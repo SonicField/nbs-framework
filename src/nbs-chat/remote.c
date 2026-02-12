@@ -9,6 +9,7 @@
  *   NBS_CHAT_PORT  (optional) — SSH port, default 22
  *   NBS_CHAT_KEY   (optional) — path to SSH identity file
  *   NBS_CHAT_BIN   (optional) — remote nbs-chat path, default "nbs-chat"
+ *   NBS_CHAT_OPTS  (optional) — comma-separated SSH -o options
  *
  * Exit codes mirror nbs-chat exactly (0-4), with SSH failures mapped to 1.
  */
@@ -40,6 +41,7 @@ typedef struct {
     int port;                /* NBS_CHAT_PORT (default 22) */
     const char *key_path;    /* NBS_CHAT_KEY (optional) */
     const char *remote_bin;  /* NBS_CHAT_BIN (default "nbs-chat") */
+    const char *ssh_opts;    /* NBS_CHAT_OPTS (optional) — comma-separated -o options */
 } remote_config_t;
 
 /*
@@ -80,6 +82,10 @@ static int load_config(remote_config_t *cfg)
     cfg->remote_bin = getenv("NBS_CHAT_BIN");
     if (!cfg->remote_bin || cfg->remote_bin[0] == '\0')
         cfg->remote_bin = "nbs-chat";
+
+    cfg->ssh_opts = getenv("NBS_CHAT_OPTS");
+    if (cfg->ssh_opts && cfg->ssh_opts[0] == '\0')
+        cfg->ssh_opts = NULL;
 
     return 0;
 }
@@ -144,17 +150,22 @@ static int shell_escape(const char *arg, char *buf, size_t buf_size)
  * Preconditions:  cfg->host != NULL, chat_argc >= 2, chat_argv != NULL
  * Postconditions: Returns heap-allocated, NULL-terminated argv array.
  *                 argv[0] = "ssh", last element = NULL.
- *                 Caller must free argv and the remote command string (argv[n]).
+ *                 Caller must free argv, the remote command string (last non-NULL),
+ *                 and *opts_out (if non-NULL).
  *
  * Returns NULL on allocation failure.
  */
 static char **build_ssh_argv(const remote_config_t *cfg,
-                              int chat_argc, char **chat_argv)
+                              int chat_argc, char **chat_argv,
+                              char **opts_out)
 {
     ASSERT_MSG(cfg != NULL, "build_ssh_argv: cfg is NULL");
     ASSERT_MSG(cfg->host != NULL, "build_ssh_argv: cfg->host is NULL");
     ASSERT_MSG(chat_argc >= 2, "build_ssh_argv: chat_argc < 2, got %d", chat_argc);
     ASSERT_MSG(chat_argv != NULL, "build_ssh_argv: chat_argv is NULL");
+    ASSERT_MSG(opts_out != NULL, "build_ssh_argv: opts_out is NULL");
+
+    *opts_out = NULL;
 
     /*
      * Build the remote command string with shell escaping.
@@ -199,9 +210,9 @@ static char **build_ssh_argv(const remote_config_t *cfg,
 
     /*
      * Build SSH argv.
-     * Maximum elements: ssh -p PORT -i KEY host REMOTE_CMD NULL = 7
+     * Maximum elements: ssh -p PORT -i KEY -o OPT1 -o OPT2 -o OPT3 -o OPT4 host REMOTE_CMD NULL = 15
      */
-    int max_args = 7;
+    int max_args = 15;
     char **argv = calloc((size_t)max_args, sizeof(char *));
     if (!argv) { free(remote_cmd); return NULL; }
 
@@ -220,6 +231,28 @@ static char **build_ssh_argv(const remote_config_t *cfg,
     if (cfg->key_path) {
         argv[ai++] = "-i";
         argv[ai++] = (char *)cfg->key_path;
+    }
+
+    /* Extra SSH options (comma-separated, each becomes -o <option>) */
+    if (cfg->ssh_opts) {
+        /* Make a mutable copy for strtok — caller frees via opts_out */
+        char *opts_buf = strdup(cfg->ssh_opts);
+        if (opts_buf) {
+            *opts_out = opts_buf;
+            char *saveptr = NULL;
+            char *opt = strtok_r(opts_buf, ",", &saveptr);
+            int opt_count = 0;
+            while (opt && opt_count < 4) {
+                /* Skip leading whitespace */
+                while (*opt == ' ') opt++;
+                if (*opt != '\0') {
+                    argv[ai++] = "-o";
+                    argv[ai++] = opt;
+                    opt_count++;
+                }
+                opt = strtok_r(NULL, ",", &saveptr);
+            }
+        }
     }
 
     /* Host */
@@ -309,7 +342,8 @@ static void print_usage(void)
     printf("  NBS_CHAT_HOST  (required) SSH target, e.g. user@server\n");
     printf("  NBS_CHAT_PORT  (optional) SSH port (default: 22)\n");
     printf("  NBS_CHAT_KEY   (optional) Path to SSH identity file\n");
-    printf("  NBS_CHAT_BIN   (optional) Remote nbs-chat path (default: nbs-chat)\n\n");
+    printf("  NBS_CHAT_BIN   (optional) Remote nbs-chat path (default: nbs-chat)\n");
+    printf("  NBS_CHAT_OPTS  (optional) Comma-separated SSH -o options\n\n");
     printf("All commands are executed on the remote machine via SSH.\n");
     printf("File paths refer to paths on the remote machine.\n\n");
     printf("Exit codes:\n");
@@ -345,7 +379,8 @@ int main(int argc, char **argv)
     if (rc != 0) return rc;
 
     /* Build SSH command with shell-escaped arguments */
-    char **ssh_argv = build_ssh_argv(&cfg, argc, argv);
+    char *opts_buf = NULL;
+    char **ssh_argv = build_ssh_argv(&cfg, argc, argv, &opts_buf);
     if (!ssh_argv) {
         fprintf(stderr, "Error: Failed to allocate SSH command\n");
         return 1;
@@ -362,6 +397,7 @@ int main(int argc, char **argv)
             break;
         }
     }
+    free(opts_buf);
     free(ssh_argv);
 
     return exit_code;

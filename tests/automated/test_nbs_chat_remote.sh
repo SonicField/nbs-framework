@@ -41,18 +41,28 @@ trap cleanup EXIT
 echo "=== nbs-chat-remote tests ==="
 echo ""
 
-# --- Prerequisite check: ssh localhost ---
-echo "Checking ssh localhost..."
-if ! ssh -o BatchMode=yes -o ConnectTimeout=5 localhost "echo ok" >/dev/null 2>&1; then
-    echo "SKIP: ssh localhost does not work without password"
-    echo "Configure: ssh-keygen && ssh-copy-id localhost"
+# --- Prerequisite check: ssh connectivity ---
+echo "Checking SSH connectivity..."
+SSH_TEST_CMD="ssh -o BatchMode=yes -o ConnectTimeout=5"
+if [ -n "${NBS_CHAT_PORT:-}" ]; then SSH_TEST_CMD="$SSH_TEST_CMD -p $NBS_CHAT_PORT"; fi
+if [ -n "${NBS_CHAT_KEY:-}" ]; then SSH_TEST_CMD="$SSH_TEST_CMD -i $NBS_CHAT_KEY"; fi
+if [ -n "${NBS_CHAT_OPTS:-}" ]; then
+    IFS=',' read -ra _OPTS <<< "$NBS_CHAT_OPTS"
+    for _opt in "${_OPTS[@]}"; do SSH_TEST_CMD="$SSH_TEST_CMD -o $_opt"; done
+fi
+SSH_TEST_HOST="${NBS_CHAT_HOST:-localhost}"
+if ! $SSH_TEST_CMD "$SSH_TEST_HOST" "echo ok" >/dev/null 2>&1; then
+    echo "SKIP: SSH connection to $SSH_TEST_HOST does not work"
+    echo "For localhost: ssh-keygen && ssh-copy-id localhost"
+    echo "For mock server: run test_nbs_chat_remote_mock.py"
     exit 0
 fi
-pass "ssh localhost available"
+pass "SSH connectivity to $SSH_TEST_HOST"
 
 # --- Configuration ---
-export NBS_CHAT_HOST="localhost"
-export NBS_CHAT_BIN="$NBS_CHAT"
+# Use environment values if set (e.g. from mock harness), else defaults
+export NBS_CHAT_HOST="${NBS_CHAT_HOST:-localhost}"
+export NBS_CHAT_BIN="${NBS_CHAT_BIN:-$NBS_CHAT}"
 
 # --- Test 1: Help (local, no SSH) ---
 echo ""
