@@ -167,6 +167,78 @@ else
     fail "Skill doc missing silent return behaviour"
 fi
 
+# 7. Plan mode auto-select
+echo "7. Plan mode auto-select..."
+if grep -q 'detect_plan_mode' "$NBS_CLAUDE"; then
+    pass "Has detect_plan_mode function"
+else
+    fail "Missing detect_plan_mode function"
+fi
+
+if grep -q 'Would you like to proceed?' "$NBS_CLAUDE"; then
+    pass "Plan mode detection pattern present"
+else
+    fail "Missing plan mode detection pattern"
+fi
+
+# Verify plan mode sends '2' keystroke (not /nbs-poll)
+if grep -A2 'detect_plan_mode' "$NBS_CLAUDE" | grep -q "'2'"; then
+    pass "Plan mode sends '2' keystroke"
+else
+    fail "Plan mode does not send '2' keystroke"
+fi
+
+# Verify plan mode check is separate from idle-timeout prompt detection
+# Plan mode should fire on content change (not just after idle timeout)
+if grep -B2 'detect_plan_mode' "$NBS_CLAUDE" | grep -q 'content change'; then
+    pass "Plan mode detection fires on content change"
+else
+    fail "Plan mode detection not tied to content change"
+fi
+
+# Verify plan mode detection exists in both sidecar functions
+TMUX_PLAN=$(grep -c 'detect_plan_mode' "$NBS_CLAUDE" | head -1)
+if [[ "$TMUX_PLAN" -ge 4 ]]; then
+    pass "Plan mode detection in both sidecar modes (tmux + pty)"
+else
+    fail "Plan mode detection not in both sidecar modes (found $TMUX_PLAN references, expected >= 4)"
+fi
+
+# 8. Functional test: detect_plan_mode pattern matching
+echo "8. Plan mode pattern matching..."
+
+# Source just the detect_plan_mode function for testing
+eval "$(grep -A3 '^detect_plan_mode()' "$NBS_CLAUDE")"
+
+# Test: plan mode prompt should match
+PLAN_PROMPT='Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+   1. Yes, clear context and bypass permissions
+ ❯ 2. Yes, and bypass permissions'
+
+if detect_plan_mode "$PLAN_PROMPT"; then
+    pass "Detects plan mode prompt correctly"
+else
+    fail "Failed to detect plan mode prompt"
+fi
+
+# Test: normal prompt should NOT match
+NORMAL_PROMPT='claude ❯'
+if detect_plan_mode "$NORMAL_PROMPT"; then
+    fail "False positive: normal prompt detected as plan mode"
+else
+    pass "Normal prompt correctly ignored by plan mode detector"
+fi
+
+# Test: mid-response output should NOT match
+RESPONSE_OUTPUT='I will read the file and check the results.
+Running tests now...'
+if detect_plan_mode "$RESPONSE_OUTPUT"; then
+    fail "False positive: normal output detected as plan mode"
+else
+    pass "Normal output correctly ignored by plan mode detector"
+fi
+
 echo ""
 echo "=== Result ==="
 if [[ $FAIL -eq 0 ]]; then

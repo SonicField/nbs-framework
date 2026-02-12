@@ -257,8 +257,21 @@ TASKEOF
     # Send the task prompt (task_file is already an absolute path)
     tmux send-keys -t "$session" "Read ${task_file} and execute the task. Update the Status and Log sections when complete." Enter
 
-    # Small delay then extra Enter for reliability
-    sleep 0.5
+    # Wait for Claude Code UI to be ready before sending confirmation Enter.
+    # The UI needs time to render the welcome screen and display the prompt.
+    # We poll the tmux pane for the prompt indicator (❯) which signals readiness.
+    local wait_count=0
+    local max_wait=30  # 30 seconds max
+    while [ $wait_count -lt $max_wait ]; do
+        if tmux capture-pane -t "$session" -p 2>/dev/null | grep -q '❯'; then
+            break
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    # Extra Enter for reliability — ensures prompt submission
+    sleep 1
     tmux send-keys -t "$session" "" Enter
 
     echo "$name"

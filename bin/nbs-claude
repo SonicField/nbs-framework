@@ -66,6 +66,16 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# --- Plan mode detection ---
+# Claude Code's plan mode displays an interactive menu that blocks execution.
+# The sidecar detects this prompt and auto-selects option 2 ("Yes, and bypass
+# permissions") so unattended workers are not blocked indefinitely.
+
+detect_plan_mode() {
+    local content="$1"
+    echo "$content" | grep -qF 'Would you like to proceed?'
+}
+
 # --- Idle detection sidecar (tmux mode) ---
 # Monitors the current tmux pane for idle and injects /nbs-poll
 
@@ -95,6 +105,29 @@ poll_sidecar_tmux() {
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
             last_content_hash="$current_hash"
+
+            # Check for plan mode immediately on content change
+            # Plan mode blocks the worker — resolve it without waiting for idle
+            if detect_plan_mode "$content"; then
+                sleep 1
+                tmux send-keys -t "$pane_id" '2'
+                sleep 0.5
+                tmux send-keys -t "$pane_id" Enter
+                idle_seconds=0
+                last_content_hash=""
+                sleep 5
+            fi
+            continue
+        fi
+
+        # Also check for plan mode when content is stable (already idle)
+        if detect_plan_mode "$content"; then
+            tmux send-keys -t "$pane_id" '2'
+            sleep 0.5
+            tmux send-keys -t "$pane_id" Enter
+            idle_seconds=0
+            last_content_hash=""
+            sleep 5
             continue
         fi
 
@@ -148,6 +181,28 @@ poll_sidecar_pty() {
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
             last_content_hash="$current_hash"
+
+            # Check for plan mode immediately on content change
+            if detect_plan_mode "$content"; then
+                sleep 1
+                "$pty" send "$session" --no-enter '2'
+                sleep 0.5
+                "$pty" send "$session" ''
+                idle_seconds=0
+                last_content_hash=""
+                sleep 5
+            fi
+            continue
+        fi
+
+        # Check for plan mode when content is stable
+        if detect_plan_mode "$content"; then
+            "$pty" send "$session" --no-enter '2'
+            sleep 0.5
+            "$pty" send "$session" ''
+            idle_seconds=0
+            last_content_hash=""
+            sleep 5
             continue
         fi
 
