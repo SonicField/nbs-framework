@@ -86,8 +86,8 @@ echo "Test 3: Valid HOME override"
 TEST_HOME=$(mktemp -d)
 trap "rm -rf $TEST_HOME" EXIT
 
-# Install with overridden HOME
-if HOME="$TEST_HOME" "$INSTALL_SCRIPT" --prefix="$TEST_HOME/.nbs" >/dev/null 2>&1; then
+# Install with overridden HOME (pipe "N" to decline PATH setup prompt)
+if echo "N" | HOME="$TEST_HOME" "$INSTALL_SCRIPT" --prefix="$TEST_HOME/.nbs" >/dev/null 2>&1; then
     pass "Valid HOME override succeeds"
 else
     fail "Valid HOME override failed"

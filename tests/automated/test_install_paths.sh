@@ -27,7 +27,7 @@ trap cleanup EXIT
 # IMPORTANT: Override HOME so we don't pollute real ~/.claude/commands/
 echo ""
 echo "Step 1: Installing to test directory..."
-HOME="$TEST_DIR" "$PROJECT_ROOT/bin/install.sh" --prefix="$TEST_DIR/.nbs"
+echo "N" | HOME="$TEST_DIR" "$PROJECT_ROOT/bin/install.sh" --prefix="$TEST_DIR/.nbs"
 
 # Update TEST_DIR to point to where commands actually are
 COMMANDS_DIR="$TEST_DIR/.nbs"
