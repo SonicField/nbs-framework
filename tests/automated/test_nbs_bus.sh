@@ -496,7 +496,10 @@ echo ""
 
 # --- Test 13: Binary integrity (ASSERT_MSG strings present) ---
 echo "13. Binary integrity..."
-if strings "$NBS_BUS" | grep -q "ASSERT FAILED"; then
+# Use grep -c instead of grep -q to avoid SIGPIPE under pipefail
+# (grep -q exits early, causing SIGPIPE on the left side of the pipe)
+ASSERT_COUNT=$(strings "$NBS_BUS" | grep -c "ASSERT FAILED" || true)
+if [[ "$ASSERT_COUNT" -gt 0 ]]; then
     check "ASSERT_MSG strings in binary" "pass"
 else
     check "ASSERT_MSG strings in binary" "fail"
