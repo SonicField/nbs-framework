@@ -19,6 +19,7 @@
  *   4 - Invalid arguments
  */
 
+#include "bus_bridge.h"
 #include "chat_file.h"
 #include <assert.h>
 #include <errno.h>
@@ -117,6 +118,10 @@ static int cmd_send(int argc, char **argv) {
         fprintf(stderr, "Error: Failed to send message\n");
         return 1;
     }
+
+    /* Publish bus events (if bus directory exists).
+     * Bus failure is non-fatal — chat send already succeeded. */
+    bus_bridge_after_send(path, handle, message);
 
     return 0;
 }

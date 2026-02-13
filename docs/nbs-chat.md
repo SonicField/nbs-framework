@@ -157,7 +157,18 @@ Configuration via environment variables:
 - `NBS_CHAT_KEY` — path to SSH private key
 - `NBS_CHAT_OPTS` — comma-separated SSH `-o` options (max 4)
 
+## Bus Integration
+
+Chat is for conversation. The coordination bus is for notification. The two systems complement each other.
+
+Every `nbs-chat send` publishes a `chat-message` event to the bus (if `.nbs/events/` exists). Messages containing `@mentions` additionally publish a `chat-mention` event at higher priority. This means all agents can overhear all conversations and react to relevant information — even when not directly addressed.
+
+Messages from `nbs-chat-terminal` (human input) generate `human-input` bus events, ensuring that human messages receive priority attention.
+
+See [nbs-bus](nbs-bus.md) for the full bus reference and [Bus Recovery](nbs-bus-recovery.md) for startup/restart protocol.
+
 ## See Also
 
+- [nbs-bus](nbs-bus.md) — Event-driven coordination bus
 - [NBS Teams](nbs-teams.md) — Supervisor/worker pattern overview
 - [nbs-worker](nbs-worker.md) — Worker lifecycle management

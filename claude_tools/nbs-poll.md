@@ -9,16 +9,37 @@ Lightweight periodic check of active chats and workers. Designed to be injected 
 
 ## Behaviour
 
-1. **Check active chats** — scan `.nbs/chat/*.chat` for unread messages (messages since your last post)
-2. **Check active workers** — scan `.nbs/workers/*.md` for completed or stalled workers
-3. **Report briefly** — if nothing new, say nothing and return silently
-4. **Act if needed** — if there are unread chat messages, read and respond. If workers have completed, capture 3Ws.
+1. **Check event bus** (if present) — process pending events from `.nbs/events/` in priority order
+2. **Check active chats** — scan `.nbs/chat/*.chat` for unread messages
+3. **Check active workers** — scan `.nbs/workers/*.md` for completed or stalled workers
+4. **Report briefly** — if nothing new, say nothing and return silently
+5. **Act if needed** — respond to events, chat messages, or completed workers as appropriate
 
 ## Instructions
 
 Run the following checks. Be brief — this is a heartbeat, not a review.
 
-### 1. Check Chats
+### 0. Check Event Bus (if present)
+
+```bash
+# Check if a bus exists
+ls .nbs/events/*.event 2>/dev/null
+```
+
+If `.nbs/events/` exists and contains pending events:
+
+```bash
+nbs-bus check .nbs/events/
+```
+
+Process events in the order returned (priority first, then timestamp). For each event:
+1. Read it: `nbs-bus read .nbs/events/ <event-file>`
+2. Act on it (see event type actions in `docs/nbs-bus-recovery.md`)
+3. Acknowledge it: `nbs-bus ack .nbs/events/ <event-file>`
+
+If the bus exists, skip the manual chat and worker scanning below — the bus covers those via `chat-mention` and `task-complete` events. Only fall through to manual checks if no bus exists.
+
+### 1. Check Chats (legacy — no bus)
 
 ```bash
 # Find all chat files
@@ -35,7 +56,7 @@ The `--unread` flag tracks a read cursor per handle. It shows messages after you
 
 If there are unread messages, read them and respond appropriately via `nbs-chat send`. When instructions arrive via chat, always send clarifications and responses back to the same chat file — do not respond only in the terminal.
 
-### 2. Check Workers
+### 2. Check Workers (legacy — no bus)
 
 ```bash
 # Find active worker files

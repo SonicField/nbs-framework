@@ -146,8 +146,24 @@ Don't use when:
 - Deep context is the asset (investigation, debugging)
 - Task is trivial
 
+## Coordination Bus
+
+For projects where multiple agents need to react to each other's events (task completion, chat mentions, human input), the coordination bus provides event-driven notification. Instead of polling chat files and worker directories repeatedly, agents check a priority-ordered event queue.
+
+```bash
+# Create the bus
+mkdir -p .nbs/events/processed
+
+# Workers publish events automatically on state changes
+# Supervisor checks the queue on each poll cycle
+nbs-bus check .nbs/events/
+```
+
+The bus is optional. Projects without `.nbs/events/` fall back to direct chat/worker scanning via `nbs-poll`. See [nbs-bus](nbs-bus.md) for the full reference and [Bus Recovery](nbs-bus-recovery.md) for startup/restart protocol.
+
 ## See Also
 
+- [nbs-bus](nbs-bus.md) - Event-driven coordination bus
 - [nbs-hub](nbs-hub.md) - Deterministic process enforcement for AI teams (mandatory for multi-worker projects)
 - [nbs-chat](nbs-chat.md) - File-based AI-to-AI chat for worker coordination
 - [nbs-worker](nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
