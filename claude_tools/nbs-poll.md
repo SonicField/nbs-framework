@@ -7,6 +7,15 @@ allowed-tools: Bash, Read
 
 Lightweight periodic check of active chats and workers. Designed to be injected automatically by `nbs-claude` when idle, but can also be invoked manually.
 
+## Notification Model
+
+The poll is a **safety net**, not the primary notification mechanism. The bus handles timely event-driven notification. The poll catches anything the bus missed — events that arrived mid-task, events from unregistered resources, or bus failures.
+
+- **Bus** (primary): event-driven, immediate. The sidecar can detect pending events and inject notifications between tool calls.
+- **Poll** (safety net): periodic, every 5 minutes of idle time. Scans all known resources. Catches what the bus missed.
+
+The sidecar injects `/nbs-poll` only when the AI has been idle for the configured interval (default 30 seconds) AND appears to be at a prompt. It never interrupts active work.
+
 ## Behaviour
 
 1. **Check event bus** (if present) — process pending events from `.nbs/events/` in priority order
@@ -80,3 +89,18 @@ For each worker file, check the Status field. If a worker has completed:
 - Be fast. Check, act if needed, return. Do not start new work from a poll.
 - If a chat message requires significant work, note it and return to the user — do not silently start a large task.
 - **Do not post zero-information messages to chat** (e.g. "acknowledged", "nothing new", "noted"). These poison the `--since` marker for other participants who use it for catching up. Only post to chat when adding information or asking a question.
+
+## Dynamic Resource Registration
+
+If you discover a new resource during a poll (or at any other time), register it so future polls include it:
+
+```bash
+# Write to the control inbox — the sidecar reads this
+echo "register-chat .nbs/chat/new-channel.chat" >> .nbs/control-inbox
+echo "register-bus .nbs/events" >> .nbs/control-inbox
+echo "register-hub .nbs/hub/project.yaml" >> .nbs/control-inbox
+```
+
+The control inbox is append-only. The sidecar processes new lines on every 1-second iteration and updates `.nbs/control-registry`. You do not need to check the registry yourself — just register what you discover and future polls will include it.
+
+If `.nbs/control-registry` exists, prefer checking the resources listed there over scanning `.nbs/chat/*.chat` directly. The registry is the authoritative list of what this agent is watching.
