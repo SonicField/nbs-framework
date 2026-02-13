@@ -47,6 +47,7 @@ The header tracks the last writer, timestamp, file size (integrity check), and p
 | `nbs-chat read <file>` | Read all messages (decoded) |
 | `nbs-chat read <file> --last=N` | Read last N messages |
 | `nbs-chat read <file> --since=<handle>` | Read messages after handle's last post |
+| `nbs-chat read <file> --unread=<handle>` | Read unread messages; advances cursor automatically |
 | `nbs-chat search <file> <pattern> [--handle=<name>]` | Search message history by substring |
 | `nbs-chat poll <file> <handle> --timeout=N` | Block until new message from someone else |
 | `nbs-chat participants <file>` | List participants and message counts |
@@ -120,7 +121,7 @@ Any participant can create the chat file. Typically the process that spawns othe
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Chat file not found |
+| 2 | Chat file not found (or already exists for create) |
 | 3 | Timeout (poll) |
 | 4 | Invalid arguments |
 

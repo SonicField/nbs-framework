@@ -94,16 +94,19 @@ Type messages, see agent responses in real time. Use `@handle` to address a spec
 ## 6. Spawn Workers
 
 ```bash
-# Create a worker task
-nbs-worker spawn .nbs/workers/ "parser-worker" \
-  "Implement the parser. Pass all 84 tests." \
-  --supervisor=claude
+# Spawn a worker (creates task file, starts Claude session, sends prompt)
+nbs-worker spawn parser /path/to/your/project \
+  "Implement the parser. Pass all 84 tests."
+# Output: parser-a3f1  (generated name)
 
-# Worker reads its task
-nbs-worker read .nbs/workers/parser-worker.md
+# Check worker status
+nbs-worker status parser-a3f1
 
-# Worker reports completion
-nbs-worker complete .nbs/workers/parser-worker.md "Done. 84/84 tests pass."
+# Extract results after completion
+nbs-worker results parser-a3f1
+
+# List all workers
+nbs-worker list
 ```
 
 ## What Happens Automatically

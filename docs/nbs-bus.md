@@ -54,7 +54,7 @@ YAML. Human-readable. One file per event. No binary encoding, no base64 — the 
 | `type` | yes | Event type (see Event Types below) |
 | `priority` | yes | `critical`, `high`, `normal`, or `low` |
 | `timestamp` | yes | ISO 8601 timestamp |
-| `dedup-key` | no | Deduplication identifier. If omitted, `<source>:<type>` is used |
+| `dedup-key` | auto | Deduplication identifier. Always `<source>:<type>`, generated automatically |
 | `payload` | no | Free-form content. Keep it brief — this is a signal, not a report |
 
 ## Commands
@@ -120,7 +120,7 @@ fi
 Configuration lives in `.nbs/events/config.yaml`:
 
 ```yaml
-# Deduplication window in seconds (default: 300)
+# Deduplication window in seconds (default: 0 = disabled without config)
 dedup-window: 300
 
 # Maximum size of processed events directory in bytes (default: 16777216 = 16MB)
@@ -153,19 +153,11 @@ Within the same priority level, events are ordered by timestamp (oldest first).
 
 When publishing, the bus checks for existing pending events with the same `dedup-key` within the configured window. If a match exists, the new event is silently dropped (exit code 5).
 
-Use `--dedup-window=N` on the `publish` command to set the window in seconds (default: 300). Set `--dedup-window=0` to disable deduplication.
+Use `--dedup-window=N` on the `publish` command to set the window in seconds. Without a config file, the default is 0 (disabled). With `dedup-window: 300` in `config.yaml`, the default becomes 300 seconds. Set `--dedup-window=0` to explicitly disable deduplication.
 
-Override deduplication by omitting the `dedup-key` field — each event will be treated as unique.
+The dedup-key is always `<source>:<type>`, generated automatically by the bus binary. There is currently no way to override it via the CLI.
 
-Default deduplication keys by event type:
-
-| Event type | Default dedup-key |
-|------------|-------------------|
-| `heartbeat` | `<source>:heartbeat` |
-| `chat-message` | `<source>:chat-message:<channel>` |
-| `chat-mention` | `<source>:chat-mention:<target>` |
-| `task-complete` | `<source>:task-complete` |
-| All others | `<source>:<type>` |
+Within the dedup window, a second event with the same source and type is silently dropped.
 
 ## Event Types
 

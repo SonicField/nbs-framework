@@ -39,7 +39,7 @@ cat .nbs/events/config.yaml 2>/dev/null
 ```
 
 If the file does not exist, defaults apply:
-- `dedup-window: 300` (enforced via `--dedup-window` on `publish`; also read from config.yaml)
+- `dedup-window: 0` (disabled by default; set to e.g. 300 in config.yaml to enable)
 - `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune`; also read from config.yaml)
 - `notify: inotifywait` (planned — falls back to poll)
 - `poll-interval: 5` (planned)
