@@ -61,6 +61,59 @@ If the directory does not exist, there is no bus. The agent falls back to legacy
 
 The critical property: an agent that restarts mid-project loses its in-memory context but not its event queue. The queue is the bridge between sessions. Everything the agent needs to know — what happened while it was away — is in the pending events.
 
+## Dynamic Discovery
+
+The bus solves "how do agents learn that something happened?" It does not solve "how do agents learn that something *exists*?"
+
+An agent starts and scans `.nbs/chat/*.chat` and `.nbs/events/`. It finds what exists at startup. But a new chat channel created ten minutes later is invisible. A hub joined mid-session is unknown. The agent cannot react to events in resources it has never discovered.
+
+Static configuration does not fix this. A config file written at startup is stale the moment the environment changes. And the environment always changes — agents create chat channels, join hubs, spin up workers. The discovery problem is dynamic.
+
+### AI-First Registration
+
+The solution is AI-first: the AI declares what it needs, the wrapper obeys. Not the other way around.
+
+Two command directions:
+- `/` prefix: human-to-AI commands (`/nbs-poll`, `/search`)
+- `\` prefix: AI-to-wrapper commands (`\nbs-register-chat`)
+
+When an AI learns about a new resource — from a chat message, from another agent, from exploring the filesystem — it registers it:
+
+```
+\nbs-register-chat .nbs/chat/debug.chat
+```
+
+The AI writes this to `.nbs/control-inbox`. The wrapper reads the inbox (forward-only, never truncated) and updates a registry at `.nbs/control-registry`. The next poll cycle includes the new resource.
+
+This works across agent boundaries. A remote agent over `nbs-chat-remote` outputs the same command. Its local wrapper picks it up. The wrapper does not need to know how the AI learned about the resource — it just obeys the registration request.
+
+### Control Inbox
+
+The control inbox is append-only. The sidecar tracks a read offset and only processes new lines. The full history is preserved for audit and post-session analysis. No truncation, no deletion. This is consistent with how all NBS state files work — chat files, worker files, event files. Append-only logs, everywhere.
+
+## Dual Notification
+
+The bus and the poll are complementary, not competing.
+
+The bus is the primary notification mechanism — event-driven, immediate. When something happens, an event is published. The sidecar detects it on its next 1-second check and can inject a notification.
+
+The poll is the safety net — periodic, catches everything the bus missed. Events that arrived mid-task, events from unregistered resources, bus failures. The poll runs at a longer interval (5 minutes) because it is insurance, not the primary mechanism.
+
+Neither alone is sufficient. The bus can miss events (the AI is busy). The poll wastes tokens if run too frequently. Together: the bus makes things fast, the poll makes them reliable.
+
+### Ack-Required Nagging
+
+Events that arrive while the AI is busy are not lost — they wait in the queue. But the sidecar can monitor unacked events and nag the AI with escalating urgency:
+
+| Priority | Nag interval | Behaviour |
+|----------|-------------|-----------|
+| Critical | 30 seconds | Nag until acked |
+| High | 2 minutes | Nag between tool calls |
+| Normal | Next poll cycle | Included in regular poll summary |
+| Low | Next poll cycle | Included if queue is otherwise empty |
+
+Nagging is context-aware. The sidecar only nags during natural pauses — when pane content has been stable for several seconds and the AI appears to be at a prompt. Interrupting active code generation or test runs causes more damage than a delayed notification. The nag should feel like a tap on the shoulder during a pause, not an alarm mid-sentence.
+
 ## The Practical Questions
 
 1. Am I polling when I could be reacting to events?
@@ -68,6 +121,8 @@ The critical property: an agent that restarts mid-project loses its in-memory co
 3. If my session crashes right now, can I recover from the event queue alone?
 4. Am I generating duplicate events? Is deduplication configured?
 5. Does every significant state change produce an event, or are some changes invisible to other agents?
+6. Have I registered all the resources I know about? Are there chats or hubs I discovered but did not register?
+7. Is my notification model dual? Bus for speed, poll for reliability?
 
 ---
 
