@@ -19,6 +19,9 @@ src/nbs-chat/assert_check
 src/nbs-chat/*.o
 src/nbs-hub/nbs-hub
 src/nbs-hub/*.o
+src/nbs-bus/nbs-bus
+src/nbs-bus/assert_check
+src/nbs-bus/*.o
 
 # NBS teams working directory (project-specific, not framework)
 .nbs/
