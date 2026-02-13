@@ -69,6 +69,37 @@
 #define BUS_EXIT_BAD_ARGS      4
 #define BUS_EXIT_DEDUP         5
 
+/* Default configuration values */
+#define BUS_DEFAULT_MAX_BYTES      (16LL * 1024 * 1024)  /* 16 MB */
+#define BUS_DEFAULT_DEDUP_WINDOW   0                      /* disabled */
+
+/* Bus configuration (loaded from config.yaml) */
+typedef struct {
+    long long retention_max_bytes;  /* max bytes in processed/ before pruning */
+    long long dedup_window_s;      /* default dedup window in seconds (0 = disabled) */
+} bus_config_t;
+
+/*
+ * bus_load_config — Load configuration from events_dir/config.yaml.
+ *
+ * Reads a simple YAML file with key: value pairs. Recognised keys:
+ *   retention-max-bytes: <integer>
+ *   dedup-window: <integer seconds>
+ *
+ * Unrecognised keys are silently ignored. Missing file or missing keys
+ * use defaults. Invalid values are ignored (default used).
+ *
+ * Preconditions:
+ *   - events_dir != NULL
+ *   - cfg != NULL
+ *
+ * Postconditions:
+ *   - cfg is populated with values from config.yaml or defaults
+ *
+ * Returns 0 always (missing config is not an error).
+ */
+int bus_load_config(const char *events_dir, bus_config_t *cfg);
+
 /* Parsed event (in-memory representation) */
 typedef struct {
     char filename[BUS_MAX_FILENAME]; /* just the filename, not the full path */

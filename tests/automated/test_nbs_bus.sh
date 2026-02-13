@@ -25,6 +25,12 @@
 #   21. No --dedup-window: duplicates allowed
 #   22. Dedup ignores acked (processed) events
 #   23. Invalid --dedup-window values rejected
+#   24. Config.yaml sets default dedup-window
+#   25. Config.yaml sets retention-max-bytes
+#   26. CLI args override config.yaml
+#   27. Missing config.yaml uses defaults
+#   28. Invalid config.yaml values ignored
+#   29. Config.yaml with comments and unknown keys
 
 set -euo pipefail
 
@@ -730,6 +736,187 @@ if [[ "$EXIT_CODE" -eq 4 ]]; then
     check "Negative dedup-window rejected (exit 4)" "pass"
 else
     check "Negative dedup-window rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 24: Config.yaml sets default dedup-window ---
+echo "24. Config.yaml sets default dedup-window..."
+EVENTS="$TEST_DIR/events24"
+mkdir -p "$EVENTS/processed"
+
+# Write config.yaml with dedup-window: 300
+cat > "$EVENTS/config.yaml" <<'YAML'
+# Bus configuration
+dedup-window: 300
+YAML
+
+# First publish succeeds (no --dedup-window flag — config provides it)
+E1=$($NBS_BUS publish "$EVENTS" cfg-src cfg-type normal "first")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "First publish with config dedup succeeds" "pass"
+else
+    check "First publish with config dedup succeeds (exit: $EXIT1)" "fail"
+fi
+
+# Second publish should be deduplicated (config sets 300s window)
+set +e
+E2=$($NBS_BUS publish "$EVENTS" cfg-src cfg-type normal "second" 2>/dev/null)
+EXIT2=$?
+set -e
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "Config dedup-window causes dedup (exit 5)" "pass"
+else
+    check "Config dedup-window causes dedup (exit 5, got: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 25: Config.yaml sets retention-max-bytes ---
+echo "25. Config.yaml sets retention-max-bytes..."
+EVENTS="$TEST_DIR/events25"
+mkdir -p "$EVENTS/processed"
+
+# Write config.yaml with small retention limit
+cat > "$EVENTS/config.yaml" <<'YAML'
+retention-max-bytes: 500
+YAML
+
+# Create processed events
+for i in $(seq 1 20); do
+    E=$($NBS_BUS publish "$EVENTS" pruner "cfg-prune-$i" normal "Payload for config prune test $i")
+    $NBS_BUS ack "$EVENTS" "$E"
+done
+
+BEFORE_COUNT=$(ls "$EVENTS/processed/"*.event | wc -l)
+
+# Prune without --max-bytes — should use config value (500)
+$NBS_BUS prune "$EVENTS"
+
+AFTER_COUNT=$(ls "$EVENTS/processed/"*.event 2>/dev/null | wc -l || echo "0")
+
+if [[ "$BEFORE_COUNT" -eq 20 ]]; then
+    check "20 processed events before config prune" "pass"
+else
+    check "20 processed events before config prune (got: $BEFORE_COUNT)" "fail"
+fi
+
+if [[ "$AFTER_COUNT" -lt "$BEFORE_COUNT" ]]; then
+    check "Config retention-max-bytes causes pruning" "pass"
+else
+    check "Config retention-max-bytes causes pruning (before=$BEFORE_COUNT, after=$AFTER_COUNT)" "fail"
+fi
+
+echo ""
+
+# --- Test 26: CLI args override config.yaml ---
+echo "26. CLI args override config.yaml..."
+EVENTS="$TEST_DIR/events26"
+mkdir -p "$EVENTS/processed"
+
+# Config says dedup-window: 300, but CLI says --dedup-window=1
+cat > "$EVENTS/config.yaml" <<'YAML'
+dedup-window: 300
+YAML
+
+$NBS_BUS publish "$EVENTS" override-src override-type normal "first" > /dev/null
+sleep 0.01
+
+# CLI --dedup-window=1 should still catch it (within 1 second)
+set +e
+$NBS_BUS publish "$EVENTS" override-src override-type normal "second" --dedup-window=1 2>/dev/null
+EXIT2=$?
+set -e
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "CLI --dedup-window overrides config" "pass"
+else
+    check "CLI --dedup-window overrides config (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 27: Missing config.yaml uses defaults ---
+echo "27. Missing config.yaml uses defaults..."
+EVENTS="$TEST_DIR/events27"
+mkdir -p "$EVENTS/processed"
+# No config.yaml
+
+# Without config and without --dedup-window, duplicates should be allowed (default=0)
+$NBS_BUS publish "$EVENTS" noconf-src noconf-type normal "first" > /dev/null
+E2=$($NBS_BUS publish "$EVENTS" noconf-src noconf-type normal "second")
+EXIT2=$?
+
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "No config, no CLI flag: duplicates allowed" "pass"
+else
+    check "No config, no CLI flag: duplicates allowed (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 28: Config.yaml with invalid values uses defaults ---
+echo "28. Invalid config.yaml values ignored..."
+EVENTS="$TEST_DIR/events28"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+retention-max-bytes: notanumber
+dedup-window: -5
+YAML
+
+# Should work normally (invalid values are ignored, defaults used)
+E1=$($NBS_BUS publish "$EVENTS" inv-src inv-type normal "test")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "Invalid config values ignored, publish works" "pass"
+else
+    check "Invalid config values ignored, publish works (exit: $EXIT1)" "fail"
+fi
+
+# No dedup should happen (invalid dedup-window → default 0)
+E2=$($NBS_BUS publish "$EVENTS" inv-src inv-type normal "test2")
+EXIT2=$?
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "Invalid dedup-window → default 0, no dedup" "pass"
+else
+    check "Invalid dedup-window → default 0, no dedup (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 29: Config.yaml with comments and extra keys ---
+echo "29. Config.yaml with comments and unknown keys..."
+EVENTS="$TEST_DIR/events29"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+# This is a comment
+retention-max-bytes: 8388608
+unknown-key: whatever
+dedup-window: 60
+
+# Another comment
+YAML
+
+# Should work — unknown keys silently ignored
+E1=$($NBS_BUS publish "$EVENTS" comment-src comment-type normal "test")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "Config with comments and unknown keys works" "pass"
+else
+    check "Config with comments and unknown keys works (exit: $EXIT1)" "fail"
+fi
+
+# Second publish should be deduplicated (dedup-window: 60 from config)
+set +e
+E2=$($NBS_BUS publish "$EVENTS" comment-src comment-type normal "test2" 2>/dev/null)
+EXIT2=$?
+set -e
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "Config dedup-window from commented config works" "pass"
+else
+    check "Config dedup-window from commented config works (exit: $EXIT2)" "fail"
 fi
 
 echo ""

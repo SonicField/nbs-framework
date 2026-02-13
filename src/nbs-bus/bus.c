@@ -262,6 +262,70 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
 }
 
 /* ------------------------------------------------------------------ */
+/* Configuration                                                       */
+/* ------------------------------------------------------------------ */
+
+int bus_load_config(const char *events_dir, bus_config_t *cfg)
+{
+    ASSERT_MSG(events_dir != NULL, "bus_load_config: events_dir is NULL");
+    ASSERT_MSG(cfg != NULL, "bus_load_config: cfg is NULL");
+
+    /* Set defaults */
+    cfg->retention_max_bytes = BUS_DEFAULT_MAX_BYTES;
+    cfg->dedup_window_s = BUS_DEFAULT_DEDUP_WINDOW;
+
+    /* Try to open config.yaml */
+    char config_path[BUS_MAX_FULLPATH];
+    snprintf(config_path, sizeof(config_path), "%s/config.yaml", events_dir);
+
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) return 0; /* missing config is fine — use defaults */
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Skip comments and empty lines */
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+            continue;
+
+        /* Find the colon separator */
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+
+        /* Extract key (trim trailing whitespace) */
+        size_t key_len = (size_t)(colon - line);
+        while (key_len > 0 && isspace((unsigned char)line[key_len - 1]))
+            key_len--;
+
+        /* Extract value (skip leading whitespace, trim trailing) */
+        char *val = colon + 1;
+        while (*val && isspace((unsigned char)*val))
+            val++;
+        char *end = val + strlen(val) - 1;
+        while (end > val && isspace((unsigned char)*end))
+            *end-- = '\0';
+
+        /* Match keys */
+        if (key_len == 19 && strncmp(line, "retention-max-bytes", 19) == 0) {
+            char *endp;
+            errno = 0;
+            long long v = strtoll(val, &endp, 10);
+            if (errno == 0 && *endp == '\0' && v > 0)
+                cfg->retention_max_bytes = v;
+        } else if (key_len == 12 && strncmp(line, "dedup-window", 12) == 0) {
+            char *endp;
+            errno = 0;
+            long long v = strtoll(val, &endp, 10);
+            if (errno == 0 && *endp == '\0' && v >= 0)
+                cfg->dedup_window_s = v;
+        }
+        /* Unknown keys silently ignored */
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Comparison for prune: sort by timestamp ascending (oldest first)    */
 /* ------------------------------------------------------------------ */
 

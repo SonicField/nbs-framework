@@ -19,9 +19,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-/* Default retention limit: 16 MB */
-#define DEFAULT_MAX_BYTES (16LL * 1024 * 1024)
-
 static void print_usage(void)
 {
     fprintf(stderr,
@@ -31,6 +28,7 @@ static void print_usage(void)
         "  publish <dir> <source> <type> <priority> [payload] [--dedup-window=N]\n"
         "      Write an event file to the queue.\n"
         "      --dedup-window=N: drop if same source:type exists within N seconds.\n"
+        "                        Default: 0 (disabled), or from config.yaml.\n"
         "                        Exit code 5 when deduplicated.\n"
         "\n"
         "  check <dir> [--handle=<name>]\n"
@@ -47,7 +45,7 @@ static void print_usage(void)
         "\n"
         "  prune <dir> [--max-bytes=N]\n"
         "      Delete oldest processed events when size limit exceeded.\n"
-        "      Default limit: 16 MB (16777216 bytes).\n"
+        "      Default: 16 MB, or from config.yaml retention-max-bytes.\n"
         "\n"
         "  status <dir>\n"
         "      Summary: pending count by priority, processed count.\n"
@@ -78,8 +76,9 @@ static const char *parse_handle_opt(int argc, char **argv, int start)
     return NULL;
 }
 
-/* Parse --max-bytes=N from argv. Returns value or default. */
-static long long parse_max_bytes_opt(int argc, char **argv, int start)
+/* Parse --max-bytes=N from argv. Returns value, or cfg_default if not specified. */
+static long long parse_max_bytes_opt(int argc, char **argv, int start,
+                                     long long cfg_default)
 {
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--max-bytes=", 12) == 0) {
@@ -94,11 +93,13 @@ static long long parse_max_bytes_opt(int argc, char **argv, int start)
             return val;
         }
     }
-    return DEFAULT_MAX_BYTES;
+    return cfg_default;
 }
 
-/* Parse --dedup-window=<seconds> from argv. Returns microseconds or 0 (disabled). */
-static long long parse_dedup_window_opt(int argc, char **argv, int start)
+/* Parse --dedup-window=<seconds> from argv. Returns microseconds, or
+ * cfg_default_us if not specified. cfg_default_us is already in microseconds. */
+static long long parse_dedup_window_opt(int argc, char **argv, int start,
+                                        long long cfg_default_us)
 {
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--dedup-window=", 15) == 0) {
@@ -113,7 +114,7 @@ static long long parse_dedup_window_opt(int argc, char **argv, int start)
             return val * 1000000LL; /* seconds to microseconds */
         }
     }
-    return 0; /* disabled by default */
+    return cfg_default_us;
 }
 
 /* Verify events directory exists, print appropriate error if not. */
@@ -161,7 +162,12 @@ static int cmd_publish(int argc, char **argv)
         return BUS_EXIT_BAD_ARGS;
     }
 
-    long long dedup_window_us = parse_dedup_window_opt(argc, argv, 6);
+    /* Load config for defaults; CLI args override */
+    bus_config_t cfg;
+    bus_load_config(dir, &cfg);
+
+    long long dedup_window_us = parse_dedup_window_opt(argc, argv, 6,
+                                                        cfg.dedup_window_s * 1000000LL);
     if (dedup_window_us < 0)
         return BUS_EXIT_BAD_ARGS;
 
@@ -272,7 +278,12 @@ static int cmd_prune(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    long long max_bytes = parse_max_bytes_opt(argc, argv, 3);
+    /* Load config for defaults; CLI args override */
+    bus_config_t cfg;
+    bus_load_config(dir, &cfg);
+
+    long long max_bytes = parse_max_bytes_opt(argc, argv, 3,
+                                              cfg.retention_max_bytes);
     if (max_bytes < 0)
         return BUS_EXIT_BAD_ARGS;
 
