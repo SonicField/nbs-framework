@@ -153,9 +153,9 @@ Within the same priority level, events are ordered by timestamp (oldest first).
 
 ## Deduplication
 
-> **MVP status:** The `dedup-key` field is written to event files for forward compatibility, but deduplication is not yet enforced. All published events are currently accepted. The behaviour described below is the target design.
+When publishing, the bus checks for existing pending events with the same `dedup-key` within the configured window. If a match exists, the new event is silently dropped (exit code 5).
 
-When publishing, the bus will check for existing pending events with the same `dedup-key` within the configured window. If a match exists, the new event will be silently dropped (exit code 5).
+Use `--dedup-window=N` on the `publish` command to set the window in seconds (default: 300). Set `--dedup-window=0` to disable deduplication.
 
 Override deduplication by omitting the `dedup-key` field — each event will be treated as unique.
 

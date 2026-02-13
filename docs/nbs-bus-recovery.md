@@ -39,8 +39,8 @@ cat .nbs/events/config.yaml 2>/dev/null
 ```
 
 If the file does not exist, defaults apply:
-- `dedup-window: 300` (planned — not yet enforced in MVP)
-- `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune` in MVP)
+- `dedup-window: 300` (enforced via `--dedup-window` on `publish`)
+- `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune`)
 - `notify: inotifywait` (planned — falls back to poll)
 - `poll-interval: 5` (planned)
 
