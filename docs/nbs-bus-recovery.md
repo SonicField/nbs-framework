@@ -41,6 +41,7 @@ cat .nbs/events/config.yaml 2>/dev/null
 If the file does not exist, defaults apply:
 - `dedup-window: 0` (disabled by default; set to e.g. 300 in config.yaml to enable)
 - `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune`; also read from config.yaml)
+- `ack-timeout: 0` (disabled by default; when set, `nbs-bus status` warns about stale events)
 - `notify: inotifywait` (planned — falls back to poll)
 - `poll-interval: 5` (planned)
 
@@ -72,6 +73,9 @@ Processing rules by event type:
 | `chat-mention` | Read the chat channel. Respond to the mention. |
 | `human-input` | Read the chat channel. A human is waiting — prioritise this. |
 | `chat-message` | Read the chat channel for context. Respond if addressed. |
+| `worker-spawned` | Note the new worker. No action required unless unexpected. |
+| `worker-dismissed` | Note the worker was dismissed. Update your tracking if relevant. |
+| `worker-died` | Worker tmux session died unexpectedly. Read the worker's task file and log. Decide whether to respawn or escalate. |
 | `config-change` | Re-read `config.yaml`. Adjust behaviour. |
 | `heartbeat` | Note the source is alive. No action required unless the heartbeat is unexpectedly old. |
 

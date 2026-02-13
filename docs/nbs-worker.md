@@ -64,6 +64,22 @@ The `status` command combines tmux session state with the task file's `State:` f
 └── docs-7b2c.log
 ```
 
+## Bus Integration
+
+When `.nbs/events/` exists, `nbs-worker` lifecycle commands automatically publish bus events:
+
+| Command | Bus event type | Priority |
+|---------|---------------|----------|
+| `spawn` | `worker-spawned` | `normal` |
+| `dismiss` | `worker-dismissed` | `normal` |
+| `status` (detects died) | `worker-died` | `high` |
+
+A `worker-died` event is published when `status` finds the tmux session dead but the task file still shows state `running`. This allows the supervisor to detect and respond to unexpected worker exits.
+
+If `.nbs/events/` does not exist, publishing is silently skipped — `nbs-worker` works without the bus.
+
+See [nbs-bus](nbs-bus.md) for the full bus reference.
+
 ## Exit Codes
 
 | Code | Meaning |

@@ -62,12 +62,12 @@ YAML. Human-readable. One file per event. No binary encoding, no base64 — the 
 | Command | Purpose |
 |---------|---------|
 | `nbs-bus publish <dir> <source> <type> <priority> [payload]` | Write an event file |
-| `nbs-bus check <dir> [--handle=<name>]` | List pending events, highest priority first |
+| `nbs-bus check <dir> [--handle=<name>]` | List pending events, highest priority first, with age |
 | `nbs-bus read <dir> <event-file>` | Read a single event |
 | `nbs-bus ack <dir> <event-file>` | Move event to `processed/` |
 | `nbs-bus ack-all <dir> [--handle=<name>]` | Acknowledge all pending events |
 | `nbs-bus prune <dir> [--max-bytes=16777216]` | Delete oldest processed events when size limit exceeded |
-| `nbs-bus status <dir>` | Summary: pending count by priority, oldest pending, last activity |
+| `nbs-bus status <dir>` | Summary: pending count by priority, processed count, stale warnings |
 | `nbs-bus help` | Usage reference |
 
 The `<dir>` argument is the `.nbs/events/` directory. All commands operate on files within it.
@@ -134,6 +134,10 @@ notify: inotifywait
 
 # Poll interval in seconds (planned — not yet implemented)
 poll-interval: 5
+
+# Stale event threshold in seconds (default: 0 = disabled)
+# When set, `nbs-bus status` warns about unacked events older than this
+ack-timeout: 120
 ```
 
 If `config.yaml` does not exist, defaults apply. The bus works without configuration. CLI arguments (e.g. `--dedup-window`, `--max-bytes`) override config file values when both are present.
@@ -166,6 +170,9 @@ Within the dedup window, a second event with the same source and type is silentl
 | `task-complete` | worker | Worker finished its task |
 | `task-blocked` | worker | Worker cannot proceed |
 | `task-failed` | worker | Worker failed |
+| `worker-spawned` | nbs-worker | Worker created and started |
+| `worker-dismissed` | nbs-worker | Worker dismissed by supervisor |
+| `worker-died` | nbs-worker | Worker tmux session died unexpectedly |
 | `chat-message` | nbs-chat | New message in a chat channel |
 | `chat-mention` | nbs-chat | Message specifically @mentioning a handle |
 | `human-input` | nbs-chat-terminal | Human posted a message |
@@ -197,9 +204,11 @@ This is by design. Alex's rationale: "we can get a lot of good collaborations fr
 | Worker completes task | `task-complete` | `high` |
 | Worker sets state to `escalated` | `task-blocked` | `critical` |
 | Worker sets state to `failed` | `task-failed` | `high` |
-| Worker spawned | `heartbeat` | `low` |
+| Worker spawned | `worker-spawned` | `normal` |
+| Worker dismissed | `worker-dismissed` | `normal` |
+| Worker died (tmux dead, state still running) | `worker-died` | `high` |
 
-These events are published automatically when `nbs-worker` detects state changes, if a bus directory is configured.
+These events are published automatically by `nbs-worker` lifecycle commands. The bus directory is detected via `.nbs/events/`; if it does not exist, publishing is silently skipped.
 
 ## File Convention
 
