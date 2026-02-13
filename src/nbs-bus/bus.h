@@ -72,11 +72,13 @@
 /* Default configuration values */
 #define BUS_DEFAULT_MAX_BYTES      (16LL * 1024 * 1024)  /* 16 MB */
 #define BUS_DEFAULT_DEDUP_WINDOW   0                      /* disabled */
+#define BUS_DEFAULT_ACK_TIMEOUT    0                      /* disabled */
 
 /* Bus configuration (loaded from config.yaml) */
 typedef struct {
     long long retention_max_bytes;  /* max bytes in processed/ before pruning */
     long long dedup_window_s;      /* default dedup window in seconds (0 = disabled) */
+    long long ack_timeout_s;       /* stale event threshold in seconds (0 = disabled) */
 } bus_config_t;
 
 /*
@@ -85,6 +87,7 @@ typedef struct {
  * Reads a simple YAML file with key: value pairs. Recognised keys:
  *   retention-max-bytes: <integer>
  *   dedup-window: <integer seconds>
+ *   ack-timeout: <integer seconds>  (0 = disabled)
  *
  * Unrecognised keys are silently ignored. Missing file or missing keys
  * use defaults. Invalid values are ignored (default used).

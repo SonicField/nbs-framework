@@ -39,6 +39,9 @@
 #   35. Config.yaml with bare colons and odd formatting
 #   36. Check with handle filter (source-based filtering)
 #   37. Ack-all with handle filter
+#   38. Check output includes event age
+#   39. Status warns about stale events (ack-timeout)
+#   40. Status stale count is correct
 
 set -euo pipefail
 
@@ -1148,6 +1151,99 @@ if [[ "$REMAINING_SOURCE" -eq 1 ]]; then
     check "Remaining event is from src-y" "pass"
 else
     check "Remaining event is from src-y (got: $REMAINING_SOURCE)" "fail"
+fi
+
+echo ""
+
+# --- Test 38: Check output includes event age ---
+echo "38. Check output includes event age..."
+EVENTS="$TEST_DIR/events38"
+mkdir -p "$EVENTS/processed"
+
+$NBS_BUS publish "$EVENTS" age-src age-type normal "age test" > /dev/null
+sleep 0.1
+
+OUTPUT=$($NBS_BUS check "$EVENTS")
+
+# Output should contain age suffix like "(0s ago)" or "(1s ago)"
+if echo "$OUTPUT" | grep -qE '\([0-9]+[smhd] ago\)'; then
+    check "Check output includes age" "pass"
+else
+    check "Check output includes age (got: $OUTPUT)" "fail"
+fi
+
+# Verify old format elements still present
+if echo "$OUTPUT" | grep -q '^\[normal\]'; then
+    check "Priority bracket still present" "pass"
+else
+    check "Priority bracket still present" "fail"
+fi
+
+if echo "$OUTPUT" | grep -qE '\.event'; then
+    check "Filename still present" "pass"
+else
+    check "Filename still present" "fail"
+fi
+
+echo ""
+
+# --- Test 39: Status includes stale event warning ---
+echo "39. Status warns about stale events..."
+EVENTS="$TEST_DIR/events39"
+mkdir -p "$EVENTS/processed"
+
+# Config with ack-timeout: 0 (disabled)
+cat > "$EVENTS/config.yaml" <<'YAML'
+ack-timeout: 0
+YAML
+
+$NBS_BUS publish "$EVENTS" stale-src stale-type normal "will not warn" > /dev/null
+
+STATUS=$($NBS_BUS status "$EVENTS")
+# No warning when ack-timeout is disabled
+if echo "$STATUS" | grep -qi "stale"; then
+    check "No stale warning when ack-timeout=0" "fail"
+else
+    check "No stale warning when ack-timeout=0" "pass"
+fi
+
+# Now set a very short ack-timeout (1 second)
+cat > "$EVENTS/config.yaml" <<'YAML'
+ack-timeout: 1
+YAML
+
+sleep 1.1
+
+STATUS=$($NBS_BUS status "$EVENTS")
+# Should now warn about stale events
+if echo "$STATUS" | grep -qi "stale"; then
+    check "Stale warning appears when events exceed ack-timeout" "pass"
+else
+    check "Stale warning appears when events exceed ack-timeout (got: $STATUS)" "fail"
+fi
+
+echo ""
+
+# --- Test 40: Status stale warning respects handle ---
+echo "40. Status stale count is correct..."
+EVENTS="$TEST_DIR/events40"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+ack-timeout: 1
+YAML
+
+$NBS_BUS publish "$EVENTS" s1 t1 normal "event 1" > /dev/null
+$NBS_BUS publish "$EVENTS" s2 t2 high "event 2" > /dev/null
+
+sleep 1.1
+
+STATUS=$($NBS_BUS status "$EVENTS")
+# Should report 2 stale events
+if echo "$STATUS" | grep -q "2 stale"; then
+    check "Reports correct stale count" "pass"
+else
+    check "Reports correct stale count (got: $STATUS)" "fail"
 fi
 
 echo ""

@@ -221,6 +221,26 @@ static void read_event_fields(const char *filepath, int *priority,
     fclose(fp);
 }
 
+/* Format an age string from microsecond delta into buf.
+ * Produces: "0s ago", "45s ago", "3m ago", "2h ago", "5d ago". */
+static void format_age(long long delta_us, char *buf, size_t len)
+{
+    ASSERT_MSG(buf != NULL, "format_age: buf is NULL");
+    ASSERT_MSG(len >= 16, "format_age: buf too small: %zu", len);
+
+    long long seconds = delta_us / 1000000;
+    if (seconds < 0) seconds = 0;
+
+    if (seconds < 60)
+        snprintf(buf, len, "%llds ago", seconds);
+    else if (seconds < 3600)
+        snprintf(buf, len, "%lldm ago", seconds / 60);
+    else if (seconds < 86400)
+        snprintf(buf, len, "%lldh ago", seconds / 3600);
+    else
+        snprintf(buf, len, "%lldd ago", seconds / 86400);
+}
+
 /* Comparison function for sorting events: by priority (asc), then timestamp (asc) */
 static int event_compare(const void *a, const void *b)
 {
@@ -294,6 +314,7 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
     /* Set defaults */
     cfg->retention_max_bytes = BUS_DEFAULT_MAX_BYTES;
     cfg->dedup_window_s = BUS_DEFAULT_DEDUP_WINDOW;
+    cfg->ack_timeout_s = BUS_DEFAULT_ACK_TIMEOUT;
 
     /* Try to open config.yaml */
     char config_path[BUS_MAX_FULLPATH];
@@ -338,6 +359,12 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
             long long v = strtoll(val, &endp, 10);
             if (errno == 0 && *endp == '\0' && v >= 0)
                 cfg->dedup_window_s = v;
+        } else if (key_len == 11 && strncmp(line, "ack-timeout", 11) == 0) {
+            char *endp;
+            errno = 0;
+            long long v = strtoll(val, &endp, 10);
+            if (errno == 0 && *endp == '\0' && v >= 0)
+                cfg->ack_timeout_s = v;
         }
         /* Unknown keys silently ignored */
     }
@@ -511,13 +538,17 @@ int bus_check(const char *events_dir, const char *handle)
     qsort(events, (size_t)count, sizeof(bus_event_t), event_compare);
 
     /* Print results, optionally filtered by source handle */
+    long long current_us = now_us();
     for (int i = 0; i < count; i++) {
         if (handle && handle[0] != '\0' &&
             strcmp(events[i].source, handle) != 0)
             continue;
-        printf("[%s] %s\n",
+        char age[32];
+        format_age(current_us - events[i].timestamp_us, age, sizeof(age));
+        printf("[%s] %s (%s)\n",
                bus_priority_to_str(events[i].priority),
-               events[i].filename);
+               events[i].filename,
+               age);
     }
 
     return 0;
@@ -772,6 +803,23 @@ int bus_status(const char *events_dir)
 
     printf("Processed: %d events (%.1f KB)\n",
            processed_count, (double)processed_size / 1024.0);
+
+    /* Check for stale events if ack-timeout is configured */
+    bus_config_t cfg;
+    bus_load_config(events_dir, &cfg);
+    if (cfg.ack_timeout_s > 0 && count > 0) {
+        long long current_us = now_us();
+        long long timeout_us = cfg.ack_timeout_s * 1000000LL;
+        int stale = 0;
+        for (int i = 0; i < count; i++) {
+            if (current_us - events[i].timestamp_us > timeout_us)
+                stale++;
+        }
+        if (stale > 0) {
+            printf("WARNING: %d stale event%s (unacked > %llds)\n",
+                   stale, stale == 1 ? "" : "s", cfg.ack_timeout_s);
+        }
+    }
 
     return 0;
 }
