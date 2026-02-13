@@ -39,12 +39,12 @@ cat .nbs/events/config.yaml 2>/dev/null
 ```
 
 If the file does not exist, defaults apply:
-- `dedup-window: 300` (enforced via `--dedup-window` on `publish`)
-- `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune`)
+- `dedup-window: 300` (enforced via `--dedup-window` on `publish`; also read from config.yaml)
+- `retention-max-bytes: 16777216` (16MB — controlled via `--max-bytes` on `prune`; also read from config.yaml)
 - `notify: inotifywait` (planned — falls back to poll)
 - `poll-interval: 5` (planned)
 
-Note: in the current MVP, `config.yaml` is not read by the bus binary. Configuration is via command-line arguments. This step can be skipped until config file support is implemented.
+CLI arguments override config file values when both are present.
 
 ### Step 3: Scan pending events
 

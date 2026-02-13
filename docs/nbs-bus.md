@@ -117,9 +117,7 @@ fi
 
 ## Configuration
 
-> **MVP status:** Configuration file support is planned but not yet implemented. The MVP uses command-line arguments and hardcoded defaults. The schema below documents the target design.
-
-Configuration will live in `.nbs/events/config.yaml`:
+Configuration lives in `.nbs/events/config.yaml`:
 
 ```yaml
 # Deduplication window in seconds (default: 300)
@@ -129,16 +127,16 @@ dedup-window: 300
 # Oldest processed events are pruned when this limit is exceeded
 retention-max-bytes: 16777216
 
-# Notification mechanism: "inotifywait" or "poll"
+# Notification mechanism: "inotifywait" or "poll" (planned — not yet implemented)
 # inotifywait is more efficient but requires inotify-tools
 # Falls back to poll if inotifywait is unavailable
 notify: inotifywait
 
-# Poll interval in seconds (used when notify=poll or inotifywait unavailable)
+# Poll interval in seconds (planned — not yet implemented)
 poll-interval: 5
 ```
 
-If `config.yaml` does not exist, defaults apply. The bus works without configuration. In the current MVP, `retention-max-bytes` is controlled via `--max-bytes` on the `prune` command (default: 16MB).
+If `config.yaml` does not exist, defaults apply. The bus works without configuration. CLI arguments (e.g. `--dedup-window`, `--max-bytes`) override config file values when both are present.
 
 ## Priority Levels
 
