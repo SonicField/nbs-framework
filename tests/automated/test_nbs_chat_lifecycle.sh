@@ -381,6 +381,75 @@ check "Search exit 4 on missing pattern" "$( [[ "$SEARCH_NOARGS_RC" -eq 4 ]] && 
 
 echo ""
 
+
+# --- Test 17: --unread cursor tracking ---
+echo "17. --unread cursor tracking..."
+UNREAD_CHAT="$TEST_DIR/unread.chat"
+"$NBS_CHAT" create "$UNREAD_CHAT" >/dev/null
+"$NBS_CHAT" send "$UNREAD_CHAT" "alice" "Message one" >/dev/null
+"$NBS_CHAT" send "$UNREAD_CHAT" "bob" "Message two" >/dev/null
+"$NBS_CHAT" send "$UNREAD_CHAT" "alice" "Message three" >/dev/null
+
+# First --unread read: should see all messages (no cursor exists yet)
+UNREAD1=$("$NBS_CHAT" read "$UNREAD_CHAT" --unread=reader)
+check "--unread first read shows all 3 messages" "$( echo "$UNREAD1" | wc -l | awk '{print ($1 == 3) ? "pass" : "fail"}' )"
+
+# Second --unread read: should see nothing (cursor was advanced)
+UNREAD2=$("$NBS_CHAT" read "$UNREAD_CHAT" --unread=reader)
+check "--unread second read shows nothing" "$( [[ -z "$UNREAD2" ]] && echo pass || echo fail )"
+
+# Send a new message, then --unread should show only the new one
+"$NBS_CHAT" send "$UNREAD_CHAT" "bob" "Message four" >/dev/null
+UNREAD3=$("$NBS_CHAT" read "$UNREAD_CHAT" --unread=reader)
+check "--unread after new message shows only new" "$( echo "$UNREAD3" | grep -qF "Message four" && echo pass || echo fail )"
+check "--unread shows exactly 1 new message" "$( echo "$UNREAD3" | wc -l | awk '{print ($1 == 1) ? "pass" : "fail"}' )"
+
+# Different handles have independent cursors
+UNREAD4=$("$NBS_CHAT" read "$UNREAD_CHAT" --unread=reader2)
+check "--unread different handle sees all messages" "$( echo "$UNREAD4" | wc -l | awk '{print ($1 == 4) ? "pass" : "fail"}' )"
+
+# Cursor file exists
+check "Cursor file created" "$( [[ -f "${UNREAD_CHAT}.cursors" ]] && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 18: --unread combined with --last ---
+echo "18. --unread combined with --last..."
+COMBO_CHAT="$TEST_DIR/combo.chat"
+"$NBS_CHAT" create "$COMBO_CHAT" >/dev/null
+for i in $(seq 1 10); do
+    "$NBS_CHAT" send "$COMBO_CHAT" "sender" "Msg $i" >/dev/null
+done
+
+# --unread sees all 10, but --last=3 limits to last 3
+COMBO1=$("$NBS_CHAT" read "$COMBO_CHAT" --unread=reader --last=3)
+check "--unread with --last=3 shows 3 messages" "$( echo "$COMBO1" | wc -l | awk '{print ($1 == 3) ? "pass" : "fail"}' )"
+check "--unread with --last shows most recent" "$( echo "$COMBO1" | grep -qF "Msg 10" && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 19: --unread cursor survives multiple senders ---
+echo "19. --unread cursor survives concurrent activity..."
+MULTI_CHAT="$TEST_DIR/multi_cursor.chat"
+"$NBS_CHAT" create "$MULTI_CHAT" >/dev/null
+"$NBS_CHAT" send "$MULTI_CHAT" "a" "first" >/dev/null
+"$NBS_CHAT" send "$MULTI_CHAT" "b" "second" >/dev/null
+
+# reader1 reads (sees 2, cursor advances to index 1)
+"$NBS_CHAT" read "$MULTI_CHAT" --unread=reader1 >/dev/null
+
+# More messages arrive
+"$NBS_CHAT" send "$MULTI_CHAT" "a" "third" >/dev/null
+"$NBS_CHAT" send "$MULTI_CHAT" "b" "fourth" >/dev/null
+
+# reader1 should see only third and fourth
+MULTI1=$("$NBS_CHAT" read "$MULTI_CHAT" --unread=reader1)
+check "--unread tracks correctly across senders" "$( echo "$MULTI1" | wc -l | awk '{print ($1 == 2) ? "pass" : "fail"}' )"
+check "--unread first new message is correct" "$( echo "$MULTI1" | head -1 | grep -qF "third" && echo pass || echo fail )"
+check "--unread second new message is correct" "$( echo "$MULTI1" | tail -1 | grep -qF "fourth" && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then
