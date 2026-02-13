@@ -17,6 +17,14 @@
 #   13. Binary integrity: ASSERT_MSG strings present
 #   14. Help exits cleanly (exit code 0)
 #   15. Prune with no processed dir (clean exit)
+#   16. Publish without payload
+#   17. No temp files left after publish
+#   18. Dedup drops duplicate within window (exit 5)
+#   19. Dedup allows different source:type keys
+#   20. Dedup: same type, different source is not a duplicate
+#   21. No --dedup-window: duplicates allowed
+#   22. Dedup ignores acked (processed) events
+#   23. Invalid --dedup-window values rejected
 
 set -euo pipefail
 
@@ -563,6 +571,165 @@ if [[ "$TMP_FILES" -eq 0 ]]; then
     check "No temp files after publish" "pass"
 else
     check "No temp files after publish (found: $TMP_FILES)" "fail"
+fi
+
+echo ""
+
+# --- Test 18: Dedup drops duplicate within window ---
+echo "18. Dedup drops duplicate within window..."
+EVENTS="$TEST_DIR/events18"
+mkdir -p "$EVENTS/processed"
+
+# First publish should succeed
+E1=$($NBS_BUS publish "$EVENTS" dedup-src dedup-type normal "first" --dedup-window=300)
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "First publish succeeds" "pass"
+else
+    check "First publish succeeds (exit: $EXIT1)" "fail"
+fi
+
+# Second publish with same source:type within 300s window should be deduplicated
+set +e
+E2=$($NBS_BUS publish "$EVENTS" dedup-src dedup-type normal "second" --dedup-window=300 2>/dev/null)
+EXIT2=$?
+set -e
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "Duplicate dropped (exit code 5)" "pass"
+else
+    check "Duplicate dropped (exit code 5, got: $EXIT2)" "fail"
+fi
+
+# Only one event file should exist
+EVENT_COUNT=$(find "$EVENTS" -maxdepth 1 -name '*.event' | wc -l)
+if [[ "$EVENT_COUNT" -eq 1 ]]; then
+    check "Only one event file exists" "pass"
+else
+    check "Only one event file exists (got: $EVENT_COUNT)" "fail"
+fi
+
+echo ""
+
+# --- Test 19: Dedup allows different keys ---
+echo "19. Dedup allows different source:type keys..."
+EVENTS="$TEST_DIR/events19"
+mkdir -p "$EVENTS/processed"
+
+E1=$($NBS_BUS publish "$EVENTS" src-a type-a normal "first" --dedup-window=300)
+EXIT1=$?
+E2=$($NBS_BUS publish "$EVENTS" src-b type-b normal "second" --dedup-window=300)
+EXIT2=$?
+
+if [[ "$EXIT1" -eq 0 && "$EXIT2" -eq 0 ]]; then
+    check "Different keys both published" "pass"
+else
+    check "Different keys both published (exit1=$EXIT1, exit2=$EXIT2)" "fail"
+fi
+
+EVENT_COUNT=$(find "$EVENTS" -maxdepth 1 -name '*.event' | wc -l)
+if [[ "$EVENT_COUNT" -eq 2 ]]; then
+    check "Two event files exist" "pass"
+else
+    check "Two event files exist (got: $EVENT_COUNT)" "fail"
+fi
+
+echo ""
+
+# --- Test 20: Dedup allows same key with different source ---
+echo "20. Dedup: same type, different source is not a duplicate..."
+EVENTS="$TEST_DIR/events20"
+mkdir -p "$EVENTS/processed"
+
+$NBS_BUS publish "$EVENTS" worker-a task-done normal "first" --dedup-window=300 > /dev/null
+E2=$($NBS_BUS publish "$EVENTS" worker-b task-done normal "second" --dedup-window=300)
+EXIT2=$?
+
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "Different source, same type: not deduplicated" "pass"
+else
+    check "Different source, same type: not deduplicated (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 21: Dedup without --dedup-window allows duplicates ---
+echo "21. No --dedup-window: duplicates allowed..."
+EVENTS="$TEST_DIR/events21"
+mkdir -p "$EVENTS/processed"
+
+$NBS_BUS publish "$EVENTS" dup-src dup-type normal "first" > /dev/null
+E2=$($NBS_BUS publish "$EVENTS" dup-src dup-type normal "second")
+EXIT2=$?
+
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "Without dedup window, duplicate allowed" "pass"
+else
+    check "Without dedup window, duplicate allowed (exit: $EXIT2)" "fail"
+fi
+
+EVENT_COUNT=$(find "$EVENTS" -maxdepth 1 -name '*.event' | wc -l)
+if [[ "$EVENT_COUNT" -eq 2 ]]; then
+    check "Two event files exist" "pass"
+else
+    check "Two event files exist (got: $EVENT_COUNT)" "fail"
+fi
+
+echo ""
+
+# --- Test 22: Dedup ignores acked (processed) events ---
+echo "22. Dedup ignores acked events..."
+EVENTS="$TEST_DIR/events22"
+mkdir -p "$EVENTS/processed"
+
+# Publish and ack
+E1=$($NBS_BUS publish "$EVENTS" acked-src acked-type normal "will be acked" --dedup-window=300)
+$NBS_BUS ack "$EVENTS" "$E1"
+
+# Same key should now be allowed (previous event is in processed/)
+E2=$($NBS_BUS publish "$EVENTS" acked-src acked-type normal "after ack" --dedup-window=300)
+EXIT2=$?
+
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "After ack, same key publishes again" "pass"
+else
+    check "After ack, same key publishes again (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 23: Dedup with invalid window value ---
+echo "23. Invalid --dedup-window value rejected..."
+EVENTS="$TEST_DIR/events23"
+mkdir -p "$EVENTS/processed"
+
+set +e
+$NBS_BUS publish "$EVENTS" src typ normal "payload" --dedup-window=abc > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Non-numeric dedup-window rejected (exit 4)" "pass"
+else
+    check "Non-numeric dedup-window rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS publish "$EVENTS" src typ normal "payload" --dedup-window=0 > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Zero dedup-window rejected (exit 4)" "pass"
+else
+    check "Zero dedup-window rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS publish "$EVENTS" src typ normal "payload" --dedup-window=-5 > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Negative dedup-window rejected (exit 4)" "pass"
+else
+    check "Negative dedup-window rejected (exit 4, got: $EXIT_CODE)" "fail"
 fi
 
 echo ""

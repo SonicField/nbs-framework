@@ -119,6 +119,27 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
                 int priority, const char *payload);
 
 /*
+ * bus_publish_dedup — Publish with deduplication.
+ *
+ * Before creating the event, scans pending events for a matching dedup-key
+ * (source:type) with a timestamp within dedup_window_us of now.  If a
+ * match is found, the event is dropped (not published).
+ *
+ * Preconditions:
+ *   - Same as bus_publish
+ *   - dedup_window_us > 0
+ *
+ * Postconditions:
+ *   - If no duplicate: same as bus_publish (return 0)
+ *   - If duplicate found: no file created, return BUS_EXIT_DEDUP (5)
+ *
+ * Returns 0 on success, BUS_EXIT_DEDUP if deduplicated, -1 on error.
+ */
+int bus_publish_dedup(const char *events_dir, const char *source,
+                      const char *type, int priority, const char *payload,
+                      long long dedup_window_us);
+
+/*
  * bus_check — List pending events sorted by priority then timestamp.
  *
  * Preconditions:

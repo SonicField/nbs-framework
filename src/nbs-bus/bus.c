@@ -143,6 +143,38 @@ static int parse_event_filename_timestamp(const char *filename, long long *ts_us
     return 0;
 }
 
+/* Read the dedup-key from an event file's content (the "dedup-key: X" line).
+ * Returns 0 on success, -1 if not found. key_buf is NUL-terminated. */
+static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_len)
+{
+    ASSERT_MSG(filepath != NULL, "read_event_dedup_key: filepath is NULL");
+    ASSERT_MSG(key_buf != NULL, "read_event_dedup_key: key_buf is NULL");
+    ASSERT_MSG(key_len > 0, "read_event_dedup_key: key_len is 0");
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) return -1;
+
+    char line[512];
+    int found = -1;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "dedup-key: ", 11) == 0) {
+            /* Trim trailing newline */
+            char *nl = strchr(line + 11, '\n');
+            if (nl) *nl = '\0';
+            size_t klen = strlen(line + 11);
+            if (klen >= key_len) klen = key_len - 1;
+            memcpy(key_buf, line + 11, klen);
+            key_buf[klen] = '\0';
+            found = 0;
+            break;
+        }
+    }
+
+    fclose(fp);
+    return found;
+}
+
 /* Read priority from an event file's content (the "priority: X" line) */
 static int read_event_priority(const char *filepath)
 {
@@ -653,4 +685,76 @@ int bus_status(const char *events_dir)
            processed_count, (double)processed_size / 1024.0);
 
     return 0;
+}
+
+int bus_publish_dedup(const char *events_dir, const char *source,
+                      const char *type, int priority, const char *payload,
+                      long long dedup_window_us)
+{
+    ASSERT_MSG(events_dir != NULL, "bus_publish_dedup: events_dir is NULL");
+    ASSERT_MSG(source != NULL, "bus_publish_dedup: source is NULL");
+    ASSERT_MSG(type != NULL, "bus_publish_dedup: type is NULL");
+    ASSERT_MSG(dedup_window_us > 0,
+               "bus_publish_dedup: dedup_window_us <= 0: %lld", dedup_window_us);
+
+    /* Build the dedup key for this proposed event */
+    char proposed_key[BUS_MAX_HANDLE + BUS_MAX_TYPE + 2];
+    snprintf(proposed_key, sizeof(proposed_key), "%s:%s", source, type);
+
+    long long current_us = now_us();
+    long long cutoff_us = current_us - dedup_window_us;
+
+    /* Scan pending events directory for duplicates */
+    DIR *dir = opendir(events_dir);
+    if (!dir) {
+        /* Directory doesn't exist — proceed to publish (it will fail there) */
+        return bus_publish(events_dir, source, type, priority, payload);
+    }
+
+    struct dirent *entry;
+    int duplicate_found = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        size_t nlen = strlen(name);
+        if (nlen < 7 || strcmp(name + nlen - 6, ".event") != 0)
+            continue;
+
+        /* Parse timestamp from filename */
+        long long ts_us;
+        if (parse_event_filename_timestamp(name, &ts_us) != 0)
+            continue;
+
+        /* Skip events older than the dedup window */
+        if (ts_us < cutoff_us)
+            continue;
+
+        /* Read dedup-key from file content */
+        char fullpath[BUS_MAX_FULLPATH];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+
+        /* Skip directories (e.g. processed/) */
+        struct stat st;
+        if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+
+        char existing_key[BUS_MAX_HANDLE + BUS_MAX_TYPE + 2];
+        if (read_event_dedup_key(fullpath, existing_key, sizeof(existing_key)) != 0)
+            continue;
+
+        if (strcmp(proposed_key, existing_key) == 0) {
+            duplicate_found = 1;
+            break;
+        }
+    }
+
+    closedir(dir);
+
+    if (duplicate_found) {
+        fprintf(stderr, "Dedup: event %s dropped (duplicate within window)\n",
+                proposed_key);
+        return BUS_EXIT_DEDUP;
+    }
+
+    return bus_publish(events_dir, source, type, priority, payload);
 }

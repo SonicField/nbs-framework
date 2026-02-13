@@ -28,8 +28,10 @@ static void print_usage(void)
         "Usage: nbs-bus <command> [args...]\n"
         "\n"
         "Commands:\n"
-        "  publish <dir> <source> <type> <priority> [payload]\n"
+        "  publish <dir> <source> <type> <priority> [payload] [--dedup-window=N]\n"
         "      Write an event file to the queue.\n"
+        "      --dedup-window=N: drop if same source:type exists within N seconds.\n"
+        "                        Exit code 5 when deduplicated.\n"
         "\n"
         "  check <dir> [--handle=<name>]\n"
         "      List pending events, highest priority first.\n"
@@ -95,6 +97,25 @@ static long long parse_max_bytes_opt(int argc, char **argv, int start)
     return DEFAULT_MAX_BYTES;
 }
 
+/* Parse --dedup-window=<seconds> from argv. Returns microseconds or 0 (disabled). */
+static long long parse_dedup_window_opt(int argc, char **argv, int start)
+{
+    for (int i = start; i < argc; i++) {
+        if (strncmp(argv[i], "--dedup-window=", 15) == 0) {
+            const char *s = argv[i] + 15;
+            char *endp;
+            errno = 0;
+            long long val = strtoll(s, &endp, 10);
+            if (errno != 0 || *endp != '\0' || val <= 0) {
+                fprintf(stderr, "Error: invalid --dedup-window value: %s\n", s);
+                return -1;
+            }
+            return val * 1000000LL; /* seconds to microseconds */
+        }
+    }
+    return 0; /* disabled by default */
+}
+
 /* Verify events directory exists, print appropriate error if not. */
 static int verify_events_dir(const char *dir)
 {
@@ -114,9 +135,9 @@ static int verify_events_dir(const char *dir)
 
 static int cmd_publish(int argc, char **argv)
 {
-    /* nbs-bus publish <dir> <source> <type> <priority> [payload] */
+    /* nbs-bus publish <dir> <source> <type> <priority> [payload] [--dedup-window=N] */
     if (argc < 6) {
-        fprintf(stderr, "Usage: nbs-bus publish <dir> <source> <type> <priority> [payload]\n");
+        fprintf(stderr, "Usage: nbs-bus publish <dir> <source> <type> <priority> [payload] [--dedup-window=N]\n");
         return BUS_EXIT_BAD_ARGS;
     }
 
@@ -124,7 +145,11 @@ static int cmd_publish(int argc, char **argv)
     const char *source = argv[3];
     const char *type = argv[4];
     const char *priority_str = argv[5];
-    const char *payload = (argc > 6) ? argv[6] : NULL;
+
+    /* Payload is the first positional arg after priority that doesn't start with -- */
+    const char *payload = NULL;
+    if (argc > 6 && strncmp(argv[6], "--", 2) != 0)
+        payload = argv[6];
 
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
@@ -134,6 +159,19 @@ static int cmd_publish(int argc, char **argv)
         fprintf(stderr, "Error: invalid priority '%s' (use: critical, high, normal, low)\n",
                 priority_str);
         return BUS_EXIT_BAD_ARGS;
+    }
+
+    long long dedup_window_us = parse_dedup_window_opt(argc, argv, 6);
+    if (dedup_window_us < 0)
+        return BUS_EXIT_BAD_ARGS;
+
+    if (dedup_window_us > 0) {
+        rc = bus_publish_dedup(dir, source, type, priority, payload, dedup_window_us);
+        if (rc == BUS_EXIT_DEDUP)
+            return BUS_EXIT_DEDUP;
+        if (rc != 0)
+            return BUS_EXIT_ERROR;
+        return BUS_EXIT_OK;
     }
 
     if (bus_publish(dir, source, type, priority, payload) != 0)
