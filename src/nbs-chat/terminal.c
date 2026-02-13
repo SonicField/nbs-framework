@@ -23,6 +23,7 @@
 #include "chat_file.h"
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -196,9 +197,10 @@ static void print_prompt(const char *handle) {
 static void print_help(void) {
     printf("\n");
     printf("%sCommands:%s\n", BOLD, RESET);
-    printf("  %s/edit%s   Open $EDITOR to compose a multi-line message\n", DIM, RESET);
-    printf("  %s/help%s   Show this help\n", DIM, RESET);
-    printf("  %s/exit%s   Leave the chat\n", DIM, RESET);
+    printf("  %s/edit%s     Open $EDITOR to compose a multi-line message\n", DIM, RESET);
+    printf("  %s/search%s   Search message history (e.g. /search parser)\n", DIM, RESET);
+    printf("  %s/help%s     Show this help\n", DIM, RESET);
+    printf("  %s/exit%s     Leave the chat\n", DIM, RESET);
     printf("\n");
     printf("%sInput:%s\n", BOLD, RESET);
     printf("  %sEnter%s        Send the message\n", DIM, RESET);
@@ -475,6 +477,23 @@ static int handle_escape_input(line_state_t *ls, esc_parser_t *esc,
     /* Should not reach here */
     esc->state = ESC_NONE;
     return 1;
+}
+
+/* --- Case-insensitive substring search --- */
+
+static const char *strcasestr_portable(const char *haystack, const char *needle) {
+    ASSERT_MSG(haystack != NULL, "strcasestr_portable: haystack is NULL");
+    ASSERT_MSG(needle != NULL, "strcasestr_portable: needle is NULL");
+
+    if (needle[0] == '\0') return haystack;
+
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; p++) {
+        if (strncasecmp(p, needle, nlen) == 0) {
+            return p;
+        }
+    }
+    return NULL;
 }
 
 /* --- Non-destructive message display --- */
@@ -830,6 +849,50 @@ int main(int argc, char **argv) {
                 }
                 /* Check for messages that arrived during editing */
                 poll_and_display(&edit, g_handle);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            if (strncmp(edit.buf, "/search ", 8) == 0) {
+                const char *pattern = edit.buf + 8;
+                /* Skip leading whitespace */
+                while (*pattern == ' ') pattern++;
+
+                if (*pattern == '\0') {
+                    printf("  %sUsage: /search <pattern>%s\n", DIM, RESET);
+                } else {
+                    chat_state_t search_state;
+                    if (chat_read(g_chat_file, &search_state) == 0) {
+                        int match_count = 0;
+                        for (int si = 0; si < search_state.message_count; si++) {
+                            if (strcasestr_portable(search_state.messages[si].content,
+                                                    pattern) != NULL) {
+                                printf("  %s[%d]%s ", DIM, si, RESET);
+                                format_message(search_state.messages[si].handle,
+                                              search_state.messages[si].content,
+                                              g_handle);
+                                match_count++;
+                            }
+                        }
+                        if (match_count == 0) {
+                            printf("  %sNo matches found.%s\n", DIM, RESET);
+                        } else {
+                            printf("  %s%d match(es)%s\n", DIM, match_count, RESET);
+                        }
+                        chat_state_free(&search_state);
+                    } else {
+                        printf("  %s(search failed — could not read chat)%s\n",
+                               DIM, RESET);
+                    }
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            if (strcmp(edit.buf, "/search") == 0) {
+                printf("  %sUsage: /search <pattern>%s\n", DIM, RESET);
+                line_state_reset(&edit);
                 print_prompt(g_handle);
                 continue;
             }
