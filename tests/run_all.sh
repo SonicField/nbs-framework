@@ -88,6 +88,7 @@ if $QUICK_MODE; then
     skip_test "test_control_inbox_ai"
     skip_test "test_poll_registry_ai"
     skip_test "test_nbs_chat_ai_integration"
+    skip_test "test_nbs_chat_search_ai"
 else
     if [[ -f "$SCRIPT_DIR/automated/test_install_worker.sh" ]]; then
         run_test "$SCRIPT_DIR/automated/test_install_worker.sh"
@@ -105,6 +106,9 @@ else
     run_test "$SCRIPT_DIR/automated/test_poll_registry_ai.sh"
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_ai_integration.sh" ]]; then
         run_test "$SCRIPT_DIR/automated/test_nbs_chat_ai_integration.sh"
+    fi
+    if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh" ]]; then
+        run_test "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh"
     fi
 fi
 
