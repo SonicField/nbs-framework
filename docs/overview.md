@@ -53,6 +53,22 @@ Claude Code slash commands that apply these principles:
 | `/nbs-discovery-verify` | Verify discovery report is complete (auto-dispatched) |
 | `/nbs-recovery` | Step-wise restructuring with confirmation |
 | `/nbs-investigation` | Hypothesis testing through isolated experiments |
+| `/nbs-audit` | Audit codebase against engineering standards with parallel sub-agents |
+| `/nbs-poll` | Periodic check of chats and workers (heartbeat) |
+| `/nbs-chat-digest` | Summarise chat channel history |
+| `/nbs-pte` | Precise Technical English mode for unambiguous specifications |
+| `/nbs-natural` | Exit Precise Technical English mode |
+
+In addition to slash commands, the framework includes C binaries:
+
+| Binary | Purpose |
+|--------|---------|
+| `nbs-hub` | Deterministic process enforcement for teams — audit gates, phase gates, stall detection |
+| `nbs-chat` | File-based messaging (non-interactive commands) |
+| `nbs-chat-terminal` | Interactive terminal client for human participation |
+| `nbs-chat-remote` | SSH proxy for remote chat access |
+| `nbs-worker` | Worker lifecycle management (spawn, monitor, dismiss) |
+| `nbs-claude` | Sidecar for Claude Code integration (poll injection, plan mode auto-select) |
 
 The dispatch design keeps one entry point (`/nbs`) while allowing context-specific verification. Run `/nbs` after discovery and it verifies the report. Run it after recovery and it reviews the work. Run it mid-session and it audits for drift.
 

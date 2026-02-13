@@ -89,7 +89,7 @@ Internally, `poll` checks once per second under lock. No inotify, no daemons —
 
 ## Terminal Client
 
-`nbs-chat-terminal` is a separate interactive script for human participation:
+`nbs-chat-terminal` is a separate interactive binary for human participation:
 
 ```bash
 nbs-chat-terminal <file> <handle>
@@ -131,18 +131,31 @@ Any participant can create the chat file. Typically the process that spawns othe
 
 **Why file-length in the header?** Integrity check. If `wc -c` doesn't match the header, something went wrong. The test suite verifies this holds even under 50 concurrent writers.
 
-**Why not a database?** No dependencies. Runs anywhere bash and coreutils exist. The file format is human-readable (header is plain text, messages decode with `base64 -d`). For coordination at the scale of a handful of participants, a file is sufficient.
+**Why not a database?** No external dependencies. The file format is human-readable (header is plain text, messages decode with `base64 -d`). For coordination at the scale of a handful of participants, a file is sufficient.
 
 **Why no privilege model?** The file is the authority. If you can read the file, you can participate. Access control is filesystem permissions, not application logic.
 
 ## Location
 
 ```
-bin/nbs-chat            # Non-interactive commands
-bin/nbs-chat-terminal   # Interactive terminal client
+bin/nbs-chat            # Non-interactive commands (C binary)
+bin/nbs-chat-terminal   # Interactive terminal client (C binary)
+bin/nbs-chat-remote     # SSH proxy for remote chat access (C binary)
 ```
 
+Source code in `src/nbs-chat/`. Build with `make` in that directory.
+
 Installed to `~/.nbs/bin/` by `bin/install.sh`.
+
+## Remote Access
+
+`nbs-chat-remote` proxies `nbs-chat` commands over SSH, allowing a local Claude instance to read and write chat files on a remote machine. It forwards the same command syntax (`send`, `read`, `poll`, etc.) to a remote `nbs-chat` binary via SSH.
+
+Configuration via environment variables:
+- `NBS_CHAT_HOST` — remote hostname
+- `NBS_CHAT_PORT` — SSH port
+- `NBS_CHAT_KEY` — path to SSH private key
+- `NBS_CHAT_OPTS` — comma-separated SSH `-o` options (max 4)
 
 ## See Also
 

@@ -64,6 +64,28 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
     └── ...
 ```
 
+## The Hub
+
+For any teams work beyond a single worker, use `nbs-hub`. It is a deterministic C binary that enforces process discipline — audit gates, phase gates, stall detection, and the 3Ws cadence. The hub wraps `nbs-worker` and adds structure that prevents supervisors from drifting.
+
+```bash
+# Initialise
+nbs-hub init /path/to/project "Terminal goal here"
+
+# Spawn workers (hub enforces audit gates after every 3 results)
+nbs-hub spawn my-task "Implement the parser. Pass all 84 tests."
+
+# Check status, collect results, dismiss
+nbs-hub check my-task-a3f1
+nbs-hub result my-task-a3f1
+nbs-hub dismiss my-task-a3f1
+
+# Full status overview (also works for session recovery)
+nbs-hub status
+```
+
+Without the hub, you manage workers directly with `nbs-worker` commands. This is fine for one-off tasks but lacks enforcement. See [nbs-hub reference](/claude_tools/nbs-hub.md) for full command documentation.
+
 ## Commands
 
 | Command | Purpose |
@@ -74,6 +96,7 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 | `/nbs-teams-worker` | Worker role reference |
 | `/nbs-teams-chat` | AI-to-AI chat reference |
 | `/nbs-tmux-worker` | nbs-worker command reference |
+| `/nbs-hub` | Hub reference (deterministic process enforcement) |
 
 ### Getting Help
 
@@ -91,9 +114,10 @@ Claude walks you through interactively, using your actual project for examples i
 
 1. Run `/nbs-teams-start`
 2. Answer the terminal goal question
-3. Decompose into worker tasks
-4. Spawn workers with `nbs-worker spawn`
-5. Capture 3Ws after each completes
+3. Initialise the hub: `nbs-hub init <project-dir> "<terminal goal>"`
+4. Decompose into worker tasks
+5. Spawn workers with `nbs-hub spawn` (or `nbs-worker spawn` without hub)
+6. Capture 3Ws after each completes
 
 ## 3Ws
 
@@ -124,6 +148,7 @@ Don't use when:
 
 ## See Also
 
+- [nbs-hub](nbs-hub.md) - Deterministic process enforcement for AI teams (mandatory for multi-worker projects)
 - [nbs-chat](nbs-chat.md) - File-based AI-to-AI chat for worker coordination
 - [nbs-worker](nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 - [Why NBS](Why-NBS.md) - The philosophy behind the framework

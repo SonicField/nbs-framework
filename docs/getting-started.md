@@ -5,13 +5,20 @@
 ```bash
 git clone https://github.com/SonicField/nbs-framework.git
 cd nbs-framework
+
+# Build C binaries (nbs-chat, nbs-chat-terminal, nbs-chat-remote, nbs-hub)
+cd src/nbs-chat && make && cd ../..
+cd src/nbs-hub && make && cd ../..
+
+# Install (symlinks bin/ to ~/.nbs/bin/, installs Claude commands)
 ./bin/install.sh
 ```
 
 This:
-1. Processes command templates with your install path
-2. Creates `~/.nbs/` with commands and symlinks to concepts/docs/bin
-3. Creates symlinks in `~/.claude/commands/` for Claude Code
+1. Compiles the C tools (`nbs-chat`, `nbs-chat-terminal`, `nbs-hub`, etc.)
+2. Processes command templates with your install path
+3. Creates `~/.nbs/` with commands and symlinks to concepts/docs/bin
+4. Creates symlinks in `~/.claude/commands/` for Claude Code
 
 Restart Claude Code to pick up the commands.
 
@@ -38,7 +45,13 @@ The command asks for your terminal goal and creates:
 - `.nbs/decisions.log` - Append-only decision record
 - `.nbs/workers/` - Worker task files go here
 
-You become the supervisor. Decompose work into tasks. Spawn workers. Capture learnings.
+You become the supervisor. Initialise the hub for process enforcement:
+
+```bash
+nbs-hub init /path/to/project "Your terminal goal"
+```
+
+Then decompose work into tasks, spawn workers with `nbs-hub spawn`, and capture learnings.
 
 Need help?
 
@@ -46,7 +59,7 @@ Need help?
 /nbs-teams-help
 ```
 
-Interactive guidance on spawning workers, writing tasks, task scope, monitoring.
+Interactive guidance on spawning workers, writing tasks, task scope, monitoring, and hub usage.
 
 ```
 /nbs-help

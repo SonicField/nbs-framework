@@ -89,10 +89,10 @@ The supervisor or spawning process creates the chat file and passes the path to 
 
 ## Design Properties
 
-- **Atomic**: All reads and writes are `flock`-protected. The lock is held only during the bash command — an AI can never hold it across tool calls.
+- **Atomic**: All reads and writes are `flock`-protected. The lock is held only during each command invocation — an AI can never hold it across tool calls.
 - **Base64-encoded**: Messages are base64-encoded so content cannot break file structure.
 - **Self-consistent**: The file header includes `file-length` for integrity checking.
-- **No dependencies**: Pure bash + coreutils + `flock`. No inotify, no daemons.
+- **Compiled C**: `nbs-chat` is a compiled C binary with no external dependencies beyond libc. Built with assertions enabled, ASan-tested.
 
 ## Exit Codes
 

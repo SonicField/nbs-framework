@@ -9,6 +9,7 @@ A framework for honest collaboration between humans and AI systems.
 - [Getting Started](docs/getting-started.md) - Installation and first use
 - [NBS Teams](docs/nbs-teams.md) - Supervisor/worker patterns for multi-agent work
 - [NBS Chat](docs/nbs-chat.md) - File-based AI-to-AI chat for worker coordination
+- [NBS Hub](claude_tools/nbs-hub.md) - Deterministic process enforcement for teams
 - [Testing Strategy](docs/testing-strategy.md) - AI-evaluates-AI testing approach
 - [Interactive Testing](docs/interactive-testing.md) - Multi-turn testing with pty-session
 - [pty-session Reference](docs/pty-session.md) - Terminal session manager for automation
@@ -60,6 +61,12 @@ For AI-as-supervisor or AI-as-worker roles:
 - [NBS Teams Worker](claude_tools/nbs-teams-worker.md) - Role and responsibilities for worker
 - [NBS Teams Chat](claude_tools/nbs-teams-chat.md) - File-based AI-to-AI chat for worker coordination
 
+### Hub (Process Enforcement)
+
+The [hub](claude_tools/nbs-hub.md) is a deterministic C binary that enforces process discipline on AI supervisors. Mandatory for teams work.
+
+- [nbs-hub](claude_tools/nbs-hub.md) - Audit gates, phase gates, stall detection, document registry, session recovery
+
 ### Workflow Commands
 
 - [/nbs-discovery](claude_tools/nbs-discovery.md) - Read-only archaeology for messy projects
@@ -86,6 +93,14 @@ Run this when you want to test a hypothesis before committing to a direction. Cr
 
 - [/nbs-discovery-verify](claude_tools/nbs-discovery-verify.md) - Verify discovery report completeness (auto-dispatched by /nbs)
 
+### Operational Tools
+
+- [/nbs-audit](claude_tools/nbs-audit.md) - Audit codebase against engineering standards with parallel sub-agents
+- [/nbs-poll](claude_tools/nbs-poll.md) - Periodic check of chats and workers (heartbeat)
+- [/nbs-chat-digest](claude_tools/nbs-chat-digest.md) - Summarise chat channel history
+- [/nbs-pte](claude_tools/nbs-pte.md) - Precise Technical English mode for unambiguous specifications
+- [/nbs-natural](claude_tools/nbs-natural.md) - Exit Precise Technical English mode
+
 ## Sub-Projects
 
 ### Terminal Weathering
@@ -99,12 +114,14 @@ Progressive replacement of CPython call protocol paths with C type slot implemen
 
 ## Testing
 
-The framework includes automated tests using a novel AI-evaluates-AI approach.
+The framework includes automated tests using a novel AI-evaluates-AI approach, plus unit tests for C binaries.
 
 - [Testing Strategy](docs/testing-strategy.md) - Philosophy, adversarial testing, test isolation
 - [Interactive Testing](docs/interactive-testing.md) - Using pty-session for multi-turn tests
 - [pty-session Reference](docs/pty-session.md) - Interactive terminal session manager (REPLs, debuggers)
 - [nbs-worker Reference](docs/nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
+
+C binary tests: `tests/automated/test_nbs_hub.sh`, `tests/automated/test_nbs_chat.sh`, `tests/automated/test_nbs_chat_remote.sh`
 
 See [tests/README.md](tests/README.md) for running tests.
 
@@ -119,6 +136,22 @@ Project plans and progress logs live in `planning/`:
 ```bash
 git clone https://github.com/SonicField/nbs-framework.git
 cd nbs-framework
+```
+
+### Building the C binaries
+
+The framework includes C binaries for `nbs-hub`, `nbs-chat`, `nbs-chat-terminal`, and `nbs-chat-remote`. Build them before installing:
+
+```bash
+cd src/nbs-hub && make && cd ../..
+cd src/nbs-chat && make && cd ../..
+```
+
+The compiled binaries are placed in `bin/`.
+
+### Installing
+
+```bash
 ./bin/install.sh
 ```
 
