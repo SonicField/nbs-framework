@@ -3,7 +3,7 @@ CC = gcc
 # Build modes
 # Default: optimised with asserts ON (no -DNDEBUG).
 # Asserts are executable specifications, not debugging aids.
-COMMON_CFLAGS = -Wall -Wextra -Werror -std=c11 -D_GNU_SOURCE
+COMMON_CFLAGS = -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
 CFLAGS ?= $(COMMON_CFLAGS) -O2
 LDFLAGS =
 
