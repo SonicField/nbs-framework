@@ -30,6 +30,7 @@ cleanup() {
     tmux kill-session -t "pty_lifecycle-test" 2>/dev/null || true
     tmux kill-session -t "pty_persist-test" 2>/dev/null || true
     tmux kill-session -t "pty_crossdir-test" 2>/dev/null || true
+    tmux kill-session -t "pty_bus-test" 2>/dev/null || true
     # Kill any sessions spawned via nbs-worker (pty_ prefix + generated hash)
     for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^pty_crossdir-" || true); do
         tmux kill-session -t "$s" 2>/dev/null || true
@@ -395,6 +396,56 @@ fi
 
 # Return to test dir for remaining tests
 cd "$TEST_DIR"
+
+# --- Test 13: Bus events published on dismiss ---
+echo "13. Bus events on worker dismiss..."
+
+# Set up events directory for bus integration
+NBS_BUS="$PROJECT_ROOT/bin/nbs-bus"
+if [[ -x "$NBS_BUS" ]]; then
+    mkdir -p "$TEST_DIR/.nbs/events/processed"
+
+    # Create a worker manually (no tmux needed for this test)
+    BUS_WORKER="bus-test"
+    BUS_TASK=".nbs/workers/${BUS_WORKER}.md"
+    cat > "$BUS_TASK" <<EOF
+# Worker: bus-test
+
+## Task
+
+Bus integration test.
+
+## Status
+
+State: running
+Started: $(date '+%Y-%m-%d %H:%M:%S')
+Completed:
+
+## Log
+
+[Worker appends findings here]
+EOF
+
+    # Create tmux session so dismiss has something to kill
+    tmux new-session -d -s "pty_${BUS_WORKER}" 'bash'
+    sleep 0.5
+
+    # Dismiss the worker — should publish a worker-dismissed event
+    "$NBS_WORKER" dismiss "$BUS_WORKER" > /dev/null 2>&1
+
+    # Check if a bus event was published
+    DISMISS_EVENTS=$(find "$TEST_DIR/.nbs/events" -maxdepth 1 -name "*${BUS_WORKER}*worker-dismissed*.event" 2>/dev/null | wc -l)
+    if [[ "$DISMISS_EVENTS" -ge 1 ]]; then
+        echo "   PASS: worker-dismissed event published to bus"
+    else
+        # Check if any events exist at all
+        ALL_EVENTS=$(find "$TEST_DIR/.nbs/events" -maxdepth 1 -name "*.event" 2>/dev/null | wc -l)
+        echo "   FAIL: worker-dismissed event not found (total events: $ALL_EVENTS)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "   SKIP: nbs-bus binary not found at $NBS_BUS"
+fi
 
 # --- Summary ---
 echo ""

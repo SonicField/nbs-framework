@@ -28,6 +28,37 @@ set -uo pipefail
 
 PREFIX="pty_"
 WORKERS_DIR=".nbs/workers"
+EVENTS_DIR=".nbs/events"
+
+# --- Bus integration ---
+
+# Publish a bus event if the events directory and nbs-bus binary exist.
+# Gracefully does nothing if the bus is not set up.
+# Usage: bus_publish <source> <type> <priority> [payload]
+bus_publish() {
+    local source="$1"
+    local type="$2"
+    local priority="$3"
+    local payload="${4:-}"
+
+    # Find nbs-bus binary
+    local nbs_bus=""
+    if command -v nbs-bus >/dev/null 2>&1; then
+        nbs_bus="nbs-bus"
+    elif [[ -x "bin/nbs-bus" ]]; then
+        nbs_bus="bin/nbs-bus"
+    fi
+
+    # No binary or no events dir — skip silently
+    [[ -n "$nbs_bus" ]] || return 0
+    [[ -d "$EVENTS_DIR" ]] || return 0
+
+    if [[ -n "$payload" ]]; then
+        $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" "$payload" >/dev/null 2>&1 || true
+    else
+        $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" >/dev/null 2>&1 || true
+    fi
+}
 
 # --- Assertion helpers ---
 
@@ -274,6 +305,9 @@ TASKEOF
     sleep 1
     tmux send-keys -t "$session" "" Enter
 
+    # Publish bus event
+    bus_publish "$name" "worker-spawned" "normal" "Task: ${task_description}"
+
     echo "$name"
     echo "  project:   $abs_project_dir" >&2
     echo "  task file:  $task_file" >&2
@@ -334,6 +368,11 @@ cmd_status() {
     echo "  tmux session: $alive"
     echo "  task state:   $state"
     echo "  status:       $reported_status"
+
+    # Publish bus event for dead workers that are still marked as running
+    if [[ "$reported_status" == "died (session exited unexpectedly)" ]]; then
+        bus_publish "$name" "worker-died" "high" "Worker $name: tmux dead but state still running"
+    fi
 
     return 0
 }
@@ -485,6 +524,9 @@ cmd_dismiss() {
     else
         echo "Note: No log file found (worker may not have produced output)"
     fi
+
+    # Publish bus event
+    bus_publish "$name" "worker-dismissed" "normal"
 
     echo "Dismissed: $name"
     return 0
