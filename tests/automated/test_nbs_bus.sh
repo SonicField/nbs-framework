@@ -31,6 +31,12 @@
 #   27. Missing config.yaml uses defaults
 #   28. Invalid config.yaml values ignored
 #   29. Config.yaml with comments and unknown keys
+#   30. Config.yaml with extremely long line (>512 bytes)
+#   31. Config.yaml with binary content
+#   32. Config.yaml without trailing newline
+#   33. Config.yaml with empty/whitespace values
+#   34. Config.yaml with numeric overflow values
+#   35. Config.yaml with bare colons and odd formatting
 
 set -euo pipefail
 
@@ -919,6 +925,156 @@ if [[ "$EXIT2" -eq 5 ]]; then
     check "Config dedup-window from commented config works" "pass"
 else
     check "Config dedup-window from commented config works (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 30: Config.yaml with extremely long lines ---
+echo "30. Config.yaml with extremely long line..."
+EVENTS="$TEST_DIR/events30"
+mkdir -p "$EVENTS/processed"
+
+# Create a config with a line longer than the 512-byte buffer
+LONG_VALUE=$(python3 -c "print('x' * 1000)")
+cat > "$EVENTS/config.yaml" <<YAML
+dedup-window: 60
+retention-max-bytes: $LONG_VALUE
+YAML
+
+# Should handle gracefully — long line truncated, valid key still works
+E1=$($NBS_BUS publish "$EVENTS" long-src long-type normal "test")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "Long config line handled safely" "pass"
+else
+    check "Long config line handled safely (exit: $EXIT1)" "fail"
+fi
+
+# dedup-window: 60 should still work
+set +e
+E2=$($NBS_BUS publish "$EVENTS" long-src long-type normal "test2" 2>/dev/null)
+EXIT2=$?
+set -e
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "Valid key before long line still works" "pass"
+else
+    check "Valid key before long line still works (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 31: Config.yaml with binary content ---
+echo "31. Config.yaml with binary content..."
+EVENTS="$TEST_DIR/events31"
+mkdir -p "$EVENTS/processed"
+
+# Write binary garbage followed by a valid key
+printf '\x00\x01\x02\xff\xfe\n' > "$EVENTS/config.yaml"
+echo "dedup-window: 60" >> "$EVENTS/config.yaml"
+
+E1=$($NBS_BUS publish "$EVENTS" bin-src bin-type normal "test")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "Binary config content handled safely" "pass"
+else
+    check "Binary config content handled safely (exit: $EXIT1)" "fail"
+fi
+
+echo ""
+
+# --- Test 32: Config.yaml with no trailing newline ---
+echo "32. Config.yaml without trailing newline..."
+EVENTS="$TEST_DIR/events32"
+mkdir -p "$EVENTS/processed"
+
+# Write config without trailing newline
+printf 'dedup-window: 60' > "$EVENTS/config.yaml"
+
+E1=$($NBS_BUS publish "$EVENTS" nonl-src nonl-type normal "first")
+EXIT1=$?
+set +e
+E2=$($NBS_BUS publish "$EVENTS" nonl-src nonl-type normal "second" 2>/dev/null)
+EXIT2=$?
+set -e
+
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "No-newline config: first publish works" "pass"
+else
+    check "No-newline config: first publish works (exit: $EXIT1)" "fail"
+fi
+if [[ "$EXIT2" -eq 5 ]]; then
+    check "No-newline config: dedup-window parsed correctly" "pass"
+else
+    check "No-newline config: dedup-window parsed correctly (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 33: Config.yaml with empty/whitespace values ---
+echo "33. Config.yaml with empty and whitespace values..."
+EVENTS="$TEST_DIR/events33"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+dedup-window:
+retention-max-bytes:
+YAML
+
+# Empty values should be silently ignored (defaults used)
+E1=$($NBS_BUS publish "$EVENTS" empty-src empty-type normal "first")
+E2=$($NBS_BUS publish "$EVENTS" empty-src empty-type normal "second")
+EXIT2=$?
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "Empty config values → defaults (no dedup)" "pass"
+else
+    check "Empty config values → defaults (no dedup, exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 34: Config.yaml with overflow values ---
+echo "34. Config.yaml with numeric overflow values..."
+EVENTS="$TEST_DIR/events34"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+retention-max-bytes: 99999999999999999999999999999999
+dedup-window: 99999999999999999999999999999999
+YAML
+
+# Overflow should be caught by errno==ERANGE, defaults used
+E1=$($NBS_BUS publish "$EVENTS" ovf-src ovf-type normal "first")
+E2=$($NBS_BUS publish "$EVENTS" ovf-src ovf-type normal "second")
+EXIT2=$?
+if [[ "$EXIT2" -eq 0 ]]; then
+    check "Overflow values ignored, defaults used (no dedup)" "pass"
+else
+    check "Overflow values ignored, defaults used (exit: $EXIT2)" "fail"
+fi
+
+echo ""
+
+# --- Test 35: Config.yaml with key but colon only ---
+echo "35. Config.yaml with bare colons and odd formatting..."
+EVENTS="$TEST_DIR/events35"
+mkdir -p "$EVENTS/processed"
+
+cat > "$EVENTS/config.yaml" <<'YAML'
+:
+::
+: 60
+dedup-window:60
+  dedup-window: 60
+YAML
+
+# All should be handled gracefully — none should match valid keys
+# (indented key won't match, no-space-after-colon value has leading whitespace trimmed)
+E1=$($NBS_BUS publish "$EVENTS" bare-src bare-type normal "first")
+EXIT1=$?
+if [[ "$EXIT1" -eq 0 ]]; then
+    check "Bare colons and odd formatting handled safely" "pass"
+else
+    check "Bare colons and odd formatting handled safely (exit: $EXIT1)" "fail"
 fi
 
 echo ""
