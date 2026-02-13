@@ -474,6 +474,48 @@ check "Backspace mid-line" "$( echo "$OUTPUT" | grep -qF 'tester: hello' && echo
 
 echo ""
 
+
+# --- Test 29: /search with matches ---
+echo "29. /search command with matches..."
+CHAT="$TEST_DIR/test29.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "alice" "The parser is broken" >/dev/null
+"$NBS_CHAT" send "$CHAT" "bob" "I fixed the parser" >/dev/null
+"$NBS_CHAT" send "$CHAT" "alice" "Thanks for the help" >/dev/null
+OUTPUT=$(printf '/search parser\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
+check "/search shows matching messages" "$( echo "$OUTPUT" | grep -c 'parser' | awk '{print ($1 >= 2) ? "pass" : "fail"}' )"
+
+echo ""
+
+# --- Test 30: /search case insensitive ---
+echo "30. /search case insensitive..."
+CHAT="$TEST_DIR/test30.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "alice" "The PARSER is broken" >/dev/null
+OUTPUT=$(printf '/search parser\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
+check "/search is case insensitive" "$( echo "$OUTPUT" | grep -qi 'parser' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 31: /search no matches ---
+echo "31. /search with no matches..."
+CHAT="$TEST_DIR/test31.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "alice" "Hello world" >/dev/null
+OUTPUT=$(printf '/search xyzzy\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
+check "/search no matches shows feedback" "$( echo "$OUTPUT" | grep -qi 'no match' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 32: /search without pattern shows usage ---
+echo "32. /search without pattern shows usage..."
+CHAT="$TEST_DIR/test32.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$(printf '/search\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
+check "/search without pattern shows usage" "$( echo "$OUTPUT" | grep -qi 'usage.*search' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then

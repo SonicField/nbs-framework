@@ -70,6 +70,15 @@ if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_bus.sh" ]]; then
     run_test "$SCRIPT_DIR/automated/test_nbs_chat_bus.sh"
 fi
 
+# nbs-chat remote tests (requires ssh localhost)
+if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh" ]]; then
+    if ssh -o BatchMode=yes -o ConnectTimeout=3 localhost true 2>/dev/null; then
+        run_test "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh"
+    else
+        skip_test "test_nbs_chat_remote (ssh localhost unavailable)"
+    fi
+fi
+
 # Slow tests (AI evaluation, workers)
 if $QUICK_MODE; then
     skip_test "test_install_worker"
