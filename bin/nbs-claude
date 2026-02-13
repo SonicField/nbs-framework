@@ -76,8 +76,138 @@ detect_plan_mode() {
     echo "$content" | grep -qF 'Would you like to proceed?'
 }
 
+# --- Dynamic resource registration ---
+# The AI declares what resources it needs by writing to .nbs/control-inbox.
+# The sidecar reads new lines (forward-only, never truncates) and maintains
+# a resource registry at .nbs/control-registry.
+#
+# Convention: / = human-to-AI, \ = AI-to-wrapper
+# The AI outputs \nbs-register-chat etc. which writes to the control inbox.
+# See feature-requests/dynamic-registration.md for full design.
+
+CONTROL_INBOX=".nbs/control-inbox"
+CONTROL_REGISTRY=".nbs/control-registry"
+CONTROL_INBOX_LINE=0
+
+# seed_registry — populate registry from existing .nbs/ resources on startup.
+# Idempotent: skips resources already registered.
+seed_registry() {
+    # Create registry file if it does not exist
+    mkdir -p "$(dirname "$CONTROL_REGISTRY")"
+    touch "$CONTROL_REGISTRY"
+
+    # Register existing chat files
+    for chat in .nbs/chat/*.chat; do
+        [[ -f "$chat" ]] || continue
+        if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
+            echo "chat:${chat}" >> "$CONTROL_REGISTRY"
+        fi
+    done
+
+    # Register bus directory if it exists
+    if [[ -d .nbs/events ]]; then
+        if ! grep -qF "bus:.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
+            echo "bus:.nbs/events" >> "$CONTROL_REGISTRY"
+        fi
+    fi
+}
+
+# process_control_command — handle a single control command line.
+# Precondition: line is non-empty and has been stripped of whitespace.
+# Postcondition: registry is updated if command is valid; invalid lines are ignored.
+process_control_command() {
+    local line="$1"
+    local verb path
+
+    verb=$(echo "$line" | awk '{print $1}')
+    path=$(echo "$line" | awk '{print $2}')
+
+    # Require both verb and path
+    [[ -z "$verb" || -z "$path" ]] && return
+
+    case "$verb" in
+        register-chat)
+            if ! grep -qF "chat:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "chat:${path}" >> "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Registered chat: $path" >&2
+            fi
+            ;;
+        unregister-chat)
+            if grep -qF "chat:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                grep -vF "chat:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
+                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Unregistered chat: $path" >&2
+            fi
+            ;;
+        register-bus)
+            if ! grep -qF "bus:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "bus:${path}" >> "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Registered bus: $path" >&2
+            fi
+            ;;
+        unregister-bus)
+            if grep -qF "bus:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                grep -vF "bus:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
+                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Unregistered bus: $path" >&2
+            fi
+            ;;
+        register-hub)
+            if ! grep -qF "hub:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "hub:${path}" >> "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Registered hub: $path" >&2
+            fi
+            ;;
+        unregister-hub)
+            if grep -qF "hub:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                grep -vF "hub:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
+                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
+                echo "[nbs-claude] Unregistered hub: $path" >&2
+            fi
+            ;;
+        set-poll-interval)
+            # Validate: must be a positive integer
+            if [[ "$path" =~ ^[0-9]+$ ]] && [[ "$path" -gt 0 ]]; then
+                POLL_INTERVAL="$path"
+                echo "[nbs-claude] Poll interval set to ${path}s" >&2
+            fi
+            ;;
+        *)
+            # Unknown command — silently ignore
+            ;;
+    esac
+}
+
+# check_control_inbox — process new lines from the control inbox.
+# Forward-only: tracks line offset, never re-processes old lines, never truncates.
+# Called every sidecar iteration (1 second).
+check_control_inbox() {
+    [[ -f "$CONTROL_INBOX" ]] || return
+
+    local total_lines
+    total_lines=$(wc -l < "$CONTROL_INBOX" 2>/dev/null) || return
+    total_lines=$((total_lines + 0))  # ensure numeric
+
+    if [[ $total_lines -gt $CONTROL_INBOX_LINE ]]; then
+        local new_lines
+        new_lines=$(tail -n +"$((CONTROL_INBOX_LINE + 1))" "$CONTROL_INBOX")
+
+        while IFS= read -r line; do
+            # Strip leading/trailing whitespace
+            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [[ -z "$line" ]] && continue
+            # Skip comment lines
+            [[ "$line" == \#* ]] && continue
+            process_control_command "$line"
+        done <<< "$new_lines"
+
+        CONTROL_INBOX_LINE=$total_lines
+    fi
+}
+
 # --- Idle detection sidecar (tmux mode) ---
-# Monitors the current tmux pane for idle and injects /nbs-poll
+# Monitors the current tmux pane for idle and injects /nbs-poll.
+# Also checks the control inbox for dynamic resource registration.
 
 poll_sidecar_tmux() {
     local interval="$1"
@@ -86,8 +216,14 @@ poll_sidecar_tmux() {
     local idle_seconds=0
     local last_content_hash=""
 
+    # Seed registry with existing resources
+    seed_registry
+
     while true; do
         sleep 1
+
+        # Check control inbox for new registration commands
+        check_control_inbox
 
         # Check pane still exists
         if ! tmux list-panes -t "$pane_id" &>/dev/null; then
@@ -165,8 +301,14 @@ poll_sidecar_pty() {
     local idle_seconds=0
     local last_content_hash=""
 
+    # Seed registry with existing resources
+    seed_registry
+
     while true; do
         sleep 1
+
+        # Check control inbox for new registration commands
+        check_control_inbox
 
         if ! "$pty" list 2>/dev/null | grep -q "$session"; then
             break

@@ -239,6 +239,225 @@ else
     pass "Normal output correctly ignored by plan mode detector"
 fi
 
+# 9. Control inbox components present
+echo "9. Control inbox components..."
+if grep -q 'CONTROL_INBOX=' "$NBS_CLAUDE"; then
+    pass "Has CONTROL_INBOX variable"
+else
+    fail "Missing CONTROL_INBOX variable"
+fi
+
+if grep -q 'CONTROL_REGISTRY=' "$NBS_CLAUDE"; then
+    pass "Has CONTROL_REGISTRY variable"
+else
+    fail "Missing CONTROL_REGISTRY variable"
+fi
+
+if grep -q 'seed_registry' "$NBS_CLAUDE"; then
+    pass "Has seed_registry function"
+else
+    fail "Missing seed_registry function"
+fi
+
+if grep -q 'check_control_inbox' "$NBS_CLAUDE"; then
+    pass "Has check_control_inbox function"
+else
+    fail "Missing check_control_inbox function"
+fi
+
+if grep -q 'process_control_command' "$NBS_CLAUDE"; then
+    pass "Has process_control_command function"
+else
+    fail "Missing process_control_command function"
+fi
+
+# Verify control inbox is checked in both sidecar modes
+TMUX_INBOX=$(grep -c 'check_control_inbox' "$NBS_CLAUDE")
+if [[ "$TMUX_INBOX" -ge 3 ]]; then
+    pass "check_control_inbox called in both sidecar modes (found $TMUX_INBOX references)"
+else
+    fail "check_control_inbox not in both sidecar modes (found $TMUX_INBOX references, expected >= 3)"
+fi
+
+# Verify forward-only design (no truncation of inbox)
+if grep -q 'CONTROL_INBOX_LINE' "$NBS_CLAUDE"; then
+    pass "Uses line offset tracking (forward-only)"
+else
+    fail "Missing line offset tracking"
+fi
+
+# Verify inbox file is never truncated (should not contain truncate/> patterns on inbox)
+if grep 'CONTROL_INBOX' "$NBS_CLAUDE" | grep -qE '>\s*"\$.*INBOX"'; then
+    fail "Control inbox may be truncated (found > redirect to inbox file)"
+else
+    pass "Control inbox is not truncated"
+fi
+
+# 10. Functional test: control inbox processing
+echo "10. Control inbox functional tests..."
+
+# Create a temporary directory to simulate .nbs/
+TEST_DIR=$(mktemp -d)
+ORIG_DIR=$(pwd)
+cd "$TEST_DIR" || exit 1
+mkdir -p .nbs/chat .nbs/events
+
+# Source the control inbox functions from nbs-claude
+# We need to extract the functions without running main
+# Using a temp file + source instead of eval to handle shell syntax (globs, redirects)
+_EXTRACT_TMP=$(mktemp)
+sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
+source "$_EXTRACT_TMP"
+rm -f "$_EXTRACT_TMP"
+
+# Test: seed_registry populates from existing chat files
+touch .nbs/chat/live.chat .nbs/chat/debug.chat
+seed_registry
+if grep -qF "chat:.nbs/chat/live.chat" .nbs/control-registry && \
+   grep -qF "chat:.nbs/chat/debug.chat" .nbs/control-registry; then
+    pass "seed_registry finds existing chat files"
+else
+    fail "seed_registry did not find chat files"
+fi
+
+if grep -qF "bus:.nbs/events" .nbs/control-registry; then
+    pass "seed_registry finds existing events directory"
+else
+    fail "seed_registry did not find events directory"
+fi
+
+# Test: seed_registry is idempotent
+seed_registry
+CHAT_COUNT=$(grep -c "chat:.nbs/chat/live.chat" .nbs/control-registry)
+if [[ "$CHAT_COUNT" -eq 1 ]]; then
+    pass "seed_registry is idempotent (no duplicates)"
+else
+    fail "seed_registry created duplicates (count: $CHAT_COUNT)"
+fi
+
+# Test: process_control_command register-chat
+process_control_command "register-chat .nbs/chat/new.chat"
+if grep -qF "chat:.nbs/chat/new.chat" .nbs/control-registry; then
+    pass "register-chat adds to registry"
+else
+    fail "register-chat did not add to registry"
+fi
+
+# Test: duplicate registration is idempotent
+process_control_command "register-chat .nbs/chat/new.chat"
+NEW_COUNT=$(grep -c "chat:.nbs/chat/new.chat" .nbs/control-registry)
+if [[ "$NEW_COUNT" -eq 1 ]]; then
+    pass "Duplicate register-chat is idempotent"
+else
+    fail "Duplicate register-chat created duplicates (count: $NEW_COUNT)"
+fi
+
+# Test: unregister-chat removes from registry
+process_control_command "unregister-chat .nbs/chat/new.chat"
+if grep -qF "chat:.nbs/chat/new.chat" .nbs/control-registry; then
+    fail "unregister-chat did not remove from registry"
+else
+    pass "unregister-chat removes from registry"
+fi
+
+# Test: unregister non-existent resource is safe
+process_control_command "unregister-chat .nbs/chat/nonexistent.chat"
+pass "Unregistering non-existent resource does not crash"
+
+# Test: register-bus
+process_control_command "register-bus /some/other/events"
+if grep -qF "bus:/some/other/events" .nbs/control-registry; then
+    pass "register-bus adds to registry"
+else
+    fail "register-bus did not add to registry"
+fi
+
+# Test: register-hub
+process_control_command "register-hub /project/.nbs/hub.yaml"
+if grep -qF "hub:/project/.nbs/hub.yaml" .nbs/control-registry; then
+    pass "register-hub adds to registry"
+else
+    fail "register-hub did not add to registry"
+fi
+
+# Test: set-poll-interval
+POLL_INTERVAL=30
+process_control_command "set-poll-interval 300"
+if [[ "$POLL_INTERVAL" -eq 300 ]]; then
+    pass "set-poll-interval updates POLL_INTERVAL"
+else
+    fail "set-poll-interval did not update (expected 300, got $POLL_INTERVAL)"
+fi
+
+# Test: set-poll-interval rejects non-numeric
+POLL_INTERVAL=300
+process_control_command "set-poll-interval abc"
+if [[ "$POLL_INTERVAL" -eq 300 ]]; then
+    pass "set-poll-interval rejects non-numeric input"
+else
+    fail "set-poll-interval accepted non-numeric input"
+fi
+
+# Test: set-poll-interval rejects zero
+process_control_command "set-poll-interval 0"
+if [[ "$POLL_INTERVAL" -eq 300 ]]; then
+    pass "set-poll-interval rejects zero"
+else
+    fail "set-poll-interval accepted zero"
+fi
+
+# Test: unknown command is silently ignored
+process_control_command "unknown-command /some/path"
+pass "Unknown command silently ignored"
+
+# Test: empty and comment lines are handled
+process_control_command ""
+process_control_command "  "
+pass "Empty lines handled without crash"
+
+# Test: check_control_inbox processes new lines only
+CONTROL_INBOX_LINE=0
+echo "register-chat .nbs/chat/inbox-test1.chat" > .nbs/control-inbox
+echo "register-chat .nbs/chat/inbox-test2.chat" >> .nbs/control-inbox
+check_control_inbox
+if grep -qF "chat:.nbs/chat/inbox-test1.chat" .nbs/control-registry && \
+   grep -qF "chat:.nbs/chat/inbox-test2.chat" .nbs/control-registry; then
+    pass "check_control_inbox processes lines from inbox"
+else
+    fail "check_control_inbox did not process inbox lines"
+fi
+
+# Test: check_control_inbox does not re-process old lines
+# Remove an entry, then check inbox again — should NOT re-add it
+process_control_command "unregister-chat .nbs/chat/inbox-test1.chat"
+check_control_inbox
+if grep -qF "chat:.nbs/chat/inbox-test1.chat" .nbs/control-registry; then
+    fail "check_control_inbox re-processed old lines"
+else
+    pass "check_control_inbox does not re-process old lines (forward-only)"
+fi
+
+# Test: check_control_inbox processes only new lines after offset
+echo "register-chat .nbs/chat/inbox-test3.chat" >> .nbs/control-inbox
+check_control_inbox
+if grep -qF "chat:.nbs/chat/inbox-test3.chat" .nbs/control-registry; then
+    pass "check_control_inbox processes new lines after offset"
+else
+    fail "check_control_inbox did not process new lines after offset"
+fi
+
+# Test: control inbox file is preserved (never truncated)
+INBOX_LINES=$(wc -l < .nbs/control-inbox)
+if [[ "$INBOX_LINES" -eq 3 ]]; then
+    pass "Control inbox file preserved (all 3 lines intact)"
+else
+    fail "Control inbox file modified (expected 3 lines, got $INBOX_LINES)"
+fi
+
+# Cleanup
+cd "$ORIG_DIR" || true
+rm -rf "$TEST_DIR"
+
 echo ""
 echo "=== Result ==="
 if [[ $FAIL -eq 0 ]]; then
