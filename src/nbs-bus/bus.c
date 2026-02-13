@@ -175,28 +175,50 @@ static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_
     return found;
 }
 
-/* Read priority from an event file's content (the "priority: X" line) */
-static int read_event_priority(const char *filepath)
+/* Read priority, source, and type from an event file in a single pass.
+ * Populates the corresponding fields of the event struct.
+ * source_buf and type_buf must be at least source_len / type_len bytes. */
+static void read_event_fields(const char *filepath, int *priority,
+                              char *source_buf, size_t source_len,
+                              char *type_buf, size_t type_len)
 {
+    *priority = BUS_PRIORITY_NORMAL;
+    source_buf[0] = '\0';
+    type_buf[0] = '\0';
+
     FILE *fp = fopen(filepath, "r");
-    if (!fp) return BUS_PRIORITY_NORMAL; /* default on error */
+    if (!fp) return;
 
     char line[512];
-    int priority = BUS_PRIORITY_NORMAL;
+    int found = 0; /* bitmask: 1=priority, 2=source, 4=type */
 
-    while (fgets(line, sizeof(line), fp)) {
-        if (strncmp(line, "priority: ", 10) == 0) {
-            /* Trim trailing newline */
+    while (fgets(line, sizeof(line), fp) && found != 7) {
+        if (!(found & 1) && strncmp(line, "priority: ", 10) == 0) {
             char *nl = strchr(line + 10, '\n');
             if (nl) *nl = '\0';
             int p = bus_priority_from_str(line + 10);
-            if (p >= 0) priority = p;
-            break;
+            if (p >= 0) *priority = p;
+            found |= 1;
+        } else if (!(found & 2) && strncmp(line, "source: ", 8) == 0) {
+            char *nl = strchr(line + 8, '\n');
+            if (nl) *nl = '\0';
+            size_t len = strlen(line + 8);
+            if (len >= source_len) len = source_len - 1;
+            memcpy(source_buf, line + 8, len);
+            source_buf[len] = '\0';
+            found |= 2;
+        } else if (!(found & 4) && strncmp(line, "type: ", 6) == 0) {
+            char *nl = strchr(line + 6, '\n');
+            if (nl) *nl = '\0';
+            size_t len = strlen(line + 6);
+            if (len >= type_len) len = type_len - 1;
+            memcpy(type_buf, line + 6, len);
+            type_buf[len] = '\0';
+            found |= 4;
         }
     }
 
     fclose(fp);
-    return priority;
 }
 
 /* Comparison function for sorting events: by priority (asc), then timestamp (asc) */
@@ -245,15 +267,14 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
         if (parse_event_filename_timestamp(name, &ts_us) != 0)
             continue; /* skip malformed filenames */
 
-        /* Read priority from file content */
-        int priority = read_event_priority(fullpath);
-
+        /* Read priority, source, and type from file content */
         bus_event_t *ev = &events[count];
+        read_event_fields(fullpath, &ev->priority,
+                          ev->source, sizeof(ev->source),
+                          ev->type, sizeof(ev->type));
+
         snprintf(ev->filename, sizeof(ev->filename), "%s", name);
         ev->timestamp_us = ts_us;
-        ev->priority = priority;
-        ev->source[0] = '\0'; /* MVP: not populated — populate from file content when handle filtering lands */
-        ev->type[0] = '\0';   /* MVP: not populated — same */
         count++;
     }
 
@@ -489,9 +510,11 @@ int bus_check(const char *events_dir, const char *handle)
     /* Sort by priority then timestamp */
     qsort(events, (size_t)count, sizeof(bus_event_t), event_compare);
 
-    /* Print results */
+    /* Print results, optionally filtered by source handle */
     for (int i = 0; i < count; i++) {
-        (void)handle; /* filtering by handle is future work */
+        if (handle && handle[0] != '\0' &&
+            strcmp(events[i].source, handle) != 0)
+            continue;
         printf("[%s] %s\n",
                bus_priority_to_str(events[i].priority),
                events[i].filename);
@@ -580,7 +603,9 @@ int bus_ack_all(const char *events_dir, const char *handle)
 
     int acked = 0;
     for (int i = 0; i < count; i++) {
-        (void)handle; /* handle-based filtering is future work */
+        if (handle && handle[0] != '\0' &&
+            strcmp(events[i].source, handle) != 0)
+            continue;
         if (bus_ack(events_dir, events[i].filename) == 0)
             acked++;
     }

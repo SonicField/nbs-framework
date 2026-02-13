@@ -37,6 +37,8 @@
 #   33. Config.yaml with empty/whitespace values
 #   34. Config.yaml with numeric overflow values
 #   35. Config.yaml with bare colons and odd formatting
+#   36. Check with handle filter (source-based filtering)
+#   37. Ack-all with handle filter
 
 set -euo pipefail
 
@@ -1075,6 +1077,77 @@ if [[ "$EXIT1" -eq 0 ]]; then
     check "Bare colons and odd formatting handled safely" "pass"
 else
     check "Bare colons and odd formatting handled safely (exit: $EXIT1)" "fail"
+fi
+
+echo ""
+
+# --- Test 36: Check with handle filter ---
+echo "36. Check with handle filter..."
+EVENTS="$TEST_DIR/events36"
+mkdir -p "$EVENTS/processed"
+
+# Publish events from different sources
+$NBS_BUS publish "$EVENTS" worker-a task-done normal "from worker-a" > /dev/null
+$NBS_BUS publish "$EVENTS" worker-b task-done normal "from worker-b" > /dev/null
+$NBS_BUS publish "$EVENTS" worker-a status normal "also from worker-a" > /dev/null
+
+# Check without filter — should see all 3
+ALL_COUNT=$($NBS_BUS check "$EVENTS" | wc -l)
+if [[ "$ALL_COUNT" -eq 3 ]]; then
+    check "Check without filter shows all 3 events" "pass"
+else
+    check "Check without filter shows all 3 events (got: $ALL_COUNT)" "fail"
+fi
+
+# Check with handle filter — should see only worker-a events (2)
+FILTERED_COUNT=$($NBS_BUS check "$EVENTS" --handle=worker-a | wc -l)
+if [[ "$FILTERED_COUNT" -eq 2 ]]; then
+    check "Check with handle=worker-a shows 2 events" "pass"
+else
+    check "Check with handle=worker-a shows 2 events (got: $FILTERED_COUNT)" "fail"
+fi
+
+# Check with handle that has no events — should see 0
+EMPTY_COUNT=$($NBS_BUS check "$EVENTS" --handle=nonexistent | wc -l)
+if [[ "$EMPTY_COUNT" -eq 0 ]]; then
+    check "Check with unknown handle shows 0 events" "pass"
+else
+    check "Check with unknown handle shows 0 events (got: $EMPTY_COUNT)" "fail"
+fi
+
+echo ""
+
+# --- Test 37: Ack-all with handle filter ---
+echo "37. Ack-all with handle filter..."
+EVENTS="$TEST_DIR/events37"
+mkdir -p "$EVENTS/processed"
+
+$NBS_BUS publish "$EVENTS" src-x type-x normal "from src-x" > /dev/null
+$NBS_BUS publish "$EVENTS" src-y type-y normal "from src-y" > /dev/null
+$NBS_BUS publish "$EVENTS" src-x type-z normal "also from src-x" > /dev/null
+
+# Ack-all for src-x only
+ACK_OUT=$($NBS_BUS ack-all "$EVENTS" --handle=src-x)
+if echo "$ACK_OUT" | grep -q "Acknowledged 2 events"; then
+    check "Ack-all with handle=src-x acks 2 events" "pass"
+else
+    check "Ack-all with handle=src-x acks 2 events (got: $ACK_OUT)" "fail"
+fi
+
+# src-y event should still be pending
+REMAINING=$($NBS_BUS check "$EVENTS" | wc -l)
+if [[ "$REMAINING" -eq 1 ]]; then
+    check "One event remains after filtered ack-all" "pass"
+else
+    check "One event remains after filtered ack-all (got: $REMAINING)" "fail"
+fi
+
+# Remaining event should be from src-y
+REMAINING_SOURCE=$($NBS_BUS check "$EVENTS" --handle=src-y | wc -l)
+if [[ "$REMAINING_SOURCE" -eq 1 ]]; then
+    check "Remaining event is from src-y" "pass"
+else
+    check "Remaining event is from src-y (got: $REMAINING_SOURCE)" "fail"
 fi
 
 echo ""
