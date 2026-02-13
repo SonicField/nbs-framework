@@ -332,6 +332,53 @@ check "CLI binary contains ASSERT_MSG strings" "$( [[ "$CLI_ASSERT_STRINGS" -gt 
 TERM_ASSERT_STRINGS=$(strings "$NBS_TERMINAL" | grep -c "ASSERT FAILED" || true)
 check "Terminal binary contains ASSERT_MSG strings" "$( [[ "$TERM_ASSERT_STRINGS" -gt 0 ]] && echo pass || echo fail )"
 
+# --- Test 16: Search command ---
+echo "16. Search command..."
+
+# Set up a dedicated chat for search tests
+SEARCH_CHAT="$TEST_DIR/search.chat"
+"$NBS_CHAT" create "$SEARCH_CHAT" >/dev/null
+"$NBS_CHAT" send "$SEARCH_CHAT" alice "The parser fails on negative inputs like -42" >/dev/null
+"$NBS_CHAT" send "$SEARCH_CHAT" bob "I can confirm the parser bug with -100 too" >/dev/null
+"$NBS_CHAT" send "$SEARCH_CHAT" alice "Fix deployed, all tests passing now" >/dev/null
+"$NBS_CHAT" send "$SEARCH_CHAT" carol "Unrelated message about the deployment pipeline" >/dev/null
+
+# Basic search — should find messages containing "parser"
+SEARCH_RESULT=$("$NBS_CHAT" search "$SEARCH_CHAT" "parser" 2>&1)
+PARSER_MATCHES=$(echo "$SEARCH_RESULT" | grep -c '^\[' || true)
+check "Search finds parser matches" "$( [[ "$PARSER_MATCHES" -eq 2 ]] && echo pass || echo fail )"
+
+# Case-insensitive search
+SEARCH_UPPER=$("$NBS_CHAT" search "$SEARCH_CHAT" "PARSER" 2>&1)
+UPPER_MATCHES=$(echo "$SEARCH_UPPER" | grep -c '^\[' || true)
+check "Search is case-insensitive" "$( [[ "$UPPER_MATCHES" -eq 2 ]] && echo pass || echo fail )"
+
+# Search with handle filter
+SEARCH_ALICE=$("$NBS_CHAT" search "$SEARCH_CHAT" "parser" --handle=alice 2>&1)
+ALICE_MATCHES=$(echo "$SEARCH_ALICE" | grep -c '^\[' || true)
+check "Search with --handle filter" "$( [[ "$ALICE_MATCHES" -eq 1 ]] && echo pass || echo fail )"
+
+# Search with no matches
+SEARCH_NONE=$("$NBS_CHAT" search "$SEARCH_CHAT" "xyzzy_no_match" 2>&1)
+check "Search with no matches says so" "$( echo "$SEARCH_NONE" | grep -q "No matches" && echo pass || echo fail )"
+
+# Search output includes message index
+check "Search shows message index" "$( echo "$SEARCH_RESULT" | grep -q '^\[0\]' && echo pass || echo fail )"
+
+# Search exit code is 0 even with no matches
+"$NBS_CHAT" search "$SEARCH_CHAT" "xyzzy_no_match" >/dev/null 2>&1
+check "Search exit 0 on no matches" "$( [[ $? -eq 0 ]] && echo pass || echo fail )"
+
+# Search on missing file
+SEARCH_MISSING_RC=0
+"$NBS_CHAT" search "$TEST_DIR/nonexistent.chat" "test" >/dev/null 2>&1 || SEARCH_MISSING_RC=$?
+check "Search exit 2 on missing file" "$( [[ "$SEARCH_MISSING_RC" -eq 2 ]] && echo pass || echo fail )"
+
+# Search with too few args
+SEARCH_NOARGS_RC=0
+"$NBS_CHAT" search "$SEARCH_CHAT" >/dev/null 2>&1 || SEARCH_NOARGS_RC=$?
+check "Search exit 4 on missing pattern" "$( [[ "$SEARCH_NOARGS_RC" -eq 4 ]] && echo pass || echo fail )"
+
 echo ""
 
 # --- Summary ---

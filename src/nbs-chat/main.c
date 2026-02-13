@@ -8,6 +8,7 @@
  *   send <file> <handle> <message>   Send a message
  *   read <file> [options]            Read messages
  *   poll <file> <handle> [options]   Wait for new message
+ *   search <file> <pattern> [opts]   Search message history
  *   participants <file>              List participants
  *   help                             Show usage
  *
@@ -22,6 +23,7 @@
 #include "bus_bridge.h"
 #include "chat_file.h"
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -37,6 +39,7 @@ static void print_usage(void) {
     printf("  send <file> <handle> <message>   Send a message\n");
     printf("  read <file> [options]            Read messages\n");
     printf("  poll <file> <handle> [options]   Wait for new message\n");
+    printf("  search <file> <pattern> [opts]   Search message history\n");
     printf("  participants <file>              List participants and counts\n");
     printf("  help                             Show this help\n\n");
     printf("Read options:\n");
@@ -44,6 +47,8 @@ static void print_usage(void) {
     printf("  --since=<handle>   Show messages after last message from <handle>\n");
     printf("  --unread=<handle>  Show messages after read cursor for <handle>\n");
     printf("                     Auto-advances cursor after displaying\n\n");
+    printf("Search options:\n");
+    printf("  --handle=<name>  Only search messages from this handle\n\n");
     printf("Poll options:\n");
     printf("  --timeout=N      Timeout in seconds (default: 10)\n\n");
     printf("Exit codes:\n");
@@ -314,6 +319,91 @@ static int cmd_participants(int argc, char **argv) {
     return 0;
 }
 
+/*
+ * strcasestr_portable — Case-insensitive substring search.
+ *
+ * Preconditions:
+ *   - haystack != NULL
+ *   - needle != NULL
+ *
+ * Returns pointer to first occurrence, or NULL if not found.
+ */
+static const char *strcasestr_portable(const char *haystack, const char *needle) {
+    ASSERT_MSG(haystack != NULL, "strcasestr_portable: haystack is NULL");
+    ASSERT_MSG(needle != NULL, "strcasestr_portable: needle is NULL");
+
+    if (needle[0] == '\0') return haystack;
+
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; p++) {
+        if (strncasecmp(p, needle, nlen) == 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static int cmd_search(int argc, char **argv) {
+    if (argc < 4) {
+        fprintf(stderr, "Usage: nbs-chat search <file> <pattern> [--handle=<name>]\n");
+        return 4;
+    }
+
+    const char *path = argv[2];
+    const char *pattern = argv[3];
+    const char *filter_handle = NULL;
+
+    /* Preconditions: args validated from argv */
+    ASSERT_MSG(path != NULL, "cmd_search: path argument is NULL");
+    ASSERT_MSG(pattern != NULL, "cmd_search: pattern argument is NULL");
+
+    /* Parse options */
+    for (int i = 4; i < argc; i++) {
+        if (strncmp(argv[i], "--handle=", 9) == 0) {
+            filter_handle = argv[i] + 9;
+        } else {
+            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+        }
+    }
+
+    /* Check file exists */
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+    fclose(f);
+
+    chat_state_t state;
+    if (chat_read(path, &state) < 0) {
+        fprintf(stderr, "Error: Failed to read chat file\n");
+        return 1;
+    }
+
+    int match_count = 0;
+    for (int i = 0; i < state.message_count; i++) {
+        /* Apply handle filter if specified */
+        if (filter_handle && strcmp(state.messages[i].handle, filter_handle) != 0) {
+            continue;
+        }
+
+        /* Case-insensitive search in message content */
+        if (strcasestr_portable(state.messages[i].content, pattern) != NULL) {
+            printf("[%d] %s: %s\n", i, state.messages[i].handle,
+                   state.messages[i].content);
+            match_count++;
+        }
+    }
+
+    if (match_count == 0) {
+        /* No matches — exit code 0 (not an error, just no results) */
+        printf("No matches found.\n");
+    }
+
+    chat_state_free(&state);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Error: No command specified\n");
@@ -327,6 +417,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "send") == 0) return cmd_send(argc, argv);
     if (strcmp(cmd, "read") == 0) return cmd_read(argc, argv);
     if (strcmp(cmd, "poll") == 0) return cmd_poll(argc, argv);
+    if (strcmp(cmd, "search") == 0) return cmd_search(argc, argv);
     if (strcmp(cmd, "participants") == 0) return cmd_participants(argc, argv);
     if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
 
