@@ -199,9 +199,27 @@ Scribe: scribe
 EOF
 ```
 
+## Error Detection
+
+Before appending a new entry, verify the log file is well-formed:
+
+```bash
+# Check that last entry has all required fields
+tail -20 .nbs/scribe/log.md | grep -c "Chat ref:\|Participants:\|Risk tags:\|Status:\|Rationale:"
+```
+
+If the count is less than 5 (the required fields), the previous entry is malformed. Publish an error event:
+
+```bash
+nbs-bus publish .nbs/events/ scribe log-error high \
+  "Malformed entry detected near end of .nbs/scribe/log.md"
+```
+
+Then fix the entry if possible (add missing fields with placeholder values), or flag it for manual review. Do not skip the current entry because of a previous error — append normally after the fix.
+
 ## Important
 
-- **Append-only.** Never modify existing entries.
+- **Append-only.** Never modify existing entries (except to fix malformed fields as described above).
 - **No opinions.** Record what was decided, not what should have been decided.
 - **Approximate line numbers.** Use `~L` prefix. Chat lines shift; precision would be misleading.
 - **Err on the side of recording.** A slightly noisy log beats a log with gaps.
