@@ -59,7 +59,9 @@ Answer these five questions. Be specific. Cite decision entries by their `D-<tim
 
 3. **Missing validation:** What claim has been made (in decisions or artefacts) that lacks a falsification test? Where is the gap between "we decided X" and "we proved X works"?
 
-4. **Six-month regret:** If you could send a message to the team six months from now, what would they wish they had done differently today? What decision, if reversed now, would be cheap — but if reversed in six months, would be expensive?
+4. **Six-month regret:** This section uses a different register. Open with one **oracular sentence** — a metaphor, koan, or compressed insight that captures the essence of the regret. Then follow with the concrete scenario citing D-timestamps. The koan frames the problem; the explanation makes it tractable. The shift in register forces the reader to pause rather than skim.
+
+   Example: *A lock that opens for everyone protects nothing it was built to guard.* Then: the decision to skip auth (D-xxx) assumes the network perimeter holds; retrofitting auth into a running system is an order of magnitude harder than adding it at build time.
 
 5. **Confidence level:** On a scale of `high / moderate / low`, how confident are you that the current trajectory will achieve the stated goals without significant rework? Justify with specific evidence.
 
@@ -76,7 +78,8 @@ nbs-chat send .nbs/chat/live.chat pythia "PYTHIA CHECKPOINT — Assessment #N
 
 **Missing validation:** <your assessment, citing D-timestamps>
 
-**Six-month regret:** <your assessment>
+**Six-month regret:** <one oracular sentence — metaphor or koan>
+<concrete scenario citing D-timestamps>
 
 **Confidence:** <high|moderate|low> — <justification>
 
