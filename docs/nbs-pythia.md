@@ -115,6 +115,6 @@ A bad Pythia assessment is:
 ## See Also
 
 - [Scribe](nbs-scribe.md) — Institutional memory (feeds Pythia)
-- [Tripod](tripod.md) — Architecture connecting Scribe, Bus, and Chat
+- [Tripod](tripod-architecture.md) — Architecture connecting Scribe, Bus, and Chat
 - [nbs-bus](nbs-bus.md) — Event-driven coordination
 - [Coordination](../concepts/coordination.md) — Why event-driven coordination matters

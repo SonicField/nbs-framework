@@ -167,4 +167,5 @@ The bus is optional. Projects without `.nbs/events/` fall back to direct chat/wo
 - [nbs-hub](nbs-hub.md) - Deterministic process enforcement for AI teams (mandatory for multi-worker projects)
 - [nbs-chat](nbs-chat.md) - File-based AI-to-AI chat for worker coordination
 - [nbs-worker](nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
+- [Tripod Architecture](tripod-architecture.md) - Scribe (institutional memory) and Pythia (risk oracle)
 - [Why NBS](Why-NBS.md) - The philosophy behind the framework

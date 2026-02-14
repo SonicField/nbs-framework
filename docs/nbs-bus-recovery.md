@@ -76,6 +76,9 @@ Processing rules by event type:
 | `worker-spawned` | Note the new worker. No action required unless unexpected. |
 | `worker-dismissed` | Note the worker was dismissed. Update your tracking if relevant. |
 | `worker-died` | Worker tmux session died unexpectedly. Read the worker's task file and log. Decide whether to respawn or escalate. |
+| `decision-logged` | Scribe recorded a decision. No action required unless tracking decision activity. |
+| `pythia-checkpoint` | Decision threshold reached. Spawn a Pythia worker: `nbs-worker spawn pythia <dir> "Read .nbs/scribe/log.md and post checkpoint assessment."` |
+| `assessment-posted` | Pythia has posted an assessment to chat. Read and discuss as a team. Scribe logs any resulting decisions. |
 | `config-change` | Re-read `config.yaml`. Adjust behaviour. |
 | `heartbeat` | Note the source is alive. No action required unless the heartbeat is unexpectedly old. |
 

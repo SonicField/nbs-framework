@@ -58,6 +58,8 @@ Claude Code slash commands that apply these principles:
 | `/nbs-chat-digest` | Summarise chat channel history |
 | `/nbs-pte` | Precise Technical English mode for unambiguous specifications |
 | `/nbs-natural` | Exit Precise Technical English mode |
+| `/nbs-scribe` | Institutional memory — log decisions to structured log |
+| `/nbs-pythia` | Trajectory and risk oracle — checkpoint assessments |
 
 In addition to slash commands, the framework includes C binaries:
 

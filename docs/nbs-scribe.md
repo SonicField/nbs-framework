@@ -209,7 +209,7 @@ EOF
 ## See Also
 
 - [Pythia](nbs-pythia.md) — Trajectory and risk assessment (reads from Scribe)
-- [Tripod](tripod.md) — Architecture connecting Scribe, Bus, and Chat
+- [Tripod](tripod-architecture.md) — Architecture connecting Scribe, Bus, and Chat
 - [nbs-bus](nbs-bus.md) — Event-driven coordination
 - [nbs-chat](nbs-chat.md) — File-based chat
 - [Coordination](../concepts/coordination.md) — Why event-driven coordination matters

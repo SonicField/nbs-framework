@@ -176,6 +176,9 @@ Within the dedup window, a second event with the same source and type is silentl
 | `chat-message` | nbs-chat | New message in a chat channel |
 | `chat-mention` | nbs-chat | Message specifically @mentioning a handle |
 | `human-input` | nbs-chat-terminal | Human posted a message |
+| `decision-logged` | scribe | Scribe recorded a new decision (see [Tripod](tripod-architecture.md)) |
+| `pythia-checkpoint` | scribe | Decision threshold reached, Pythia assessment requested |
+| `assessment-posted` | pythia | Pythia has posted her checkpoint assessment |
 | `config-change` | nbs-bus | Bus configuration changed |
 | `heartbeat` | any | Periodic liveness signal |
 
