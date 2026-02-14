@@ -167,12 +167,13 @@ lines = [l.strip() for l in sys.stdin if l.strip()]
 print(json.dumps(lines))
 " 2>/dev/null || echo '[]')
 
+READS_SCRIBE_PY=$( [[ "$READS_SCRIBE" == true ]] && echo "True" || echo "False" )
 JSON_VERDICT=$(python3 -c "
 import json
 print(json.dumps({
     'verdict': '$VERDICT',
     'chat_access_patterns': $PATTERNS_JSON,
-    'reads_scribe_log': $READS_SCRIBE,
+    'reads_scribe_log': $READS_SCRIBE_PY,
     'reasoning': $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$REASONING")
 }, indent=2))
 ")

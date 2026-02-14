@@ -95,13 +95,14 @@ else
 fi
 
 # Build verdict JSON
+SAYS_NO_DECISIONS_PY=$( [[ "$SAYS_NO_DECISIONS" == true ]] && echo "True" || echo "False" )
 JSON_VERDICT=$(python3 -c "
 import json, sys
 print(json.dumps({
     'verdict': '$VERDICT',
     'decision_entries_found': $DECISION_COUNT,
     'alt_entries_found': $ALT_DECISION_COUNT,
-    'says_no_decisions': $SAYS_NO_DECISIONS,
+    'says_no_decisions': $SAYS_NO_DECISIONS_PY,
     'reasoning': $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$REASONING")
 }, indent=2))
 ")
