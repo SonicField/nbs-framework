@@ -51,7 +51,12 @@ Read enough to understand the current state of what was decided. You do not need
 
 ### Step 3: Assess trajectory
 
-Answer these five questions. Be specific. Cite decision entries by their `D-<timestamp>` identifier.
+Answer these five questions. Use two linguistic registers:
+
+- **Sections 1–3 and 5:** Use Precise Technical English (`/nbs-pte` register). Be specific, cite D-timestamps, use active voice. Eliminate ambiguity.
+- **Section 4 (Six-Month Regret):** Use Oracular Speech (`/nbs-oracular-speech` register). Open with one koan or metaphor, then ground it with concrete specifics. Introduce productive ambiguity that forces interpretation.
+
+Cite decision entries by their `D-<timestamp>` identifier in all sections.
 
 1. **Hidden assumption:** What assumption is the team making that has not been explicitly tested or validated? What decision entry contains or implies this assumption?
 
@@ -113,6 +118,13 @@ Your work is done. If you were spawned as a worker, update your task file status
 
 **Bad — generic worry:**
 > **Second-order risk:** Things might break if the system gets too big.
+
+**Good — oracular six-month regret (koan + concrete):**
+> **Six-month regret:** *A cache that never forgets it has forgotten is indistinguishable from truth.*
+> The TTL-only invalidation strategy (D-1707634800) means stale data is served as if current. When user-facing preferences live in the same cache (D-1707613200), users will experience their own changes vanishing for 5 minutes after every save. Retrofitting proper invalidation into a system with established consumers is significantly harder than adding it now — every consumer assumes cache coherence.
+
+**Bad — koan without substance:**
+> **Six-month regret:** *The river that does not know its banks drowns everything it touches.*
 
 ## Assessment Principles
 

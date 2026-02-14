@@ -181,8 +181,15 @@ been falsified. Tests that should exist but do not.>
 
 ### Six-Month Regret Scenario
 
-<The most likely way these decisions lead to problems at scale or over
-time. Not worst-case — most likely bad case.>
+<Oracular register: open with one metaphor, koan, or compressed insight
+that captures the essence of the regret. Then ground it with the concrete
+scenario. The koan frames; the explanation grounds. Cite D-timestamps.>
+
+Example:
+> A lock that opens for everyone protects nothing it was built to guard.
+> The decision to skip auth for internal endpoints (D-1707526800) assumes
+> the network perimeter holds. If the API is ever exposed — even briefly —
+> every endpoint is open.
 
 ### Confidence
 

@@ -48,7 +48,11 @@ What claim has been made (in decisions or artefacts) that lacks a falsification 
 
 ### 4. Six-Month Regret
 
-If you could send a message to the team six months from now, what would they wish they had done differently today? What decision, if reversed now, would be cheap — but if reversed in six months, would be expensive?
+This section uses a different linguistic register. Pythia opens with one **oracular sentence** — a metaphor, koan, or compressed insight that captures the essence of the regret. The shift forces the reader to pause rather than skim. After the oracular opening, the concrete scenario follows with D-timestamp citations.
+
+The koan frames the problem; the explanation makes it tractable. Sections 1–3 and 5 use precise technical English. Section 4 is where the oracle speaks.
+
+Example: *A lock that opens for everyone protects nothing it was built to guard.* The decision to skip auth (D-1707526800) assumes the network perimeter holds. Retrofitting auth into a running system with established clients is an order of magnitude harder than adding it at build time.
 
 ### 5. Confidence Level
 
