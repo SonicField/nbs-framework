@@ -38,7 +38,7 @@ Chat ──read──▶ Scribe ──threshold──▶ Bus ──trigger──
   └──────────────────── post ◀───────────────────────────┘
 ```
 
-1. **Chat → Scribe.** Scribe reads all chat channels continuously, watching for decisions. When it identifies one, it appends a structured entry to `.nbs/scribe/log.md`.
+1. **Chat → Scribe.** Scribe reads all chat channels continuously, watching for decisions. When it identifies one, it appends a structured entry to the corresponding log (e.g., `.nbs/scribe/live-log.md` for `live.chat`).
 
 2. **Scribe → Bus.** After each decision, Scribe publishes a `decision-logged` event. When the decision count reaches a threshold (configurable, default 20), Scribe publishes a `pythia-checkpoint` event at high priority.
 
@@ -52,7 +52,7 @@ Chat ──read──▶ Scribe ──threshold──▶ Bus ──trigger──
 
 | Component | Persistence | Input | Output | Role |
 |-----------|-------------|-------|--------|------|
-| **Scribe** | Persistent instance, long context | Chat channels, bus events | `.nbs/scribe/log.md`, bus events | Observe, distil, record |
+| **Scribe** | Persistent instance, long context | Chat channels, bus events | `.nbs/scribe/<chat-name>-log.md`, bus events | Observe, distil, record |
 | **Bus** | Stateless (directory is the state) | Published events | Event queue for consumers | Route, prioritise, trigger |
 | **Chat** | Persistent file | Agent messages | Human/agent-readable conversation | Converse, deliver, coordinate |
 | **Pythia** | Ephemeral (spawned per checkpoint) | Scribe log, source files | Chat message (structured assessment) | Assess, surface risks, exit |
@@ -70,7 +70,7 @@ Two advantages of a dedicated instance over a shared skill:
 
 ### Decision Log Format
 
-Location: `.nbs/scribe/log.md`
+Location: `.nbs/scribe/<chat-name>-log.md` (e.g., `live-log.md` for `live.chat`)
 
 ```markdown
 # Decision Log
@@ -215,7 +215,7 @@ The Scribe triggers Pythia through the bus. No daemon, no scheduler — just eve
 3. If threshold reached, Scribe publishes a `pythia-checkpoint` bus event
 4. Supervisor (or sidecar) detects the event via `nbs-bus check`
 5. Supervisor spawns Pythia as a worker: `nbs-worker spawn pythia <dir> "<checkpoint task>"`
-6. Pythia reads `.nbs/scribe/log.md`
+6. Pythia reads `.nbs/scribe/<chat-name>-log.md`
 7. Pythia posts assessment to the designated chat channel
 8. Pythia exits (worker completes)
 9. Team discusses assessment in chat
@@ -263,7 +263,7 @@ nbs-bus check .nbs/events/
 # [high] 1707760800123456-scribe-pythia-checkpoint-12345.event
 
 # Supervisor spawns Pythia
-PYTHIA=$(nbs-worker spawn pythia /project "Read .nbs/scribe/log.md. \
+PYTHIA=$(nbs-worker spawn pythia /project "Read .nbs/scribe/live-log.md. \
   Post Pythia checkpoint assessment to .nbs/chat/live.chat. \
   Review decisions D-1707753600 through D-1707760800.")
 
@@ -273,6 +273,31 @@ PYTHIA=$(nbs-worker spawn pythia /project "Read .nbs/scribe/log.md. \
 # Supervisor acknowledges the checkpoint event
 nbs-bus ack .nbs/events/ 1707760800123456-scribe-pythia-checkpoint-12345.event
 ```
+
+## Naming Convention
+
+The chat filename is the naming root for all associated resources. Everything derives from it. One name, one grep, full picture.
+
+If the chat is `live.chat`, then:
+
+| Resource | Name | Pattern |
+|----------|------|---------|
+| Chat file | `.nbs/chat/live.chat` | `<name>.chat` |
+| Scribe log | `.nbs/scribe/live-log.md` | `<name>-log.md` |
+| Pythia worker | `.nbs/workers/pythia-live-<hash>.md` | `pythia-<name>-<hash>.md` |
+| Tmux session (Scribe) | `nbs-scribe-live` | `nbs-scribe-<name>` |
+| Tmux session (Claude) | `nbs-claude-live` | `nbs-claude-<name>` |
+| Tmux session (Pythia) | `nbs-pythia-live` | `nbs-pythia-<name>` |
+| Bus events | `*-scribe-decision-logged-*.event` | (unchanged — source is agent, not chat) |
+
+If a second chat `refactor.chat` exists, its resources are `refactor-log.md`, `pythia-refactor-<hash>.md`, `nbs-scribe-refactor`, etc. An AI can discover everything associated with a conversation by grepping for the chat name.
+
+This convention:
+
+- **Avoids invented identifiers.** No project-id hashes or random suffixes. The chat filename is already unique within the project.
+- **Avoids tmux collisions.** Different chats produce different session names. Different projects use different chat names. Sessions are user-wide but names never collide.
+- **Enables discovery.** `tmux ls | grep live` shows all sessions for that conversation. `ls .nbs/workers/*live*` finds associated workers. `ls .nbs/scribe/live-*` finds the decision log.
+- **Follows existing patterns.** Workers already use descriptive filenames for discovery. This extends the principle to all Tripod resources.
 
 ## Directory Structure
 
@@ -285,12 +310,12 @@ nbs-bus ack .nbs/events/ 1707760800123456-scribe-pythia-checkpoint-12345.event
 │   ├── <timestamp>-pythia-assessment-posted-<pid>.event
 │   └── processed/
 ├── scribe/
-│   └── log.md                         # Decision log (append-only)
+│   └── live-log.md                    # Decision log for live.chat (append-only)
 ├── chat/
 │   └── live.chat                      # Conversation substrate
 ├── workers/
-│   ├── pythia-<hash>.md               # Pythia worker task file
-│   └── pythia-<hash>.log              # Pythia worker session log
+│   ├── pythia-live-<hash>.md          # Pythia worker for live.chat
+│   └── pythia-live-<hash>.log         # Pythia worker session log
 └── supervisor.md
 ```
 
@@ -303,14 +328,15 @@ Setting up the Tripod for a project:
 mkdir -p .nbs/events/processed .nbs/chat
 nbs-chat create .nbs/chat/live.chat
 
-# 2. Create Scribe directory and initial log
+# 2. Create Scribe directory and initial log (named after chat)
 mkdir -p .nbs/scribe
-cat > .nbs/scribe/log.md << 'EOF'
+cat > .nbs/scribe/live-log.md << 'EOF'
 # Decision Log
 
 Project: <project-name>
 Created: <ISO 8601 timestamp>
 Scribe: scribe
+Chat: live.chat
 
 ---
 EOF
@@ -336,7 +362,7 @@ These must hold. Violations indicate bugs.
 
 3. **Every Pythia checkpoint has a corresponding bus event.** If a checkpoint assessment appears in chat without a preceding `pythia-checkpoint` event, the activation path was bypassed.
 
-4. **Decision count is computable from the log.** `grep -c "^### D-"` on the log must return the correct count. If entries are missing or malformed, the count is wrong and Pythia activation drifts.
+4. **Decision count is computable from the log.** `grep -c "^### D-"` on the log file must return the correct count. If entries are missing or malformed, the count is wrong and Pythia activation drifts.
 
 5. **Scribe entries have chat refs that point to real messages.** Fabricated or stale refs indicate the Scribe is not reading the chat correctly.
 
@@ -344,12 +370,12 @@ These must hold. Violations indicate bugs.
 
 ### Scribe not recording decisions
 
-**Symptoms:** `.nbs/scribe/log.md` is empty or stale despite active chat.
+**Symptoms:** `.nbs/scribe/<chat-name>-log.md` is empty or stale despite active chat.
 
 **Checks:**
 1. Is the Scribe instance running? Check for active Claude session
 2. Is Scribe polling the correct chat files? Verify channel paths
-3. Is the Scribe log writable? `touch .nbs/scribe/log.md`
+3. Is the Scribe log writable? `touch .nbs/scribe/<chat-name>-log.md`
 4. Is Scribe's polling interval too long? Check if `--since=scribe` returns messages
 
 **Impact:** Without Scribe entries, Pythia checkpoints are never triggered. The meta layer is inactive.
@@ -360,7 +386,7 @@ These must hold. Violations indicate bugs.
 
 **Checks:**
 1. Is `pythia-interval` set? `grep pythia-interval .nbs/events/config.yaml`
-2. Has the decision count reached the threshold? `grep -c "^### D-" .nbs/scribe/log.md`
+2. Has the decision count reached the threshold? `grep -c "^### D-" .nbs/scribe/<chat-name>-log.md`
 3. Is the bus operational? `nbs-bus status .nbs/events/`
 4. Is Scribe publishing events? `ls .nbs/events/*scribe*.event 2>/dev/null`
 

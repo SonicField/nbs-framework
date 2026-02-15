@@ -32,12 +32,13 @@ cd "$TEST_REPO" || exit 1
 mkdir -p .nbs/scribe
 
 # Create a decision log with enough content for meaningful assessment
-cat > .nbs/scribe/log.md << 'LOGEOF'
+cat > .nbs/scribe/live-log.md << 'LOGEOF'
 # Decision Log
 
 Project: web-api-refactor
 Created: 2026-02-10T08:00:00Z
 Scribe: scribe
+Chat: live.chat
 
 ---
 
@@ -106,7 +107,7 @@ $PYTHIA_CONTENT
 The project is at $TEST_REPO. The decision log is below:
 
 ---
-$(cat .nbs/scribe/log.md)
+$(cat .nbs/scribe/live-log.md)
 ---
 
 Produce your Pythia Checkpoint assessment now. Follow the exact format specified in your role document. This is assessment #1."

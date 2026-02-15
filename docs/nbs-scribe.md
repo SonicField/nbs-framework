@@ -10,7 +10,7 @@ The Scribe solves this by maintaining a structured decision log separate from ch
 
 ## How It Works
 
-Scribe is a persistent Claude instance with a long context window (up to 1M tokens). It reads all chat channels continuously and distils decisions into `.nbs/scribe/log.md`. It does not participate in conversation — it observes, records, and makes the record available.
+Scribe is a persistent Claude instance with a long context window (up to 1M tokens). It reads all chat channels continuously and distils decisions into per-chat decision logs at `.nbs/scribe/<chat-name>-log.md` (e.g. `live.chat` → `.nbs/scribe/live-log.md`). It does not participate in conversation — it observes, records, and makes the record available.
 
 ### What Scribe Records
 
@@ -41,7 +41,7 @@ Scribe reads from chat. Pythia reads from Scribe. This separation prevents persu
 
 ## Log Format
 
-The decision log lives at `.nbs/scribe/log.md`. It is a markdown file with structured entries.
+The decision log for each chat lives at `.nbs/scribe/<chat-name>-log.md`. It is a markdown file with structured entries.
 
 ### File Structure
 
@@ -51,6 +51,8 @@ The decision log lives at `.nbs/scribe/log.md`. It is a markdown file with struc
 Project: <project name>
 Created: <ISO 8601 timestamp>
 Scribe: <scribe instance handle>
+Chat: <chat filename>
+Decision count: 0
 
 ---
 
@@ -121,19 +123,19 @@ The log is plain markdown. Query with standard tools:
 
 ```bash
 # All decisions
-grep "^### D-" .nbs/scribe/log.md
+grep "^### D-" .nbs/scribe/live-log.md
 
 # Decisions with risk tags
-grep -A6 "^### D-" .nbs/scribe/log.md | grep -B1 "Risk tags:" | grep -v "none"
+grep -A6 "^### D-" .nbs/scribe/live-log.md | grep -B1 "Risk tags:" | grep -v "none"
 
 # Decisions involving a specific participant
-grep -A6 "^### D-" .nbs/scribe/log.md | grep -B2 "alex"
+grep -A6 "^### D-" .nbs/scribe/live-log.md | grep -B2 "alex"
 
 # Decisions by status
-grep -A6 "^### D-" .nbs/scribe/log.md | grep "Status: superseded"
+grep -A6 "^### D-" .nbs/scribe/live-log.md | grep "Status: superseded"
 
 # Count decisions (for Pythia threshold)
-grep -c "^### D-" .nbs/scribe/log.md
+grep -c "^### D-" .nbs/scribe/live-log.md
 ```
 
 ## Bus Integration
@@ -159,11 +161,11 @@ Scribe also subscribes to:
 ```
 .nbs/
 ├── scribe/
-│   └── log.md          # Decision log (append-only)
+│   └── live-log.md    # Decision log for live.chat (append-only)
 ├── events/
 │   └── ...             # Bus events
 ├── chat/
-│   └── ...             # Chat channels
+│   └── live.chat       # Primary chat channel
 └── ...
 ```
 
@@ -171,17 +173,21 @@ The `.nbs/scribe/` directory is created by the Scribe instance on first run. The
 
 ## Initialisation
 
+The log filename derives from the chat: `<chat-name>.chat` → `.nbs/scribe/<chat-name>-log.md`.
+
 ```bash
 # Create the Scribe directory
 mkdir -p .nbs/scribe
 
-# Create the initial log file
-cat > .nbs/scribe/log.md << 'EOF'
+# Create the initial log file (for live.chat)
+cat > .nbs/scribe/live-log.md << 'EOF'
 # Decision Log
 
 Project: <project-name>
 Created: <timestamp>
 Scribe: scribe
+Chat: live.chat
+Decision count: 0
 
 ---
 EOF

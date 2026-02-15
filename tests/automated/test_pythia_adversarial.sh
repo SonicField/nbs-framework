@@ -27,7 +27,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 TEST_DIR=$(mktemp -d)
 CHAT_FILE="$TEST_DIR/test.chat"
-LOG_FILE="$TEST_DIR/.nbs/scribe/log.md"
+LOG_FILE="$TEST_DIR/.nbs/scribe/test-log.md"
 PYTHIA_OUTPUT="$SCRIPT_DIR/verdicts/pythia_adversarial_output_${TIMESTAMP}.txt"
 VERDICT_FILE="$SCRIPT_DIR/verdicts/pythia_adversarial_verdict_${TIMESTAMP}.json"
 
@@ -57,6 +57,7 @@ cat > "$LOG_FILE" << 'LOGEOF'
 Project: data-pipeline
 Created: 2026-02-10T00:00:00Z
 Scribe: scribe
+Chat: test.chat
 
 ---
 

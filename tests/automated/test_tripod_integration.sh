@@ -2,7 +2,7 @@
 # Test: Tripod integration — Scribe log, Pythia activation, bus events
 #
 # Deterministic tests covering:
-#   1.  Scribe log initialisation (directory and file creation)
+#   1.  Scribe log initialisation (directory, file creation, chat field)
 #   2.  Decision entry format validation
 #   3.  Append-only invariant (entries never modified)
 #   4.  Decision count via grep
@@ -17,7 +17,7 @@
 #   13. Config.yaml pythia-channel read correctly
 #   14. Missing config.yaml uses defaults
 #   15. Decision log survives append of 50 entries
-#   16. Pythia worker task file references scribe log, not chat
+#   16. Pythia worker task file references chat-named scribe log, not chat
 #   17. Scribe log is valid UTF-8
 #   18. Entry timestamps are monotonically increasing
 #   19. D-timestamp format is exactly 10 digits
@@ -60,32 +60,39 @@ mkdir -p "$PROJ/.nbs/scribe"
 mkdir -p "$PROJ/.nbs/events/processed"
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-cat > "$PROJ/.nbs/scribe/log.md" << EOF
+cat > "$PROJ/.nbs/scribe/live-log.md" << EOF
 # Decision Log
 
 Project: tripod-test
 Created: $TIMESTAMP
 Scribe: scribe
+Chat: live.chat
 
 ---
 EOF
 
-if [[ -f "$PROJ/.nbs/scribe/log.md" ]]; then
+if [[ -f "$PROJ/.nbs/scribe/live-log.md" ]]; then
     check "log file created" "pass"
 else
     check "log file created" "fail"
 fi
 
-if grep -q "^# Decision Log" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "^# Decision Log" "$PROJ/.nbs/scribe/live-log.md"; then
     check "log header present" "pass"
 else
     check "log header present" "fail"
 fi
 
+if grep -q "^Chat: live.chat" "$PROJ/.nbs/scribe/live-log.md"; then
+    check "chat field in log header" "pass"
+else
+    check "chat field in log header" "fail"
+fi
+
 # --- Test 2: Decision entry format validation ---
 echo "2. Decision entry format validation..."
 ENTRY_TS=$(date +%s)
-cat >> "$PROJ/.nbs/scribe/log.md" << EOF
+cat >> "$PROJ/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -99,31 +106,31 @@ cat >> "$PROJ/.nbs/scribe/log.md" << EOF
 EOF
 
 # Validate entry fields
-if grep -q "^### D-${ENTRY_TS} " "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "^### D-${ENTRY_TS} " "$PROJ/.nbs/scribe/live-log.md"; then
     check "D-timestamp header present" "pass"
 else
     check "D-timestamp header present" "fail"
 fi
 
-if grep -q "Chat ref:.*~L" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "Chat ref:.*~L" "$PROJ/.nbs/scribe/live-log.md"; then
     check "chat ref with ~L prefix" "pass"
 else
     check "chat ref with ~L prefix" "fail"
 fi
 
-if grep -q "Participants:" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "Participants:" "$PROJ/.nbs/scribe/live-log.md"; then
     check "participants field present" "pass"
 else
     check "participants field present" "fail"
 fi
 
-if grep -q "Status:.*decided" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "Status:.*decided" "$PROJ/.nbs/scribe/live-log.md"; then
     check "status field present" "pass"
 else
     check "status field present" "fail"
 fi
 
-if grep -q "Rationale:" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "Rationale:" "$PROJ/.nbs/scribe/live-log.md"; then
     check "rationale field present" "pass"
 else
     check "rationale field present" "fail"
@@ -131,12 +138,12 @@ fi
 
 # --- Test 3: Append-only invariant ---
 echo "3. Append-only invariant..."
-BEFORE_HASH=$(sha256sum "$PROJ/.nbs/scribe/log.md" | awk '{print $1}')
-BEFORE_LINES=$(wc -l < "$PROJ/.nbs/scribe/log.md")
+BEFORE_HASH=$(sha256sum "$PROJ/.nbs/scribe/live-log.md" | awk '{print $1}')
+BEFORE_LINES=$(wc -l < "$PROJ/.nbs/scribe/live-log.md")
 
 # Append a second entry
 ENTRY_TS2=$((ENTRY_TS + 60))
-cat >> "$PROJ/.nbs/scribe/log.md" << EOF
+cat >> "$PROJ/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -149,7 +156,7 @@ cat >> "$PROJ/.nbs/scribe/log.md" << EOF
 - **Rationale:** Repeated events from flaky workers flood the queue. Dedup window prevents this.
 EOF
 
-AFTER_LINES=$(wc -l < "$PROJ/.nbs/scribe/log.md")
+AFTER_LINES=$(wc -l < "$PROJ/.nbs/scribe/live-log.md")
 
 # The file should be strictly longer (append-only)
 if [[ "$AFTER_LINES" -gt "$BEFORE_LINES" ]]; then
@@ -159,7 +166,7 @@ else
 fi
 
 # The first N lines should be identical (nothing was modified)
-FIRST_N=$(head -n "$BEFORE_LINES" "$PROJ/.nbs/scribe/log.md" | sha256sum | awk '{print $1}')
+FIRST_N=$(head -n "$BEFORE_LINES" "$PROJ/.nbs/scribe/live-log.md" | sha256sum | awk '{print $1}')
 if [[ "$FIRST_N" == "$BEFORE_HASH" ]]; then
     check "original content unchanged" "pass"
 else
@@ -168,7 +175,7 @@ fi
 
 # --- Test 4: Decision count via grep ---
 echo "4. Decision count via grep..."
-COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/log.md")
+COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/live-log.md")
 if [[ "$COUNT" -eq 2 ]]; then
     check "decision count is 2" "pass"
 else
@@ -228,12 +235,13 @@ pythia-interval: 3
 pythia-channel: test.chat
 EOF
 
-cat > "$PROJ2/.nbs/scribe/log.md" << 'EOF'
+cat > "$PROJ2/.nbs/scribe/live-log.md" << 'EOF'
 # Decision Log
 
 Project: tripod-test-2
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: live.chat
 
 ---
 EOF
@@ -241,7 +249,7 @@ EOF
 # Add 3 decisions (should trigger at 3 with interval=3)
 for i in 1 2 3; do
     TS=$((ENTRY_TS + i * 60))
-    cat >> "$PROJ2/.nbs/scribe/log.md" << EOF
+    cat >> "$PROJ2/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -256,7 +264,7 @@ EOF
 done
 
 # Verify count is 3
-DCOUNT=$(grep -c "^### D-" "$PROJ2/.nbs/scribe/log.md")
+DCOUNT=$(grep -c "^### D-" "$PROJ2/.nbs/scribe/live-log.md")
 if [[ "$DCOUNT" -eq 3 ]]; then
     check "3 decisions logged" "pass"
 else
@@ -322,12 +330,13 @@ cat > "$PROJ4/.nbs/events/config.yaml" << 'EOF'
 pythia-interval: 5
 EOF
 
-cat > "$PROJ4/.nbs/scribe/log.md" << 'EOF'
+cat > "$PROJ4/.nbs/scribe/live-log.md" << 'EOF'
 # Decision Log
 
 Project: tripod-test-4
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: live.chat
 
 ---
 EOF
@@ -335,7 +344,7 @@ EOF
 # Add only 3 decisions (threshold is 5)
 for i in 1 2 3; do
     TS=$((ENTRY_TS + 500 + i * 60))
-    cat >> "$PROJ4/.nbs/scribe/log.md" << EOF
+    cat >> "$PROJ4/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -349,7 +358,7 @@ for i in 1 2 3; do
 EOF
 done
 
-DCOUNT4=$(grep -c "^### D-" "$PROJ4/.nbs/scribe/log.md")
+DCOUNT4=$(grep -c "^### D-" "$PROJ4/.nbs/scribe/live-log.md")
 INTERVAL4=5
 if [[ $((DCOUNT4 % INTERVAL4)) -ne 0 ]]; then
     check "below threshold: no checkpoint (3 % 5 = 3)" "pass"
@@ -359,10 +368,10 @@ fi
 
 # --- Test 9: Status change creates new entry ---
 echo "9. Status change creates new entry..."
-ORIG_COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/log.md")
+ORIG_COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/live-log.md")
 SUPERSEDE_TS=$((ENTRY_TS + 300))
 
-cat >> "$PROJ/.nbs/scribe/log.md" << EOF
+cat >> "$PROJ/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -375,14 +384,14 @@ cat >> "$PROJ/.nbs/scribe/log.md" << EOF
 - **Rationale:** Original file-based polling replaced by inotify for performance.
 EOF
 
-NEW_COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/log.md")
+NEW_COUNT=$(grep -c "^### D-" "$PROJ/.nbs/scribe/live-log.md")
 if [[ "$NEW_COUNT" -eq $((ORIG_COUNT + 1)) ]]; then
     check "status change is a new entry (count $ORIG_COUNT -> $NEW_COUNT)" "pass"
 else
     check "status change is a new entry" "fail"
 fi
 
-if grep -q "\[SUPERSEDES D-${ENTRY_TS}\]" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "\[SUPERSEDES D-${ENTRY_TS}\]" "$PROJ/.nbs/scribe/live-log.md"; then
     check "supersedes reference present" "pass"
 else
     check "supersedes reference present" "fail"
@@ -391,7 +400,7 @@ fi
 # --- Test 10: Chat ref format ---
 echo "10. Chat ref format validation..."
 # All chat refs must use the ~L prefix
-BAD_REFS=$(grep "Chat ref:" "$PROJ/.nbs/scribe/log.md" | grep -cv "~L" || true)
+BAD_REFS=$(grep "Chat ref:" "$PROJ/.nbs/scribe/live-log.md" | grep -cv "~L" || true)
 if [[ "$BAD_REFS" -eq 0 ]]; then
     check "all chat refs use ~L prefix" "pass"
 else
@@ -400,7 +409,7 @@ fi
 
 # --- Test 11: Multiple risk tags ---
 echo "11. Multiple risk tags in single entry..."
-if grep -q "breaking-change, irreversible" "$PROJ/.nbs/scribe/log.md"; then
+if grep -q "breaking-change, irreversible" "$PROJ/.nbs/scribe/live-log.md"; then
     check "multiple risk tags in one entry" "pass"
 else
     check "multiple risk tags in one entry" "fail"
@@ -442,19 +451,20 @@ echo "15. Decision log survives 50 entries..."
 PROJ6="$TEST_DIR/proj6"
 mkdir -p "$PROJ6/.nbs/scribe"
 
-cat > "$PROJ6/.nbs/scribe/log.md" << 'EOF'
+cat > "$PROJ6/.nbs/scribe/live-log.md" << 'EOF'
 # Decision Log
 
 Project: stress-test
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: live.chat
 
 ---
 EOF
 
 for i in $(seq 1 50); do
     TS=$((ENTRY_TS + 1000 + i))
-    cat >> "$PROJ6/.nbs/scribe/log.md" << EOF
+    cat >> "$PROJ6/.nbs/scribe/live-log.md" << EOF
 
 ---
 
@@ -468,7 +478,7 @@ for i in $(seq 1 50); do
 EOF
 done
 
-STRESS_COUNT=$(grep -c "^### D-" "$PROJ6/.nbs/scribe/log.md")
+STRESS_COUNT=$(grep -c "^### D-" "$PROJ6/.nbs/scribe/live-log.md")
 if [[ "$STRESS_COUNT" -eq 50 ]]; then
     check "50 entries appended and counted correctly" "pass"
 else
@@ -485,7 +495,7 @@ for n in 20 40; do
 done
 
 # --- Test 16: Pythia worker task file references scribe log ---
-echo "16. Pythia worker task file references scribe log, not chat..."
+echo "16. Pythia worker task file references chat-named scribe log, not chat..."
 
 # Simulate what a supervisor would write for a Pythia task
 PYTHIA_TASK="$TEST_DIR/pythia_task.md"
@@ -494,14 +504,14 @@ cat > "$PYTHIA_TASK" << 'EOF'
 
 ## Task
 
-Read .nbs/scribe/log.md. Post Pythia checkpoint assessment to .nbs/chat/live.chat.
+Read .nbs/scribe/live-log.md. Post Pythia checkpoint assessment to .nbs/chat/live.chat.
 Review all decisions in the log.
 
 ## Tooling
 
 | Do NOT | Use instead |
 |--------|-------------|
-| Read .nbs/chat/*.chat | Read .nbs/scribe/log.md |
+| Read .nbs/chat/*.chat | Read .nbs/scribe/live-log.md |
 
 ## Status
 
@@ -514,11 +524,11 @@ Completed:
 [Worker appends findings here]
 EOF
 
-# The task MUST reference scribe/log.md
-if grep -q ".nbs/scribe/log.md" "$PYTHIA_TASK"; then
-    check "task references scribe log" "pass"
+# The task MUST reference scribe/live-log.md (named after chat)
+if grep -q ".nbs/scribe/live-log.md" "$PYTHIA_TASK"; then
+    check "task references chat-named scribe log" "pass"
 else
-    check "task references scribe log" "fail"
+    check "task references chat-named scribe log" "fail"
 fi
 
 # The tooling table MUST prohibit direct chat reads
@@ -530,7 +540,7 @@ fi
 
 # --- Test 17: Scribe log is valid UTF-8 ---
 echo "17. Scribe log is valid UTF-8..."
-if iconv -f UTF-8 -t UTF-8 "$PROJ/.nbs/scribe/log.md" > /dev/null 2>&1; then
+if iconv -f UTF-8 -t UTF-8 "$PROJ/.nbs/scribe/live-log.md" > /dev/null 2>&1; then
     check "log is valid UTF-8" "pass"
 else
     check "log is valid UTF-8" "fail"
@@ -538,7 +548,7 @@ fi
 
 # --- Test 18: Entry timestamps monotonically increasing ---
 echo "18. Entry timestamps monotonically increasing..."
-TIMESTAMPS=$(grep "^### D-" "$PROJ/.nbs/scribe/log.md" | sed 's/### D-\([0-9]*\).*/\1/')
+TIMESTAMPS=$(grep "^### D-" "$PROJ/.nbs/scribe/live-log.md" | sed 's/### D-\([0-9]*\).*/\1/')
 PREV=0
 MONOTONIC="pass"
 while IFS= read -r ts; do
@@ -552,7 +562,7 @@ check "timestamps are monotonically increasing" "$MONOTONIC"
 
 # --- Test 19: D-timestamp format is 10 digits ---
 echo "19. D-timestamp format is 10 digits..."
-BAD_TS=$(grep "^### D-" "$PROJ/.nbs/scribe/log.md" | grep -cvE "^### D-[0-9]{10} " || true)
+BAD_TS=$(grep "^### D-" "$PROJ/.nbs/scribe/live-log.md" | grep -cvE "^### D-[0-9]{10} " || true)
 if [[ "$BAD_TS" -eq 0 ]]; then
     check "all D-timestamps are 10 digits" "pass"
 else

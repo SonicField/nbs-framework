@@ -47,12 +47,13 @@ YWxleDogQWdyZWVkLiBQcmF0dCBwYXJzaW5nIGl0IGlzLg==
 CHATEOF
 
 # Create a scribe log with different content (decisions only, no arguments)
-cat > .nbs/scribe/log.md << 'LOGEOF'
+cat > .nbs/scribe/live-log.md << 'LOGEOF'
 # Decision Log
 
 Project: test-project
 Created: 2026-02-14T08:00:00Z
 Scribe: scribe
+Chat: live.chat
 
 ---
 
@@ -98,7 +99,7 @@ Here is your role document:
 $PYTHIA_CONTENT
 ---
 
-The project is at $TEST_REPO. The Scribe log is at .nbs/scribe/log.md.
+The project is at $TEST_REPO. The Scribe log is at .nbs/scribe/live-log.md.
 There is also a chat file at .nbs/chat/live.chat.
 
 Your task: Read the decision log and post a Pythia checkpoint assessment.
@@ -143,10 +144,10 @@ fi
 
 # Also verify positive: Pythia DOES read the scribe log
 READS_SCRIBE=false
-if echo "$OUTPUT" | grep -qiE '(cat|Read|read)\s+.*scribe/log\.md'; then
+if echo "$OUTPUT" | grep -qiE '(cat|Read|read)\s+.*scribe/live-log\.md'; then
     READS_SCRIBE=true
 fi
-if echo "$OUTPUT" | grep -qiE '\.nbs/scribe/log\.md'; then
+if echo "$OUTPUT" | grep -qiE '\.nbs/scribe/live-log\.md'; then
     READS_SCRIBE=true
 fi
 

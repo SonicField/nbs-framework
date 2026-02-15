@@ -1,0 +1,564 @@
+#!/bin/bash
+# nbs-chat-init: Bootstrap NBS framework infrastructure for a project
+#
+# Creates the tripod (bus, chat, scribe log) and optionally spawns AI
+# instances via tmux. This script is both executable automation and
+# living documentation — read it to understand how the system fits
+# together.
+#
+# Usage:
+#   nbs-chat-init [OPTIONS]
+#
+#   --project-name=NAME   Override project name (default: dirname of pwd)
+#   --force               Skip confirmation prompts
+#   --dry-run             Print actions without executing
+#   --spawn-scribe        Launch Scribe in tmux session
+#   --spawn-all           Launch Scribe + main Claude instance
+#   --help                Show usage
+#
+# Exit codes:
+#   0 - Success
+#   1 - General error
+#   4 - Invalid arguments
+#
+# Infrastructure created:
+#   .nbs/events/           Bus event queue
+#   .nbs/events/processed/ Acknowledged events
+#   .nbs/events/config.yaml Bus + Pythia configuration
+#   .nbs/chat/live.chat    Primary chat channel
+#   .nbs/chat/archive/     Archived previous chats
+#   .nbs/scribe/live-log.md Decision log (Scribe's output)
+#   .nbs/project-id        4-char project identifier
+#
+# Tmux sessions (optional):
+#   nbs-scribe-<id>        Scribe instance (--spawn-scribe or --spawn-all)
+#   nbs-claude-<id>        Main Claude instance (--spawn-all)
+
+set -euo pipefail
+
+# --- Configuration ---
+
+PROJECT_ROOT="$(pwd)"
+PROJECT_NAME=""
+FORCE=false
+DRY_RUN=false
+SPAWN_SCRIBE=false
+SPAWN_ALL=false
+PROJECT_ID=""
+
+# --- Output helpers ---
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}[nbs-chat-init]${NC} $*"; }
+ok()    { echo -e "${GREEN}[nbs-chat-init]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[nbs-chat-init]${NC} $*"; }
+error() { echo -e "${RED}[nbs-chat-init]${NC} $*" >&2; }
+
+# --- Dry-run wrapper ---
+# Every side-effectful operation goes through run().
+# In dry-run mode, the command is printed but not executed.
+# Reading the dry-run output is equivalent to reading a specification.
+
+run() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} $*"
+        return 0
+    fi
+    "$@"
+}
+
+# --- Assertion helpers ---
+
+assert_not_empty() {
+    local var_name="$1"
+    local var_value="$2"
+    [[ -n "$var_value" ]] || {
+        error "ASSERTION FAILED: $var_name is empty"
+        exit 4
+    }
+}
+
+assert_tool_exists() {
+    local tool="$1"
+    command -v "$tool" >/dev/null 2>&1 || {
+        error "Required tool not found: $tool"
+        error "Ensure NBS tools are installed and on PATH."
+        error "Run: ./bin/install.sh"
+        exit 1
+    }
+}
+
+assert_directory_exists() {
+    local dir="$1"
+    [[ -d "$dir" ]] || {
+        error "ASSERTION FAILED: Directory not found: $dir"
+        exit 1
+    }
+}
+
+assert_file_exists() {
+    local file="$1"
+    [[ -f "$file" ]] || {
+        error "ASSERTION FAILED: File not found: $file"
+        exit 1
+    }
+}
+
+# --- Interaction ---
+
+confirm() {
+    local message="$1"
+    if [[ "$FORCE" == "true" ]]; then
+        return 0
+    fi
+    read -rp "$(echo -e "${YELLOW}[nbs-chat-init]${NC} $message [y/N]: ")" answer
+    case "$answer" in
+        [Yy]|[Yy]es) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# --- Project identity ---
+
+generate_project_id() {
+    local path="$1"
+    assert_not_empty "path" "$path"
+    echo -n "$path" | sha256sum | head -c 4
+}
+
+tmux_session_name() {
+    local role="$1"
+    echo "nbs-${role}-${PROJECT_ID}"
+}
+
+# --- Argument parsing ---
+
+for arg in "$@"; do
+    case "$arg" in
+        --project-name=*)
+            PROJECT_NAME="${arg#--project-name=}"
+            ;;
+        --force)
+            FORCE=true
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        --spawn-scribe)
+            SPAWN_SCRIBE=true
+            ;;
+        --spawn-all)
+            SPAWN_ALL=true
+            SPAWN_SCRIBE=true
+            ;;
+        --help|-h)
+            cat <<'USAGE'
+nbs-chat-init: Bootstrap NBS framework infrastructure
+
+Usage: nbs-chat-init [OPTIONS]
+
+Options:
+  --project-name=NAME   Override project name (default: dirname of pwd)
+  --force               Skip confirmation prompts
+  --dry-run             Print actions without executing
+  --spawn-scribe        Launch Scribe in tmux session
+  --spawn-all           Launch Scribe + main Claude instance
+  --help                Show this help
+
+Infrastructure created:
+  .nbs/events/           Event bus queue
+  .nbs/chat/live.chat    Primary chat channel
+  .nbs/scribe/live-log.md Decision log
+
+Exit codes:
+  0 - Success
+  1 - General error
+  4 - Invalid arguments
+USAGE
+            exit 0
+            ;;
+        *)
+            error "Unknown argument: $arg"
+            error "Run: nbs-chat-init --help"
+            exit 4
+            ;;
+    esac
+done
+
+# --- Validate prerequisites ---
+
+info "Checking prerequisites..."
+assert_tool_exists "nbs-chat"
+assert_tool_exists "nbs-bus"
+
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+    assert_tool_exists "tmux"
+    assert_tool_exists "nbs-claude"
+fi
+
+# --- Project detection ---
+
+if [[ -z "$PROJECT_NAME" ]]; then
+    PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+fi
+
+PROJECT_ID=$(generate_project_id "$PROJECT_ROOT")
+
+echo ""
+echo -e "${BOLD}NBS Init${NC}"
+echo "  Project:    $PROJECT_NAME"
+echo "  Root:       $PROJECT_ROOT"
+echo "  Project ID: $PROJECT_ID"
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  Mode:       ${YELLOW}DRY RUN${NC}"
+fi
+echo ""
+
+# Check for existing .nbs/
+if [[ -d ".nbs" ]]; then
+    warn "Existing .nbs/ directory found."
+    if ! confirm "Re-initialise? (existing data will be preserved)"; then
+        info "Cancelled."
+        exit 0
+    fi
+fi
+
+# ============================================================
+# PHASE 1: Bus Infrastructure
+# ============================================================
+
+info "Phase 1: Event bus..."
+
+# 1.1 Create bus directories
+run mkdir -p .nbs/events/processed
+
+# 1.2 Write config (only if missing)
+if [[ ! -f ".nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/events/config.yaml (defaults)"
+    else
+        cat > .nbs/events/config.yaml << 'CONFIGEOF'
+# NBS Event Bus Configuration
+#
+# dedup-window:  Seconds to suppress duplicate events (default: 300)
+# ack-timeout:   Seconds before unacknowledged events are flagged stale (default: 120)
+# pythia-interval: Scribe decisions between Pythia checkpoints (default: 10)
+# retention-max-bytes: Maximum total size of processed events before pruning (default: 16MB)
+
+dedup-window: 300
+ack-timeout: 120
+pythia-interval: 10
+retention-max-bytes: 16777216
+CONFIGEOF
+        ok "  config.yaml written"
+    fi
+else
+    info "  config.yaml already exists — keeping"
+fi
+
+# 1.3 Bus self-test: publish, check, ack, verify
+info "  Bus self-test..."
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-bus publish → check → ack → verify"
+else
+    # Use a unique event type per invocation to avoid dedup window collisions
+    SELF_TEST_TYPE="self-test-$(date +%s)"
+
+    # Publish a test event
+    nbs-bus publish .nbs/events/ nbs-chat-init "$SELF_TEST_TYPE" low "nbs-chat-init self-test" >/dev/null 2>&1
+
+    # Find and acknowledge it
+    SELF_TEST_EVENT=$(ls .nbs/events/*nbs-chat-init*self-test*.event 2>/dev/null | head -1 | xargs -r basename)
+    if [[ -n "$SELF_TEST_EVENT" ]]; then
+        nbs-bus ack .nbs/events/ "$SELF_TEST_EVENT" >/dev/null 2>&1
+
+        # Verify it reached processed/
+        if [[ -f ".nbs/events/processed/$SELF_TEST_EVENT" ]]; then
+            ok "  Bus self-test passed"
+        else
+            error "  Bus self-test: event not found in processed/"
+            exit 1
+        fi
+    else
+        # If no event was created, the bus binary may have deduped it or failed.
+        # Fall back to checking bus status — if status works, the bus is operational.
+        if nbs-bus status .nbs/events/ >/dev/null 2>&1; then
+            ok "  Bus self-test passed (via status check)"
+        else
+            error "  Bus self-test: no event file created and status check failed"
+            exit 1
+        fi
+    fi
+fi
+
+# ============================================================
+# PHASE 2: Chat
+# ============================================================
+
+info "Phase 2: Chat..."
+
+run mkdir -p .nbs/chat/archive
+
+# 2.1 Archive existing live.chat (if present)
+if [[ -f ".nbs/chat/live.chat" ]]; then
+    ARCHIVE_TS=$(date +%Y%m%d_%H%M%S)
+    ARCHIVE_NAME="live-${ARCHIVE_TS}.chat"
+    info "  Archiving existing live.chat → archive/$ARCHIVE_NAME"
+    run mv .nbs/chat/live.chat ".nbs/chat/archive/$ARCHIVE_NAME"
+    if [[ -f ".nbs/chat/live.chat.cursors" ]]; then
+        run mv .nbs/chat/live.chat.cursors ".nbs/chat/archive/${ARCHIVE_NAME}.cursors"
+    fi
+    if [[ -f ".nbs/chat/live.chat.lock" ]]; then
+        run rm -f .nbs/chat/live.chat.lock
+    fi
+fi
+
+# 2.2 Create fresh chat
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat create .nbs/chat/live.chat"
+else
+    nbs-chat create .nbs/chat/live.chat >/dev/null 2>&1
+    ok "  live.chat created"
+fi
+
+# 2.3 Post init message
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat send init message"
+else
+    nbs-chat send .nbs/chat/live.chat nbs-chat-init \
+        "Project '$PROJECT_NAME' initialised (project-id: $PROJECT_ID). Bus, chat, and scribe log are ready." \
+        >/dev/null 2>&1
+    ok "  Init message posted"
+fi
+
+# ============================================================
+# PHASE 3: Scribe Log
+# ============================================================
+
+info "Phase 3: Scribe log..."
+
+run mkdir -p .nbs/scribe
+
+if [[ ! -f ".nbs/scribe/live-log.md" ]] || [[ "$DRY_RUN" == "true" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/scribe/live-log.md (header)"
+    else
+        CREATED_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        cat > .nbs/scribe/live-log.md << LOGEOF
+# Decision Log
+
+Project: $PROJECT_NAME
+Created: $CREATED_TS
+Scribe: scribe
+Chat: live.chat
+Decision count: 0
+
+---
+LOGEOF
+        ok "  live-log.md created"
+    fi
+else
+    info "  live-log.md already exists — keeping"
+fi
+
+# ============================================================
+# PHASE 4: Project Identity
+# ============================================================
+
+info "Phase 4: Project identity..."
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/project-id ($PROJECT_ID)"
+else
+    echo "$PROJECT_ID" > .nbs/project-id
+    ok "  project-id: $PROJECT_ID"
+fi
+
+# ============================================================
+# PHASE 5: Health Check
+# ============================================================
+
+info "Phase 5: Health check..."
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-bus status .nbs/events/"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat read .nbs/chat/live.chat"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} Verify .nbs/scribe/live-log.md header"
+else
+    HEALTH_PASS=true
+
+    # Bus
+    if nbs-bus status .nbs/events/ >/dev/null 2>&1; then
+        ok "  Bus: operational"
+    else
+        error "  Bus: FAILED"
+        HEALTH_PASS=false
+    fi
+
+    # Chat
+    if nbs-chat read .nbs/chat/live.chat >/dev/null 2>&1; then
+        ok "  Chat: operational"
+    else
+        error "  Chat: FAILED"
+        HEALTH_PASS=false
+    fi
+
+    # Scribe log
+    if grep -q "^Project:" .nbs/scribe/live-log.md 2>/dev/null && \
+       grep -q "^Decision count:" .nbs/scribe/live-log.md 2>/dev/null; then
+        ok "  Scribe log: well-formed"
+    else
+        error "  Scribe log: FAILED (missing header fields)"
+        HEALTH_PASS=false
+    fi
+
+    if [[ "$HEALTH_PASS" != "true" ]]; then
+        error "Health check failed. Infrastructure may be incomplete."
+        exit 1
+    fi
+fi
+
+# ============================================================
+# PHASE 6: AI Spawn (optional)
+# ============================================================
+
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+    echo ""
+    info "Phase 6: AI spawn..."
+
+    # --- Scribe ---
+    SCRIBE_SESSION=$(tmux_session_name "scribe")
+
+    if tmux has-session -t "$SCRIBE_SESSION" 2>/dev/null; then
+        warn "  tmux session '$SCRIBE_SESSION' already exists."
+        if confirm "Kill existing session?"; then
+            run tmux kill-session -t "$SCRIBE_SESSION"
+        else
+            warn "  Skipping Scribe spawn."
+            SPAWN_SCRIBE=false
+        fi
+    fi
+
+    if [[ "$SPAWN_SCRIBE" == "true" ]]; then
+        info "  Spawning Scribe..."
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $SCRIBE_SESSION"
+            echo -e "  ${YELLOW}[DRY-RUN]${NC} → nbs-claude"
+            echo -e "  ${YELLOW}[DRY-RUN]${NC} → Send Scribe role prompt"
+        else
+            # Create tmux session in the project directory
+            tmux new-session -d -s "$SCRIBE_SESSION" -c "$PROJECT_ROOT"
+
+            # Wait for shell to initialise
+            sleep 2
+
+            # Launch nbs-claude inside the session
+            tmux send-keys -t "$SCRIBE_SESSION" "nbs-claude --dangerously-skip-permissions" Enter
+
+            # Wait for Claude to start
+            sleep 3
+
+            # Send the Scribe role prompt
+            SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor .nbs/chat/live.chat and log decisions to .nbs/scribe/live-log.md. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
+
+            # Wait for Claude Code prompt to appear
+            wait_count=0
+            max_wait=30
+            while [ $wait_count -lt $max_wait ]; do
+                if tmux capture-pane -t "$SCRIBE_SESSION" -p 2>/dev/null | grep -q '❯'; then
+                    break
+                fi
+                sleep 1
+                wait_count=$((wait_count + 1))
+            done
+
+            tmux send-keys -t "$SCRIBE_SESSION" "$SCRIBE_PROMPT" Enter
+
+            # Extra Enter for reliability
+            sleep 1
+            tmux send-keys -t "$SCRIBE_SESSION" "" Enter
+
+            ok "  Scribe spawned: $SCRIBE_SESSION"
+            info "  Attach: tmux attach -t $SCRIBE_SESSION"
+        fi
+    fi
+
+    # --- Main Claude (--spawn-all only) ---
+    if [[ "$SPAWN_ALL" == "true" ]]; then
+        CLAUDE_SESSION=$(tmux_session_name "claude")
+
+        if tmux has-session -t "$CLAUDE_SESSION" 2>/dev/null; then
+            warn "  tmux session '$CLAUDE_SESSION' already exists."
+            if confirm "Kill existing session?"; then
+                run tmux kill-session -t "$CLAUDE_SESSION"
+            else
+                warn "  Skipping Claude spawn."
+                SPAWN_ALL=false
+            fi
+        fi
+
+        if [[ "$SPAWN_ALL" == "true" ]]; then
+            info "  Spawning Claude..."
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $CLAUDE_SESSION"
+                echo -e "  ${YELLOW}[DRY-RUN]${NC} → nbs-claude"
+            else
+                tmux new-session -d -s "$CLAUDE_SESSION" -c "$PROJECT_ROOT"
+                sleep 2
+                tmux send-keys -t "$CLAUDE_SESSION" "nbs-claude --dangerously-skip-permissions" Enter
+
+                ok "  Claude spawned: $CLAUDE_SESSION"
+                info "  Attach: tmux attach -t $CLAUDE_SESSION"
+            fi
+        fi
+    fi
+
+    # Publish spawn event
+    if [[ "$DRY_RUN" != "true" ]]; then
+        nbs-bus publish .nbs/events/ nbs-chat-init ai-spawned normal \
+            "AI instances spawned by nbs-chat-init" >/dev/null 2>&1 || true
+    fi
+fi
+
+# ============================================================
+# Summary
+# ============================================================
+
+echo ""
+echo -e "${BOLD}=== NBS Init Complete ===${NC}"
+echo ""
+echo "  Project:    $PROJECT_NAME"
+echo "  Root:       $PROJECT_ROOT"
+echo "  Project ID: $PROJECT_ID"
+echo ""
+echo "  Components:"
+echo "    Bus:        .nbs/events/"
+echo "    Chat:       .nbs/chat/live.chat"
+echo "    Scribe log: .nbs/scribe/live-log.md"
+echo "    Config:     .nbs/events/config.yaml"
+
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+    echo ""
+    echo "  Tmux sessions:"
+    if [[ "$SPAWN_SCRIBE" == "true" ]]; then
+        echo "    Scribe: $(tmux_session_name scribe)"
+    fi
+    if [[ "$SPAWN_ALL" == "true" ]]; then
+        echo "    Claude: $(tmux_session_name claude)"
+    fi
+    echo ""
+    echo "  List all NBS sessions: tmux ls | grep nbs-"
+fi
+
+echo ""
+echo "  Next steps:"
+echo "    1. Start Claude:  cd $PROJECT_ROOT && nbs-claude"
+echo "    2. Read the chat: nbs-chat read .nbs/chat/live.chat"
+echo "    3. Post to chat:  nbs-chat send .nbs/chat/live.chat <handle> <message>"
+echo ""

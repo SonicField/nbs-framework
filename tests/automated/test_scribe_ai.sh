@@ -22,7 +22,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 TEST_DIR=$(mktemp -d)
 CHAT_FILE="$TEST_DIR/test.chat"
-LOG_FILE="$TEST_DIR/.nbs/scribe/log.md"
+LOG_FILE="$TEST_DIR/.nbs/scribe/test-log.md"
 SCRIBE_OUTPUT="$SCRIPT_DIR/verdicts/scribe_ai_output_${TIMESTAMP}.txt"
 VERDICT_FILE="$SCRIPT_DIR/verdicts/scribe_ai_verdict_${TIMESTAMP}.json"
 
@@ -75,6 +75,7 @@ cat > "$LOG_FILE" << 'EOF'
 Project: scribe-test
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: test.chat
 
 ---
 EOF

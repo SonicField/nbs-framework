@@ -28,8 +28,10 @@ You are spawned by a bus event, typically `scribe pythia-checkpoint`. You may al
 
 ### Step 1: Read the decision log
 
+Find the decision log for the chat you are assessing. The log filename derives from the chat name: `live.chat` → `.nbs/scribe/live-log.md`.
+
 ```bash
-cat .nbs/scribe/log.md
+cat .nbs/scribe/live-log.md
 ```
 
 Read the entire log. Pay attention to:

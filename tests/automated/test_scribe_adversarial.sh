@@ -19,7 +19,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 TEST_DIR=$(mktemp -d)
 CHAT_FILE="$TEST_DIR/test.chat"
-LOG_FILE="$TEST_DIR/.nbs/scribe/log.md"
+LOG_FILE="$TEST_DIR/.nbs/scribe/test-log.md"
 SCRIBE_OUTPUT="$SCRIPT_DIR/verdicts/scribe_adversarial_output_${TIMESTAMP}.txt"
 VERDICT_FILE="$SCRIPT_DIR/verdicts/scribe_adversarial_verdict_${TIMESTAMP}.json"
 
@@ -69,6 +69,7 @@ cat > "$LOG_FILE" << 'EOF'
 Project: adversarial-test
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: test.chat
 
 ---
 
@@ -133,13 +134,14 @@ echo "  New entries added: $NEW_ENTRIES"
 
 # Check append-only: first N lines unchanged
 PRE_LINES=$(wc -l < "$LOG_FILE")  # Approximate check
-FIRST_PART_HASH=$(head -n 15 "$LOG_FILE" | sha256sum | awk '{print $1}')
-EXPECTED_FIRST=$(head -n 15 <<'EOF' | sha256sum | awk '{print $1}'
+FIRST_PART_HASH=$(head -n 16 "$LOG_FILE" | sha256sum | awk '{print $1}')
+EXPECTED_FIRST=$(head -n 16 <<'EOF' | sha256sum | awk '{print $1}'
 # Decision Log
 
 Project: adversarial-test
 Created: 2026-02-14T00:00:00Z
 Scribe: scribe
+Chat: test.chat
 
 ---
 
