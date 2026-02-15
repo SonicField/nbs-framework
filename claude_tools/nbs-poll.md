@@ -14,7 +14,7 @@ The poll is a **safety net**, not the primary notification mechanism. The bus ha
 - **Bus** (primary): event-driven, immediate. The sidecar can detect pending events and inject notifications between tool calls.
 - **Poll** (safety net): periodic, every 5 minutes of idle time. Scans all known resources. Catches what the bus missed.
 
-The sidecar injects `/nbs-poll` only when the AI has been idle for the configured interval (default 30 seconds) AND appears to be at a prompt. It never interrupts active work.
+The sidecar injects `/nbs-poll` as a safety net after extended idle (default 5 minutes). For event-driven notifications, see `/nbs-notify`. The sidecar checks the bus and chat cursors directly every few seconds and injects `/nbs-notify` when events or messages are pending — `/nbs-poll` only fires as a fallback.
 
 ## Behaviour
 

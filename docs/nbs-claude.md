@@ -1,6 +1,6 @@
 # nbs-claude: Claude Code Integration Wrapper
 
-Launches Claude Code with a background sidecar that monitors for idle state, injects `/nbs-poll` when appropriate, auto-selects plan mode prompts, and processes dynamic resource registration commands.
+Launches Claude Code with a bus-aware background sidecar that checks for pending events and unread chat messages, injecting `/nbs-notify` when there is something to process. Falls back to `/nbs-poll` as a safety net after extended idle. Auto-selects plan mode prompts and processes dynamic resource registration commands.
 
 ## Usage
 
@@ -13,8 +13,11 @@ nbs-claude --resume abc123    # Resume session with polling
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NBS_POLL_INTERVAL` | `30` | Seconds of idle before injecting `/nbs-poll` |
-| `NBS_POLL_DISABLE` | `0` | Set to `1` to disable polling (just wraps Claude) |
+| `NBS_POLL_INTERVAL` | `300` | Safety net: seconds of idle before injecting `/nbs-poll` |
+| `NBS_POLL_DISABLE` | `0` | Set to `1` to disable all polling (just wraps Claude) |
+| `NBS_BUS_CHECK_INTERVAL` | `3` | Seconds between bus/chat checks |
+| `NBS_NOTIFY_COOLDOWN` | `15` | Minimum seconds between `/nbs-notify` injections |
+| `NBS_HANDLE` | `claude` | Agent handle for cursor peeking |
 
 ## Operating Modes
 
@@ -29,39 +32,58 @@ Both modes have identical sidecar logic. The only difference is how pane content
 
 ## Sidecar Architecture
 
-The sidecar is a background process that runs a 1-second loop:
+The sidecar is a background process that runs a 1-second loop with two notification tracks:
 
 ```
 every 1 second:
+  check control inbox for new commands
   capture pane content (last 5 lines of scrollback)
   hash content with md5sum
   if hash changed from last second:
-    reset idle counter to 0
+    reset idle and bus-check counters
     check for plan mode prompt → auto-select option 2
-    check control inbox for new commands
   if hash unchanged:
-    increment idle counter
+    increment idle counter and bus-check counter
     check for plan mode prompt (also when stable)
-  if idle counter >= POLL_INTERVAL:
-    check if prompt character visible (❯ or > in last 3 lines)
-    if yes: inject /nbs-poll, reset counter, wait 10 seconds
-    if no: reset counter (AI is thinking, not idle)
+
+  # Track 1: Bus-aware fast check (every BUS_CHECK_INTERVAL seconds)
+  if bus_check_counter >= BUS_CHECK_INTERVAL:
+    reset bus_check_counter
+    if prompt visible AND (bus events pending OR chat unread):
+      inject /nbs-notify <summary>
+      wait 10 seconds
+
+  # Track 2: Safety net (every POLL_INTERVAL seconds)
+  if idle_seconds >= POLL_INTERVAL:
+    if prompt visible:
+      inject /nbs-poll
+      wait 10 seconds
 ```
+
+### Bus-Aware Notification
+
+The sidecar checks the event bus and chat cursors directly, injecting `/nbs-notify` only when there is something to process. This eliminates the context waste of blind polling.
+
+**Bus checking** (`check_bus_events`): Reads the control registry for `bus:` entries, runs `nbs-bus check` (non-destructive) on each. If pending events exist, notes the count and highest priority.
+
+**Chat cursor peeking** (`check_chat_unread`): For each registered chat, reads the cursor file (`<chat>.cursors`) directly — no lock acquired, no cursor advanced. Compares the handle's cursor position against the total message count. The AI's cursor is never modified by the sidecar; it is only advanced when the AI reads messages via `nbs-chat read --unread`.
+
+**Cooldown**: After injecting `/nbs-notify`, the sidecar waits at least `NBS_NOTIFY_COOLDOWN` seconds (default 15) before injecting again. Critical-priority bus events bypass the cooldown.
+
+**Summary message**: The sidecar passes a summary as the `/nbs-notify` argument, e.g.: `2 event(s) in .nbs/events/. 3 unread in live.chat`. This is capped at 200 characters for tmux safety.
 
 ### Idle Detection
 
 The sidecar determines "idle" by two conditions both being true:
 
-1. **Content stability**: the pane content hash has not changed for `POLL_INTERVAL` seconds (default 30). While the AI is generating output or tools are running, the hash changes every second and the counter never reaches the threshold.
+1. **Content stability**: the pane content hash has not changed for the required interval. While the AI is generating output or tools are running, the hash changes every second and the counter never reaches the threshold.
 
 2. **Prompt visibility**: one of `❯` or `>` appears in the last 3 lines of pane content. This distinguishes "idle at prompt" from "AI is thinking" — during thinking, the pane is stable (spinner only) but no prompt character is visible.
 
-This prevents poll injection from interrupting:
+This prevents injection from interrupting:
 - Active code generation (content changing rapidly)
 - Tool execution (content changing, no prompt)
 - AI thinking time (content stable, no prompt)
-
-The poll is only injected during genuine idle periods when Claude is waiting for user input.
 
 ### Plan Mode Auto-Select
 
@@ -90,7 +112,7 @@ Written to `.nbs/control-inbox`, one per line:
 | `unregister-bus <path>` | Remove a bus events directory |
 | `register-hub <path>` | Add a hub configuration to the watch list |
 | `unregister-hub <path>` | Remove a hub configuration |
-| `set-poll-interval <seconds>` | Change the poll interval dynamically |
+| `set-poll-interval <seconds>` | Change the safety net poll interval dynamically |
 
 The AI-facing convention uses `\nbs-` prefix (e.g. `\nbs-register-chat`). The control inbox strips the prefix — the file contains bare verbs.
 
@@ -132,5 +154,6 @@ On exit (INT, TERM, or normal), the sidecar process is killed and any `pty-sessi
 
 - [Coordination](../concepts/coordination.md) — Why event-driven coordination matters, including dynamic discovery and dual notification
 - [nbs-bus](nbs-bus.md) — Event queue that the sidecar monitors
-- [nbs-poll skill](../claude_tools/nbs-poll.md) — The skill injected by the sidecar
+- [nbs-notify skill](../claude_tools/nbs-notify.md) — Lightweight notification skill injected when events are pending
+- [nbs-poll skill](../claude_tools/nbs-poll.md) — Safety net skill injected after extended idle
 - [Dynamic Registration](../feature-requests/dynamic-registration.md) — Full design rationale for the registration mechanism

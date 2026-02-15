@@ -8,6 +8,9 @@
 #   4. Idle detection logic
 #   5. Dual-mode support (tmux vs pty-session)
 #   6. nbs-poll skill doc
+#
+# See also: test_nbs_claude_bus.sh for bus-aware sidecar tests
+# (check_bus_events, check_chat_unread, should_inject_notify, etc.)
 
 set -uo pipefail
 

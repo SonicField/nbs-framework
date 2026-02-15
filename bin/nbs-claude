@@ -1,8 +1,12 @@
 #!/bin/bash
-# nbs-claude: Launch Claude Code with automatic chat/worker polling
+# nbs-claude: Launch Claude Code with bus-aware event-driven notification
 #
-# Runs claude with a background sidecar that monitors for idle state
-# and injects /nbs-poll when claude is waiting for user input.
+# Runs claude with a background sidecar that:
+#   1. Checks the event bus every few seconds for pending events
+#   2. Checks chat cursors for unread messages
+#   3. Injects /nbs-notify only when there is something to process
+#   4. Injects /nbs-poll as a safety net after extended idle (5 min)
+#   5. Auto-selects plan mode prompts for unattended workers
 #
 # Works in two modes:
 #   - Inside tmux: runs claude in the current pane, sidecar monitors it
@@ -16,8 +20,11 @@
 #   nbs-claude --resume abc123   # Resume session with polling
 #
 # Environment:
-#   NBS_POLL_INTERVAL  Seconds of idle before injecting poll (default: 30)
-#   NBS_POLL_DISABLE   Set to 1 to disable polling (just wraps claude)
+#   NBS_POLL_INTERVAL       Safety net poll interval in seconds (default: 300)
+#   NBS_POLL_DISABLE        Set to 1 to disable all polling (just wraps claude)
+#   NBS_BUS_CHECK_INTERVAL  Bus/chat check interval in seconds (default: 3)
+#   NBS_NOTIFY_COOLDOWN     Min seconds between /nbs-notify injections (default: 15)
+#   NBS_HANDLE              Agent handle for cursor peeking (default: claude)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -28,8 +35,11 @@ set -uo pipefail
 
 # --- Configuration ---
 
-POLL_INTERVAL="${NBS_POLL_INTERVAL:-30}"
+POLL_INTERVAL="${NBS_POLL_INTERVAL:-300}"
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
+BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
+NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
+SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -205,15 +215,186 @@ check_control_inbox() {
     fi
 }
 
+# --- Bus-aware event checking ---
+# The sidecar checks the bus and chat cursors directly, injecting /nbs-notify
+# only when there is something to process. This replaces blind /nbs-poll
+# injection which wastes context on empty checks.
+
+# Globals set by check functions
+BUS_EVENT_COUNT=0
+BUS_MAX_PRIORITY="none"
+BUS_EVENT_SUMMARY=""
+CHAT_UNREAD_COUNT=0
+CHAT_UNREAD_SUMMARY=""
+NOTIFY_MESSAGE=""
+LAST_NOTIFY_TIME=0
+
+# check_bus_events — peek at the event bus without consuming anything.
+# Reads the control registry for bus: entries, runs nbs-bus check on each.
+# Sets BUS_EVENT_COUNT, BUS_MAX_PRIORITY, BUS_EVENT_SUMMARY.
+# Returns: 0 = events found, 1 = empty, 2 = no bus registered.
+check_bus_events() {
+    BUS_EVENT_COUNT=0
+    BUS_MAX_PRIORITY="none"
+    BUS_EVENT_SUMMARY=""
+
+    [[ -f "$CONTROL_REGISTRY" ]] || return 2
+
+    local has_bus=0
+    local output
+
+    while IFS= read -r line; do
+        case "$line" in
+            bus:*)
+                local bus_dir="${line#bus:}"
+                if [[ -d "$bus_dir" ]]; then
+                    has_bus=1
+                    output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
+                    if [[ -n "$output" ]]; then
+                        BUS_EVENT_COUNT=$(echo "$output" | wc -l)
+                        BUS_EVENT_COUNT=$((BUS_EVENT_COUNT + 0))
+                        # Extract highest priority (first line, first bracket group)
+                        BUS_MAX_PRIORITY=$(echo "$output" | head -1 | sed 's/^\[\([a-z]*\)\].*/\1/')
+                        BUS_EVENT_SUMMARY="${BUS_EVENT_COUNT} event(s) in ${bus_dir}"
+                    fi
+                fi
+                ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    [[ $has_bus -eq 0 ]] && return 2
+    [[ $BUS_EVENT_COUNT -eq 0 ]] && return 1
+    return 0
+}
+
+# check_chat_unread — peek at chat cursors without advancing them.
+# Reads cursor files directly (no lock, no modification) and compares
+# against total message count. Format: handle=index in <chat>.cursors.
+# See src/nbs-chat/chat_file.c for cursor file format.
+# Sets CHAT_UNREAD_COUNT, CHAT_UNREAD_SUMMARY.
+# Returns: 0 = unread found, 1 = caught up, 2 = no chats registered.
+check_chat_unread() {
+    CHAT_UNREAD_COUNT=0
+    CHAT_UNREAD_SUMMARY=""
+
+    [[ -f "$CONTROL_REGISTRY" ]] || return 2
+
+    local has_chat=0
+    local unread_chats=""
+
+    while IFS= read -r line; do
+        case "$line" in
+            chat:*)
+                local chat_path="${line#chat:}"
+                [[ -f "$chat_path" ]] || continue
+                has_chat=1
+
+                # Count total messages: non-empty lines after --- delimiter
+                local total
+                total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null)
+                total=$((total + 0))
+
+                # Read cursor for our handle (no lock, no advancement)
+                local cursor=0
+                if [[ -f "${chat_path}.cursors" ]]; then
+                    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null)
+                    cursor=$((${cursor:-0} + 0))
+                fi
+
+                # Unread if total messages > cursor position + 1
+                # (cursor is 0-indexed: cursor=0 means message 0 has been read)
+                if (( total > cursor + 1 )); then
+                    local chat_name
+                    chat_name=$(basename "$chat_path")
+                    local n_unread=$((total - cursor - 1))
+                    CHAT_UNREAD_COUNT=$((CHAT_UNREAD_COUNT + n_unread))
+                    if [[ -n "$unread_chats" ]]; then
+                        unread_chats="${unread_chats}, ${chat_name}"
+                    else
+                        unread_chats="$chat_name"
+                    fi
+                fi
+                ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    if [[ $CHAT_UNREAD_COUNT -gt 0 ]]; then
+        CHAT_UNREAD_SUMMARY="${CHAT_UNREAD_COUNT} unread in ${unread_chats}"
+    fi
+
+    [[ $has_chat -eq 0 ]] && return 2
+    [[ $CHAT_UNREAD_COUNT -eq 0 ]] && return 1
+    return 0
+}
+
+# should_inject_notify — decide whether to inject /nbs-notify.
+# Combines bus and chat checks, applies cooldown logic.
+# Critical priority bypasses cooldown.
+# Sets NOTIFY_MESSAGE with summary text (capped at 200 chars).
+# Returns: 0 = should inject, 1 = should not.
+should_inject_notify() {
+    NOTIFY_MESSAGE=""
+
+    check_bus_events
+    local bus_rc=$?
+
+    check_chat_unread
+    local chat_rc=$?
+
+    # Nothing pending
+    if [[ $bus_rc -ne 0 && $chat_rc -ne 0 ]]; then
+        return 1
+    fi
+
+    # Apply cooldown (critical bypasses)
+    local now
+    now=$(date +%s)
+    local elapsed=$((now - LAST_NOTIFY_TIME))
+
+    if [[ "$BUS_MAX_PRIORITY" != "critical" && $elapsed -lt $NOTIFY_COOLDOWN ]]; then
+        return 1
+    fi
+
+    # Build summary message
+    local parts=""
+    if [[ -n "$BUS_EVENT_SUMMARY" ]]; then
+        parts="$BUS_EVENT_SUMMARY"
+    fi
+    if [[ -n "$CHAT_UNREAD_SUMMARY" ]]; then
+        if [[ -n "$parts" ]]; then
+            parts="${parts}. ${CHAT_UNREAD_SUMMARY}"
+        else
+            parts="$CHAT_UNREAD_SUMMARY"
+        fi
+    fi
+
+    # Cap at 200 chars for tmux safety
+    if [[ ${#parts} -gt 200 ]]; then
+        parts="${parts:0:197}..."
+    fi
+
+    NOTIFY_MESSAGE="$parts"
+    LAST_NOTIFY_TIME=$now
+    return 0
+}
+
+# --- Prompt detection ---
+
+is_prompt_visible() {
+    local content="$1"
+    echo "$content" | tail -3 | grep -qE '❯|>\s*$'
+}
+
 # --- Idle detection sidecar (tmux mode) ---
-# Monitors the current tmux pane for idle and injects /nbs-poll.
-# Also checks the control inbox for dynamic resource registration.
+# Monitors the current tmux pane. Checks bus/chat every BUS_CHECK_INTERVAL
+# seconds and injects /nbs-notify when events or messages are pending.
+# Falls back to /nbs-poll as a safety net after POLL_INTERVAL seconds.
 
 poll_sidecar_tmux() {
-    local interval="$1"
-    local pane_id="$2"
+    local pane_id="$1"
 
     local idle_seconds=0
+    local bus_check_counter=0
     local last_content_hash=""
 
     # Seed registry with existing resources
@@ -240,6 +421,7 @@ poll_sidecar_tmux() {
 
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
+            bus_check_counter=0
             last_content_hash="$current_hash"
 
             # Check for plan mode immediately on content change
@@ -268,21 +450,39 @@ poll_sidecar_tmux() {
         fi
 
         idle_seconds=$((idle_seconds + 1))
+        bus_check_counter=$((bus_check_counter + 1))
 
-        if [[ $idle_seconds -ge $interval ]]; then
-            # Check if claude appears to be at a prompt
-            if echo "$content" | tail -3 | grep -qE '❯|>\s*$'; then
-                # Inject /nbs-poll followed by Enter
-                # Send text first, small delay, then Enter separately
-                # Claude Code may not process pasted text + Enter atomically
+        # --- Track 1: Bus-aware fast check ---
+        # Check bus and chat every BUS_CHECK_INTERVAL seconds.
+        # Only inject /nbs-notify if something is actually pending.
+        if [[ $bus_check_counter -ge $BUS_CHECK_INTERVAL ]]; then
+            bus_check_counter=0
+
+            if is_prompt_visible "$content"; then
+                if should_inject_notify; then
+                    tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}"
+                    sleep 0.3
+                    tmux send-keys -t "$pane_id" Enter
+
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 10
+                    continue
+                fi
+            fi
+        fi
+
+        # --- Track 2: Safety net poll ---
+        # Full /nbs-poll after extended idle. Catches bus failures,
+        # unregistered resources, anything the fast check missed.
+        if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
+            if is_prompt_visible "$content"; then
                 tmux send-keys -t "$pane_id" -l '/nbs-poll'
                 sleep 0.3
                 tmux send-keys -t "$pane_id" Enter
 
                 idle_seconds=0
                 last_content_hash=""
-
-                # Wait for poll to complete
                 sleep 10
             else
                 idle_seconds=0
@@ -296,9 +496,9 @@ poll_sidecar_tmux() {
 poll_sidecar_pty() {
     local pty="$1"
     local session="$2"
-    local interval="$3"
 
     local idle_seconds=0
+    local bus_check_counter=0
     local last_content_hash=""
 
     # Seed registry with existing resources
@@ -322,6 +522,7 @@ poll_sidecar_pty() {
 
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
+            bus_check_counter=0
             last_content_hash="$current_hash"
 
             # Check for plan mode immediately on content change
@@ -349,9 +550,29 @@ poll_sidecar_pty() {
         fi
 
         idle_seconds=$((idle_seconds + 1))
+        bus_check_counter=$((bus_check_counter + 1))
 
-        if [[ $idle_seconds -ge $interval ]]; then
-            if echo "$content" | tail -3 | grep -qE '❯|>\s*$'; then
+        # --- Track 1: Bus-aware fast check ---
+        if [[ $bus_check_counter -ge $BUS_CHECK_INTERVAL ]]; then
+            bus_check_counter=0
+
+            if is_prompt_visible "$content"; then
+                if should_inject_notify; then
+                    "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}"
+                    sleep 0.5
+                    "$pty" send "$session" ''
+
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 10
+                    continue
+                fi
+            fi
+        fi
+
+        # --- Track 2: Safety net poll ---
+        if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
+            if is_prompt_visible "$content"; then
                 "$pty" send "$session" '/nbs-poll'
                 sleep 0.5
                 "$pty" send "$session" ''
@@ -374,8 +595,11 @@ for arg in "$@"; do
     CLAUDE_ARGS+=("$arg")
 done
 
-echo "Starting Claude Code with NBS polling..."
-echo "  Poll interval: ${POLL_INTERVAL}s idle"
+echo "Starting Claude Code with NBS bus-aware polling..."
+echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
+echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
+echo "  Safety net poll: ${POLL_INTERVAL}s idle"
+echo "  Handle: ${SIDECAR_HANDLE}"
 if [[ "$POLL_DISABLE" == "1" ]]; then
     echo "  Polling: DISABLED"
 fi
@@ -391,7 +615,7 @@ if [[ -n "${TMUX:-}" ]]; then
 
     # Start sidecar monitoring this pane
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        poll_sidecar_tmux "$POLL_INTERVAL" "$PANE_ID" &
+        poll_sidecar_tmux "$PANE_ID" &
         SIDECAR_PID=$!
     fi
 
@@ -432,7 +656,7 @@ else
 
     # Start sidecar if polling enabled
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        poll_sidecar_pty "$PTY_SESSION" "$SESSION_NAME" "$POLL_INTERVAL" &
+        poll_sidecar_pty "$PTY_SESSION" "$SESSION_NAME" &
         SIDECAR_PID=$!
     fi
 
