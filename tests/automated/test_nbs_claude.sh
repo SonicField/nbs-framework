@@ -308,6 +308,8 @@ mkdir -p .nbs/chat .nbs/events
 # Source the control inbox functions from nbs-claude
 # We need to extract the functions without running main
 # Using a temp file + source instead of eval to handle shell syntax (globs, redirects)
+# Set SIDECAR_HANDLE before sourcing — the control file paths now include it
+SIDECAR_HANDLE="testhandle"
 _EXTRACT_TMP=$(mktemp)
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"
@@ -316,14 +318,14 @@ rm -f "$_EXTRACT_TMP"
 # Test: seed_registry populates from existing chat files
 touch .nbs/chat/live.chat .nbs/chat/debug.chat
 seed_registry
-if grep -qF "chat:.nbs/chat/live.chat" .nbs/control-registry && \
-   grep -qF "chat:.nbs/chat/debug.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/live.chat" "$CONTROL_REGISTRY" && \
+   grep -qF "chat:.nbs/chat/debug.chat" "$CONTROL_REGISTRY"; then
     pass "seed_registry finds existing chat files"
 else
     fail "seed_registry did not find chat files"
 fi
 
-if grep -qF "bus:.nbs/events" .nbs/control-registry; then
+if grep -qF "bus:.nbs/events" "$CONTROL_REGISTRY"; then
     pass "seed_registry finds existing events directory"
 else
     fail "seed_registry did not find events directory"
@@ -331,7 +333,7 @@ fi
 
 # Test: seed_registry is idempotent
 seed_registry
-CHAT_COUNT=$(grep -c "chat:.nbs/chat/live.chat" .nbs/control-registry)
+CHAT_COUNT=$(grep -c "chat:.nbs/chat/live.chat" $CONTROL_REGISTRY)
 if [[ "$CHAT_COUNT" -eq 1 ]]; then
     pass "seed_registry is idempotent (no duplicates)"
 else
@@ -340,7 +342,7 @@ fi
 
 # Test: process_control_command register-chat
 process_control_command "register-chat .nbs/chat/new.chat"
-if grep -qF "chat:.nbs/chat/new.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/new.chat" $CONTROL_REGISTRY; then
     pass "register-chat adds to registry"
 else
     fail "register-chat did not add to registry"
@@ -348,7 +350,7 @@ fi
 
 # Test: duplicate registration is idempotent
 process_control_command "register-chat .nbs/chat/new.chat"
-NEW_COUNT=$(grep -c "chat:.nbs/chat/new.chat" .nbs/control-registry)
+NEW_COUNT=$(grep -c "chat:.nbs/chat/new.chat" $CONTROL_REGISTRY)
 if [[ "$NEW_COUNT" -eq 1 ]]; then
     pass "Duplicate register-chat is idempotent"
 else
@@ -357,7 +359,7 @@ fi
 
 # Test: unregister-chat removes from registry
 process_control_command "unregister-chat .nbs/chat/new.chat"
-if grep -qF "chat:.nbs/chat/new.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/new.chat" $CONTROL_REGISTRY; then
     fail "unregister-chat did not remove from registry"
 else
     pass "unregister-chat removes from registry"
@@ -369,7 +371,7 @@ pass "Unregistering non-existent resource does not crash"
 
 # Test: register-bus
 process_control_command "register-bus /some/other/events"
-if grep -qF "bus:/some/other/events" .nbs/control-registry; then
+if grep -qF "bus:/some/other/events" $CONTROL_REGISTRY; then
     pass "register-bus adds to registry"
 else
     fail "register-bus did not add to registry"
@@ -377,7 +379,7 @@ fi
 
 # Test: register-hub
 process_control_command "register-hub /project/.nbs/hub.yaml"
-if grep -qF "hub:/project/.nbs/hub.yaml" .nbs/control-registry; then
+if grep -qF "hub:/project/.nbs/hub.yaml" $CONTROL_REGISTRY; then
     pass "register-hub adds to registry"
 else
     fail "register-hub did not add to registry"
@@ -420,11 +422,11 @@ pass "Empty lines handled without crash"
 
 # Test: check_control_inbox processes new lines only
 CONTROL_INBOX_LINE=0
-echo "register-chat .nbs/chat/inbox-test1.chat" > .nbs/control-inbox
-echo "register-chat .nbs/chat/inbox-test2.chat" >> .nbs/control-inbox
+echo "register-chat .nbs/chat/inbox-test1.chat" > $CONTROL_INBOX
+echo "register-chat .nbs/chat/inbox-test2.chat" >> $CONTROL_INBOX
 check_control_inbox
-if grep -qF "chat:.nbs/chat/inbox-test1.chat" .nbs/control-registry && \
-   grep -qF "chat:.nbs/chat/inbox-test2.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/inbox-test1.chat" $CONTROL_REGISTRY && \
+   grep -qF "chat:.nbs/chat/inbox-test2.chat" $CONTROL_REGISTRY; then
     pass "check_control_inbox processes lines from inbox"
 else
     fail "check_control_inbox did not process inbox lines"
@@ -434,23 +436,23 @@ fi
 # Remove an entry, then check inbox again — should NOT re-add it
 process_control_command "unregister-chat .nbs/chat/inbox-test1.chat"
 check_control_inbox
-if grep -qF "chat:.nbs/chat/inbox-test1.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/inbox-test1.chat" $CONTROL_REGISTRY; then
     fail "check_control_inbox re-processed old lines"
 else
     pass "check_control_inbox does not re-process old lines (forward-only)"
 fi
 
 # Test: check_control_inbox processes only new lines after offset
-echo "register-chat .nbs/chat/inbox-test3.chat" >> .nbs/control-inbox
+echo "register-chat .nbs/chat/inbox-test3.chat" >> $CONTROL_INBOX
 check_control_inbox
-if grep -qF "chat:.nbs/chat/inbox-test3.chat" .nbs/control-registry; then
+if grep -qF "chat:.nbs/chat/inbox-test3.chat" $CONTROL_REGISTRY; then
     pass "check_control_inbox processes new lines after offset"
 else
     fail "check_control_inbox did not process new lines after offset"
 fi
 
 # Test: control inbox file is preserved (never truncated)
-INBOX_LINES=$(wc -l < .nbs/control-inbox)
+INBOX_LINES=$(wc -l < $CONTROL_INBOX)
 if [[ "$INBOX_LINES" -eq 3 ]]; then
     pass "Control inbox file preserved (all 3 lines intact)"
 else
@@ -470,6 +472,7 @@ cd "$TEST_DIR" || exit 1
 mkdir -p .nbs/chat .nbs/events
 
 # Source control inbox functions
+SIDECAR_HANDLE="testhandle"
 _EXTRACT_TMP=$(mktemp)
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"
@@ -480,7 +483,7 @@ seed_registry
 
 # Test: path traversal attempt
 process_control_command "register-chat ../../../etc/passwd"
-if grep -qF "chat:../../../etc/passwd" .nbs/control-registry; then
+if grep -qF "chat:../../../etc/passwd" $CONTROL_REGISTRY; then
     # This is expected — the sidecar does not sanitise paths.
     # The AI skill doc and the nbs-poll handler must refuse to read arbitrary paths.
     # This test documents the current behaviour, not a security flaw per se,
@@ -494,12 +497,12 @@ process_control_command "unregister-chat ../../../etc/passwd"
 
 # Test: command injection attempt in path (semicolons, pipes, backticks)
 process_control_command "register-chat .nbs/chat/evil;rm -rf /"
-if grep -qF 'chat:.nbs/chat/evil;rm' .nbs/control-registry; then
+if grep -qF 'chat:.nbs/chat/evil;rm' $CONTROL_REGISTRY; then
     pass "Semicolon in path treated as literal (no execution)"
 else
     # The awk split on whitespace means the path is just the second field
     # 'evil;rm' — the '-rf' and '/' are extra fields, silently ignored
-    if grep -qF 'chat:.nbs/chat/evil;rm' .nbs/control-registry 2>/dev/null; then
+    if grep -qF 'chat:.nbs/chat/evil;rm' $CONTROL_REGISTRY 2>/dev/null; then
         pass "Semicolon in path treated as literal"
     else
         pass "Extra fields after path silently ignored"
@@ -508,7 +511,7 @@ fi
 
 # Test: backtick injection
 process_control_command 'register-chat `whoami`.chat'
-if grep -qF 'chat:`whoami`.chat' .nbs/control-registry; then
+if grep -qF 'chat:`whoami`.chat' $CONTROL_REGISTRY; then
     pass "Backtick in path treated as literal (no expansion)"
 else
     fail "Backtick expanded or caused error"
@@ -517,7 +520,7 @@ process_control_command 'unregister-chat `whoami`.chat'
 
 # Test: dollar expansion attempt
 process_control_command 'register-chat $HOME/.secret'
-if grep -qF 'chat:$HOME/.secret' .nbs/control-registry; then
+if grep -qF 'chat:$HOME/.secret' $CONTROL_REGISTRY; then
     pass "Dollar sign in path treated as literal (no expansion)"
 else
     fail "Dollar sign expanded or caused error"
@@ -527,7 +530,7 @@ process_control_command 'unregister-chat $HOME/.secret'
 # Test: very long path (boundary test)
 LONG_PATH=$(python3 -c "print('a' * 4096)")
 process_control_command "register-chat $LONG_PATH"
-if grep -qF "chat:$LONG_PATH" .nbs/control-registry; then
+if grep -qF "chat:$LONG_PATH" $CONTROL_REGISTRY; then
     pass "Very long path registered without crash"
 else
     pass "Very long path handled gracefully"
@@ -535,11 +538,11 @@ fi
 process_control_command "unregister-chat $LONG_PATH"
 
 # Test: newline in inbox (should be separate commands)
-echo -e "register-chat .nbs/chat/line1.chat\nregister-chat .nbs/chat/line2.chat" > .nbs/control-inbox
+echo -e "register-chat .nbs/chat/line1.chat\nregister-chat .nbs/chat/line2.chat" > $CONTROL_INBOX
 CONTROL_INBOX_LINE=0
 check_control_inbox
-LINE1=$(grep -c "chat:.nbs/chat/line1.chat" .nbs/control-registry)
-LINE2=$(grep -c "chat:.nbs/chat/line2.chat" .nbs/control-registry)
+LINE1=$(grep -c "chat:.nbs/chat/line1.chat" $CONTROL_REGISTRY)
+LINE2=$(grep -c "chat:.nbs/chat/line2.chat" $CONTROL_REGISTRY)
 if [[ "$LINE1" -eq 1 ]] && [[ "$LINE2" -eq 1 ]]; then
     pass "Multi-line inbox processed as separate commands"
 else
@@ -547,9 +550,9 @@ else
 fi
 
 # Test: comment lines are ignored
-echo "# This is a comment" >> .nbs/control-inbox
+echo "# This is a comment" >> $CONTROL_INBOX
 check_control_inbox
-if grep -qF "# This is a comment" .nbs/control-registry; then
+if grep -qF "# This is a comment" $CONTROL_REGISTRY; then
     fail "Comment line was added to registry"
 else
     pass "Comment lines ignored in inbox"
@@ -559,7 +562,7 @@ fi
 process_control_command "register-chat .nbs/chat/cycle.chat"
 process_control_command "unregister-chat .nbs/chat/cycle.chat"
 process_control_command "register-chat .nbs/chat/cycle.chat"
-CYCLE_COUNT=$(grep -c "chat:.nbs/chat/cycle.chat" .nbs/control-registry)
+CYCLE_COUNT=$(grep -c "chat:.nbs/chat/cycle.chat" $CONTROL_REGISTRY)
 if [[ "$CYCLE_COUNT" -eq 1 ]]; then
     pass "Register-unregister-register cycle produces exactly one entry"
 else

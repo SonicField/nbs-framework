@@ -273,8 +273,8 @@ echo "4. check_bus_events..."
 
 # Test: no bus registered in registry → returns 2
 # Remove bus entry if seed_registry added it
-grep -v "^bus:" .nbs/control-registry > .nbs/control-registry.tmp 2>/dev/null
-mv .nbs/control-registry.tmp .nbs/control-registry
+grep -v "^bus:" $CONTROL_REGISTRY > $CONTROL_REGISTRY.tmp 2>/dev/null
+mv $CONTROL_REGISTRY.tmp $CONTROL_REGISTRY
 
 check_bus_events
 rc=$?
@@ -285,7 +285,7 @@ else
 fi
 
 # Test: bus registered but directory empty → returns 1
-echo "bus:.nbs/events" >> .nbs/control-registry
+echo "bus:.nbs/events" >> $CONTROL_REGISTRY
 check_bus_events
 rc=$?
 if [[ $rc -eq 1 ]]; then
@@ -329,9 +329,9 @@ else
 fi
 
 # Test: bus registered but directory does not exist → returns 1 (dir check fails)
-grep -v "^bus:" .nbs/control-registry > .nbs/control-registry.tmp
-mv .nbs/control-registry.tmp .nbs/control-registry
-echo "bus:/nonexistent/events" >> .nbs/control-registry
+grep -v "^bus:" $CONTROL_REGISTRY > $CONTROL_REGISTRY.tmp
+mv $CONTROL_REGISTRY.tmp $CONTROL_REGISTRY
+echo "bus:/nonexistent/events" >> $CONTROL_REGISTRY
 check_bus_events
 rc=$?
 if [[ $rc -eq 1 ]]; then
@@ -350,12 +350,12 @@ else
 fi
 
 # Restore proper registry
-grep -v "^bus:" .nbs/control-registry > .nbs/control-registry.tmp
-mv .nbs/control-registry.tmp .nbs/control-registry
-echo "bus:.nbs/events" >> .nbs/control-registry
+grep -v "^bus:" $CONTROL_REGISTRY > $CONTROL_REGISTRY.tmp
+mv $CONTROL_REGISTRY.tmp $CONTROL_REGISTRY
+echo "bus:.nbs/events" >> $CONTROL_REGISTRY
 
 # Test: no registry file at all → returns 2
-mv .nbs/control-registry .nbs/control-registry.bak
+mv $CONTROL_REGISTRY $CONTROL_REGISTRY.bak
 check_bus_events
 rc=$?
 if [[ $rc -eq 2 ]]; then
@@ -363,7 +363,7 @@ if [[ $rc -eq 2 ]]; then
 else
     fail "No registry file → expected rc=2, got rc=$rc"
 fi
-mv .nbs/control-registry.bak .nbs/control-registry
+mv $CONTROL_REGISTRY.bak $CONTROL_REGISTRY
 
 # =========================================================================
 # 5. check_chat_unread: functional tests
@@ -384,7 +384,7 @@ Created: 2025-01-01
 CHAT
 
 # Register the test chat
-echo "chat:.nbs/chat/test.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/test.chat" >> $CONTROL_REGISTRY
 
 # Test: no cursor file → messages are unread
 # cursor defaults to 0 (meaning "position 0 read"), so unread = total - 1
@@ -461,7 +461,7 @@ cat > .nbs/chat/other.chat <<'CHAT'
 [msg1] Hello
 [msg2] World
 CHAT
-echo "chat:.nbs/chat/other.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/other.chat" >> $CONTROL_REGISTRY
 
 cat > .nbs/chat/test.chat.cursors <<'CURSORS'
 testhandle=2
@@ -488,8 +488,8 @@ else
 fi
 
 # Test: no chats registered → returns 2
-grep -v "^chat:" .nbs/control-registry > .nbs/control-registry.tmp
-mv .nbs/control-registry.tmp .nbs/control-registry
+grep -v "^chat:" $CONTROL_REGISTRY > $CONTROL_REGISTRY.tmp
+mv $CONTROL_REGISTRY.tmp $CONTROL_REGISTRY
 
 check_chat_unread
 rc=$?
@@ -500,14 +500,14 @@ else
 fi
 
 # Restore chat entries
-echo "chat:.nbs/chat/test.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/test.chat" >> $CONTROL_REGISTRY
 
 # Test: empty chat file (no messages after ---)
 cat > .nbs/chat/empty.chat <<'CHAT'
 # NBS Chat — empty
 ---
 CHAT
-echo "chat:.nbs/chat/empty.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/empty.chat" >> $CONTROL_REGISTRY
 
 check_chat_unread
 rc=$?
@@ -524,7 +524,7 @@ cat > .nbs/chat/nodash.chat <<'CHAT'
 This chat has no delimiter
 Just some text
 CHAT
-echo "chat:.nbs/chat/nodash.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/nodash.chat" >> $CONTROL_REGISTRY
 
 check_chat_unread
 rc=$?
@@ -537,7 +537,7 @@ else
 fi
 
 # Test: chat file that does not exist (registered but deleted)
-echo "chat:.nbs/chat/deleted.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/deleted.chat" >> $CONTROL_REGISTRY
 check_chat_unread
 rc=$?
 # deleted.chat: [[ -f "$chat_path" ]] fails → continue (skip it)
@@ -553,7 +553,7 @@ fi
 echo "6. should_inject_notify..."
 
 # Clean the registry to a known state
-cat > .nbs/control-registry <<'REG'
+cat > $CONTROL_REGISTRY <<'REG'
 bus:.nbs/events
 chat:.nbs/chat/test.chat
 REG
@@ -656,7 +656,7 @@ for i in $(seq 1 20); do
 ---
 [msg] Hello from channel $i
 CHAT
-    echo "chat:$chatfile" >> .nbs/control-registry
+    echo "chat:$chatfile" >> $CONTROL_REGISTRY
 done
 
 LAST_NOTIFY_TIME=0
@@ -769,7 +769,7 @@ else
 fi
 
 # Test: verify cursor file content is preserved after multiple checks
-cat > .nbs/control-registry <<'REG'
+cat > $CONTROL_REGISTRY <<'REG'
 chat:.nbs/chat/test.chat
 REG
 cat > .nbs/chat/test.chat.cursors <<'CURSORS'
@@ -815,7 +815,7 @@ cat > .nbs/chat/blanks.chat <<'CHAT'
 
 [msg3] Final
 CHAT
-cat > .nbs/control-registry <<'REG'
+cat > $CONTROL_REGISTRY <<'REG'
 chat:.nbs/chat/blanks.chat
 REG
 
@@ -834,7 +834,7 @@ cat > .nbs/chat/onlydash.chat <<'CHAT'
 # Chat with just separator
 ---
 CHAT
-echo "chat:.nbs/chat/onlydash.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/onlydash.chat" >> $CONTROL_REGISTRY
 
 check_chat_unread
 # onlydash: 0 messages, blanks: 3 messages (cursor=0 → 2 unread), total 2
@@ -852,7 +852,7 @@ cat > .nbs/chat/multidash.chat <<'CHAT'
 ---
 [msg2] Second section
 CHAT
-echo "chat:.nbs/chat/multidash.chat" >> .nbs/control-registry
+echo "chat:.nbs/chat/multidash.chat" >> $CONTROL_REGISTRY
 
 check_chat_unread
 # awk: found=1 after first ---, then counts msg1, second --- triggers next (skipped),
@@ -865,7 +865,7 @@ else
 fi
 
 # Test: BUS_EVENT_SUMMARY contains directory path
-cat > .nbs/control-registry <<'REG'
+cat > $CONTROL_REGISTRY <<'REG'
 bus:.nbs/events
 REG
 if command -v nbs-bus &>/dev/null; then

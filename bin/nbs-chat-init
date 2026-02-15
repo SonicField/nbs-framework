@@ -30,9 +30,9 @@
 #   .nbs/scribe/live-log.md Decision log (Scribe's output)
 #   .nbs/project-id        4-char project identifier
 #
-# Tmux sessions (optional):
-#   nbs-scribe-<id>        Scribe instance (--spawn-scribe or --spawn-all)
-#   nbs-claude-<id>        Main Claude instance (--spawn-all)
+# Tmux sessions (optional, named after chat):
+#   nbs-scribe-<name>      Scribe instance (--spawn-scribe or --spawn-all)
+#   nbs-claude-<name>      Main Claude instance (--spawn-all)
 
 set -euo pipefail
 
@@ -45,6 +45,7 @@ DRY_RUN=false
 SPAWN_SCRIBE=false
 SPAWN_ALL=false
 PROJECT_ID=""
+CHAT_NAME="live"  # Chat filename root — all resource names derive from this
 
 # --- Output helpers ---
 
@@ -134,7 +135,7 @@ generate_project_id() {
 
 tmux_session_name() {
     local role="$1"
-    echo "nbs-${role}-${PROJECT_ID}"
+    echo "nbs-${role}-${CHAT_NAME}"
 }
 
 # --- Argument parsing ---

@@ -87,16 +87,16 @@ detect_plan_mode() {
 }
 
 # --- Dynamic resource registration ---
-# The AI declares what resources it needs by writing to .nbs/control-inbox.
+# The AI declares what resources it needs by writing to .nbs/control-inbox-<handle>.
 # The sidecar reads new lines (forward-only, never truncates) and maintains
-# a resource registry at .nbs/control-registry.
+# a resource registry at .nbs/control-registry-<handle>.
 #
 # Convention: / = human-to-AI, \ = AI-to-wrapper
 # The AI outputs \nbs-register-chat etc. which writes to the control inbox.
 # See feature-requests/dynamic-registration.md for full design.
 
-CONTROL_INBOX=".nbs/control-inbox"
-CONTROL_REGISTRY=".nbs/control-registry"
+CONTROL_INBOX=".nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY=".nbs/control-registry-${SIDECAR_HANDLE}"
 CONTROL_INBOX_LINE=0
 
 # seed_registry — populate registry from existing .nbs/ resources on startup.

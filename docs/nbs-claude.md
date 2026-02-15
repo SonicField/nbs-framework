@@ -93,16 +93,16 @@ The sidecar detects this text in the pane content and automatically selects opti
 
 ### Dynamic Resource Registration
 
-The sidecar maintains a resource registry at `.nbs/control-registry` — a list of resources this agent is watching. On startup, it seeds the registry from existing `.nbs/` resources:
+The sidecar maintains a per-agent resource registry at `.nbs/control-registry-<handle>` — a list of resources this agent is watching. On startup, it seeds the registry from existing `.nbs/` resources:
 
 - All `.nbs/chat/*.chat` files → `chat:<path>`
 - `.nbs/events/` directory (if present) → `bus:.nbs/events`
 
-At runtime, the AI can modify the registry by writing commands to `.nbs/control-inbox`. The sidecar reads new lines from the inbox on every iteration (forward-only, never re-reads, never truncates) and updates the registry.
+At runtime, the AI can modify the registry by writing commands to `.nbs/control-inbox-<handle>`. The sidecar reads new lines from the inbox on every iteration (forward-only, never re-reads, never truncates) and updates the registry.
 
 #### Control Commands
 
-Written to `.nbs/control-inbox`, one per line:
+Written to `.nbs/control-inbox-<handle>`, one per line:
 
 | Command | Effect |
 |---------|--------|
@@ -132,8 +132,8 @@ On exit (INT, TERM, or normal), the sidecar process is killed and any `pty-sessi
 
 ```
 .nbs/
-├── control-inbox       # AI → wrapper commands (append-only)
-├── control-registry    # Current resource watch list
+├── control-inbox-<handle>   # AI → wrapper commands (append-only, per-agent)
+├── control-registry-<handle> # Current resource watch list (per-agent)
 ├── chat/
 │   └── *.chat
 ├── events/
