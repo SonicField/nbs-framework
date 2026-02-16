@@ -26,9 +26,10 @@ Supervisor (you or Claude)
 The supervisor:
 - Maintains terminal goal clarity
 - Decomposes work into worker tasks
-- Spawns workers (via nbs-worker)
+- Spawns workers (via nbs-worker or Task tool sub-agents)
 - Captures learnings after each worker (3Ws)
 - Runs self-check every 3 workers
+- Coordinates via chat — Scribe captures decisions, Pythia assesses trajectory
 
 Workers:
 - Read their task file
@@ -56,35 +57,17 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 
 ```
 .nbs/
-├── supervisor.md        # Terminal goal, progress, 3Ws log
-├── decisions.log        # Append-only decision record
+├── chat/
+│   └── live.chat           # Coordination via chat
+├── scribe/
+│   └── live-log.md         # Decision log (managed by Scribe)
+├── events/
+│   └── config.yaml         # Bus configuration
 └── workers/
-    ├── parser-a3f1.md   # Task file (created by nbs-worker spawn)
-    ├── parser-a3f1.log  # Persistent session output
+    ├── parser-a3f1.md      # Task file (created by nbs-worker spawn)
+    ├── parser-a3f1.log     # Persistent session output
     └── ...
 ```
-
-## The Hub
-
-For any teams work beyond a single worker, use `nbs-hub`. It is a deterministic C binary that enforces process discipline — audit gates, phase gates, stall detection, and the 3Ws cadence. The hub wraps `nbs-worker` and adds structure that prevents supervisors from drifting.
-
-```bash
-# Initialise
-nbs-hub init /path/to/project "Terminal goal here"
-
-# Spawn workers (hub enforces audit gates after every 3 results)
-nbs-hub spawn my-task "Implement the parser. Pass all 84 tests."
-
-# Check status, collect results, dismiss
-nbs-hub check my-task-a3f1
-nbs-hub result my-task-a3f1
-nbs-hub dismiss my-task-a3f1
-
-# Full status overview (also works for session recovery)
-nbs-hub status
-```
-
-Without the hub, you manage workers directly with `nbs-worker` commands. This is fine for one-off tasks but lacks enforcement. See [nbs-hub reference](/claude_tools/nbs-hub.md) for full command documentation.
 
 ## Commands
 
@@ -96,7 +79,6 @@ Without the hub, you manage workers directly with `nbs-worker` commands. This is
 | `/nbs-teams-worker` | Worker role reference |
 | `/nbs-teams-chat` | AI-to-AI chat reference |
 | `/nbs-tmux-worker` | nbs-worker command reference |
-| `/nbs-hub` | Hub reference (deterministic process enforcement) |
 
 ### Getting Help
 
@@ -114,10 +96,9 @@ Claude walks you through interactively, using your actual project for examples i
 
 1. Run `/nbs-teams-start`
 2. Answer the terminal goal question
-3. Initialise the hub: `nbs-hub init <project-dir> "<terminal goal>"`
-4. Decompose into worker tasks
-5. Spawn workers with `nbs-hub spawn` (or `nbs-worker spawn` without hub)
-6. Capture 3Ws after each completes
+3. Decompose into worker tasks
+4. Spawn workers with `nbs-worker spawn` or Task tool sub-agents
+5. Capture 3Ws after each completes
 
 ## 3Ws
 
@@ -164,7 +145,6 @@ The bus is optional. Projects without `.nbs/events/` fall back to direct chat/wo
 ## See Also
 
 - [nbs-bus](nbs-bus.md) - Event-driven coordination bus
-- [nbs-hub](nbs-hub.md) - Deterministic process enforcement for AI teams (mandatory for multi-worker projects)
 - [nbs-chat](nbs-chat.md) - File-based AI-to-AI chat for worker coordination
 - [nbs-worker](nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 - [Tripod Architecture](tripod-architecture.md) - Scribe (institutional memory) and Pythia (risk oracle)

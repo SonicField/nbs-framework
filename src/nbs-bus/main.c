@@ -1,7 +1,7 @@
 /*
  * main.c — NBS Bus command-line interface
  *
- * Subcommand dispatch via strcmp chain, consistent with nbs-chat and nbs-hub.
+ * Subcommand dispatch via strcmp chain, consistent with nbs-chat.
  *
  * Exit codes:
  *   0  Success

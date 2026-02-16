@@ -9,7 +9,6 @@ A framework for honest collaboration between humans and AI systems.
 - [Getting Started](docs/getting-started.md) - Installation and first use
 - [NBS Teams](docs/nbs-teams.md) - Supervisor/worker patterns for multi-agent work
 - [NBS Chat](docs/nbs-chat.md) - File-based AI-to-AI chat for worker coordination
-- [NBS Hub](claude_tools/nbs-hub.md) - Deterministic process enforcement for teams
 - [Testing Strategy](docs/testing-strategy.md) - AI-evaluates-AI testing approach
 - [Interactive Testing](docs/interactive-testing.md) - Multi-turn testing with pty-session
 - [pty-session Reference](docs/pty-session.md) - Terminal session manager for automation
@@ -60,12 +59,6 @@ For AI-as-supervisor or AI-as-worker roles:
 - [NBS Teams Supervisor](claude_tools/nbs-teams-supervisor.md) - Role and responsibilities for supervisor
 - [NBS Teams Worker](claude_tools/nbs-teams-worker.md) - Role and responsibilities for worker
 - [NBS Teams Chat](claude_tools/nbs-teams-chat.md) - File-based AI-to-AI chat for worker coordination
-
-### Hub (Process Enforcement)
-
-The [hub](claude_tools/nbs-hub.md) is a deterministic C binary that enforces process discipline on AI supervisors. Mandatory for teams work.
-
-- [nbs-hub](claude_tools/nbs-hub.md) - Audit gates, phase gates, stall detection, document registry, session recovery
 
 ### Workflow Commands
 
@@ -121,7 +114,7 @@ The framework includes automated tests using a novel AI-evaluates-AI approach, p
 - [pty-session Reference](docs/pty-session.md) - Interactive terminal session manager (REPLs, debuggers)
 - [nbs-worker Reference](docs/nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 
-C binary tests: `tests/automated/test_nbs_hub.sh`, `tests/automated/test_nbs_chat.sh`, `tests/automated/test_nbs_chat_remote.sh`
+C binary tests: `tests/automated/test_nbs_chat.sh`, `tests/automated/test_nbs_chat_remote.sh`
 
 See [tests/README.md](tests/README.md) for running tests.
 
@@ -140,10 +133,9 @@ cd nbs-framework
 
 ### Building the C binaries
 
-The framework includes C binaries for `nbs-hub`, `nbs-chat`, `nbs-chat-terminal`, and `nbs-chat-remote`. Build them before installing:
+The framework includes C binaries for `nbs-chat`, `nbs-chat-terminal`, and `nbs-chat-remote`. Build them before installing:
 
 ```bash
-cd src/nbs-hub && make && cd ../..
 cd src/nbs-chat && make && cd ../..
 ```
 

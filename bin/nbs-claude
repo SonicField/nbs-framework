@@ -223,19 +223,6 @@ process_control_command() {
                 echo "[nbs-claude] Unregistered bus: $path" >&2
             fi
             ;;
-        register-hub)
-            if ! grep -qF "hub:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "hub:${path}" >> "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Registered hub: $path" >&2
-            fi
-            ;;
-        unregister-hub)
-            if grep -qF "hub:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                grep -vF "hub:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
-                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Unregistered hub: $path" >&2
-            fi
-            ;;
         set-poll-interval)
             # Validate: must be a positive integer
             if [[ "$path" =~ ^[0-9]+$ ]] && [[ "$path" -gt 0 ]]; then

@@ -74,7 +74,7 @@ ls .nbs/workers/*.md 2>/dev/null
 
 For each worker file, check the Status field. If a worker has completed:
 - Read the results
-- Capture 3Ws in supervisor.md (if you are a supervisor)
+- Post 3Ws to chat (if you are a supervisor)
 - Decide on next steps
 
 ### 3. Report
@@ -98,7 +98,6 @@ If you discover a new resource during a poll (or at any other time), register it
 # Write to the control inbox — the sidecar reads this
 echo "register-chat .nbs/chat/new-channel.chat" >> .nbs/control-inbox
 echo "register-bus .nbs/events" >> .nbs/control-inbox
-echo "register-hub .nbs/hub/project.yaml" >> .nbs/control-inbox
 ```
 
 The control inbox is append-only. The sidecar processes new lines on every 1-second iteration and updates `.nbs/control-registry`. You do not need to check the registry yourself — just register what you discover and future polls will include it.

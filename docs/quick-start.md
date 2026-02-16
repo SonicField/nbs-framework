@@ -128,8 +128,7 @@ your-project/
     ├── workers/
     │   └── *.md               # Worker task files
     ├── control-inbox          # AI → wrapper commands (auto-created)
-    ├── control-registry       # Resource watch list (auto-created)
-    └── supervisor.md          # Supervisor state
+    └── control-registry       # Resource watch list (auto-created)
 ```
 
 ## Next Steps

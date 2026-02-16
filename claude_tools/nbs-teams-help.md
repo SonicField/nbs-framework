@@ -21,7 +21,7 @@ Before asking what they need help with, quickly check if they have an active pro
 Glob: .nbs/**
 ```
 
-If `.nbs/` exists, read `supervisor.md` to understand their current state. Reference their actual project in your explanations.
+If `.nbs/` exists, read the chat history (`nbs-chat read .nbs/chat/live.chat`) to understand their current state. Reference their actual project in your explanations.
 
 ### Step 2: Ask What They Need
 
@@ -67,22 +67,9 @@ If they need help with terminal goals, explain:
 ### Spawning workers
 
 **Brief answer:**
-> "Workers are separate Claude instances. Use `nbs-hub spawn` (recommended) or `nbs-worker spawn` (without hub). The hub adds audit gates and process enforcement."
+> "Workers are separate Claude instances. Use `nbs-worker spawn` for persistent tmux workers, or the Task tool for synchronous sub-agents."
 
-**Walk through with hub (recommended):**
-1. Initialise hub if not already done:
-   ```bash
-   nbs-hub init /your/project "Terminal goal"
-   ```
-2. Spawn with hub:
-   ```bash
-   nbs-hub spawn my-task "Describe what the worker should do."
-   ```
-3. Monitor: `nbs-hub check <worker-name>` or `nbs-worker search <worker-name> "pattern"`
-4. Collect results: `nbs-hub result <worker-name>` (triggers audit counter)
-5. When done: `nbs-hub dismiss <worker-name>`
-
-**Walk through without hub (lightweight):**
+**Walk through with nbs-worker:**
 1. Spawn with a single command:
    ```bash
    WORKER=$(nbs-worker spawn my-task /your/project "Describe what the worker should do.")
@@ -93,7 +80,7 @@ If they need help with terminal goals, explain:
 4. When done: `nbs-worker dismiss $WORKER`
 
 **Check understanding:**
-> "Have you initialised the hub for this project? If so, use `nbs-hub spawn`. If not, you can either initialise it now or use `nbs-worker spawn` directly."
+> "What's the first task you want to delegate?"
 
 If they have an active project, reference it:
 > "I see you're working on [terminal goal]. What's the first task you want to delegate?"

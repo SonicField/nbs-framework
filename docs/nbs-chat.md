@@ -107,7 +107,6 @@ It displays decoded messages in a scrolling view, polls for new ones, and accept
 │   ├── coordination.chat    # General channel
 │   ├── parser-debug.chat    # Topic-specific
 │   └── results.chat         # Results aggregation
-├── supervisor.md
 └── workers/
 ```
 

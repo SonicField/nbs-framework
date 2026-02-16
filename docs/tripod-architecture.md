@@ -313,10 +313,9 @@ This convention:
 │   └── live-log.md                    # Decision log for live.chat (append-only)
 ├── chat/
 │   └── live.chat                      # Conversation substrate
-├── workers/
-│   ├── pythia-live-<hash>.md          # Pythia worker for live.chat
-│   └── pythia-live-<hash>.log         # Pythia worker session log
-└── supervisor.md
+└── workers/
+    ├── pythia-live-<hash>.md          # Pythia worker for live.chat
+    └── pythia-live-<hash>.log         # Pythia worker session log
 ```
 
 ## Initialisation
@@ -424,7 +423,7 @@ These must hold. Violations indicate bugs.
 
 **Why an append-only log?** Auditability. If decisions can be silently modified, the log's value as institutional memory is destroyed. Status changes (superseded, reversed) are recorded as new entries that reference the original, preserving the full history of how the team's thinking evolved.
 
-**Why not extend supervisor.md?** The supervisor is a role, not a system. `supervisor.md` captures one agent's state. The decision log captures the project's state. A project may have multiple supervisors, or no supervisor at all (a flat team). The Tripod serves the project, not the role.
+**Why not a dedicated supervisor state file?** The supervisor is a role, not a system. A state file would capture one agent's state. The decision log captures the project's state. A project may have multiple supervisors, or no supervisor at all (a flat team). The supervisor coordinates via chat, not via a state file. The Tripod serves the project, not the role.
 
 ## See Also
 

@@ -225,7 +225,6 @@ These events are published automatically by `nbs-worker` lifecycle commands. The
 │       └── 1707753500111222-claude-chat-message-48289.event      # Processed
 ├── chat/
 │   └── ...
-├── supervisor.md
 └── workers/
     └── ...
 ```

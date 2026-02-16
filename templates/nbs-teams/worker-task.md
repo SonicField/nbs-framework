@@ -36,6 +36,6 @@ Completed:
 ## Supervisor Actions (on completion)
 
 After reading this completed task, supervisor must:
-1. Capture 3Ws in supervisor.md
+1. Post 3Ws to chat
 2. Increment workers_since_check
 3. If workers_since_check >= 3, run self-check

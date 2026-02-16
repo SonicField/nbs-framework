@@ -106,7 +106,6 @@ Chat files live in `.nbs/chat/` with `.chat` extension:
 │   ├── coordination.chat    # General coordination channel
 │   ├── parser-debug.chat    # Topic-specific channel
 │   └── results.chat         # Results aggregation
-├── supervisor.md
 └── workers/
 ```
 

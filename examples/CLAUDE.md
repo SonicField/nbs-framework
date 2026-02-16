@@ -140,9 +140,9 @@ export PATH="$HOME/.nbs/bin:$PATH"
 |------|--------|-------------|
 | Read chat messages | `cat *.chat`, base64 decode | `nbs-chat read <file>` |
 | Send chat messages | Write to files directly | `nbs-chat send <file> <handle> <msg>` |
-| Spawn workers | `tmux new-session` | `nbs-hub spawn <slug> <task>` |
-| Check worker status | `tmux ls` | `nbs-hub check <worker-name>` |
-| Read worker results | Read raw log files | `nbs-hub result <worker-name>` |
+| Spawn workers | `tmux new-session` | `nbs-worker spawn <slug> <dir> <task>` |
+| Check worker status | `tmux ls` | `nbs-worker status <worker-name>` |
+| Read worker results | Read raw log files | `nbs-worker results <worker-name>` |
 
 Chat files are a binary format. Worker sessions are managed with persistent logging and task files. Using raw tmux/cat/base64 bypasses the coordination model.
 

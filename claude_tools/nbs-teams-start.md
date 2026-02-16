@@ -22,8 +22,8 @@ ls -la .nbs/ 2>/dev/null
 ```
 
 **If it exists:**
-- Ask: "An .nbs/ directory already exists. Would you like to reset it? This will overwrite supervisor.md and decisions.log."
-- If no, stop. If yes, proceed.
+- Ask: "An .nbs/ directory already exists. Would you like to add teams structure to it, or is this a fresh start?"
+- If fresh start, proceed. If adding, skip directory creation for existing dirs.
 
 ### Step 2: Ask Terminal Goal
 
@@ -31,7 +31,7 @@ Ask the user:
 
 > "What is the terminal goal for this project? (One sentence describing what you're trying to achieve)"
 
-Wait for their answer. This becomes the foundation of the supervisor document.
+Wait for their answer. This grounds all subsequent work.
 
 **Do not proceed without a terminal goal.** If the answer is vague, ask for clarification:
 - "Can you be more specific? What would success look like?"
@@ -39,104 +39,51 @@ Wait for their answer. This becomes the foundation of the supervisor document.
 
 ### Step 3: Create Directory Structure
 
-Create the `.nbs/` directory and `workers/` subdirectory:
+```bash
+mkdir -p .nbs/chat .nbs/events/processed .nbs/scribe .nbs/workers
+```
+
+### Step 4: Create Chat Channel
 
 ```bash
-mkdir -p .nbs/workers
+nbs-chat create .nbs/chat/live.chat
 ```
 
-### Step 4: Create supervisor.md
+### Step 5: Create Bus Config
 
-Write `.nbs/supervisor.md` using this template, inserting the user's terminal goal:
+Write `.nbs/events/config.yaml`:
 
-```markdown
-# Supervisor: [Project Name from terminal goal]
-
-## Terminal Goal
-
-[User's terminal goal - verbatim]
-
-## Current State
-
-Phase: PLANNING
-Active workers: none
-Workers since last check: 0
-
-## Progress
-
-[Track major milestones and questions answered]
-
-## Decisions Log
-
-See `.nbs/decisions.log`
-
----
-
-## 3Ws + Self-Check Log
-
-[Append after each worker completes]
-
-<!--
-Template for each entry:
-
-### Worker: [name] - [date]
-
-**What went well:**
--
-
-**What didn't work:**
--
-
-**What we can do better:**
--
-
-**Self-check** (if workers_since_check >= 3):
-- [ ] Am I still pursuing terminal goal?
-- [ ] Am I delegating vs doing tactical work myself?
-- [ ] Have I captured learnings that should improve future tasks?
-- [ ] Should I escalate anything to human?
-
-[Reset workers_since_check to 0 after self-check]
--->
-
----
+```yaml
+dedup-window: 300
+ack-timeout: 120
+pythia-interval: 20
+retention-max-bytes: 16777216
 ```
 
-### Step 5: Create decisions.log
+### Step 6: Post Terminal Goal to Chat
 
-Write `.nbs/decisions.log`:
-
-```markdown
-# Decisions Log
-
-Append all significant decisions using this format:
-
----
-[YYYY-MM-DD HH:MM] [DECISION TITLE]
-Context: [why this decision was needed]
-Decision: [what was decided]
-Implication: [what this means for the work]
----
-
+```bash
+nbs-chat send .nbs/chat/live.chat supervisor "Terminal goal: [user's goal verbatim]"
 ```
 
-### Step 6: Confirm and Explain
+### Step 7: Confirm and Explain
 
 Tell the user what was created:
 
 ```
 Created:
-- .nbs/supervisor.md (your state and learnings)
-- .nbs/decisions.log (append-only decision record)
+- .nbs/chat/live.chat (coordination channel)
+- .nbs/events/ (bus for event-driven coordination)
+- .nbs/scribe/ (Scribe writes decision logs here)
 - .nbs/workers/ (worker task files go here)
 
-You are now the supervisor. Your terminal goal is recorded.
+Your terminal goal is posted to chat.
 
 Next steps:
-1. Read claude_tools/nbs-teams-supervisor.md to understand your role
+1. Load /nbs-teams-supervisor for planning guidance
 2. Decompose your goal into worker tasks
-3. Spawn workers with nbs-worker (see /nbs-tmux-worker for reference)
-4. Capture learnings after each worker completes
+3. Spawn workers with nbs-worker or Task tool sub-agents
+4. Post 3Ws to chat after each worker completes
 
 Run /nbs-teams-help if you need guidance on any of these.
 ```
@@ -155,10 +102,9 @@ Run /nbs-teams-help if you need guidance on any of these.
 ## What Happens Next
 
 The user is now the supervisor. They should:
-1. Read `nbs-teams-supervisor.md` to understand their role
-2. For teams work with phased delivery, initialise the hub: `nbs-hub init <project-dir> <goal>`
-3. Decompose work into worker tasks
-4. Use `nbs-hub spawn` (with hub) or `nbs-worker spawn` (without) to create and start worker Claudes
-5. Capture 3Ws after each worker completes
+1. Load `/nbs-teams-supervisor` for planning guidance
+2. Decompose work into worker tasks
+3. Use `nbs-worker spawn` or Task tool sub-agents to create and start workers
+4. Post 3Ws to chat after each worker completes
 
 If they need help, they run `/nbs-teams-help`.

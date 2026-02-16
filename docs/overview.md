@@ -65,7 +65,6 @@ In addition to slash commands, the framework includes C binaries:
 
 | Binary | Purpose |
 |--------|---------|
-| `nbs-hub` | Deterministic process enforcement for teams — audit gates, phase gates, stall detection |
 | `nbs-chat` | File-based messaging (non-interactive commands) |
 | `nbs-chat-terminal` | Interactive terminal client for human participation |
 | `nbs-chat-remote` | SSH proxy for remote chat access |

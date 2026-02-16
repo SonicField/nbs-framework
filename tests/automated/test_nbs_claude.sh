@@ -380,14 +380,6 @@ else
     fail "register-bus did not add to registry"
 fi
 
-# Test: register-hub
-process_control_command "register-hub /project/.nbs/hub.yaml"
-if grep -qF "hub:/project/.nbs/hub.yaml" $CONTROL_REGISTRY; then
-    pass "register-hub adds to registry"
-else
-    fail "register-hub did not add to registry"
-fi
-
 # Test: set-poll-interval
 POLL_INTERVAL=30
 process_control_command "set-poll-interval 300"

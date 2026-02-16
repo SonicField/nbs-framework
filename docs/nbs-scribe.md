@@ -204,7 +204,7 @@ EOF
 
 ## Design Decisions
 
-**Why a separate file, not supervisor.md?** Supervisor state is per-session and per-role. The decision log is project-wide and role-independent. A decision made by bench-claude and alex is as relevant to doc-claude as to claude. The log must outlive any individual session.
+**Why a separate file, not a supervisor state file?** Supervisor coordination happens via chat, which is per-session. The decision log is project-wide and role-independent. A decision made by bench-claude and alex is as relevant to doc-claude as to claude. The log must outlive any individual session.
 
 **Why markdown, not YAML?** The log is meant to be read by humans scanning a file. Markdown headings are visually scannable. YAML would require tooling to read comfortably. The structured fields within each entry use a consistent format that is both human-readable and grep-parseable.
 
