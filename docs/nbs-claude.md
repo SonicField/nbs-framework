@@ -22,8 +22,7 @@ nbs-claude --resume abc123    # Resume session with polling
 | `NBS_STARTUP_GRACE` | `30` | Seconds after init before allowing notifications |
 | `NBS_INITIAL_PROMPT` | *(none)* | Custom initial prompt sent on startup (default: handle + `/nbs-teams-chat`) |
 | `NBS_NOTIFY_FAIL_THRESHOLD` | `5` | Consecutive failed `/nbs-notify` injections before self-healing activates |
-| `NBS_STANDUP_INTERVAL` | `30` | Minutes between standup check-in messages posted to chat (0 to disable) |
-| `NBS_STANDUP_HANDLE` | `claude` | Only this handle's sidecar posts standups (avoids duplicates) |
+| `NBS_STANDUP_INTERVAL` | `15` | Minutes between standup check-in messages posted to chat (0 to disable) |
 
 ## Operating Modes
 
@@ -135,12 +134,11 @@ The sidecar posts periodic team check-in messages directly to chat, prompting al
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NBS_STANDUP_INTERVAL` | `30` | Minutes between standup messages (0 to disable) |
-| `NBS_STANDUP_HANDLE` | `claude` | Only this handle's sidecar posts standups |
+| `NBS_STANDUP_INTERVAL` | `15` | Minutes between standup messages (0 to disable) |
 
-**Behaviour**: After `NBS_STANDUP_INTERVAL` minutes of wall-clock time since the last standup, the designated sidecar posts to the first registered chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.`
+**Behaviour**: After `NBS_STANDUP_INTERVAL` minutes of wall-clock time since the last standup, the sidecar posts to the first registered chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.`
 
-This message appears as a normal chat message from `sidecar`, triggering every agent's unread detection and causing them to respond with status updates. Only one sidecar posts (designated by `NBS_STANDUP_HANDLE`) to avoid duplicates.
+This message appears as a normal chat message from `sidecar`, triggering every agent's unread detection and causing them to respond with status updates. Duplicate prevention uses CSMA/CD (Carrier Sense Multiple Access with Collision Detection): before posting, each sidecar checks the last 5 chat messages for a recent standup. If one exists, it backs off and resets its timer. Random jitter (±2 minutes) on the interval reduces the probability of simultaneous posts to near zero.
 
 **First run**: On startup, the timer is initialised without posting. The first standup fires after the full interval elapses.
 

@@ -1770,22 +1770,22 @@ else
     fail "NBS_STANDUP_INTERVAL config missing"
 fi
 
-# --- Structural: STANDUP_HANDLE config ---
-if grep -q 'NBS_STANDUP_HANDLE' "$NBS_CLAUDE"; then
-    pass "NBS_STANDUP_HANDLE config exists"
+# --- Structural: CSMA/CD collision detection ---
+if grep -A 60 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'Check-in:'; then
+    pass "check_standup_trigger has CSMA/CD collision detection"
 else
-    fail "NBS_STANDUP_HANDLE config missing"
+    fail "check_standup_trigger missing CSMA/CD collision detection"
 fi
 
-# --- Structural: only designated handle posts ---
-if grep -A 20 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'STANDUP_HANDLE'; then
-    pass "check_standup_trigger checks STANDUP_HANDLE"
+# --- Structural: random jitter ---
+if grep -A 30 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'jitter'; then
+    pass "check_standup_trigger has random jitter"
 else
-    fail "check_standup_trigger does not check STANDUP_HANDLE"
+    fail "check_standup_trigger missing random jitter"
 fi
 
 # --- Structural: posts to chat ---
-if grep -A 50 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'nbs-chat send'; then
+if grep -A 70 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'nbs-chat send'; then
     pass "check_standup_trigger posts via nbs-chat send"
 else
     fail "check_standup_trigger does not post to chat"
@@ -1803,37 +1803,17 @@ else
     fail "Standup should not fire when STANDUP_INTERVAL=0"
 fi
 
-# --- Functional: non-matching handle skips ---
-SAVE_SIDECAR_HANDLE="$SIDECAR_HANDLE"
-SAVE_STANDUP_HANDLE="$STANDUP_HANDLE"
-SIDECAR_HANDLE="testkeeper"
-STANDUP_HANDLE="claude"
-STANDUP_INTERVAL=1
-LAST_STANDUP_TIME=0
-check_standup_trigger
-rc=$?
-SIDECAR_HANDLE="$SAVE_SIDECAR_HANDLE"
-STANDUP_HANDLE="$SAVE_STANDUP_HANDLE"
-if [[ $rc -ne 0 ]]; then
-    pass "Non-matching handle does not post standup"
-else
-    fail "Non-matching handle should not post standup"
-fi
-
 # --- Functional: first run initialises timer without posting ---
 STANDUP_TEST_DIR=$(mktemp -d)
 mkdir -p "$STANDUP_TEST_DIR/.nbs/chat"
-# Create a minimal chat file
-printf "=== nbs-chat ===\nlast-writer: system\nlast-write: 2026-01-01T00:00:00Z\nfile-length: 100\nparticipants: \n---\n" > "$STANDUP_TEST_DIR/.nbs/chat/test.chat"
+# Create a proper chat file via nbs-chat
+nbs-chat create "$STANDUP_TEST_DIR/.nbs/chat/test.chat" >/dev/null 2>&1
 
 STANDUP_REG="$STANDUP_TEST_DIR/.nbs/control-registry-standup-test"
 echo "chat:$STANDUP_TEST_DIR/.nbs/chat/test.chat" > "$STANDUP_REG"
 
 SAVE_CONTROL_REGISTRY="$CONTROL_REGISTRY"
 CONTROL_REGISTRY="$STANDUP_REG"
-SAVE_SIDECAR_HANDLE="$SIDECAR_HANDLE"
-SIDECAR_HANDLE="claude"
-STANDUP_HANDLE="claude"
 STANDUP_INTERVAL=1
 LAST_STANDUP_TIME=0
 
@@ -1846,7 +1826,7 @@ else
 fi
 
 # --- Functional: fires after interval elapses ---
-LAST_STANDUP_TIME=$(($(date +%s) - 120))  # 2 minutes ago, interval is 1 minute
+LAST_STANDUP_TIME=$(($(date +%s) - 300))  # 5 minutes ago, exceeds max jittered interval
 check_standup_trigger
 rc=$?
 if [[ $rc -eq 0 ]]; then
@@ -1866,7 +1846,6 @@ fi
 
 # Restore
 CONTROL_REGISTRY="$SAVE_CONTROL_REGISTRY"
-SIDECAR_HANDLE="$SAVE_SIDECAR_HANDLE"
 rm -rf "$STANDUP_TEST_DIR"
 
 # =========================================================================

@@ -30,8 +30,7 @@
 #   NBS_STARTUP_GRACE       Seconds after init before allowing notifications (default: 30)
 #   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
 #   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
-#   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 30, 0 to disable)
-#   NBS_STANDUP_HANDLE      Only this handle's sidecar posts standups (default: claude)
+#   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 15, 0 to disable)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -52,7 +51,6 @@ STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
 STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
-STANDUP_HANDLE="${NBS_STANDUP_HANDLE:-claude}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
