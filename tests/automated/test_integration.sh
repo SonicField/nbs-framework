@@ -22,6 +22,7 @@
 #   T14 (66-72): Plan mode detection robustness
 #   T15 (73-79): Concurrent chat under SIGKILL (Phase 2d)
 #   T16 (80-87): Bus event delivery under contention (Phase 2e)
+#   T17 (88-95): Permissions prompt detection robustness
 
 set -euo pipefail
 
@@ -1815,6 +1816,180 @@ check "ack-all moved ack-src events to processed/" "$( [[ "$PROCESSED_ACK_SRC" -
 echo ""
 
 cd "$SCRIPT_DIR"
+
+# ============================================================
+# T17: Permissions prompt detection robustness
+# ============================================================
+#
+# The permissions prompt is the #1 cause of agent stalls in multi-agent
+# setups. detect_permissions_prompt must reliably match the exact Claude
+# Code permissions prompt format while avoiding false positives from
+# chat messages, code output, or other detectors' content.
+#
+# detect_permissions_prompt requires BOTH:
+#   1. 'Do you want to proceed?' (exact substring)
+#   2. "don't ask again" (exact substring)
+# This dual-match design reduces false positives: chat messages about
+# "proceeding" won't trigger unless they also mention "don't ask again".
+
+echo "T17: Permissions prompt detection robustness"
+echo ""
+
+# --- Test 88: Exact Claude Code permissions prompt ---
+echo "88. Exact permissions prompt format..."
+EXACT_PERMS="  Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user/project
+  3. No
+❯"
+check "Exact permissions prompt detected" "$( detect_permissions_prompt "$EXACT_PERMS" && echo pass || echo fail )"
+echo ""
+
+# --- Test 89: Permissions prompt with different tool types ---
+echo "89. Permissions prompt with varying tool and directory names..."
+# Read tool
+PERMS_READ="● Read(src/main.rs)
+  Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Read in /home/user/project
+  3. No
+❯"
+# Write tool with deeply nested path
+PERMS_WRITE="● Write(/home/user/project/src/utils/helper.ts)
+  Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Write in /home/user/project
+  3. No
+❯"
+# Permissions prompt with spinner text above
+PERMS_WITH_SPINNER="  Processing...
+  Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /tmp
+  3. No
+❯"
+# Minimal permissions prompt (no tool output context)
+PERMS_MINIMAL="Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user
+  3. No
+❯"
+
+check "Permissions prompt for Read tool" "$( detect_permissions_prompt "$PERMS_READ" && echo pass || echo fail )"
+check "Permissions prompt for Write tool" "$( detect_permissions_prompt "$PERMS_WRITE" && echo pass || echo fail )"
+check "Permissions prompt with spinner above" "$( detect_permissions_prompt "$PERMS_WITH_SPINNER" && echo pass || echo fail )"
+check "Permissions prompt minimal" "$( detect_permissions_prompt "$PERMS_MINIMAL" && echo pass || echo fail )"
+echo ""
+
+# --- Test 90: Permissions prompt false positive resistance ---
+echo "90. Permissions prompt false positive resistance..."
+# Chat message discussing proceeding — has "proceed?" but not "don't ask again"
+CHAT_PROCEED_PERMS="● Bash(nbs-chat read .nbs/chat/live.chat)
+  ⎿  alex: Do you want to proceed with this approach?
+❯"
+# Code comment mentioning the prompt — has "proceed?" but not "don't ask again"
+CODE_PROCEED_PERMS="● Read(src/sidecar.sh)
+  ⎿  # Check: Do you want to proceed?
+  ⎿  echo 'Continuing...'
+❯"
+# Normal build output — neither substring
+NORMAL_BUILD="● Bash(make -j8)
+  ⎿  Building targets...
+  ⎿  [100%] Built target nbs-chat
+❯"
+# Has "don't ask again" but NOT "Do you want to proceed?" — partial match
+PARTIAL_MATCH="  Some other prompt
+  1. Yes
+  2. Yes, and don't ask again for Bash in /tmp
+  3. No
+❯"
+
+check "Chat 'proceed' without 'don't ask again' is NOT a false positive" "$( ! detect_permissions_prompt "$CHAT_PROCEED_PERMS" && echo pass || echo fail )"
+check "Code comment 'proceed' is NOT a false positive" "$( ! detect_permissions_prompt "$CODE_PROCEED_PERMS" && echo pass || echo fail )"
+check "Normal build output does NOT trigger" "$( ! detect_permissions_prompt "$NORMAL_BUILD" && echo pass || echo fail )"
+check "Partial match (don't ask again only) does NOT trigger" "$( ! detect_permissions_prompt "$PARTIAL_MATCH" && echo pass || echo fail )"
+echo ""
+
+# --- Test 91: Permissions prompt independence from other detectors ---
+echo "91. Permissions vs plan mode vs AskUserQuestion independence..."
+# Permissions prompt should NOT trigger plan mode or AskUserQuestion
+check "Permissions prompt is NOT plan mode" "$( ! detect_plan_mode "$EXACT_PERMS" && echo pass || echo fail )"
+check "Permissions prompt is NOT AskUserQuestion" "$( ! detect_ask_modal "$EXACT_PERMS" && echo pass || echo fail )"
+# Plan mode should NOT trigger permissions detection
+PLAN_ONLY="  Would you like to proceed?
+  1. Yes
+  2. Yes, and don't ask again for this project
+❯"
+check "Plan mode is NOT permissions prompt" "$( ! detect_permissions_prompt "$PLAN_ONLY" && echo pass || echo fail )"
+# AskUserQuestion should NOT trigger permissions detection
+ASK_ONLY="? Which approach should we use?
+  1. Option A (Recommended)
+  2. Option B
+Type something.
+❯"
+check "AskUserQuestion is NOT permissions prompt" "$( ! detect_permissions_prompt "$ASK_ONLY" && echo pass || echo fail )"
+echo ""
+
+# --- Test 92: Permissions prompt in both content-change and stable-content paths ---
+echo "92. Permissions detection in both content-change and stable-content paths..."
+# Same as T14 test 70: the sidecar checks in two places (content change and stable).
+# Verify the function is deterministic across repeated calls.
+PERMS_CONTENT="Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user
+  3. No
+❯"
+HASH_P1=$(echo "$PERMS_CONTENT" | sha256sum | cut -d' ' -f1)
+HASH_P2=$(echo "$PERMS_CONTENT" | sha256sum | cut -d' ' -f1)
+check "Same content produces same hash" "$( [[ "$HASH_P1" == "$HASH_P2" ]] && echo pass || echo fail )"
+check "Detection on first call (content-change path)" "$( detect_permissions_prompt "$PERMS_CONTENT" && echo pass || echo fail )"
+check "Detection on second call (stable-content path)" "$( detect_permissions_prompt "$PERMS_CONTENT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 93: Permissions prompt during context stress ---
+echo "93. Permissions prompt during context stress..."
+# If a permissions prompt appears while context is stressed, plan mode and
+# permissions detection run before context stress handling. The sidecar should
+# detect both, but permissions is resolved first (blocking prompt).
+STRESS_PERMS="Compacting conversation...
+Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user
+  3. No
+❯"
+check "Permissions detected despite context stress" "$( detect_permissions_prompt "$STRESS_PERMS" && echo pass || echo fail )"
+check "Context stress also detected" "$( detect_context_stress "$STRESS_PERMS" && echo pass || echo fail )"
+echo ""
+
+# --- Test 94: Permissions prompt with bypass permissions bar ---
+echo "94. Permissions prompt with bypass permissions status bar..."
+# The bypass-permissions bar appears at the bottom of the pane.
+# It should not interfere with permissions prompt detection.
+PERMS_WITH_BYPASS="Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user
+  3. No
+  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+check "Permissions detected with bypass bar" "$( detect_permissions_prompt "$PERMS_WITH_BYPASS" && echo pass || echo fail )"
+echo ""
+
+# --- Test 95: Permissions prompt co-occurrence with plan mode ---
+echo "95. Both permissions and plan mode in same content..."
+# Edge case: both prompts appear in captured pane content (e.g., scrollback
+# contains a resolved plan mode prompt, current prompt is permissions).
+# Both detectors should fire independently.
+BOTH_PROMPTS="Would you like to proceed?
+  1. Yes
+  2. Yes, and don't ask again for this project
+
+Do you want to proceed?
+  1. Yes
+  2. Yes, and don't ask again for Bash in /home/user
+  3. No
+❯"
+check "Permissions detected in combined content" "$( detect_permissions_prompt "$BOTH_PROMPTS" && echo pass || echo fail )"
+check "Plan mode also detected in combined content" "$( detect_plan_mode "$BOTH_PROMPTS" && echo pass || echo fail )"
+echo ""
 
 # ============================================================
 # Summary

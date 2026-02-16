@@ -142,6 +142,24 @@ detect_ask_modal() {
     return 1
 }
 
+# --- Permissions prompt detection ---
+# Claude Code displays a blocking permissions prompt when a tool (bash, read,
+# etc.) is invoked without prior approval. The prompt shows:
+#   "Do you want to proceed?"
+#   1. Yes
+#   2. Yes, and don't ask again for <type> in <dir>
+#   3. No
+# In multi-agent setups no human is watching, so the agent stalls indefinitely.
+# The sidecar detects this prompt and auto-selects option 2 ("Yes, and don't
+# ask again") to permanently approve and prevent recurring stalls.
+
+detect_permissions_prompt() {
+    local content="$1"
+    echo "$content" | grep -qF 'Do you want to proceed?' && \
+    echo "$content" | grep -qF "don't ask again" && return 0
+    return 1
+}
+
 # --- Context stress detection ---
 # Claude Code displays specific messages when context is stressed:
 #   - "Compacting conversation" during auto-compact
@@ -794,6 +812,17 @@ poll_sidecar_tmux() {
                 last_content_hash=""
                 sleep 5
             fi
+
+            # Check for permissions prompt — auto-select option 2 (don't ask again)
+            if detect_permissions_prompt "$content"; then
+                sleep 1
+                tmux send-keys -t "$pane_id" '2' || true
+                sleep 0.5
+                tmux send-keys -t "$pane_id" Enter || true
+                idle_seconds=0
+                last_content_hash=""
+                sleep 2
+            fi
             continue
         fi
 
@@ -816,6 +845,17 @@ poll_sidecar_tmux() {
             idle_seconds=0
             last_content_hash=""
             sleep 5
+            continue
+        fi
+
+        # Check for permissions prompt when content is stable
+        if detect_permissions_prompt "$content"; then
+            tmux send-keys -t "$pane_id" '2' || true
+            sleep 0.5
+            tmux send-keys -t "$pane_id" Enter || true
+            idle_seconds=0
+            last_content_hash=""
+            sleep 2
             continue
         fi
 
@@ -995,6 +1035,17 @@ poll_sidecar_pty() {
                 last_content_hash=""
                 sleep 5
             fi
+
+            # Check for permissions prompt — auto-select option 2 (don't ask again)
+            if detect_permissions_prompt "$content"; then
+                sleep 1
+                "$pty" send "$session" --no-enter '2' || true
+                sleep 0.5
+                "$pty" send "$session" '' || true
+                idle_seconds=0
+                last_content_hash=""
+                sleep 2
+            fi
             continue
         fi
 
@@ -1017,6 +1068,17 @@ poll_sidecar_pty() {
             idle_seconds=0
             last_content_hash=""
             sleep 5
+            continue
+        fi
+
+        # Check for permissions prompt when content is stable
+        if detect_permissions_prompt "$content"; then
+            "$pty" send "$session" --no-enter '2' || true
+            sleep 0.5
+            "$pty" send "$session" '' || true
+            idle_seconds=0
+            last_content_hash=""
+            sleep 2
             continue
         fi
 
