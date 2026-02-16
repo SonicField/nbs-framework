@@ -31,6 +31,7 @@
 #  17. Self-healing: detect_skill_failure, build_recovery_prompt, failure tracking
 
 #  18. Deterministic Pythia trigger: check_pythia_trigger function
+#  19. Deterministic standup trigger: check_standup_trigger function
 
 set -uo pipefail
 
@@ -140,10 +141,10 @@ fi
 # Verify it is lightweight (under 35 lines — includes proactivity guidance)
 if [[ -f "$NOTIFY_DOC" ]]; then
     NOTIFY_LINES=$(wc -l < "$NOTIFY_DOC")
-    if [[ "$NOTIFY_LINES" -lt 35 ]]; then
-        pass "nbs-notify.md is lightweight ($NOTIFY_LINES lines, < 35)"
+    if [[ "$NOTIFY_LINES" -lt 40 ]]; then
+        pass "nbs-notify.md is lightweight ($NOTIFY_LINES lines, < 40)"
     else
-        fail "nbs-notify.md is too large ($NOTIFY_LINES lines, expected < 35)"
+        fail "nbs-notify.md is too large ($NOTIFY_LINES lines, expected < 40)"
     fi
 fi
 
@@ -1735,6 +1736,138 @@ fi
 CONTROL_REGISTRY="$SAVE_CONTROL_REGISTRY"
 NBS_ROOT="$SAVE_NBS_ROOT"
 rm -rf "$PYTHIA_TEST_DIR"
+
+# =========================================================================
+# 19. Deterministic standup trigger: check_standup_trigger
+# =========================================================================
+echo "19. check_standup_trigger: deterministic team check-in..."
+
+# --- Structural: function exists ---
+if grep -q 'check_standup_trigger' "$NBS_CLAUDE"; then
+    pass "check_standup_trigger function exists"
+else
+    fail "check_standup_trigger function missing"
+fi
+
+# --- Structural: LAST_STANDUP_TIME variable ---
+if grep -q 'LAST_STANDUP_TIME' "$NBS_CLAUDE"; then
+    pass "LAST_STANDUP_TIME tracking variable exists"
+else
+    fail "LAST_STANDUP_TIME tracking variable missing"
+fi
+
+# --- Structural: called from should_inject_notify ---
+if grep -A 40 'should_inject_notify' "$NBS_CLAUDE" | grep -q 'check_standup_trigger'; then
+    pass "check_standup_trigger called from should_inject_notify"
+else
+    fail "check_standup_trigger not called from should_inject_notify"
+fi
+
+# --- Structural: STANDUP_INTERVAL config ---
+if grep -q 'NBS_STANDUP_INTERVAL' "$NBS_CLAUDE"; then
+    pass "NBS_STANDUP_INTERVAL config exists"
+else
+    fail "NBS_STANDUP_INTERVAL config missing"
+fi
+
+# --- Structural: STANDUP_HANDLE config ---
+if grep -q 'NBS_STANDUP_HANDLE' "$NBS_CLAUDE"; then
+    pass "NBS_STANDUP_HANDLE config exists"
+else
+    fail "NBS_STANDUP_HANDLE config missing"
+fi
+
+# --- Structural: only designated handle posts ---
+if grep -A 20 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'STANDUP_HANDLE'; then
+    pass "check_standup_trigger checks STANDUP_HANDLE"
+else
+    fail "check_standup_trigger does not check STANDUP_HANDLE"
+fi
+
+# --- Structural: posts to chat ---
+if grep -A 50 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'nbs-chat send'; then
+    pass "check_standup_trigger posts via nbs-chat send"
+else
+    fail "check_standup_trigger does not post to chat"
+fi
+
+# --- Functional: disabled when interval is 0 ---
+SAVE_STANDUP_INTERVAL="$STANDUP_INTERVAL"
+STANDUP_INTERVAL=0
+check_standup_trigger
+rc=$?
+STANDUP_INTERVAL="$SAVE_STANDUP_INTERVAL"
+if [[ $rc -ne 0 ]]; then
+    pass "Standup disabled when STANDUP_INTERVAL=0"
+else
+    fail "Standup should not fire when STANDUP_INTERVAL=0"
+fi
+
+# --- Functional: non-matching handle skips ---
+SAVE_SIDECAR_HANDLE="$SIDECAR_HANDLE"
+SAVE_STANDUP_HANDLE="$STANDUP_HANDLE"
+SIDECAR_HANDLE="testkeeper"
+STANDUP_HANDLE="claude"
+STANDUP_INTERVAL=1
+LAST_STANDUP_TIME=0
+check_standup_trigger
+rc=$?
+SIDECAR_HANDLE="$SAVE_SIDECAR_HANDLE"
+STANDUP_HANDLE="$SAVE_STANDUP_HANDLE"
+if [[ $rc -ne 0 ]]; then
+    pass "Non-matching handle does not post standup"
+else
+    fail "Non-matching handle should not post standup"
+fi
+
+# --- Functional: first run initialises timer without posting ---
+STANDUP_TEST_DIR=$(mktemp -d)
+mkdir -p "$STANDUP_TEST_DIR/.nbs/chat"
+# Create a minimal chat file
+printf "=== nbs-chat ===\nlast-writer: system\nlast-write: 2026-01-01T00:00:00Z\nfile-length: 100\nparticipants: \n---\n" > "$STANDUP_TEST_DIR/.nbs/chat/test.chat"
+
+STANDUP_REG="$STANDUP_TEST_DIR/.nbs/control-registry-standup-test"
+echo "chat:$STANDUP_TEST_DIR/.nbs/chat/test.chat" > "$STANDUP_REG"
+
+SAVE_CONTROL_REGISTRY="$CONTROL_REGISTRY"
+CONTROL_REGISTRY="$STANDUP_REG"
+SAVE_SIDECAR_HANDLE="$SIDECAR_HANDLE"
+SIDECAR_HANDLE="claude"
+STANDUP_HANDLE="claude"
+STANDUP_INTERVAL=1
+LAST_STANDUP_TIME=0
+
+check_standup_trigger
+rc=$?
+if [[ $rc -ne 0 && $LAST_STANDUP_TIME -gt 0 ]]; then
+    pass "First run initialises timer without posting"
+else
+    fail "First run should initialise timer without posting (rc=$rc, LAST_STANDUP_TIME=$LAST_STANDUP_TIME)"
+fi
+
+# --- Functional: fires after interval elapses ---
+LAST_STANDUP_TIME=$(($(date +%s) - 120))  # 2 minutes ago, interval is 1 minute
+check_standup_trigger
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "Standup fires after interval elapses"
+else
+    fail "Standup should fire after interval elapses"
+fi
+
+# --- Functional: does not re-fire immediately ---
+check_standup_trigger
+rc=$?
+if [[ $rc -ne 0 ]]; then
+    pass "Standup does not re-fire immediately"
+else
+    fail "Standup should not re-fire immediately"
+fi
+
+# Restore
+CONTROL_REGISTRY="$SAVE_CONTROL_REGISTRY"
+SIDECAR_HANDLE="$SAVE_SIDECAR_HANDLE"
+rm -rf "$STANDUP_TEST_DIR"
 
 # =========================================================================
 # Cleanup

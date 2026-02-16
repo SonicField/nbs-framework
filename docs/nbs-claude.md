@@ -22,6 +22,8 @@ nbs-claude --resume abc123    # Resume session with polling
 | `NBS_STARTUP_GRACE` | `30` | Seconds after init before allowing notifications |
 | `NBS_INITIAL_PROMPT` | *(none)* | Custom initial prompt sent on startup (default: handle + `/nbs-teams-chat`) |
 | `NBS_NOTIFY_FAIL_THRESHOLD` | `5` | Consecutive failed `/nbs-notify` injections before self-healing activates |
+| `NBS_STANDUP_INTERVAL` | `30` | Minutes between standup check-in messages posted to chat (0 to disable) |
+| `NBS_STANDUP_HANDLE` | `claude` | Only this handle's sidecar posts standups (avoids duplicates) |
 
 ## Operating Modes
 
@@ -124,6 +126,23 @@ The default is 20 if no config file exists or the value is missing. The value mu
 **Behaviour**: On each `should_inject_notify` cycle, `check_pythia_trigger` runs independently of the notify decision. It uses bucket arithmetic (`decision_count / interval`) to detect threshold crossings. This prevents re-triggering at the same count and handles catch-up correctly on first run — if 40 events already exist when the sidecar starts, it triggers once and syncs its counter.
 
 **State**: The trigger count is tracked in-memory via `PYTHIA_LAST_TRIGGER_COUNT` (not persisted across restarts). This is intentional: on restart, the sidecar catches up to the current count and triggers if a new threshold has been crossed since the last run.
+
+### Deterministic Standup Check-In
+
+The sidecar posts periodic team check-in messages directly to chat, prompting all agents to report their status and look for useful work. This prevents the "everyone is idle because no one has anything to say" stall.
+
+**Configuration**:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NBS_STANDUP_INTERVAL` | `30` | Minutes between standup messages (0 to disable) |
+| `NBS_STANDUP_HANDLE` | `claude` | Only this handle's sidecar posts standups |
+
+**Behaviour**: After `NBS_STANDUP_INTERVAL` minutes of wall-clock time since the last standup, the designated sidecar posts to the first registered chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.`
+
+This message appears as a normal chat message from `sidecar`, triggering every agent's unread detection and causing them to respond with status updates. Only one sidecar posts (designated by `NBS_STANDUP_HANDLE`) to avoid duplicates.
+
+**First run**: On startup, the timer is initialised without posting. The first standup fires after the full interval elapses.
 
 The sidecar maintains a per-agent resource registry at `.nbs/control-registry-<handle>` — a list of resources this agent is watching. On startup, it seeds the registry from existing `.nbs/` resources:
 

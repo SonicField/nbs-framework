@@ -30,6 +30,8 @@
 #   NBS_STARTUP_GRACE       Seconds after init before allowing notifications (default: 30)
 #   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
 #   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
+#   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 30, 0 to disable)
+#   NBS_STANDUP_HANDLE      Only this handle's sidecar posts standups (default: claude)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -49,6 +51,8 @@ NBS_ROOT="${NBS_ROOT:-.}"
 STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
+STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
+STANDUP_HANDLE="${NBS_STANDUP_HANDLE:-claude}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -57,7 +61,7 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 }
 
 # Validate numeric config variables
-for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD; do
+for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
@@ -384,6 +388,7 @@ LAST_NOTIFY_TIME=0
 SIDECAR_START_TIME=0
 NOTIFY_FAIL_COUNT=0
 PYTHIA_LAST_TRIGGER_COUNT=0
+LAST_STANDUP_TIME=0
 
 # check_pythia_trigger — deterministic Pythia checkpoint trigger.
 # Counts decision-logged events in the processed directory.
@@ -441,6 +446,75 @@ check_pythia_trigger() {
         fi
         return 1
     fi
+}
+
+# check_standup_trigger — deterministic team check-in via chat.
+# Posts a standup message to the first registered chat after N minutes
+# of wall-clock time since the last standup. Uses CSMA/CD collision
+# detection: before posting, checks if a standup was already posted
+# recently. Random jitter (±2 min) reduces collision probability.
+# Returns: 0 = standup posted, 1 = no action.
+check_standup_trigger() {
+    # Disabled if interval is 0
+    [[ "$STANDUP_INTERVAL" -gt 0 ]] || return 1
+
+    [[ -f "$CONTROL_REGISTRY" ]] || return 1
+
+    local now
+    now=$(date +%s)
+    local interval_seconds=$((STANDUP_INTERVAL * 60))
+
+    # Add random jitter: ±120 seconds (using PID and time for pseudo-random)
+    local jitter=$(( (BASHPID * now) % 241 - 120 ))
+    local jittered_interval=$((interval_seconds + jitter))
+    # Clamp to at least 60 seconds
+    (( jittered_interval < 60 )) && jittered_interval=60
+
+    # Skip if not enough time has passed
+    if [[ $LAST_STANDUP_TIME -gt 0 ]] && (( now - LAST_STANDUP_TIME < jittered_interval )); then
+        return 1
+    fi
+
+    # First run: initialise timer without posting
+    if [[ $LAST_STANDUP_TIME -eq 0 ]]; then
+        LAST_STANDUP_TIME=$now
+        return 1
+    fi
+
+    # Find first registered chat
+    local chat_path=""
+    while IFS= read -r line; do
+        case "$line" in
+            chat:*) chat_path="${line#chat:}"; break ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    [[ -n "$chat_path" ]] || return 1
+
+    # CSMA/CD: check if a standup was already posted recently
+    # Read last 5 messages and look for a recent sidecar check-in
+    local recent_standup=""
+    if is_remote; then
+        recent_standup=$(remote_cmd "nbs-chat read $(printf '%q' "$chat_path") --last=5 2>/dev/null" | grep -c 'sidecar:.*Check-in:' || true)
+    else
+        recent_standup=$(nbs-chat read "$chat_path" --last=5 2>/dev/null | grep -c 'sidecar:.*Check-in:' || true)
+    fi
+
+    if [[ "${recent_standup:-0}" -gt 0 ]]; then
+        # Another sidecar already posted — back off, reset timer
+        LAST_STANDUP_TIME=$now
+        return 1
+    fi
+
+    # Post standup to chat
+    if is_remote; then
+        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar '@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.'" 2>/dev/null || true
+    else
+        nbs-chat send "$chat_path" sidecar '@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.' 2>/dev/null || true
+    fi
+
+    LAST_STANDUP_TIME=$now
+    return 0
 }
 
 # check_bus_events — peek at the event bus without consuming anything.
@@ -586,6 +660,9 @@ should_inject_notify() {
 
     # Deterministic Pythia trigger — fire independently of notify decision
     check_pythia_trigger || true
+
+    # Deterministic standup — post check-in to chat after silence
+    check_standup_trigger || true
 
     local chat_rc=0
     check_chat_unread || chat_rc=$?

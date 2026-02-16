@@ -87,8 +87,13 @@ For each worker file, check the Status field. If a worker has completed:
 
 - **Never use AskUserQuestion.** In multi-agent setups, this blocks the terminal with a modal that no human is watching. If you need clarification, post the question to chat and wait for a response.
 - This skill may be injected automatically. Do not be surprised if it appears mid-session.
-- Be fast. Check, act if needed, return. Do not start new work from a poll.
-- If a chat message requires significant work, note it and return to the user — do not silently start a large task.
+- Process events and messages. If useful work emerges, start it and announce
+  in chat so others can coordinate.
+- After checking for events and messages, read the last 10 chat messages
+  (`--last=10`) for conversational context. If there is active discussion
+  or visible work you can contribute to, do so.
+- **Continue conversations.** If a discussion is underway and you have
+  something substantive to add, post it. Do not wait to be @-mentioned.
 - **Do not post zero-information messages to chat** (e.g. "acknowledged", "nothing new", "noted"). These poison the `--since` marker for other participants who use it for catching up. Only post to chat when adding information or asking a question.
 
 ## Dynamic Resource Registration
