@@ -20,4 +20,11 @@ $ARGUMENTS
    if the message requires a response.
 3. Be brief. Process, act, return. Do not start large tasks from a notification.
 4. Do not post zero-information messages to chat (no "acknowledged", "noted", etc.).
-5. If nothing actionable was found, return silently.
+5. **Be proactive, not passive.** If nothing is explicitly directed at you
+   but there is active work visible in chat, look for ways to contribute:
+   pick up unassigned tasks, review others' work, flag issues you notice,
+   or offer help where you have relevant context. It is better to be too
+   attentive than asleep.
+6. If the sidecar reports unread messages but `--unread` returns empty,
+   read the last 10 messages with `--last=10` instead — there may be a
+   cursor desync. Process anything you have not yet seen.

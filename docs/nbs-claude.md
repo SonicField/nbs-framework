@@ -109,6 +109,22 @@ This bypasses the skill registration system entirely, asking the agent to read t
 
 The detection function (`detect_skill_failure`) matches the exact error string produced by Claude Code when a skill symlink is dangling or a skill name is unregistered.
 
+### Deterministic Pythia Trigger
+
+The sidecar includes a deterministic checkpoint trigger for Pythia trajectory assessments. Rather than relying on AI judgement to decide when an assessment is due, the sidecar counts `decision-logged` events in the bus processed directory (`.nbs/events/processed/`) and publishes a `pythia-checkpoint` event when the count crosses a multiple of the configured interval.
+
+**Configuration**: The interval is read from `.nbs/events/config.yaml`:
+
+```yaml
+pythia-interval: 20
+```
+
+The default is 20 if no config file exists or the value is missing. The value must be a positive integer.
+
+**Behaviour**: On each `should_inject_notify` cycle, `check_pythia_trigger` runs independently of the notify decision. It uses bucket arithmetic (`decision_count / interval`) to detect threshold crossings. This prevents re-triggering at the same count and handles catch-up correctly on first run — if 40 events already exist when the sidecar starts, it triggers once and syncs its counter.
+
+**State**: The trigger count is tracked in-memory via `PYTHIA_LAST_TRIGGER_COUNT` (not persisted across restarts). This is intentional: on restart, the sidecar catches up to the current count and triggers if a new threshold has been crossed since the last run.
+
 The sidecar maintains a per-agent resource registry at `.nbs/control-registry-<handle>` — a list of resources this agent is watching. On startup, it seeds the registry from existing `.nbs/` resources:
 
 - All `.nbs/chat/*.chat` files → `chat:<path>`

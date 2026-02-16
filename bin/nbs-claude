@@ -383,6 +383,65 @@ NOTIFY_MESSAGE=""
 LAST_NOTIFY_TIME=0
 SIDECAR_START_TIME=0
 NOTIFY_FAIL_COUNT=0
+PYTHIA_LAST_TRIGGER_COUNT=0
+
+# check_pythia_trigger — deterministic Pythia checkpoint trigger.
+# Counts decision-logged events in the processed directory.
+# When the count crosses a multiple of pythia-interval, publishes
+# a pythia-checkpoint bus event. This replaces the unreliable
+# Scribe-based trigger with a mechanical count.
+# Returns: 0 = checkpoint published, 1 = no action.
+check_pythia_trigger() {
+    [[ -f "$CONTROL_REGISTRY" ]] || return 1
+
+    local bus_dir=""
+    while IFS= read -r line; do
+        case "$line" in
+            bus:*) bus_dir="${line#bus:}"; break ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    [[ -n "$bus_dir" && -d "$bus_dir/processed" ]] || return 1
+
+    # Read pythia-interval from config (default: 20)
+    local interval=20
+    local config_file="${bus_dir}/config.yaml"
+    if [[ -f "$config_file" ]]; then
+        local cfg_val
+        cfg_val=$(grep "^pythia-interval:" "$config_file" 2>/dev/null | awk '{print $2}') || true
+        if [[ -n "$cfg_val" && "$cfg_val" =~ ^[0-9]+$ && "$cfg_val" -gt 0 ]]; then
+            interval=$cfg_val
+        fi
+    fi
+
+    # Count decision-logged events in processed directory
+    local decision_count
+    decision_count=$(ls "$bus_dir/processed/" 2>/dev/null | grep -c "decision-logged" || true)
+    decision_count=$((decision_count + 0))
+
+    # Check if we've crossed a new threshold
+    local current_bucket=$((decision_count / interval))
+    local last_bucket=$((PYTHIA_LAST_TRIGGER_COUNT / interval))
+
+    if [[ $current_bucket -gt $last_bucket && $decision_count -gt 0 ]]; then
+        PYTHIA_LAST_TRIGGER_COUNT=$decision_count
+        # Publish pythia-checkpoint event
+        if is_remote; then
+            remote_cmd "nbs-bus publish $(printf '%q' "$bus_dir") sidecar pythia-checkpoint high \
+                'Decision count: ${decision_count}. Sidecar-triggered Pythia assessment.'" 2>/dev/null || true
+        else
+            nbs-bus publish "$bus_dir" sidecar pythia-checkpoint high \
+                "Decision count: ${decision_count}. Sidecar-triggered Pythia assessment." 2>/dev/null || true
+        fi
+        return 0
+    else
+        # Sync counter without triggering (for first run / catch-up)
+        if [[ $PYTHIA_LAST_TRIGGER_COUNT -eq 0 && $decision_count -gt 0 ]]; then
+            PYTHIA_LAST_TRIGGER_COUNT=$decision_count
+        fi
+        return 1
+    fi
+}
 
 # check_bus_events — peek at the event bus without consuming anything.
 # Reads the control registry for bus: entries, runs nbs-bus check on each.
@@ -524,6 +583,9 @@ should_inject_notify() {
 
     local bus_rc=0
     check_bus_events || bus_rc=$?
+
+    # Deterministic Pythia trigger — fire independently of notify decision
+    check_pythia_trigger || true
 
     local chat_rc=0
     check_chat_unread || chat_rc=$?
