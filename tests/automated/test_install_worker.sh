@@ -19,10 +19,20 @@ echo ""
 TEST_DIR=$(mktemp -d)
 echo "Test directory: $TEST_DIR"
 
+# IMPORTANT: Override HOME so install.sh creates symlinks in the test
+# directory, not in real ~/.claude/commands/. Without this, install.sh
+# pollutes the real HOME with symlinks to the temp prefix, and when
+# cleanup deletes the temp dir, all skill symlinks become dangling.
+REAL_HOME="$HOME"
+export HOME="$TEST_DIR"
+mkdir -p "$HOME/.claude" "$HOME/.nbs/commands"
+
 # Cleanup on exit
 cleanup() {
     # Kill worker if still running
     "$PTY_SESSION" kill worker-path-check 2>/dev/null || true
+    # Restore real HOME before cleanup
+    export HOME="$REAL_HOME"
     rm -rf "$TEST_DIR"
     # Remove tripwire if it exists
     rm -f "$HOME/.nbs/commands/TRIPWIRE_DO_NOT_READ.md" 2>/dev/null || true
@@ -32,17 +42,18 @@ trap cleanup EXIT
 
 # Step 1: Create tripwire in production ~/.nbs (if it exists)
 echo "Step 1: Setting up tripwire..."
-if [[ -d "$HOME/.nbs/commands" ]]; then
-    echo "TRIPWIRE: If you read this file, the test has FAILED. You should only be reading from $TEST_DIR" > "$HOME/.nbs/commands/TRIPWIRE_DO_NOT_READ.md"
-    echo "  Tripwire placed in ~/.nbs/commands/"
+if [[ -d "$REAL_HOME/.nbs/commands" ]]; then
+    echo "TRIPWIRE: If you read this file, the test has FAILED. You should only be reading from $TEST_DIR" > "$REAL_HOME/.nbs/commands/TRIPWIRE_DO_NOT_READ.md"
+    echo "  Tripwire placed in $REAL_HOME/.nbs/commands/"
 else
-    echo "  No ~/.nbs/commands/ - skipping tripwire (first install)"
+    echo "  No $REAL_HOME/.nbs/commands/ - skipping tripwire (first install)"
 fi
 
 # Step 2: Install to test directory
+# HOME is overridden so ~/.claude/commands/ symlinks go into TEST_DIR
 echo ""
 echo "Step 2: Installing to test directory..."
-"$PROJECT_ROOT/bin/install.sh" --prefix="$TEST_DIR"
+echo "N" | "$PROJECT_ROOT/bin/install.sh" --prefix="$TEST_DIR"
 
 # Step 3: Create worker task file
 echo ""
@@ -81,9 +92,9 @@ INVALID_PATHS: [count]
 INVALID PATH DETAILS:
 [If any invalid paths, list: file:line - path]
 
-TRIPWIRE_CHECK: [Did you see TRIPWIRE_DO_NOT_READ.md? YES/NO]
+TRIPWIRE_CHECK: <YES_OR_NO>
 
-VERDICT: PASS or FAIL
+VERDICT: <PASS_OR_FAIL>
 \`\`\`
 
 ## Success Criteria
@@ -125,8 +136,8 @@ while [[ $ELAPSED -lt $TIMEOUT ]]; do
     sleep 10
     ELAPSED=$((ELAPSED + 10))
 
-    # Check if worker updated the file
-    if grep -q "^VERDICT:" "$TEST_DIR/worker/task.md" 2>/dev/null; then
+    # Check if worker has written findings (placeholder removed)
+    if ! grep -q "\[Worker fills this in\]" "$TEST_DIR/worker/task.md" 2>/dev/null; then
         echo "  Worker completed after ${ELAPSED}s"
         break
     fi

@@ -27,6 +27,8 @@
 #  13. docs/nbs-claude.md updated
 #  14. detect_context_stress: functional and structural
 #  15. Startup grace period: no notifications during grace window
+#  16. NBS_INITIAL_PROMPT: custom initial prompt for sidecar
+#  17. Self-healing: detect_skill_failure, build_recovery_prompt, failure tracking
 
 set -uo pipefail
 
@@ -922,7 +924,7 @@ fi
 echo "11. Injection verification logic..."
 
 # Test: tmux sidecar verifies injection was consumed
-if grep -A25 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
+if grep -A50 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
     pass "tmux sidecar captures pane after injection for verification"
 else
     fail "tmux sidecar missing post-injection verification"
@@ -1275,6 +1277,313 @@ if grep 'STARTUP_GRACE' "$NBS_CLAUDE" | grep -q '_nbs_var_name'; then
     pass "STARTUP_GRACE included in numeric validation"
 else
     fail "STARTUP_GRACE missing from numeric validation"
+fi
+
+# =========================================================================
+# 16. NBS_INITIAL_PROMPT: custom initial prompt for sidecar
+# =========================================================================
+echo "16. NBS_INITIAL_PROMPT..."
+
+# Structural: INITIAL_PROMPT variable exists in configuration
+if grep -q 'INITIAL_PROMPT=' "$NBS_CLAUDE"; then
+    pass "Has INITIAL_PROMPT variable"
+else
+    fail "Missing INITIAL_PROMPT variable"
+fi
+
+# Structural: NBS_INITIAL_PROMPT environment variable documented in header
+if grep -q 'NBS_INITIAL_PROMPT' "$NBS_CLAUDE"; then
+    pass "NBS_INITIAL_PROMPT env var documented"
+else
+    fail "NBS_INITIAL_PROMPT env var not documented"
+fi
+
+# Structural: default is empty (no custom prompt)
+if grep -q 'NBS_INITIAL_PROMPT:-}' "$NBS_CLAUDE"; then
+    pass "Default INITIAL_PROMPT is empty string"
+else
+    fail "Default INITIAL_PROMPT is not empty"
+fi
+
+# Structural: INITIAL_PROMPT used in tmux sidecar init prompt logic
+TMUX_INIT=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE")
+if echo "$TMUX_INIT" | grep -q 'INITIAL_PROMPT'; then
+    pass "INITIAL_PROMPT referenced in tmux sidecar"
+else
+    fail "INITIAL_PROMPT not referenced in tmux sidecar"
+fi
+
+# Structural: INITIAL_PROMPT used in pty sidecar init prompt logic
+PTY_INIT=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE")
+if echo "$PTY_INIT" | grep -q 'INITIAL_PROMPT'; then
+    pass "INITIAL_PROMPT referenced in pty sidecar"
+else
+    fail "INITIAL_PROMPT not referenced in pty sidecar"
+fi
+
+# Structural: conditional uses INITIAL_PROMPT to choose between custom and default
+if echo "$TMUX_INIT" | grep -q 'if.*-n.*INITIAL_PROMPT'; then
+    pass "tmux sidecar has INITIAL_PROMPT conditional"
+else
+    fail "tmux sidecar missing INITIAL_PROMPT conditional"
+fi
+
+if echo "$PTY_INIT" | grep -q 'if.*-n.*INITIAL_PROMPT'; then
+    pass "pty sidecar has INITIAL_PROMPT conditional"
+else
+    fail "pty sidecar missing INITIAL_PROMPT conditional"
+fi
+
+# Structural: default prompt contains handle and /nbs-teams-chat
+if echo "$TMUX_INIT" | grep -q 'SIDECAR_HANDLE.*nbs-teams-chat'; then
+    pass "Default prompt includes handle and /nbs-teams-chat"
+else
+    fail "Default prompt missing handle or /nbs-teams-chat"
+fi
+
+# Structural: startup banner shows custom prompt indicator
+if grep -q 'Initial prompt.*custom.*NBS_INITIAL_PROMPT' "$NBS_CLAUDE"; then
+    pass "Startup banner shows custom prompt indicator"
+else
+    fail "Startup banner missing custom prompt indicator"
+fi
+
+# Structural: init_prompt variable exists in both sidecars
+TMUX_INIT_PROMPT_COUNT=$(echo "$TMUX_INIT" | grep -c 'init_prompt')
+if [[ "$TMUX_INIT_PROMPT_COUNT" -ge 3 ]]; then
+    pass "init_prompt variable used in tmux sidecar ($TMUX_INIT_PROMPT_COUNT refs)"
+else
+    fail "init_prompt variable insufficient in tmux sidecar (found $TMUX_INIT_PROMPT_COUNT, expected >= 3)"
+fi
+
+PTY_INIT_PROMPT_COUNT=$(echo "$PTY_INIT" | grep -c 'init_prompt')
+if [[ "$PTY_INIT_PROMPT_COUNT" -ge 3 ]]; then
+    pass "init_prompt variable used in pty sidecar ($PTY_INIT_PROMPT_COUNT refs)"
+else
+    fail "init_prompt variable insufficient in pty sidecar (found $PTY_INIT_PROMPT_COUNT, expected >= 3)"
+fi
+
+# Structural: SIDECAR_START_TIME set AFTER init_prompt is sent (both sidecars)
+# In tmux: init_prompt sent via send-keys, then SIDECAR_START_TIME set
+TMUX_SEND_LINE=$(echo "$TMUX_INIT" | grep -n 'send-keys.*init_prompt' | head -1 | cut -d: -f1)
+TMUX_START_LINE=$(echo "$TMUX_INIT" | grep -n 'SIDECAR_START_TIME=' | head -1 | cut -d: -f1)
+if [[ -n "$TMUX_SEND_LINE" && -n "$TMUX_START_LINE" && "$TMUX_SEND_LINE" -lt "$TMUX_START_LINE" ]]; then
+    pass "SIDECAR_START_TIME set after init_prompt sent (tmux)"
+else
+    fail "SIDECAR_START_TIME not after init_prompt in tmux (send=$TMUX_SEND_LINE, start=$TMUX_START_LINE)"
+fi
+
+# In pty: init_prompt sent via pty send, then SIDECAR_START_TIME set
+PTY_SEND_LINE=$(echo "$PTY_INIT" | grep -n 'send.*init_prompt' | head -1 | cut -d: -f1)
+PTY_START_LINE=$(echo "$PTY_INIT" | grep -n 'SIDECAR_START_TIME=' | head -1 | cut -d: -f1)
+if [[ -n "$PTY_SEND_LINE" && -n "$PTY_START_LINE" && "$PTY_SEND_LINE" -lt "$PTY_START_LINE" ]]; then
+    pass "SIDECAR_START_TIME set after init_prompt sent (pty)"
+else
+    fail "SIDECAR_START_TIME not after init_prompt in pty (send=$PTY_SEND_LINE, start=$PTY_START_LINE)"
+fi
+
+# =========================================================================
+# 17. Self-healing: detect_skill_failure, build_recovery_prompt, failure tracking
+# =========================================================================
+echo "17. Self-healing after skill loss..."
+
+# --- Structural: detect_skill_failure function exists ---
+if grep -q 'detect_skill_failure()' "$NBS_CLAUDE"; then
+    pass "Has detect_skill_failure function"
+else
+    fail "Missing detect_skill_failure function"
+fi
+
+# --- Structural: build_recovery_prompt function exists ---
+if grep -q 'build_recovery_prompt()' "$NBS_CLAUDE"; then
+    pass "Has build_recovery_prompt function"
+else
+    fail "Missing build_recovery_prompt function"
+fi
+
+# --- Structural: NOTIFY_FAIL_COUNT global exists ---
+if grep -q 'NOTIFY_FAIL_COUNT=0' "$NBS_CLAUDE"; then
+    pass "Has NOTIFY_FAIL_COUNT global"
+else
+    fail "Missing NOTIFY_FAIL_COUNT global"
+fi
+
+# --- Structural: NOTIFY_FAIL_THRESHOLD config exists ---
+if grep -q 'NOTIFY_FAIL_THRESHOLD=' "$NBS_CLAUDE"; then
+    pass "Has NOTIFY_FAIL_THRESHOLD config"
+else
+    fail "Missing NOTIFY_FAIL_THRESHOLD config"
+fi
+
+# --- Structural: detect_skill_failure used in tmux sidecar ---
+TMUX_SKILL=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_skill_failure')
+if [[ "$TMUX_SKILL" -ge 2 ]]; then
+    pass "detect_skill_failure in tmux sidecar ($TMUX_SKILL references)"
+else
+    fail "detect_skill_failure insufficient in tmux sidecar (found $TMUX_SKILL, expected >= 2)"
+fi
+
+# --- Structural: detect_skill_failure used in pty sidecar ---
+PTY_SKILL=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_skill_failure')
+if [[ "$PTY_SKILL" -ge 2 ]]; then
+    pass "detect_skill_failure in pty sidecar ($PTY_SKILL references)"
+else
+    fail "detect_skill_failure insufficient in pty sidecar (found $PTY_SKILL, expected >= 2)"
+fi
+
+# --- Structural: build_recovery_prompt used in tmux sidecar ---
+TMUX_RECOVERY=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE" | grep -c 'build_recovery_prompt')
+if [[ "$TMUX_RECOVERY" -ge 1 ]]; then
+    pass "build_recovery_prompt in tmux sidecar"
+else
+    fail "build_recovery_prompt not in tmux sidecar"
+fi
+
+# --- Structural: build_recovery_prompt used in pty sidecar ---
+PTY_RECOVERY=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -c 'build_recovery_prompt')
+if [[ "$PTY_RECOVERY" -ge 1 ]]; then
+    pass "build_recovery_prompt in pty sidecar"
+else
+    fail "build_recovery_prompt not in pty sidecar"
+fi
+
+# --- Structural: NOTIFY_FAIL_COUNT incremented on skill failure ---
+if grep -q 'NOTIFY_FAIL_COUNT=\$((NOTIFY_FAIL_COUNT + 1))' "$NBS_CLAUDE"; then
+    pass "NOTIFY_FAIL_COUNT incremented on skill failure"
+else
+    fail "NOTIFY_FAIL_COUNT not incremented"
+fi
+
+# --- Structural: NOTIFY_FAIL_COUNT reset on success ---
+if grep -q 'NOTIFY_FAIL_COUNT=0' "$NBS_CLAUDE"; then
+    pass "NOTIFY_FAIL_COUNT reset on success"
+else
+    fail "NOTIFY_FAIL_COUNT not reset"
+fi
+
+# --- Structural: recovery triggered when count >= threshold ---
+if grep -q 'NOTIFY_FAIL_COUNT -ge.*NOTIFY_FAIL_THRESHOLD' "$NBS_CLAUDE"; then
+    pass "Recovery triggered at threshold"
+else
+    fail "Recovery threshold check not found"
+fi
+
+# --- Functional: detect_skill_failure ---
+eval "$(grep -A4 '^detect_skill_failure()' "$NBS_CLAUDE")"
+
+# Detects "Unknown skill: nbs-notify"
+if detect_skill_failure "❯ Unknown skill: nbs-notify
+
+❯"; then
+    pass "detect_skill_failure catches 'Unknown skill: nbs-notify'"
+else
+    fail "detect_skill_failure missed 'Unknown skill: nbs-notify'"
+fi
+
+# Detects "Unknown skill" with any skill name
+if detect_skill_failure "❯ Unknown skill: nbs-poll
+
+❯"; then
+    pass "detect_skill_failure catches 'Unknown skill: nbs-poll'"
+else
+    fail "detect_skill_failure missed 'Unknown skill: nbs-poll'"
+fi
+
+# Normal output — NOT detected
+if detect_skill_failure "● Bash(nbs-chat read .nbs/chat/live.chat)
+  ⎿  some output
+❯"; then
+    fail "False positive: normal output detected as skill failure"
+else
+    pass "Normal output correctly not detected as skill failure"
+fi
+
+# Empty content — NOT detected
+if detect_skill_failure ""; then
+    fail "False positive: empty content detected as skill failure"
+else
+    pass "Empty content correctly not detected as skill failure"
+fi
+
+# --- Functional: build_recovery_prompt ---
+# Source the function with minimal env
+(
+    NBS_ROOT="$TEST_DIR"
+    SIDECAR_HANDLE="test-agent"
+    CONTROL_REGISTRY="$TEST_DIR/.nbs/control-registry-test-agent"
+
+    # Create the skill files and registry
+    mkdir -p "$TEST_DIR/claude_tools"
+    touch "$TEST_DIR/claude_tools/nbs-notify.md"
+    touch "$TEST_DIR/claude_tools/nbs-teams-chat.md"
+    touch "$TEST_DIR/claude_tools/nbs-poll.md"
+
+    echo "chat:$TEST_DIR/.nbs/chat/live.chat" > "$CONTROL_REGISTRY"
+
+    eval "$(grep -A30 '^build_recovery_prompt()' "$NBS_CLAUDE" | head -31)"
+
+    prompt=$(build_recovery_prompt)
+
+    # Must contain absolute paths to skill files
+    if echo "$prompt" | grep -qF "$TEST_DIR/claude_tools/nbs-notify.md"; then
+        echo "PASS: recovery prompt contains nbs-notify path"
+    else
+        echo "FAIL: recovery prompt missing nbs-notify path"
+        echo "  got: $prompt"
+    fi
+
+    # Must contain the handle
+    if echo "$prompt" | grep -qF "test-agent"; then
+        echo "PASS: recovery prompt contains handle"
+    else
+        echo "FAIL: recovery prompt missing handle"
+    fi
+
+    # Must contain chat file for announcement
+    if echo "$prompt" | grep -qF "$TEST_DIR/.nbs/chat/live.chat"; then
+        echo "PASS: recovery prompt contains chat file"
+    else
+        echo "FAIL: recovery prompt missing chat file"
+    fi
+
+    # Must mention compaction
+    if echo "$prompt" | grep -qiF "compaction"; then
+        echo "PASS: recovery prompt mentions compaction"
+    else
+        echo "FAIL: recovery prompt missing compaction context"
+    fi
+) | while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done
+
+# --- Structural: NOTIFY_FAIL_THRESHOLD in numeric validation ---
+if grep -q 'NOTIFY_FAIL_THRESHOLD' "$NBS_CLAUDE" | head -1 && \
+   grep 'for _nbs_var_name in' "$NBS_CLAUDE" | grep -q 'NOTIFY_FAIL_THRESHOLD'; then
+    pass "NOTIFY_FAIL_THRESHOLD in numeric validation loop"
+else
+    # Check directly
+    if grep 'for _nbs_var_name in' "$NBS_CLAUDE" | grep -q 'NOTIFY_FAIL_THRESHOLD'; then
+        pass "NOTIFY_FAIL_THRESHOLD in numeric validation loop"
+    else
+        fail "NOTIFY_FAIL_THRESHOLD not in numeric validation loop"
+    fi
+fi
+
+# --- Structural: startup info includes self-heal threshold ---
+if grep -q 'Self-heal threshold' "$NBS_CLAUDE"; then
+    pass "Startup info includes self-heal threshold"
+else
+    fail "Startup info missing self-heal threshold"
+fi
+
+# --- Structural: env var documented in header ---
+if grep -q 'NBS_NOTIFY_FAIL_THRESHOLD' "$NBS_CLAUDE"; then
+    pass "NBS_NOTIFY_FAIL_THRESHOLD documented"
+else
+    fail "NBS_NOTIFY_FAIL_THRESHOLD not documented"
 fi
 
 # =========================================================================

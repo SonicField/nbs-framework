@@ -6,14 +6,35 @@
 #   ~/.nbs/commands/*.md (content with {{NBS_ROOT}} expanded)
 #   ~/.nbs/{concepts,docs,templates,bin} -> repo directories
 #
+# Env isolation: Uses a temp HOME so the test does not depend on or
+# modify the real HOME directory.  This prevents failures caused by
+# stale/broken symlinks (e.g. pointing to cleaned /tmp directories).
+#
 # Falsification: Exits 0 if all symlinks correct, non-zero otherwise
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
+
+# --- Env isolation: temp HOME ---
+REAL_HOME="$HOME"
+TEST_HOME=$(mktemp -d)
+cleanup() {
+    export HOME="$REAL_HOME"
+    rm -rf "$TEST_HOME"
+}
+trap cleanup EXIT
+
+export HOME="$TEST_HOME"
+
 NBS_ROOT="$HOME/.nbs"
+CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
+
+# Run install.sh in the isolated HOME (answer 'n' to PATH prompt)
+echo "Running install.sh in isolated HOME ($TEST_HOME)..."
+echo 'n' | "$PROJECT_ROOT/bin/install.sh"
+echo ""
 
 # Colours for output
 RED='\033[0;31m'
@@ -104,6 +125,6 @@ if [[ $FAILED -eq 0 ]]; then
     echo -e "${GREEN}All symlinks correct${NC}"
     exit 0
 else
-    echo -e "${RED}Some symlinks incorrect - run bin/install.sh${NC}"
+    echo -e "${RED}Some symlinks incorrect - install.sh produced bad symlinks${NC}"
     exit 1
 fi

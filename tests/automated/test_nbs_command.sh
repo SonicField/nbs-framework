@@ -28,6 +28,19 @@ echo "Scenario: no_plan_project"
 echo "Timestamp: $TIMESTAMP"
 echo ""
 
+# Prerequisite: ensure /nbs skill is registered (repair broken symlinks)
+NBS_SKILL="$HOME/.claude/commands/nbs.md"
+if [[ ! -e "$NBS_SKILL" ]]; then
+    echo "Skill symlink broken or missing — running install.sh to repair..."
+    echo 'n' | "$PROJECT_ROOT/bin/install.sh" >/dev/null 2>&1
+    if [[ ! -e "$NBS_SKILL" ]]; then
+        echo "SKIP: Could not install /nbs skill"
+        exit 0
+    fi
+    echo "  Repaired."
+    echo ""
+fi
+
 # Step 1: Run /nbs in scenario directory
 echo "Step 1: Running /nbs command..."
 cd "$SCENARIO_DIR" || exit 1

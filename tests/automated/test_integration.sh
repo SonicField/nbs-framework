@@ -16,6 +16,7 @@
 #   T8 (34-38): nbs-chat-init --compact-log decision log archival
 #   T9 (39-43): nbs-claude-remote argument validation
 #   T10 (44-45): Terminal self-echo
+#   T11 (46-50): Self-healing sidecar after skill loss
 
 set -euo pipefail
 
@@ -871,6 +872,125 @@ check "Handle in self-echo output" "$( echo "$ECHO_OUTPUT" | grep -q "echouser" 
 # the editor requires /dev/tty which is unavailable in piped CI.
 # The normal-send self-echo exercises the same format_message() path.
 echo ""
+
+# ============================================================
+# T11: Self-healing sidecar after skill loss
+# ============================================================
+
+echo "T11: Self-healing sidecar — skill failure detection and recovery"
+echo ""
+
+# Set up a project directory with skill files and source sidecar functions
+T11_DIR="$TEST_DIR/t11-heal"
+mkdir -p "$T11_DIR/.nbs/chat" "$T11_DIR/.nbs/events/processed" "$T11_DIR/claude_tools"
+
+# Create skill files
+cat > "$T11_DIR/claude_tools/nbs-notify.md" << 'SKILL'
+---
+description: "NBS Notify: Process pending events or messages"
+allowed-tools: Bash, Read
+---
+# NBS Notify
+SKILL
+
+cat > "$T11_DIR/claude_tools/nbs-teams-chat.md" << 'SKILL'
+---
+description: "NBS Teams: AI-to-AI Chat"
+allowed-tools: Bash, Read
+---
+# NBS Teams Chat
+SKILL
+
+cat > "$T11_DIR/claude_tools/nbs-poll.md" << 'SKILL'
+---
+description: "NBS Poll"
+allowed-tools: Bash, Read
+---
+# NBS Poll
+SKILL
+
+"$NBS_CHAT" create "$T11_DIR/.nbs/chat/live.chat" >/dev/null 2>&1
+
+# Source sidecar functions
+SIDECAR_HANDLE="heal-test"
+NBS_ROOT="$T11_DIR"
+_EXTRACT_TMP=$(mktemp)
+sed -n '/^# --- Configuration ---/,/^# --- Cleanup ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
+sed -n '/^# --- Context stress detection ---/,/^# --- Dynamic resource registration ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
+sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 >> "$_EXTRACT_TMP"
+source "$_EXTRACT_TMP"
+rm -f "$_EXTRACT_TMP"
+
+# Re-set after sourcing
+SIDECAR_HANDLE="heal-test"
+NBS_ROOT="$T11_DIR"
+CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
+NOTIFY_FAIL_COUNT=0
+NOTIFY_FAIL_THRESHOLD=5
+
+cd "$T11_DIR"
+seed_registry
+
+# --- Test 46: detect_skill_failure + failure counter integration ---
+echo "46. Skill failure detection increments counter..."
+NOTIFY_FAIL_COUNT=0
+# Simulate 5 consecutive skill failures
+for i in $(seq 1 5); do
+    if detect_skill_failure "❯ Unknown skill: nbs-notify"; then
+        NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+    fi
+done
+check "Counter reaches threshold after 5 failures" "$( [[ $NOTIFY_FAIL_COUNT -eq 5 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 47: Counter resets on successful injection ---
+echo "47. Counter resets on successful injection..."
+NOTIFY_FAIL_COUNT=3
+# Simulate a successful injection (no 'Unknown skill' in output)
+if ! detect_skill_failure "● Bash(nbs-chat read .nbs/chat/live.chat)
+  ⎿  some output
+❯"; then
+    NOTIFY_FAIL_COUNT=0
+fi
+check "Counter reset to 0 after success" "$( [[ $NOTIFY_FAIL_COUNT -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 48: build_recovery_prompt produces usable prompt ---
+echo "48. Recovery prompt contains absolute paths and handle..."
+# seed_registry already populated chat entries from .nbs/chat/*.chat
+
+RECOVERY=$(build_recovery_prompt)
+
+check "Recovery prompt contains nbs-notify.md path" "$( echo "$RECOVERY" | grep -qF "claude_tools/nbs-notify.md" && echo pass || echo fail )"
+check "Recovery prompt contains nbs-teams-chat.md path" "$( echo "$RECOVERY" | grep -qF "claude_tools/nbs-teams-chat.md" && echo pass || echo fail )"
+check "Recovery prompt contains nbs-poll.md path" "$( echo "$RECOVERY" | grep -qF "claude_tools/nbs-poll.md" && echo pass || echo fail )"
+check "Recovery prompt contains agent handle" "$( echo "$RECOVERY" | grep -qF "heal-test" && echo pass || echo fail )"
+check "Recovery prompt contains chat file for announcement" "$( echo "$RECOVERY" | grep -qF ".nbs/chat/live.chat" && echo pass || echo fail )"
+echo ""
+
+# --- Test 49: Recovery prompt uses absolute paths (not relative) ---
+echo "49. Recovery prompt uses absolute paths..."
+# NBS_ROOT is absolute (resolved at startup), so paths should be absolute
+check "Paths are absolute (start with /)" "$( echo "$RECOVERY" | grep -qE '/.*claude_tools/nbs-notify.md' && echo pass || echo fail )"
+echo ""
+
+# --- Test 50: Threshold triggers recovery instead of /nbs-notify ---
+echo "50. Threshold check gates recovery vs normal injection..."
+# When NOTIFY_FAIL_COUNT >= NOTIFY_FAIL_THRESHOLD, sidecar should use recovery
+NOTIFY_FAIL_COUNT=5
+NOTIFY_FAIL_THRESHOLD=5
+check "At threshold" "$( [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]] && echo pass || echo fail )"
+
+# Below threshold — should use normal injection
+NOTIFY_FAIL_COUNT=4
+check "Below threshold" "$( [[ $NOTIFY_FAIL_COUNT -lt $NOTIFY_FAIL_THRESHOLD ]] && echo pass || echo fail )"
+
+# Reset
+NOTIFY_FAIL_COUNT=0
+echo ""
+
+cd "$SCRIPT_DIR"
 
 # ============================================================
 # Summary

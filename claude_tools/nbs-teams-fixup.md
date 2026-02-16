@@ -72,7 +72,13 @@ Do **not** kill sessions that are actively working.
 
 ### Step 6: Respawn
 
-For each killed session:
+For each killed session, use `NBS_INITIAL_PROMPT` to fold the role prompt into the sidecar's initial prompt. This avoids the queued-prompt problem where a separate role prompt gets stuck behind the sidecar's default handle prompt.
+
+```bash
+NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" tmux new-session -d -s nbs-<handle>-live -c <project-root> "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude --dangerously-skip-permissions"
+```
+
+If no custom prompt is needed (default handle + /nbs-teams-chat), omit `NBS_INITIAL_PROMPT`:
 
 ```bash
 tmux new-session -d -s nbs-<handle>-live -c <project-root> "NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions"
@@ -84,24 +90,36 @@ Wait ~10 seconds for initialisation, then verify the prompt appears:
 tmux capture-pane -t nbs-<handle>-live -p | tail -5
 ```
 
-### Step 7: Send Role Prompts
+### Step 7: Verify Role Prompt Delivery
 
-Send each agent its role prompt. Include:
-1. NBS handle assignment
-2. Skills to load (`/nbs-teams-chat` for all, plus role-specific skills)
-3. Role description
-4. Instruction to read `live.chat` and post status
-5. Any warnings from the diagnosis (e.g. "don't poll live2.chat")
+When using `NBS_INITIAL_PROMPT`, the role prompt is sent as the sidecar's single initial prompt — no separate step is needed. Verify the agent processed it:
 
 ```bash
-tmux send-keys -t nbs-<handle>-live "<prompt>" Enter
+# Wait for the agent to finish processing the initial prompt
+for i in $(seq 1 60); do
+    content=$(tmux capture-pane -t nbs-<handle>-live -p -S -5 2>/dev/null)
+    if echo "$content" | tail -3 | grep -qF '❯'; then
+        break
+    fi
+    sleep 2
+done
 ```
 
-**Critical:** Wait a moment, then check if the prompt was queued behind a sidecar notification. If the session shows output from a notification handler with the role prompt visible at the bottom behind a `bypass permissions on` modal, submit it:
+If `NBS_INITIAL_PROMPT` was NOT used, the sidecar sends the default handle prompt. You must then send a separate role prompt after the agent processes it. Wait for the `❯` prompt, then:
 
 ```bash
-tmux send-keys -t nbs-<handle>-live Enter
+tmux send-keys -t nbs-<handle>-live "<role prompt>" Enter
 ```
+
+The role prompt should include:
+1. Role description
+2. Skills to load (role-specific: `/nbs-pythia`, `/nbs-scribe`, etc.)
+3. Instruction to read `live.chat` and post status
+4. Any warnings from the diagnosis (e.g. "don't poll live2.chat")
+
+Do NOT include handle assignment or `/nbs-teams-chat` when sending a separate role prompt — the sidecar's default initial prompt already handled those.
+
+**Preferred approach:** Use `NBS_INITIAL_PROMPT` to combine handle, skills, and role into one prompt. This eliminates the queued-prompt annoyance where the role prompt gets stuck behind the bypass-permissions status bar.
 
 ### Step 8: Verify
 

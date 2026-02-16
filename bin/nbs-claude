@@ -28,6 +28,8 @@
 #   NBS_HANDLE              Agent handle for cursor peeking (default: claude)
 #   NBS_ROOT                Project root containing .nbs/ (default: current directory)
 #   NBS_STARTUP_GRACE       Seconds after init before allowing notifications (default: 30)
+#   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
+#   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -45,6 +47,8 @@ NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
 STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
+INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
+NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -53,7 +57,7 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 }
 
 # Validate numeric config variables
-for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE; do
+for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
@@ -152,6 +156,48 @@ detect_context_stress() {
     echo "$content" | grep -qF 'Prompt is too long' && return 0
     echo "$content" | grep -qF 'Error compacting conversation' && return 0
     return 1
+}
+
+# detect_skill_failure — check if Claude rejected the last injection as an unknown skill.
+# Returns: 0 = skill failure detected, 1 = no failure.
+detect_skill_failure() {
+    local content="$1"
+    echo "$content" | grep -qF 'Unknown skill' && return 0
+    return 1
+}
+
+# build_recovery_prompt — construct a raw text prompt that re-bootstraps the agent
+# without depending on registered skills. Uses absolute paths to skill files.
+# This is the self-healing fallback when /nbs-notify is rejected repeatedly.
+build_recovery_prompt() {
+    local notify_skill="${NBS_ROOT}/claude_tools/nbs-notify.md"
+    local chat_skill="${NBS_ROOT}/claude_tools/nbs-teams-chat.md"
+    local poll_skill="${NBS_ROOT}/claude_tools/nbs-poll.md"
+
+    # Find available chat files for the active announcement
+    local chat_files=""
+    if [[ -f "$CONTROL_REGISTRY" ]]; then
+        while IFS= read -r line; do
+            case "$line" in
+                chat:*) chat_files="${chat_files} ${line#chat:}" ;;
+            esac
+        done < "$CONTROL_REGISTRY"
+    fi
+
+    # Build the prompt with absolute paths
+    local prompt="Your skills were lost after compaction. Please read these files to restore them: "
+    prompt+="$(realpath "$notify_skill" 2>/dev/null || echo "$notify_skill")"
+    prompt+=", $(realpath "$chat_skill" 2>/dev/null || echo "$chat_skill")"
+    prompt+=", $(realpath "$poll_skill" 2>/dev/null || echo "$poll_skill")"
+    prompt+=". Your handle is '${SIDECAR_HANDLE}'. "
+
+    if [[ -n "$chat_files" ]]; then
+        local first_chat
+        first_chat=$(echo "$chat_files" | awk '{print $1}')
+        prompt+="Then send a message to ${first_chat} using: nbs-chat send ${first_chat} ${SIDECAR_HANDLE} 'active — skills restored after compaction recovery'."
+    fi
+
+    echo "$prompt"
 }
 
 # --- Dynamic resource registration ---
@@ -336,6 +382,7 @@ CHAT_UNREAD_SUMMARY=""
 NOTIFY_MESSAGE=""
 LAST_NOTIFY_TIME=0
 SIDECAR_START_TIME=0
+NOTIFY_FAIL_COUNT=0
 
 # check_bus_events — peek at the event bus without consuming anything.
 # Reads the control registry for bus: entries, runs nbs-bus check on each.
@@ -487,7 +534,6 @@ should_inject_notify() {
     fi
 
     # Apply cooldown (critical bypasses)
-    local now
     now=$(date +%s)
     local elapsed=$((now - LAST_NOTIFY_TIME))
 
@@ -540,15 +586,21 @@ poll_sidecar_tmux() {
     # Seed registry with existing resources
     seed_registry
 
-    # Inject initial handle and chat skill prompt
-    # Wait for Claude's prompt to appear, then tell it its handle
+    # Inject initial prompt — either custom (NBS_INITIAL_PROMPT) or default (handle + skill)
+    # Wait for Claude's prompt to appear, then send the initial prompt
+    local init_prompt
+    if [[ -n "$INITIAL_PROMPT" ]]; then
+        init_prompt="$INITIAL_PROMPT"
+    else
+        init_prompt="Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+    fi
     local init_wait=0
     while [[ $init_wait -lt 60 ]]; do
         sleep 2
         local init_content
         init_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
         if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
-            tmux send-keys -t "$pane_id" -l "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands." || true
+            tmux send-keys -t "$pane_id" -l "$init_prompt" || true
             sleep 0.3
             tmux send-keys -t "$pane_id" Enter || true
             sleep 5
@@ -648,6 +700,28 @@ poll_sidecar_tmux() {
                     continue
                 fi
                 if should_inject_notify; then
+                    # Check if we've exceeded the failure threshold — switch to recovery mode
+                    if [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]]; then
+                        local recovery_prompt
+                        recovery_prompt=$(build_recovery_prompt)
+                        tmux send-keys -t "$pane_id" -l "$recovery_prompt" || true
+                        sleep 0.3
+                        tmux send-keys -t "$pane_id" Enter || true
+
+                        # Wait for recovery to be processed
+                        sleep 5
+                        local recovery_content
+                        recovery_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                        if ! detect_skill_failure "$recovery_content"; then
+                            NOTIFY_FAIL_COUNT=0
+                        fi
+
+                        idle_seconds=0
+                        last_content_hash=""
+                        sleep 15
+                        continue
+                    fi
+
                     tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.3
                     tmux send-keys -t "$pane_id" Enter || true
@@ -657,9 +731,17 @@ poll_sidecar_tmux() {
                     local verify_content
                     verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
                     if is_prompt_visible "$verify_content"; then
-                        # Prompt still visible — injection was not consumed, retry once
-                        tmux send-keys -t "$pane_id" Enter || true
-                        sleep 1
+                        # Check if this was a skill failure
+                        if detect_skill_failure "$verify_content"; then
+                            NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+                        else
+                            # Prompt still visible but not a skill failure — retry once
+                            tmux send-keys -t "$pane_id" Enter || true
+                            sleep 1
+                        fi
+                    else
+                        # Injection consumed successfully — reset failure counter
+                        NOTIFY_FAIL_COUNT=0
                     fi
 
                     idle_seconds=0
@@ -709,15 +791,21 @@ poll_sidecar_pty() {
     # Seed registry with existing resources
     seed_registry
 
-    # Inject initial handle and chat skill prompt
-    # Wait for Claude's prompt to appear, then tell it its handle
+    # Inject initial prompt — either custom (NBS_INITIAL_PROMPT) or default (handle + skill)
+    # Wait for Claude's prompt to appear, then send the initial prompt
+    local init_prompt
+    if [[ -n "$INITIAL_PROMPT" ]]; then
+        init_prompt="$INITIAL_PROMPT"
+    else
+        init_prompt="Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+    fi
     local init_wait=0
     while [[ $init_wait -lt 60 ]]; do
         sleep 2
         local init_content
         init_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
         if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
-            "$pty" send "$session" "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands." || true
+            "$pty" send "$session" "$init_prompt" || true
             sleep 0.5
             "$pty" send "$session" '' || true
             sleep 5
@@ -811,6 +899,28 @@ poll_sidecar_pty() {
                     continue
                 fi
                 if should_inject_notify; then
+                    # Check if we've exceeded the failure threshold — switch to recovery mode
+                    if [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]]; then
+                        local recovery_prompt
+                        recovery_prompt=$(build_recovery_prompt)
+                        "$pty" send "$session" "$recovery_prompt" || true
+                        sleep 0.5
+                        "$pty" send "$session" '' || true
+
+                        # Wait for recovery to be processed
+                        sleep 5
+                        local recovery_content
+                        recovery_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                        if ! detect_skill_failure "$recovery_content"; then
+                            NOTIFY_FAIL_COUNT=0
+                        fi
+
+                        idle_seconds=0
+                        last_content_hash=""
+                        sleep 15
+                        continue
+                    fi
+
                     "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.5
                     "$pty" send "$session" '' || true
@@ -820,9 +930,17 @@ poll_sidecar_pty() {
                     local verify_content
                     verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
                     if is_prompt_visible "$verify_content"; then
-                        # Prompt still visible — injection was not consumed, retry once
-                        "$pty" send "$session" '' || true
-                        sleep 1
+                        # Check if this was a skill failure
+                        if detect_skill_failure "$verify_content"; then
+                            NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+                        else
+                            # Prompt still visible but not a skill failure — retry once
+                            "$pty" send "$session" '' || true
+                            sleep 1
+                        fi
+                    else
+                        # Injection consumed successfully — reset failure counter
+                        NOTIFY_FAIL_COUNT=0
                     fi
 
                     idle_seconds=0
@@ -901,7 +1019,11 @@ echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
 echo "  Safety net poll: ${POLL_INTERVAL}s idle"
 echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Startup grace: ${STARTUP_GRACE}s"
+echo "  Self-heal threshold: ${NOTIFY_FAIL_THRESHOLD} failures"
 echo "  Root: ${NBS_ROOT}"
+if [[ -n "$INITIAL_PROMPT" ]]; then
+    echo "  Initial prompt: custom (NBS_INITIAL_PROMPT)"
+fi
 if [[ -n "$NBS_REMOTE_HOST" ]]; then
     echo "  Remote: ${NBS_REMOTE_HOST}"
 fi
