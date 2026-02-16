@@ -841,6 +841,7 @@ int main(int argc, char **argv) {
                     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
                 if (msg) {
                     if (chat_send(g_chat_file, g_handle, msg) == 0) {
+                        format_message(g_handle, msg, g_handle);
                         g_msg_count++;
                         /* Publish bus events: standard chat-message + human-input priority signal */
                         bus_bridge_after_send(g_chat_file, g_handle, msg);
