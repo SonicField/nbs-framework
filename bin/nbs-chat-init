@@ -664,7 +664,7 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                 tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter
                 sleep 3
 
-                PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. You are a persistent agent monitoring the bus for pythia-checkpoint events. Read the decision log at $SCRIBE_LOG and post structured assessments to $CHAT_FILE. You accumulate context across checkpoints. Start by reading the decision log and posting your first assessment."
+                PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. Read the decision log at $SCRIBE_LOG. Post your structured assessment to $CHAT_FILE. When your assessment is posted and the bus event published, exit."
 
                 # Wait for sidecar handle injection (proves CLI is fully ready)
                 wait_count=0

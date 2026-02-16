@@ -91,6 +91,24 @@ detect_plan_mode() {
     echo "$content" | grep -qF 'Would you like to proceed?'
 }
 
+# --- Context stress detection ---
+# Claude Code displays specific messages when context is stressed:
+#   - "Compacting conversation" during auto-compact
+#   - "Conversation too long" when compact fails (cannot compact further)
+#   - "Prompt is too long" when the API rejects input
+#   - "Error compacting conversation" on compact error
+# When any of these are visible, the sidecar must NOT inject commands
+# as they will fail and waste remaining context, creating an infinite loop.
+
+detect_context_stress() {
+    local content="$1"
+    echo "$content" | grep -qF 'Compacting conversation' && return 0
+    echo "$content" | grep -qF 'Conversation too long' && return 0
+    echo "$content" | grep -qF 'Prompt is too long' && return 0
+    echo "$content" | grep -qF 'Error compacting conversation' && return 0
+    return 1
+}
+
 # --- Dynamic resource registration ---
 # The AI declares what resources it needs by writing to .nbs/control-inbox-<handle>.
 # The sidecar reads new lines (forward-only, never truncates) and maintains
@@ -540,6 +558,13 @@ poll_sidecar_tmux() {
             bus_check_counter=0
 
             if is_prompt_visible "$content"; then
+                # Skip injection if Claude is context-stressed (compacting, too long, etc.)
+                if detect_context_stress "$content"; then
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 30
+                    continue
+                fi
                 if should_inject_notify; then
                     tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}"
                     sleep 0.3
@@ -568,6 +593,13 @@ poll_sidecar_tmux() {
         # unregistered resources, anything the fast check missed.
         if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
             if is_prompt_visible "$content"; then
+                # Skip injection if Claude is context-stressed
+                if detect_context_stress "$content"; then
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 30
+                    continue
+                fi
                 tmux send-keys -t "$pane_id" -l '/nbs-poll'
                 sleep 0.3
                 tmux send-keys -t "$pane_id" Enter
@@ -666,6 +698,13 @@ poll_sidecar_pty() {
             bus_check_counter=0
 
             if is_prompt_visible "$content"; then
+                # Skip injection if Claude is context-stressed (compacting, too long, etc.)
+                if detect_context_stress "$content"; then
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 30
+                    continue
+                fi
                 if should_inject_notify; then
                     "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}"
                     sleep 0.5
@@ -692,6 +731,13 @@ poll_sidecar_pty() {
         # --- Track 2: Safety net poll ---
         if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
             if is_prompt_visible "$content"; then
+                # Skip injection if Claude is context-stressed
+                if detect_context_stress "$content"; then
+                    idle_seconds=0
+                    last_content_hash=""
+                    sleep 30
+                    continue
+                fi
                 "$pty" send "$session" '/nbs-poll'
                 sleep 0.5
                 "$pty" send "$session" ''

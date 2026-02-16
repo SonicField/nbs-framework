@@ -920,7 +920,7 @@ fi
 echo "11. Injection verification logic..."
 
 # Test: tmux sidecar verifies injection was consumed
-if grep -A15 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
+if grep -A25 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
     pass "tmux sidecar captures pane after injection for verification"
 else
     fail "tmux sidecar missing post-injection verification"
@@ -1016,6 +1016,122 @@ if grep -q 'check_bus_events\|check_chat_unread\|Cursor' "$DOC"; then
     pass "docs/nbs-claude.md documents cursor peeking"
 else
     fail "docs/nbs-claude.md missing cursor peeking docs"
+fi
+
+# =========================================================================
+# 14. detect_context_stress: structural and functional tests
+# =========================================================================
+echo "14. detect_context_stress..."
+
+# Structural: function exists
+if grep -q 'detect_context_stress' "$NBS_CLAUDE"; then
+    pass "Has detect_context_stress function"
+else
+    fail "Missing detect_context_stress function"
+fi
+
+# Structural: referenced in both sidecar loops
+TMUX_CTX=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_context_stress')
+if [[ "$TMUX_CTX" -ge 2 ]]; then
+    pass "detect_context_stress in tmux sidecar ($TMUX_CTX references, Track 1 + Track 2)"
+else
+    fail "detect_context_stress not in both tmux tracks (found $TMUX_CTX, expected >= 2)"
+fi
+
+PTY_CTX=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_context_stress')
+if [[ "$PTY_CTX" -ge 2 ]]; then
+    pass "detect_context_stress in pty sidecar ($PTY_CTX references, Track 1 + Track 2)"
+else
+    fail "detect_context_stress not in both pty tracks (found $PTY_CTX, expected >= 2)"
+fi
+
+# Source just the detect_context_stress function
+eval "$(grep -A7 '^detect_context_stress()' "$NBS_CLAUDE")"
+
+# Functional: detects "Compacting conversation"
+if detect_context_stress "some output
+Compacting conversation
+❯"; then
+    pass "Detects 'Compacting conversation'"
+else
+    fail "Failed to detect 'Compacting conversation'"
+fi
+
+# Functional: detects "Compacting conversation…" (with ellipsis)
+if detect_context_stress "some output
+Compacting conversation…
+waiting"; then
+    pass "Detects 'Compacting conversation…' (ellipsis variant)"
+else
+    fail "Failed to detect 'Compacting conversation…'"
+fi
+
+# Functional: detects "Conversation too long"
+if detect_context_stress "error output
+Conversation too long. Press esc twice to go up a few messages and try again.
+❯"; then
+    pass "Detects 'Conversation too long'"
+else
+    fail "Failed to detect 'Conversation too long'"
+fi
+
+# Functional: detects "Prompt is too long"
+if detect_context_stress "Prompt is too long
+❯"; then
+    pass "Detects 'Prompt is too long'"
+else
+    fail "Failed to detect 'Prompt is too long'"
+fi
+
+# Functional: detects "Error compacting conversation"
+if detect_context_stress "Error compacting conversation
+❯"; then
+    pass "Detects 'Error compacting conversation'"
+else
+    fail "Failed to detect 'Error compacting conversation'"
+fi
+
+# Functional: normal prompt — NOT detected
+if detect_context_stress "some AI output
+claude ❯"; then
+    fail "False positive: normal prompt detected as context stress"
+else
+    pass "Normal prompt correctly not detected as context stress"
+fi
+
+# Functional: empty content — NOT detected
+if detect_context_stress ""; then
+    fail "False positive: empty content detected as context stress"
+else
+    pass "Empty content correctly not detected as context stress"
+fi
+
+# Functional: --compact-log (different context for 'compact') — NOT detected
+if detect_context_stress "nbs-chat --compact-log archive/
+❯"; then
+    fail "False positive: --compact-log detected as context stress"
+else
+    pass "--compact-log correctly not detected as context stress"
+fi
+
+# Structural: context stress check appears BEFORE should_inject_notify in tmux
+TMUX_ORDER=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE" | grep -n 'detect_context_stress\|should_inject_notify' | head -2)
+STRESS_LINE=$(echo "$TMUX_ORDER" | head -1 | cut -d: -f1)
+NOTIFY_LINE=$(echo "$TMUX_ORDER" | tail -1 | cut -d: -f1)
+if [[ "$STRESS_LINE" -lt "$NOTIFY_LINE" ]]; then
+    pass "Context stress check before should_inject_notify in tmux"
+else
+    fail "Context stress check NOT before should_inject_notify in tmux"
+fi
+
+# Structural: context stress check appears BEFORE should_inject_notify in pty
+PTY_ORDER=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -n 'detect_context_stress\|should_inject_notify' | head -2)
+STRESS_LINE=$(echo "$PTY_ORDER" | head -1 | cut -d: -f1)
+NOTIFY_LINE=$(echo "$PTY_ORDER" | tail -1 | cut -d: -f1)
+if [[ "$STRESS_LINE" -lt "$NOTIFY_LINE" ]]; then
+    pass "Context stress check before should_inject_notify in pty"
+else
+    fail "Context stress check NOT before should_inject_notify in pty"
 fi
 
 # =========================================================================
