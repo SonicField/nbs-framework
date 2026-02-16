@@ -14,6 +14,8 @@
 #   T6 (26-30): Full Scribe/Pythia pipeline
 #   T7 (31-33): Multi-handle concurrent cursor tracking
 #   T8 (34-38): nbs-chat-init --compact-log decision log archival
+#   T9 (39-43): nbs-claude-remote argument validation
+#   T10 (44-45): Terminal self-echo
 
 set -euo pipefail
 
@@ -24,6 +26,7 @@ NBS_BUS="${NBS_BUS_BIN:-$PROJECT_ROOT/bin/nbs-bus}"
 NBS_CHAT_INIT="${NBS_CHAT_INIT_BIN:-$PROJECT_ROOT/bin/nbs-chat-init}"
 NBS_TERMINAL="${NBS_TERMINAL_BIN:-$PROJECT_ROOT/bin/nbs-chat-terminal}"
 NBS_CLAUDE="$PROJECT_ROOT/bin/nbs-claude"
+NBS_CLAUDE_REMOTE="$PROJECT_ROOT/bin/nbs-claude-remote"
 
 # Add bin/ to PATH so bus_bridge.c can find nbs-bus via execlp
 export PATH="$PROJECT_ROOT/bin:$PATH"
@@ -789,6 +792,84 @@ AFTER_MD5=$(md5sum "$T38_DIR/.nbs/scribe/compact-log.md" | awk '{print $1}')
 DRY_ARCHIVE=$(find "$T38_DIR/.nbs/scribe/" -name "compact-log-archive-*.md" 2>/dev/null | wc -l)
 check "Log file unchanged by --dry-run" "$( [[ "$BEFORE_MD5" == "$AFTER_MD5" ]] && echo pass || echo fail )"
 check "No archive created by --dry-run" "$( [[ $DRY_ARCHIVE -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T9: nbs-claude-remote argument validation
+# ============================================================
+
+echo "T9: nbs-claude-remote argument validation"
+echo ""
+
+# --- Test 39: --help exits 0 ---
+echo "39. --help exits 0..."
+set +e
+"$NBS_CLAUDE_REMOTE" --help >/dev/null 2>&1
+RC=$?
+set -e
+check "exit code is 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 40: Missing --host exits 4 ---
+echo "40. Missing --host exits 4..."
+set +e
+"$NBS_CLAUDE_REMOTE" --root=/tmp 2>/dev/null
+RC=$?
+set -e
+check "exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 41: Missing --root (without --list) exits 4 ---
+echo "41. Missing --root (without --list) exits 4..."
+set +e
+"$NBS_CLAUDE_REMOTE" --host=user@example 2>/dev/null
+RC=$?
+set -e
+check "exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 42: Unknown argument exits 4 ---
+echo "42. Unknown argument exits 4..."
+set +e
+"$NBS_CLAUDE_REMOTE" --host=user@example --root=/tmp --bogus 2>/dev/null
+RC=$?
+set -e
+check "exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 43: --help output contains usage information ---
+echo "43. --help output contains usage information..."
+HELP_OUTPUT=$("$NBS_CLAUDE_REMOTE" --help 2>&1)
+check "Help mentions --host" "$( echo "$HELP_OUTPUT" | grep -q '\-\-host' && echo pass || echo fail )"
+check "Help mentions --root" "$( echo "$HELP_OUTPUT" | grep -q '\-\-root' && echo pass || echo fail )"
+check "Help mentions --resume" "$( echo "$HELP_OUTPUT" | grep -q '\-\-resume' && echo pass || echo fail )"
+check "Help mentions --list" "$( echo "$HELP_OUTPUT" | grep -q '\-\-list' && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T10: Terminal self-echo
+# ============================================================
+
+echo "T10: Terminal self-echo"
+echo ""
+
+# --- Test 44: Normal send echoes message back to sender ---
+echo "44. Normal send echoes message back to sender..."
+T10_DIR="$TEST_DIR/t10"
+mkdir -p "$T10_DIR/.nbs/chat" "$T10_DIR/.nbs/events/processed"
+"$NBS_CHAT" create "$T10_DIR/.nbs/chat/echo.chat" >/dev/null 2>&1
+
+# Send a message via terminal and capture output
+ECHO_OUTPUT=$(printf 'Hello self-echo test\x04' | timeout 5 "$NBS_TERMINAL" "$T10_DIR/.nbs/chat/echo.chat" "echouser" 2>&1 || true)
+check "Self-echo in terminal output" "$( echo "$ECHO_OUTPUT" | grep -q "Hello self-echo test" && echo pass || echo fail )"
+echo ""
+
+# --- Test 45: Self-echo contains sender handle ---
+echo "45. Self-echo contains sender handle..."
+check "Handle in self-echo output" "$( echo "$ECHO_OUTPUT" | grep -q "echouser" && echo pass || echo fail )"
+# Note: /edit self-echo (fe86eb5) cannot be tested without a tty —
+# the editor requires /dev/tty which is unavailable in piped CI.
+# The normal-send self-echo exercises the same format_message() path.
 echo ""
 
 # ============================================================

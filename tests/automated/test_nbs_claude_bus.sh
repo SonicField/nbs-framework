@@ -22,6 +22,9 @@
 #   8. Configuration defaults: correct values for bus-aware mode
 #   9. Cursor peeking safety: cursor files NOT modified by check_chat_unread
 #  10. Edge cases: empty chat file, chat with no delimiter, multiple bus dirs
+#  11. Injection verification: post-injection prompt check, retry, both modes
+#  12. nbs-poll.md safety net language
+#  13. docs/nbs-claude.md updated
 
 set -uo pipefail
 
@@ -190,22 +193,22 @@ else
     fail "Failed to detect ❯ prompt"
 fi
 
-# Test: prompt with > at end of line should match
+# Test: prompt with > at end of line should NOT match (tightened to ❯ only)
 if is_prompt_visible "some output
 more output
 > "; then
-    pass "Detects > prompt with trailing space"
+    fail "False positive: bare > detected as prompt (should only match ❯)"
 else
-    fail "Failed to detect > prompt"
+    pass "Bare > correctly rejected (not a Claude prompt)"
 fi
 
-# Test: bare > at end of line
+# Test: bare > at end of line should NOT match
 if is_prompt_visible "line 1
 line 2
 >"; then
-    pass "Detects bare > at end of line"
+    fail "False positive: bare > detected as prompt"
 else
-    fail "Failed to detect bare >"
+    pass "Bare > at end of line correctly rejected"
 fi
 
 # Test: no prompt should NOT match
@@ -235,13 +238,40 @@ else
     pass "Empty content correctly rejected"
 fi
 
-# Test: > in the middle of a line should match (regex '>\s*$')
+# Test: > in the middle of a line should NOT match (only ❯ is valid)
 if is_prompt_visible "some text
 prefix >
 next line"; then
-    pass "Detects > at end of line with prefix text"
+    fail "False positive: > at end of line with prefix detected as prompt"
 else
-    fail "Failed to detect > at end of line with prefix"
+    pass "Line ending with > correctly rejected (not Claude prompt)"
+fi
+
+# Test: ❯ with prefix text should match
+if is_prompt_visible "some text
+prefix ❯
+next line"; then
+    pass "Detects ❯ at end of line with prefix text"
+else
+    fail "Failed to detect ❯ at end of line with prefix"
+fi
+
+# Test: HTML-like output ending with > should NOT match
+if is_prompt_visible "Rendering component
+<div class='container'>
+</div>"; then
+    fail "False positive: HTML closing tag detected as prompt"
+else
+    pass "HTML closing tag correctly rejected"
+fi
+
+# Test: Shell redirect in output should NOT match
+if is_prompt_visible "Running command
+echo 'test' >
+output.txt"; then
+    fail "False positive: shell redirect detected as prompt"
+else
+    pass "Shell redirect output correctly rejected"
 fi
 
 # =========================================================================
@@ -885,9 +915,57 @@ else
 fi
 
 # =========================================================================
-# 11. nbs-poll.md updated for safety net role
+# 11. Injection verification: structural tests
 # =========================================================================
-echo "11. nbs-poll.md safety net language..."
+echo "11. Injection verification logic..."
+
+# Test: tmux sidecar verifies injection was consumed
+if grep -A15 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
+    pass "tmux sidecar captures pane after injection for verification"
+else
+    fail "tmux sidecar missing post-injection verification"
+fi
+
+# Test: verification checks is_prompt_visible on post-injection content
+if grep -A20 'Verify injection' "$NBS_CLAUDE" | grep -q 'is_prompt_visible.*verify_content'; then
+    pass "Verification checks is_prompt_visible on captured content"
+else
+    fail "Verification does not check is_prompt_visible"
+fi
+
+# Test: retry sends Enter if prompt still visible
+if grep -A25 'Verify injection' "$NBS_CLAUDE" | grep -q 'retry'; then
+    pass "Retry logic present when injection not consumed"
+else
+    fail "Missing retry logic for unconsumed injection"
+fi
+
+# Test: verification exists in both sidecar modes (tmux and pty)
+VERIFY_COUNT=$(grep -c 'Verify injection' "$NBS_CLAUDE")
+if [[ "$VERIFY_COUNT" -ge 2 ]]; then
+    pass "Injection verification in both sidecar modes ($VERIFY_COUNT occurrences)"
+else
+    fail "Injection verification not in both modes (found $VERIFY_COUNT, expected >= 2)"
+fi
+
+# Test: is_prompt_visible uses fixed string match (grep -qF) not regex
+if grep -A3 'is_prompt_visible()' "$NBS_CLAUDE" | grep -q 'grep -qF'; then
+    pass "is_prompt_visible uses grep -qF (fixed string, no regex false positives)"
+else
+    fail "is_prompt_visible does not use grep -qF"
+fi
+
+# Test: is_prompt_visible does NOT match bare > (the old pattern)
+if grep -A3 'is_prompt_visible()' "$NBS_CLAUDE" | grep -q '>\\\s\*\$'; then
+    fail "is_prompt_visible still has '>\\s*$' pattern (should be removed)"
+else
+    pass "is_prompt_visible no longer matches bare > pattern"
+fi
+
+# =========================================================================
+# 12. nbs-poll.md updated for safety net role
+# =========================================================================
+echo "12. nbs-poll.md safety net language..."
 
 POLL_DOC="$PROJECT_ROOT/claude_tools/nbs-poll.md"
 
@@ -910,9 +988,9 @@ else
 fi
 
 # =========================================================================
-# 12. Documentation updated
+# 13. Documentation updated
 # =========================================================================
-echo "12. docs/nbs-claude.md updated..."
+echo "13. docs/nbs-claude.md updated..."
 
 DOC="$PROJECT_ROOT/docs/nbs-claude.md"
 

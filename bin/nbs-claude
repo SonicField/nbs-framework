@@ -385,7 +385,7 @@ should_inject_notify() {
 
 is_prompt_visible() {
     local content="$1"
-    echo "$content" | tail -3 | grep -qE '❯|>\s*$'
+    echo "$content" | tail -3 | grep -qF '❯'
 }
 
 # --- Idle detection sidecar (tmux mode) ---
@@ -485,9 +485,19 @@ poll_sidecar_tmux() {
                     sleep 0.3
                     tmux send-keys -t "$pane_id" Enter
 
+                    # Verify injection was consumed: prompt should disappear
+                    sleep 2
+                    local verify_content
+                    verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                    if is_prompt_visible "$verify_content"; then
+                        # Prompt still visible — injection was not consumed, retry once
+                        tmux send-keys -t "$pane_id" Enter
+                        sleep 1
+                    fi
+
                     idle_seconds=0
                     last_content_hash=""
-                    sleep 10
+                    sleep 8
                     continue
                 fi
             fi
@@ -601,9 +611,19 @@ poll_sidecar_pty() {
                     sleep 0.5
                     "$pty" send "$session" ''
 
+                    # Verify injection was consumed: prompt should disappear
+                    sleep 2
+                    local verify_content
+                    verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                    if is_prompt_visible "$verify_content"; then
+                        # Prompt still visible — injection was not consumed, retry once
+                        "$pty" send "$session" ''
+                        sleep 1
+                    fi
+
                     idle_seconds=0
                     last_content_hash=""
-                    sleep 10
+                    sleep 8
                     continue
                 fi
             fi
