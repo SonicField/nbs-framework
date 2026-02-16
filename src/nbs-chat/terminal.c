@@ -559,7 +559,6 @@ static void send_and_display(line_state_t *ls) {
     ASSERT_MSG(ls->len > 0, "send_and_display: called with empty buffer");
 
     if (chat_send(g_chat_file, g_handle, ls->buf) == 0) {
-        format_message(g_handle, ls->buf, g_handle);
         g_msg_count++;
         /* Publish bus events: standard chat-message + human-input priority signal */
         bus_bridge_after_send(g_chat_file, g_handle, ls->buf);
@@ -842,7 +841,6 @@ int main(int argc, char **argv) {
                     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
                 if (msg) {
                     if (chat_send(g_chat_file, g_handle, msg) == 0) {
-                        format_message(g_handle, msg, g_handle);
                         g_msg_count++;
                         /* Publish bus events: standard chat-message + human-input priority signal */
                         bus_bridge_after_send(g_chat_file, g_handle, msg);

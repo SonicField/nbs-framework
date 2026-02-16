@@ -14,7 +14,8 @@
 #   --force               Skip confirmation prompts
 #   --dry-run             Print actions without executing
 #   --spawn-scribe        Launch Scribe in tmux session
-#   --spawn-all           Launch Scribe + main Claude instance
+#   --spawn-pythia        Launch Pythia in tmux session
+#   --spawn-all           Launch Scribe + Pythia + main Claude instance
 #   --spawn-only          Skip infrastructure creation, just spawn agents (for restart)
 #   --help                Show usage
 #
@@ -34,6 +35,7 @@
 #
 # Tmux sessions (optional, named after chat):
 #   nbs-scribe-<name>      Scribe instance (--spawn-scribe or --spawn-all)
+#   nbs-pythia-<name>      Pythia instance (--spawn-pythia or --spawn-all)
 #   nbs-claude-<name>      Main Claude instance (--spawn-all)
 
 set -euo pipefail
@@ -45,6 +47,7 @@ PROJECT_NAME=""
 FORCE=false
 DRY_RUN=false
 SPAWN_SCRIBE=false
+SPAWN_PYTHIA=false
 SPAWN_ALL=false
 SPAWN_ONLY=false
 PROJECT_ID=""
@@ -160,9 +163,13 @@ for arg in "$@"; do
         --spawn-scribe)
             SPAWN_SCRIBE=true
             ;;
+        --spawn-pythia)
+            SPAWN_PYTHIA=true
+            ;;
         --spawn-all)
             SPAWN_ALL=true
             SPAWN_SCRIBE=true
+            SPAWN_PYTHIA=true
             ;;
         --spawn-only)
             SPAWN_ONLY=true
@@ -181,7 +188,8 @@ Options:
   --force                 Skip confirmation prompts
   --dry-run               Print actions without executing
   --spawn-scribe          Launch Scribe in tmux session
-  --spawn-all             Launch Scribe + main Claude instance
+  --spawn-pythia          Launch Pythia in tmux session
+  --spawn-all             Launch Scribe + Pythia + main Claude instance
   --spawn-only            Skip infrastructure creation, just spawn agents (for restart)
   --help                  Show this help
 
@@ -223,8 +231,8 @@ if [[ -z "$CHAT_NAME" ]]; then
     exit 4
 fi
 
-if [[ "$SPAWN_ONLY" == "true" ]] && [[ "$SPAWN_SCRIBE" != "true" ]] && [[ "$SPAWN_ALL" != "true" ]]; then
-    error "--spawn-only requires --spawn-scribe or --spawn-all"
+if [[ "$SPAWN_ONLY" == "true" ]] && [[ "$SPAWN_SCRIBE" != "true" ]] && [[ "$SPAWN_PYTHIA" != "true" ]] && [[ "$SPAWN_ALL" != "true" ]]; then
+    error "--spawn-only requires --spawn-scribe, --spawn-pythia, or --spawn-all"
     exit 4
 fi
 
@@ -241,7 +249,7 @@ info "Checking prerequisites..."
 assert_tool_exists "nbs-chat"
 assert_tool_exists "nbs-bus"
 
-if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     assert_tool_exists "tmux"
     assert_tool_exists "nbs-claude"
 fi
@@ -486,7 +494,7 @@ fi
 # PHASE 6: AI Spawn (optional)
 # ============================================================
 
-if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     echo ""
     info "Phase 6: AI spawn..."
 
@@ -547,6 +555,54 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
         fi
     fi
 
+    # --- Pythia ---
+    if [[ "$SPAWN_PYTHIA" == "true" ]]; then
+        PYTHIA_SESSION=$(tmux_session_name "pythia")
+
+        if tmux has-session -t "$PYTHIA_SESSION" 2>/dev/null; then
+            warn "  tmux session '$PYTHIA_SESSION' already exists."
+            if confirm "Kill existing session?"; then
+                run tmux kill-session -t "$PYTHIA_SESSION"
+            else
+                warn "  Skipping Pythia spawn."
+                SPAWN_PYTHIA=false
+            fi
+        fi
+
+        if [[ "$SPAWN_PYTHIA" == "true" ]]; then
+            info "  Spawning Pythia..."
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $PYTHIA_SESSION"
+                echo -e "  ${YELLOW}[DRY-RUN]${NC} → NBS_HANDLE=pythia nbs-claude"
+                echo -e "  ${YELLOW}[DRY-RUN]${NC} → Send Pythia role prompt"
+            else
+                tmux new-session -d -s "$PYTHIA_SESSION" -c "$PROJECT_ROOT"
+                sleep 2
+                tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter
+                sleep 3
+
+                PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. You are a persistent agent monitoring the bus for pythia-checkpoint events. Read the decision log at $SCRIBE_LOG and post structured assessments to $CHAT_FILE. You accumulate context across checkpoints. Start by reading the decision log and posting your first assessment."
+
+                wait_count=0
+                max_wait=30
+                while [ $wait_count -lt $max_wait ]; do
+                    if tmux capture-pane -t "$PYTHIA_SESSION" -p 2>/dev/null | grep -q '❯'; then
+                        break
+                    fi
+                    sleep 1
+                    wait_count=$((wait_count + 1))
+                done
+
+                tmux send-keys -t "$PYTHIA_SESSION" "$PYTHIA_PROMPT" Enter
+                sleep 1
+                tmux send-keys -t "$PYTHIA_SESSION" "" Enter
+
+                ok "  Pythia spawned: $PYTHIA_SESSION"
+                info "  Attach: tmux attach -t $PYTHIA_SESSION"
+            fi
+        fi
+    fi
+
     # --- Main Claude (--spawn-all only) ---
     if [[ "$SPAWN_ALL" == "true" ]]; then
         CLAUDE_SESSION=$(tmux_session_name "claude")
@@ -602,11 +658,14 @@ echo "    Chat:       $CHAT_FILE"
 echo "    Scribe log: $SCRIBE_LOG"
 echo "    Config:     .nbs/events/config.yaml"
 
-if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
+if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     echo ""
     echo "  Tmux sessions:"
     if [[ "$SPAWN_SCRIBE" == "true" ]]; then
         echo "    Scribe: $(tmux_session_name scribe)"
+    fi
+    if [[ "$SPAWN_PYTHIA" == "true" ]]; then
+        echo "    Pythia: $(tmux_session_name pythia)"
     fi
     if [[ "$SPAWN_ALL" == "true" ]]; then
         echo "    Claude: $(tmux_session_name claude)"
