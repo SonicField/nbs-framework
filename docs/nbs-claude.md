@@ -18,6 +18,10 @@ nbs-claude --resume abc123    # Resume session with polling
 | `NBS_BUS_CHECK_INTERVAL` | `3` | Seconds between bus/chat checks |
 | `NBS_NOTIFY_COOLDOWN` | `15` | Minimum seconds between `/nbs-notify` injections |
 | `NBS_HANDLE` | `claude` | Agent handle for cursor peeking |
+| `NBS_ROOT` | `.` | Project root containing `.nbs/` (resolved to absolute path at startup) |
+| `NBS_STARTUP_GRACE` | `30` | Seconds after init before allowing notifications |
+| `NBS_INITIAL_PROMPT` | *(none)* | Custom initial prompt sent on startup (default: handle + `/nbs-teams-chat`) |
+| `NBS_NOTIFY_FAIL_THRESHOLD` | `5` | Consecutive failed `/nbs-notify` injections before self-healing activates |
 
 ## Operating Modes
 
@@ -91,7 +95,19 @@ When Claude Code enters plan mode, it displays "Would you like to proceed?" with
 
 The sidecar detects this text in the pane content and automatically selects option 2 ("Yes, and bypass permissions"). This is checked on every content change and also during stable-content periods, so it is caught regardless of timing.
 
-### Dynamic Resource Registration
+### Self-Healing After Skill Loss
+
+When Claude Code compacts context, it can lose its registered skills. The sidecar detects this by checking for "Unknown skill" in pane content after injecting `/nbs-notify`. If the skill is rejected, the sidecar increments a failure counter (`NOTIFY_FAIL_COUNT`).
+
+After `NBS_NOTIFY_FAIL_THRESHOLD` consecutive failures (default 5), the sidecar switches to a recovery mode: instead of injecting `/nbs-notify`, it sends a raw text prompt containing:
+
+- Absolute paths to the skill files (`nbs-notify.md`, `nbs-teams-chat.md`, `nbs-poll.md`) resolved via `realpath`
+- The agent's handle
+- Instructions to announce recovery on the first registered chat file
+
+This bypasses the skill registration system entirely, asking the agent to read the skill files directly. If the recovery succeeds (no "Unknown skill" in subsequent output), the failure counter resets to 0 and the sidecar resumes normal `/nbs-notify` injection.
+
+The detection function (`detect_skill_failure`) matches the exact error string produced by Claude Code when a skill symlink is dangling or a skill name is unregistered.
 
 The sidecar maintains a per-agent resource registry at `.nbs/control-registry-<handle>` — a list of resources this agent is watching. On startup, it seeds the registry from existing `.nbs/` resources:
 
