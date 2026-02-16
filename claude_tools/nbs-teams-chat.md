@@ -118,6 +118,7 @@ The supervisor or spawning process creates the chat file and passes the path to 
 - **Base64-encoded**: Messages are base64-encoded so content cannot break file structure.
 - **Self-consistent**: The file header includes `file-length` for integrity checking.
 - **No external dependencies**: `nbs-chat` is a self-contained binary.
+- **Single-user assumption**: All agents must run as the same OS user. The lock file is created with `0600` permissions (owner-only read/write), and cursor files for `--since`/`--unread` tracking are stored per-user. If agents run as different users, `flock` acquisition and cursor tracking silently fail. When using `nbs-chat-remote`, the remote commands execute as the SSH user on the remote machine — ensure this is the same user that owns the chat files.
 
 ## Exit Codes
 
@@ -128,3 +129,32 @@ The supervisor or spawning process creates the chat file and passes the path to 
 | 2 | Chat file not found |
 | 3 | Timeout (poll command) |
 | 4 | Invalid arguments |
+
+## Remote Chat (SSH Proxy)
+
+`nbs-chat-remote` is a drop-in replacement for `nbs-chat` that executes commands on a remote machine via SSH. Same CLI, same exit codes — file paths refer to paths on the remote machine.
+
+### Configuration
+
+Set these environment variables before use:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NBS_CHAT_HOST` | Yes | — | SSH target, e.g. `user@server` |
+| `NBS_CHAT_PORT` | No | 22 | SSH port |
+| `NBS_CHAT_KEY` | No | — | Path to SSH identity file |
+| `NBS_CHAT_BIN` | No | `nbs-chat` | Path to nbs-chat on the remote machine |
+| `NBS_CHAT_OPTS` | No | — | Comma-separated SSH `-o` options |
+
+### Example
+
+```bash
+export NBS_CHAT_HOST=user@build-server
+export NBS_CHAT_KEY=~/.ssh/id_ed25519
+
+# All commands work identically — they execute on the remote machine
+nbs-chat-remote read /project/.nbs/chat/coordination.chat --last=5
+nbs-chat-remote send /project/.nbs/chat/coordination.chat my-handle "Message from local machine"
+```
+
+The binary is at `~/.nbs/bin/nbs-chat-remote` or `<project>/bin/nbs-chat-remote`.
