@@ -840,10 +840,10 @@ echo ""
 # --- Test 43: --help output contains usage information ---
 echo "43. --help output contains usage information..."
 HELP_OUTPUT=$("$NBS_CLAUDE_REMOTE" --help 2>&1)
-check "Help mentions --host" "$( echo "$HELP_OUTPUT" | grep -q '\-\-host' && echo pass || echo fail )"
-check "Help mentions --root" "$( echo "$HELP_OUTPUT" | grep -q '\-\-root' && echo pass || echo fail )"
-check "Help mentions --resume" "$( echo "$HELP_OUTPUT" | grep -q '\-\-resume' && echo pass || echo fail )"
-check "Help mentions --list" "$( echo "$HELP_OUTPUT" | grep -q '\-\-list' && echo pass || echo fail )"
+check "Help mentions --host" "$( echo "$HELP_OUTPUT" | grep -qF -- '--host' && echo pass || echo fail )"
+check "Help mentions --root" "$( echo "$HELP_OUTPUT" | grep -qF -- '--root' && echo pass || echo fail )"
+check "Help mentions --resume" "$( echo "$HELP_OUTPUT" | grep -qF -- '--resume' && echo pass || echo fail )"
+check "Help mentions --list" "$( echo "$HELP_OUTPUT" | grep -qF -- '--list' && echo pass || echo fail )"
 echo ""
 
 # ============================================================

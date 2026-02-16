@@ -311,6 +311,8 @@ mkdir -p .nbs/chat .nbs/events
 # Set SIDECAR_HANDLE and NBS_ROOT before sourcing — the control/resource paths use them
 SIDECAR_HANDLE="testhandle"
 NBS_ROOT="."
+NBS_REMOTE_HOST=""
+NBS_REMOTE_SSH_OPTS=""
 _EXTRACT_TMP=$(mktemp)
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"

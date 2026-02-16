@@ -43,6 +43,8 @@ BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
+NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
+NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,25 +104,63 @@ CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
 CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
 CONTROL_INBOX_LINE=0
 
+# --- Remote execution helper ---
+# When NBS_REMOTE_HOST is set, commands that access .nbs/ files run over SSH.
+# When empty, commands run locally (normal mode).
+
+remote_cmd() {
+    if [[ -n "$NBS_REMOTE_HOST" ]]; then
+        local ssh_cmd=(ssh -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=5)
+        [[ -n "$NBS_REMOTE_SSH_OPTS" ]] && ssh_cmd+=($NBS_REMOTE_SSH_OPTS)
+        ssh_cmd+=("$NBS_REMOTE_HOST" "$@")
+        "${ssh_cmd[@]}" 2>/dev/null
+    else
+        eval "$@" 2>/dev/null
+    fi
+}
+
+# is_remote — returns 0 if running in remote mode
+is_remote() {
+    [[ -n "$NBS_REMOTE_HOST" ]]
+}
+
 # seed_registry — populate registry from existing .nbs/ resources on startup.
 # Idempotent: skips resources already registered.
 seed_registry() {
-    # Create registry file if it does not exist
+    # Create registry file if it does not exist (always local)
     mkdir -p "$(dirname "$CONTROL_REGISTRY")"
     touch "$CONTROL_REGISTRY"
 
-    # Register existing chat files
-    for chat in "${NBS_ROOT}"/.nbs/chat/*.chat; do
-        [[ -f "$chat" ]] || continue
-        if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
-            echo "chat:${chat}" >> "$CONTROL_REGISTRY"
-        fi
-    done
+    if is_remote; then
+        # Remote mode: discover resources via SSH
+        local remote_chats
+        remote_chats=$(remote_cmd "ls ${NBS_ROOT}/.nbs/chat/*.chat 2>/dev/null") || true
+        while IFS= read -r chat; do
+            [[ -z "$chat" ]] && continue
+            if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "chat:${chat}" >> "$CONTROL_REGISTRY"
+            fi
+        done <<< "$remote_chats"
 
-    # Register bus directory if it exists
-    if [[ -d "${NBS_ROOT}/.nbs/events" ]]; then
-        if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
-            echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
+        # Register bus directory if it exists on remote
+        if remote_cmd "test -d ${NBS_ROOT}/.nbs/events" 2>/dev/null; then
+            if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
+            fi
+        fi
+    else
+        # Local mode: direct file access
+        for chat in "${NBS_ROOT}"/.nbs/chat/*.chat; do
+            [[ -f "$chat" ]] || continue
+            if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "chat:${chat}" >> "$CONTROL_REGISTRY"
+            fi
+        done
+
+        if [[ -d "${NBS_ROOT}/.nbs/events" ]]; then
+            if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
+                echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
+            fi
         fi
     fi
 }
@@ -250,9 +290,15 @@ check_bus_events() {
         case "$line" in
             bus:*)
                 local bus_dir="${line#bus:}"
-                if [[ -d "$bus_dir" ]]; then
+                if is_remote; then
+                    has_bus=1
+                    output=$(remote_cmd "nbs-bus check '$bus_dir'") || continue
+                elif [[ -d "$bus_dir" ]]; then
                     has_bus=1
                     output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
+                else
+                    continue
+                fi
                     if [[ -n "$output" ]]; then
                         BUS_EVENT_COUNT=$(echo "$output" | wc -l)
                         BUS_EVENT_COUNT=$((BUS_EVENT_COUNT + 0))
@@ -260,7 +306,6 @@ check_bus_events() {
                         BUS_MAX_PRIORITY=$(echo "$output" | head -1 | sed 's/^\[\([a-z]*\)\].*/\1/')
                         BUS_EVENT_SUMMARY="${BUS_EVENT_COUNT} event(s) in ${bus_dir}"
                     fi
-                fi
                 ;;
         esac
     done < "$CONTROL_REGISTRY"
@@ -289,19 +334,34 @@ check_chat_unread() {
         case "$line" in
             chat:*)
                 local chat_path="${line#chat:}"
-                [[ -f "$chat_path" ]] || continue
-                has_chat=1
 
-                # Count total messages: non-empty lines after --- delimiter
-                local total
-                total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null)
-                total=$((total + 0))
+                if is_remote; then
+                    # Remote mode: check file existence and read via SSH
+                    remote_cmd "test -f '$chat_path'" || continue
+                    has_chat=1
 
-                # Read cursor for our handle (no lock, no advancement)
-                local cursor=0
-                if [[ -f "${chat_path}.cursors" ]]; then
-                    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null)
-                    cursor=$((${cursor:-0} + 0))
+                    local total
+                    total=$(remote_cmd "awk '/^---\$/{found=1; next} found && NF{count++} END{print count+0}' '$chat_path'")
+                    total=$((${total:-0} + 0))
+
+                    local cursor=0
+                    local cursor_val
+                    cursor_val=$(remote_cmd "awk -F= -v h='$SIDECAR_HANDLE' '\$1==h{print \$2}' '${chat_path}.cursors' 2>/dev/null") || true
+                    cursor=$((${cursor_val:-0} + 0))
+                else
+                    # Local mode: direct file access
+                    [[ -f "$chat_path" ]] || continue
+                    has_chat=1
+
+                    local total
+                    total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null)
+                    total=$((total + 0))
+
+                    local cursor=0
+                    if [[ -f "${chat_path}.cursors" ]]; then
+                        cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null)
+                        cursor=$((${cursor:-0} + 0))
+                    fi
                 fi
 
                 # Unread if total messages > cursor position + 1
@@ -655,6 +715,12 @@ for arg in "$@"; do
         --root=*)
             NBS_ROOT="${arg#--root=}"
             ;;
+        --remote-host=*)
+            NBS_REMOTE_HOST="${arg#--remote-host=}"
+            ;;
+        --remote-ssh-opts=*)
+            NBS_REMOTE_SSH_OPTS="${arg#--remote-ssh-opts=}"
+            ;;
         *)
             CLAUDE_ARGS+=("$arg")
             ;;
@@ -667,6 +733,9 @@ echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
 echo "  Safety net poll: ${POLL_INTERVAL}s idle"
 echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Root: ${NBS_ROOT}"
+if [[ -n "$NBS_REMOTE_HOST" ]]; then
+    echo "  Remote: ${NBS_REMOTE_HOST}"
+fi
 if [[ "$POLL_DISABLE" == "1" ]]; then
     echo "  Polling: DISABLED"
 fi
@@ -704,7 +773,7 @@ else
     if [[ $# -gt 0 ]]; then
         CLAUDE_CMD_ARGS=""
         for arg in "$@"; do
-            case "$arg" in --root=*) continue ;; esac
+            case "$arg" in --root=*|--remote-host=*|--remote-ssh-opts=*) continue ;; esac
             if [[ -z "$CLAUDE_CMD_ARGS" ]]; then
                 CLAUDE_CMD_ARGS="$(printf '%q' "$arg")"
             else

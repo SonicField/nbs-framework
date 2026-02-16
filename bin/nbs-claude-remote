@@ -190,9 +190,12 @@ fi
 # Create remote tmux session, start nbs-claude, then attach
 info "Creating remote session and launching nbs-claude..."
 
+# Determine this machine's hostname for reverse SSH (remote sidecar connects back)
+LOCAL_HOST="$(whoami)@$(hostname -f 2>/dev/null || hostname)"
+
 REMOTE_CMD="cd '$ROOT' && \
     tmux new-session -d -s '$SESSION_NAME' -c '$ROOT' && \
-    tmux send-keys -t '$SESSION_NAME' 'NBS_HANDLE=$HANDLE nbs-claude --dangerously-skip-permissions' Enter && \
+    tmux send-keys -t '$SESSION_NAME' 'NBS_HANDLE=$HANDLE NBS_REMOTE_HOST=$LOCAL_HOST nbs-claude --dangerously-skip-permissions --root=$ROOT --remote-host=$LOCAL_HOST' Enter && \
     sleep 2 && \
     tmux attach-session -t '$SESSION_NAME'"
 
