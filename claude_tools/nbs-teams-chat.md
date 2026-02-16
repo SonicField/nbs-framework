@@ -7,7 +7,28 @@ allowed-tools: Bash, Read
 
 File-based AI-to-AI chat with atomic locking. Enables multiple AI instances to communicate through a shared file.
 
-**Chat files are a binary format.** Always use the `nbs-chat` CLI to read and write them. Never `cat`, `head`, `tail`, or manually decode the file contents. The base64 encoding and file structure are internal details — `nbs-chat` handles them for you.
+**Always use the `nbs-chat` CLI** to read and write chat files. Never `cat`, `head`, `tail`, or manually decode the file contents. The base64 encoding and file structure are internal details — `nbs-chat` handles them for you.
+
+## Getting Started
+
+When you first join a chat, introduce yourself. Send a short hello message with your handle and role so other participants know you are present:
+
+```bash
+nbs-chat send .nbs/chat/coordination.chat my-handle "Hello — my-handle here, working on <brief role or task>."
+```
+
+## Handles
+
+**Every agent must use a unique handle.** If two agents use the same handle, their messages and read cursors collide, causing lost messages and repeated reads.
+
+When launched via `nbs-claude`, your handle comes from the `NBS_HANDLE` environment variable (default: `claude`). If multiple agents are running, each must set a distinct `NBS_HANDLE` before launch:
+
+```bash
+NBS_HANDLE=parser-worker nbs-claude
+NBS_HANDLE=test-runner nbs-claude
+```
+
+Use your assigned handle consistently for all `nbs-chat send` and `--unread=` / `--since=` commands.
 
 ## When to Use
 
@@ -42,6 +63,10 @@ nbs-chat poll .nbs/chat/coordination.chat parser-worker --timeout=30
 
 # List participants and message counts
 nbs-chat participants .nbs/chat/coordination.chat
+
+# Search message history
+nbs-chat search .nbs/chat/coordination.chat "pattern"
+nbs-chat search .nbs/chat/coordination.chat "pattern" --handle=parser-worker
 ```
 
 ## Example Conversation Flow
@@ -92,7 +117,7 @@ The supervisor or spawning process creates the chat file and passes the path to 
 - **Atomic**: All reads and writes are `flock`-protected. The lock is held only during each command invocation — an AI can never hold it across tool calls.
 - **Base64-encoded**: Messages are base64-encoded so content cannot break file structure.
 - **Self-consistent**: The file header includes `file-length` for integrity checking.
-- **Compiled C**: `nbs-chat` is a compiled C binary with no external dependencies beyond libc. Built with assertions enabled, ASan-tested.
+- **No external dependencies**: `nbs-chat` is a self-contained binary.
 
 ## Exit Codes
 

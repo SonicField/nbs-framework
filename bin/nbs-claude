@@ -13,11 +13,12 @@
 #   - Outside tmux: creates a pty-session, attaches to it
 #
 # Usage:
-#   nbs-claude [claude-args...]
+#   nbs-claude [--root=PATH] [claude-args...]
 #
 # Examples:
 #   nbs-claude                    # Start interactive claude
 #   nbs-claude --resume abc123   # Resume session with polling
+#   nbs-claude --root=/path/to/project  # Use .nbs/ from another directory
 #
 # Environment:
 #   NBS_POLL_INTERVAL       Safety net poll interval in seconds (default: 300)
@@ -25,6 +26,7 @@
 #   NBS_BUS_CHECK_INTERVAL  Bus/chat check interval in seconds (default: 3)
 #   NBS_NOTIFY_COOLDOWN     Min seconds between /nbs-notify injections (default: 15)
 #   NBS_HANDLE              Agent handle for cursor peeking (default: claude)
+#   NBS_ROOT                Project root containing .nbs/ (default: current directory)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -40,6 +42,7 @@ POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
+NBS_ROOT="${NBS_ROOT:-.}"
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,8 +98,8 @@ detect_plan_mode() {
 # The AI outputs \nbs-register-chat etc. which writes to the control inbox.
 # See feature-requests/dynamic-registration.md for full design.
 
-CONTROL_INBOX=".nbs/control-inbox-${SIDECAR_HANDLE}"
-CONTROL_REGISTRY=".nbs/control-registry-${SIDECAR_HANDLE}"
+CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
 CONTROL_INBOX_LINE=0
 
 # seed_registry — populate registry from existing .nbs/ resources on startup.
@@ -107,7 +110,7 @@ seed_registry() {
     touch "$CONTROL_REGISTRY"
 
     # Register existing chat files
-    for chat in .nbs/chat/*.chat; do
+    for chat in "${NBS_ROOT}"/.nbs/chat/*.chat; do
         [[ -f "$chat" ]] || continue
         if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
             echo "chat:${chat}" >> "$CONTROL_REGISTRY"
@@ -115,9 +118,9 @@ seed_registry() {
     done
 
     # Register bus directory if it exists
-    if [[ -d .nbs/events ]]; then
-        if ! grep -qF "bus:.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
-            echo "bus:.nbs/events" >> "$CONTROL_REGISTRY"
+    if [[ -d "${NBS_ROOT}/.nbs/events" ]]; then
+        if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
+            echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
         fi
     fi
 }
@@ -400,6 +403,24 @@ poll_sidecar_tmux() {
     # Seed registry with existing resources
     seed_registry
 
+    # Inject initial handle and chat skill prompt
+    # Wait for Claude's prompt to appear, then tell it its handle
+    local init_wait=0
+    while [[ $init_wait -lt 60 ]]; do
+        sleep 2
+        local init_content
+        init_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+        if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
+            tmux send-keys -t "$pane_id" -l "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+            sleep 0.3
+            tmux send-keys -t "$pane_id" Enter
+            sleep 5
+            last_content_hash=""
+            break
+        fi
+        init_wait=$((init_wait + 2))
+    done
+
     while true; do
         sleep 1
 
@@ -504,6 +525,24 @@ poll_sidecar_pty() {
     # Seed registry with existing resources
     seed_registry
 
+    # Inject initial handle and chat skill prompt
+    # Wait for Claude's prompt to appear, then tell it its handle
+    local init_wait=0
+    while [[ $init_wait -lt 60 ]]; do
+        sleep 2
+        local init_content
+        init_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+        if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
+            "$pty" send "$session" "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+            sleep 0.5
+            "$pty" send "$session" ''
+            sleep 5
+            last_content_hash=""
+            break
+        fi
+        init_wait=$((init_wait + 2))
+    done
+
     while true; do
         sleep 1
 
@@ -589,10 +628,17 @@ poll_sidecar_pty() {
 
 # --- Main ---
 
-# Build claude command with args
+# Build claude command with args (intercept --root= for sidecar)
 CLAUDE_ARGS=("claude")
 for arg in "$@"; do
-    CLAUDE_ARGS+=("$arg")
+    case "$arg" in
+        --root=*)
+            NBS_ROOT="${arg#--root=}"
+            ;;
+        *)
+            CLAUDE_ARGS+=("$arg")
+            ;;
+    esac
 done
 
 echo "Starting Claude Code with NBS bus-aware polling..."
@@ -600,6 +646,7 @@ echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
 echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
 echo "  Safety net poll: ${POLL_INTERVAL}s idle"
 echo "  Handle: ${SIDECAR_HANDLE}"
+echo "  Root: ${NBS_ROOT}"
 if [[ "$POLL_DISABLE" == "1" ]]; then
     echo "  Polling: DISABLED"
 fi
@@ -632,11 +679,12 @@ else
     echo "  Mode: pty-session ($SESSION_NAME)"
     echo ""
 
-    # Build command string for pty-session
+    # Build command string for pty-session (skip --root= which is sidecar-only)
     CLAUDE_CMD="claude"
     if [[ $# -gt 0 ]]; then
         CLAUDE_CMD_ARGS=""
         for arg in "$@"; do
+            case "$arg" in --root=*) continue ;; esac
             if [[ -z "$CLAUDE_CMD_ARGS" ]]; then
                 CLAUDE_CMD_ARGS="$(printf '%q' "$arg")"
             else

@@ -111,7 +111,7 @@ static long long parse_dedup_window_opt(int argc, char **argv, int start,
             char *endp;
             errno = 0;
             long long val = strtoll(s, &endp, 10);
-            if (errno != 0 || *endp != '\0' || val <= 0) {
+            if (errno != 0 || *endp != '\0' || val < 0) {
                 fprintf(stderr, "Error: invalid --dedup-window value: %s\n", s);
                 return -1;
             }

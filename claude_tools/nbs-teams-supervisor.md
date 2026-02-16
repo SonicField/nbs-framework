@@ -343,6 +343,8 @@ Implication: [what this means for the work]
 
 When workers need to coordinate directly or you need to broadcast instructions to multiple workers, use `nbs-chat`. See `/nbs-teams-chat` for full usage.
 
+**Important:** Each agent must use a unique handle. Set `NBS_HANDLE` before launching workers to avoid handle collisions. Instruct new workers to load `/nbs-teams-chat` so they know how to use the chat system.
+
 ```bash
 # Create a shared channel
 nbs-chat create .nbs/chat/coordination.chat
@@ -354,4 +356,4 @@ nbs-chat send .nbs/chat/coordination.chat supervisor "Focus on parse_int first"
 nbs-chat read .nbs/chat/coordination.chat
 ```
 
-Pass the chat file path to workers in their task descriptions so they know where to communicate.
+Pass the chat file path and the worker's handle to workers in their task descriptions so they know where and how to communicate.

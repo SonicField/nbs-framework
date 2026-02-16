@@ -27,7 +27,7 @@ nbs-bus publish .nbs/events/ <your-handle> <event-type> <priority> "payload text
 
 Priority: `critical`, `high`, `normal`, `low`
 
-Common event types: `task-complete`, `task-blocked`, `task-failed`, `chat-mention`, `human-input`, `heartbeat`
+Common event types: `task-complete`, `task-blocked`, `task-failed`, `chat-message`, `chat-mention`, `human-input`, `decision-logged`, `pythia-checkpoint`, `heartbeat`
 
 ### Check pending events
 

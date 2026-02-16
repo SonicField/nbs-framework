@@ -21,6 +21,7 @@
  */
 
 #include "chat_file.h"
+#include "bus_bridge.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -560,6 +561,9 @@ static void send_and_display(line_state_t *ls) {
     if (chat_send(g_chat_file, g_handle, ls->buf) == 0) {
         format_message(g_handle, ls->buf, g_handle);
         g_msg_count++;
+        /* Publish bus events: standard chat-message + human-input priority signal */
+        bus_bridge_after_send(g_chat_file, g_handle, ls->buf);
+        bus_bridge_human_input(g_chat_file, g_handle, ls->buf);
     } else {
         printf("  %s(send failed)%s\n", DIM, RESET);
     }
@@ -840,6 +844,9 @@ int main(int argc, char **argv) {
                     if (chat_send(g_chat_file, g_handle, msg) == 0) {
                         format_message(g_handle, msg, g_handle);
                         g_msg_count++;
+                        /* Publish bus events: standard chat-message + human-input priority signal */
+                        bus_bridge_after_send(g_chat_file, g_handle, msg);
+                        bus_bridge_human_input(g_chat_file, g_handle, msg);
                     } else {
                         printf("  %s(send failed)%s\n", DIM, RESET);
                     }

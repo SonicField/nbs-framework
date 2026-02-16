@@ -67,6 +67,27 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
 int bus_find_events_dir(const char *chat_path, char *out_buf, size_t out_buf_size);
 
 /*
+ * bus_bridge_human_input — Publish a high-priority human-input bus event.
+ *
+ * Called by nbs-chat-terminal after a human sends a message. This is in
+ * addition to the standard chat-message event published by
+ * bus_bridge_after_send(). The human-input event signals to AI agents
+ * that a human has spoken and their attention is needed.
+ *
+ * Preconditions:
+ *   - chat_path != NULL (path to the chat file)
+ *   - handle != NULL (sender handle)
+ *   - message != NULL (message content)
+ *
+ * Postconditions:
+ *   - If .nbs/events/ exists: publishes human-input event (high priority).
+ *   - If .nbs/events/ does not exist: returns silently.
+ *   - Returns 0 always — bus bridge never fails the caller.
+ */
+int bus_bridge_human_input(const char *chat_path, const char *handle,
+                            const char *message);
+
+/*
  * bus_extract_mentions — Extract @handles from a message.
  *
  * Preconditions:

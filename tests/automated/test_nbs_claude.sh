@@ -308,8 +308,9 @@ mkdir -p .nbs/chat .nbs/events
 # Source the control inbox functions from nbs-claude
 # We need to extract the functions without running main
 # Using a temp file + source instead of eval to handle shell syntax (globs, redirects)
-# Set SIDECAR_HANDLE before sourcing — the control file paths now include it
+# Set SIDECAR_HANDLE and NBS_ROOT before sourcing — the control/resource paths use them
 SIDECAR_HANDLE="testhandle"
+NBS_ROOT="."
 _EXTRACT_TMP=$(mktemp)
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"
@@ -318,14 +319,14 @@ rm -f "$_EXTRACT_TMP"
 # Test: seed_registry populates from existing chat files
 touch .nbs/chat/live.chat .nbs/chat/debug.chat
 seed_registry
-if grep -qF "chat:.nbs/chat/live.chat" "$CONTROL_REGISTRY" && \
-   grep -qF "chat:.nbs/chat/debug.chat" "$CONTROL_REGISTRY"; then
+if grep -qF "chat:${NBS_ROOT}/.nbs/chat/live.chat" "$CONTROL_REGISTRY" && \
+   grep -qF "chat:${NBS_ROOT}/.nbs/chat/debug.chat" "$CONTROL_REGISTRY"; then
     pass "seed_registry finds existing chat files"
 else
     fail "seed_registry did not find chat files"
 fi
 
-if grep -qF "bus:.nbs/events" "$CONTROL_REGISTRY"; then
+if grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY"; then
     pass "seed_registry finds existing events directory"
 else
     fail "seed_registry did not find events directory"
@@ -333,7 +334,7 @@ fi
 
 # Test: seed_registry is idempotent
 seed_registry
-CHAT_COUNT=$(grep -c "chat:.nbs/chat/live.chat" $CONTROL_REGISTRY)
+CHAT_COUNT=$(grep -c "chat:${NBS_ROOT}/.nbs/chat/live.chat" $CONTROL_REGISTRY)
 if [[ "$CHAT_COUNT" -eq 1 ]]; then
     pass "seed_registry is idempotent (no duplicates)"
 else

@@ -92,7 +92,7 @@ test-all: test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h
-terminal.o: terminal.c chat_file.h
+terminal.o: terminal.c chat_file.h bus_bridge.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h chat_file.h
 lock.o: lock.c lock.h chat_file.h

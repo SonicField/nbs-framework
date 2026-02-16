@@ -7,13 +7,15 @@
 # together.
 #
 # Usage:
-#   nbs-chat-init [OPTIONS]
+#   nbs-chat-init --name=NAME [OPTIONS]
 #
+#   --name=NAME           Chat name (required) — all resource names derive from this
 #   --project-name=NAME   Override project name (default: dirname of pwd)
 #   --force               Skip confirmation prompts
 #   --dry-run             Print actions without executing
 #   --spawn-scribe        Launch Scribe in tmux session
 #   --spawn-all           Launch Scribe + main Claude instance
+#   --spawn-only          Skip infrastructure creation, just spawn agents (for restart)
 #   --help                Show usage
 #
 # Exit codes:
@@ -25,9 +27,9 @@
 #   .nbs/events/           Bus event queue
 #   .nbs/events/processed/ Acknowledged events
 #   .nbs/events/config.yaml Bus + Pythia configuration
-#   .nbs/chat/live.chat    Primary chat channel
+#   .nbs/chat/<name>.chat  Primary chat channel
 #   .nbs/chat/archive/     Archived previous chats
-#   .nbs/scribe/live-log.md Decision log (Scribe's output)
+#   .nbs/scribe/<name>-log.md Decision log (Scribe's output)
 #   .nbs/project-id        4-char project identifier
 #
 # Tmux sessions (optional, named after chat):
@@ -44,8 +46,9 @@ FORCE=false
 DRY_RUN=false
 SPAWN_SCRIBE=false
 SPAWN_ALL=false
+SPAWN_ONLY=false
 PROJECT_ID=""
-CHAT_NAME="live"  # Chat filename root — all resource names derive from this
+CHAT_NAME=""  # Set via --name= (required)
 
 # --- Output helpers ---
 
@@ -142,6 +145,9 @@ tmux_session_name() {
 
 for arg in "$@"; do
     case "$arg" in
+        --name=*)
+            CHAT_NAME="${arg#--name=}"
+            ;;
         --project-name=*)
             PROJECT_NAME="${arg#--project-name=}"
             ;;
@@ -158,24 +164,41 @@ for arg in "$@"; do
             SPAWN_ALL=true
             SPAWN_SCRIBE=true
             ;;
+        --spawn-only)
+            SPAWN_ONLY=true
+            ;;
         --help|-h)
             cat <<'USAGE'
 nbs-chat-init: Bootstrap NBS framework infrastructure
 
-Usage: nbs-chat-init [OPTIONS]
+Usage: nbs-chat-init --name=NAME [OPTIONS]
+
+Required:
+  --name=NAME             Chat name — all resource names derive from this
 
 Options:
-  --project-name=NAME   Override project name (default: dirname of pwd)
-  --force               Skip confirmation prompts
-  --dry-run             Print actions without executing
-  --spawn-scribe        Launch Scribe in tmux session
-  --spawn-all           Launch Scribe + main Claude instance
-  --help                Show this help
+  --project-name=NAME     Override project name (default: dirname of pwd)
+  --force                 Skip confirmation prompts
+  --dry-run               Print actions without executing
+  --spawn-scribe          Launch Scribe in tmux session
+  --spawn-all             Launch Scribe + main Claude instance
+  --spawn-only            Skip infrastructure creation, just spawn agents (for restart)
+  --help                  Show this help
 
 Infrastructure created:
-  .nbs/events/           Event bus queue
-  .nbs/chat/live.chat    Primary chat channel
-  .nbs/scribe/live-log.md Decision log
+  .nbs/events/            Event bus queue
+  .nbs/chat/<name>.chat   Primary chat channel
+  .nbs/scribe/<name>-log.md Decision log
+
+Spawn only (restart after reboot):
+  nbs-chat-init --name=NAME --spawn-only --spawn-scribe
+  nbs-chat-init --name=NAME --spawn-only --spawn-all
+
+Join an existing chat (human):
+  nbs-chat-terminal .nbs/chat/<name>.chat <your-handle>
+
+Join an existing chat (additional agent):
+  NBS_HANDLE=<unique-name> nbs-claude
 
 Exit codes:
   0 - Success
@@ -191,6 +214,26 @@ USAGE
             ;;
     esac
 done
+
+# --- Validate arguments ---
+
+if [[ -z "$CHAT_NAME" ]]; then
+    error "Missing required argument: --name=NAME"
+    error "Run: nbs-chat-init --help"
+    exit 4
+fi
+
+if [[ "$SPAWN_ONLY" == "true" ]] && [[ "$SPAWN_SCRIBE" != "true" ]] && [[ "$SPAWN_ALL" != "true" ]]; then
+    error "--spawn-only requires --spawn-scribe or --spawn-all"
+    exit 4
+fi
+
+# --- Derived paths (all resource names derive from CHAT_NAME) ---
+
+CHAT_FILE=".nbs/chat/${CHAT_NAME}.chat"
+CHAT_CURSORS="${CHAT_FILE}.cursors"
+CHAT_LOCK="${CHAT_FILE}.lock"
+SCRIBE_LOG=".nbs/scribe/${CHAT_NAME}-log.md"
 
 # --- Validate prerequisites ---
 
@@ -214,12 +257,22 @@ PROJECT_ID=$(generate_project_id "$PROJECT_ROOT")
 echo ""
 echo -e "${BOLD}NBS Init${NC}"
 echo "  Project:    $PROJECT_NAME"
+echo "  Chat name:  $CHAT_NAME"
 echo "  Root:       $PROJECT_ROOT"
 echo "  Project ID: $PROJECT_ID"
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  Mode:       ${YELLOW}DRY RUN${NC}"
 fi
+if [[ "$SPAWN_ONLY" == "true" ]]; then
+    echo -e "  Mode:       ${YELLOW}SPAWN ONLY${NC}"
+fi
 echo ""
+
+# ============================================================
+# PHASES 1-4: Infrastructure Creation (skipped in spawn-only mode)
+# ============================================================
+
+if [[ "$SPAWN_ONLY" != "true" ]]; then
 
 # Check for existing .nbs/
 if [[ -d ".nbs" ]]; then
@@ -247,7 +300,9 @@ if [[ ! -f ".nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
         cat > .nbs/events/config.yaml << 'CONFIGEOF'
 # NBS Event Bus Configuration
 #
-# dedup-window:  Seconds to suppress duplicate events (default: 300)
+# dedup-window:  Seconds to suppress duplicate events (default: 0 = disabled)
+#                System events use this as the default. Chat events pass
+#                --dedup-window=0 to nbs-bus to bypass dedup entirely.
 # ack-timeout:   Seconds before unacknowledged events are flagged stale (default: 120)
 # pythia-interval: Scribe decisions between Pythia checkpoints (default: 10)
 # retention-max-bytes: Maximum total size of processed events before pruning (default: 16MB)
@@ -306,33 +361,33 @@ info "Phase 2: Chat..."
 
 run mkdir -p .nbs/chat/archive
 
-# 2.1 Archive existing live.chat (if present)
-if [[ -f ".nbs/chat/live.chat" ]]; then
+# 2.1 Archive existing chat (if present)
+if [[ -f "$CHAT_FILE" ]]; then
     ARCHIVE_TS=$(date +%Y%m%d_%H%M%S)
-    ARCHIVE_NAME="live-${ARCHIVE_TS}.chat"
-    info "  Archiving existing live.chat → archive/$ARCHIVE_NAME"
-    run mv .nbs/chat/live.chat ".nbs/chat/archive/$ARCHIVE_NAME"
-    if [[ -f ".nbs/chat/live.chat.cursors" ]]; then
-        run mv .nbs/chat/live.chat.cursors ".nbs/chat/archive/${ARCHIVE_NAME}.cursors"
+    ARCHIVE_NAME="${CHAT_NAME}-${ARCHIVE_TS}.chat"
+    info "  Archiving existing ${CHAT_NAME}.chat → archive/$ARCHIVE_NAME"
+    run mv "$CHAT_FILE" ".nbs/chat/archive/$ARCHIVE_NAME"
+    if [[ -f "$CHAT_CURSORS" ]]; then
+        run mv "$CHAT_CURSORS" ".nbs/chat/archive/${ARCHIVE_NAME}.cursors"
     fi
-    if [[ -f ".nbs/chat/live.chat.lock" ]]; then
-        run rm -f .nbs/chat/live.chat.lock
+    if [[ -f "$CHAT_LOCK" ]]; then
+        run rm -f "$CHAT_LOCK"
     fi
 fi
 
 # 2.2 Create fresh chat
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat create .nbs/chat/live.chat"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat create $CHAT_FILE"
 else
-    nbs-chat create .nbs/chat/live.chat >/dev/null 2>&1
-    ok "  live.chat created"
+    nbs-chat create "$CHAT_FILE" >/dev/null 2>&1
+    ok "  ${CHAT_NAME}.chat created"
 fi
 
 # 2.3 Post init message
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat send init message"
 else
-    nbs-chat send .nbs/chat/live.chat nbs-chat-init \
+    nbs-chat send "$CHAT_FILE" nbs-chat-init \
         "Project '$PROJECT_NAME' initialised (project-id: $PROJECT_ID). Bus, chat, and scribe log are ready." \
         >/dev/null 2>&1
     ok "  Init message posted"
@@ -346,26 +401,26 @@ info "Phase 3: Scribe log..."
 
 run mkdir -p .nbs/scribe
 
-if [[ ! -f ".nbs/scribe/live-log.md" ]] || [[ "$DRY_RUN" == "true" ]]; then
+if [[ ! -f "$SCRIBE_LOG" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/scribe/live-log.md (header)"
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write $SCRIBE_LOG (header)"
     else
         CREATED_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        cat > .nbs/scribe/live-log.md << LOGEOF
+        cat > "$SCRIBE_LOG" << LOGEOF
 # Decision Log
 
 Project: $PROJECT_NAME
 Created: $CREATED_TS
 Scribe: scribe
-Chat: live.chat
+Chat: ${CHAT_NAME}.chat
 Decision count: 0
 
 ---
 LOGEOF
-        ok "  live-log.md created"
+        ok "  ${CHAT_NAME}-log.md created"
     fi
 else
-    info "  live-log.md already exists — keeping"
+    info "  ${CHAT_NAME}-log.md already exists — keeping"
 fi
 
 # ============================================================
@@ -381,6 +436,8 @@ else
     ok "  project-id: $PROJECT_ID"
 fi
 
+fi  # end of SPAWN_ONLY != true
+
 # ============================================================
 # PHASE 5: Health Check
 # ============================================================
@@ -389,8 +446,8 @@ info "Phase 5: Health check..."
 
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-bus status .nbs/events/"
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat read .nbs/chat/live.chat"
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} Verify .nbs/scribe/live-log.md header"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat read $CHAT_FILE"
+    echo -e "  ${YELLOW}[DRY-RUN]${NC} Verify $SCRIBE_LOG header"
 else
     HEALTH_PASS=true
 
@@ -403,7 +460,7 @@ else
     fi
 
     # Chat
-    if nbs-chat read .nbs/chat/live.chat >/dev/null 2>&1; then
+    if nbs-chat read "$CHAT_FILE" >/dev/null 2>&1; then
         ok "  Chat: operational"
     else
         error "  Chat: FAILED"
@@ -411,8 +468,8 @@ else
     fi
 
     # Scribe log
-    if grep -q "^Project:" .nbs/scribe/live-log.md 2>/dev/null && \
-       grep -q "^Decision count:" .nbs/scribe/live-log.md 2>/dev/null; then
+    if grep -q "^Project:" "$SCRIBE_LOG" 2>/dev/null && \
+       grep -q "^Decision count:" "$SCRIBE_LOG" 2>/dev/null; then
         ok "  Scribe log: well-formed"
     else
         error "  Scribe log: FAILED (missing header fields)"
@@ -450,7 +507,7 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
         info "  Spawning Scribe..."
         if [[ "$DRY_RUN" == "true" ]]; then
             echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $SCRIBE_SESSION"
-            echo -e "  ${YELLOW}[DRY-RUN]${NC} → nbs-claude"
+            echo -e "  ${YELLOW}[DRY-RUN]${NC} → NBS_HANDLE=scribe nbs-claude"
             echo -e "  ${YELLOW}[DRY-RUN]${NC} → Send Scribe role prompt"
         else
             # Create tmux session in the project directory
@@ -459,14 +516,14 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
             # Wait for shell to initialise
             sleep 2
 
-            # Launch nbs-claude inside the session
-            tmux send-keys -t "$SCRIBE_SESSION" "nbs-claude --dangerously-skip-permissions" Enter
+            # Launch nbs-claude inside the session with unique handle
+            tmux send-keys -t "$SCRIBE_SESSION" "NBS_HANDLE=scribe nbs-claude --dangerously-skip-permissions" Enter
 
             # Wait for Claude to start
             sleep 3
 
             # Send the Scribe role prompt
-            SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor .nbs/chat/live.chat and log decisions to .nbs/scribe/live-log.md. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
+            SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor $CHAT_FILE and log decisions to $SCRIBE_LOG. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
 
             # Wait for Claude Code prompt to appear
             wait_count=0
@@ -535,13 +592,14 @@ echo ""
 echo -e "${BOLD}=== NBS Init Complete ===${NC}"
 echo ""
 echo "  Project:    $PROJECT_NAME"
+echo "  Chat name:  $CHAT_NAME"
 echo "  Root:       $PROJECT_ROOT"
 echo "  Project ID: $PROJECT_ID"
 echo ""
 echo "  Components:"
 echo "    Bus:        .nbs/events/"
-echo "    Chat:       .nbs/chat/live.chat"
-echo "    Scribe log: .nbs/scribe/live-log.md"
+echo "    Chat:       $CHAT_FILE"
+echo "    Scribe log: $SCRIBE_LOG"
 echo "    Config:     .nbs/events/config.yaml"
 
 if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
@@ -559,7 +617,7 @@ fi
 
 echo ""
 echo "  Next steps:"
-echo "    1. Start Claude:  cd $PROJECT_ROOT && nbs-claude"
-echo "    2. Read the chat: nbs-chat read .nbs/chat/live.chat"
-echo "    3. Post to chat:  nbs-chat send .nbs/chat/live.chat <handle> <message>"
+echo "    1. Join the chat:  nbs-chat-terminal $CHAT_FILE <your-handle>"
+echo "    2. Start Claude:   cd $PROJECT_ROOT && nbs-claude"
+echo "    3. Join (new agent): NBS_HANDLE=<name> nbs-claude"
 echo ""

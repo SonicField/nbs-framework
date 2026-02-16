@@ -30,6 +30,15 @@
 #   26. Non-destructive display
 #   27. Up/Down arrows harmless
 #   28. Backspace at mid-line cursor
+#   29. /search matches
+#   30. /search case insensitive
+#   31. /search no matches
+#   32. /search without pattern shows usage
+#   33. Bus: human-input event published on send
+#   34. Bus: chat-message event also published
+#   35. Bus: event content matches schema
+#   36. Bus: no bus directory — graceful degradation
+#   37. Bus: @mention generates chat-mention event
 
 set -euo pipefail
 
@@ -37,6 +46,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 NBS_CHAT="${NBS_CHAT_BIN:-$PROJECT_ROOT/bin/nbs-chat}"
 NBS_TERMINAL="${NBS_TERMINAL_BIN:-$PROJECT_ROOT/bin/nbs-chat-terminal}"
+NBS_BUS="${NBS_BUS_BIN:-$PROJECT_ROOT/bin/nbs-bus}"
+
+# Add bin/ to PATH so bus_bridge.c can find nbs-bus via execlp
+export PATH="$PROJECT_ROOT/bin:$PATH"
 
 TEST_DIR=$(mktemp -d)
 ERRORS=0
@@ -513,6 +526,75 @@ CHAT="$TEST_DIR/test32.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 OUTPUT=$(printf '/search\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
 check "/search without pattern shows usage" "$( echo "$OUTPUT" | grep -qi 'usage.*search' && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Bus integration tests
+# ============================================================
+
+# --- Test 33: human-input event published on send ---
+echo "33. Bus: human-input event published on send..."
+BUS_DIR="$TEST_DIR/test33_project"
+mkdir -p "$BUS_DIR/.nbs/chat" "$BUS_DIR/.nbs/events/processed"
+CHAT="$BUS_DIR/.nbs/chat/test.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+printf 'Hello from human\x04' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" >/dev/null 2>&1 || true
+sleep 1  # Allow fork+exec to complete
+HUMAN_EVENTS=$(ls "$BUS_DIR/.nbs/events/"*human-input*.event 2>/dev/null | wc -l)
+check "human-input event published" "$( [[ $HUMAN_EVENTS -ge 1 ]] && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 34: chat-message event also published ---
+echo "34. Bus: chat-message event also published..."
+MSG_EVENTS=$(ls "$BUS_DIR/.nbs/events/"*chat-message*.event 2>/dev/null | wc -l)
+check "chat-message event also published" "$( [[ $MSG_EVENTS -ge 1 ]] && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 35: event content matches schema ---
+echo "35. Bus: event content matches schema..."
+HUMAN_EVENT=$(ls "$BUS_DIR/.nbs/events/"*human-input*.event 2>/dev/null | head -1)
+if [[ -n "$HUMAN_EVENT" ]]; then
+    HAS_SOURCE=$(grep -c '^source: nbs-chat-terminal' "$HUMAN_EVENT" 2>/dev/null || true)
+    HAS_TYPE=$(grep -c '^type: human-input' "$HUMAN_EVENT" 2>/dev/null || true)
+    HAS_PRIORITY=$(grep -c '^priority: high' "$HUMAN_EVENT" 2>/dev/null || true)
+    HAS_PAYLOAD=$(grep -c 'Hello from human' "$HUMAN_EVENT" 2>/dev/null || true)
+    check "event source is nbs-chat-terminal" "$( [[ $HAS_SOURCE -ge 1 ]] && echo pass || echo fail )"
+    check "event type is human-input" "$( [[ $HAS_TYPE -ge 1 ]] && echo pass || echo fail )"
+    check "event priority is high" "$( [[ $HAS_PRIORITY -ge 1 ]] && echo pass || echo fail )"
+    check "event payload contains message" "$( [[ $HAS_PAYLOAD -ge 1 ]] && echo pass || echo fail )"
+else
+    check "event source is nbs-chat-terminal" "fail"
+    check "event type is human-input" "fail"
+    check "event priority is high" "fail"
+    check "event payload contains message" "fail"
+fi
+
+echo ""
+
+# --- Test 36: no bus directory — graceful degradation ---
+echo "36. Bus: no bus directory — graceful degradation..."
+CHAT="$TEST_DIR/test36.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$(printf 'No bus here\x04' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" 2>/dev/null) || true
+# Verify message was still sent despite no bus
+CONTENT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "send works without bus directory" "$( echo "$CONTENT" | grep -q 'No bus here' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 37: @mention generates chat-mention event ---
+echo "37. Bus: @mention generates chat-mention event..."
+BUS_DIR2="$TEST_DIR/test37_project"
+mkdir -p "$BUS_DIR2/.nbs/chat" "$BUS_DIR2/.nbs/events/processed"
+CHAT="$BUS_DIR2/.nbs/chat/test.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+printf 'Hey @scribe check this\x04' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" >/dev/null 2>&1 || true
+sleep 1
+MENTION_EVENTS=$(ls "$BUS_DIR2/.nbs/events/"*chat-mention*.event 2>/dev/null | wc -l)
+check "@mention generates chat-mention event" "$( [[ $MENTION_EVENTS -ge 1 ]] && echo pass || echo fail )"
 
 echo ""
 

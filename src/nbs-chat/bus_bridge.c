@@ -257,7 +257,7 @@ static int bus_publish(const char *events_dir, const char *source,
 
         execlp("nbs-bus", "nbs-bus", "publish",
                events_dir, source, type, priority,
-               truncated_payload, (char *)NULL);
+               truncated_payload, "--dedup-window=0", (char *)NULL);
 
         /* exec failed — exit silently */
         _exit(1);
@@ -273,8 +273,10 @@ static int bus_publish(const char *events_dir, const char *source,
 
     /* Bus publish failed — log but don't propagate */
     /* Don't log if exec failed (exit code 1 from _exit) — nbs-bus likely
-     * not installed yet. Only log unexpected failures. */
-    if (WIFEXITED(status) && WEXITSTATUS(status) != 1) {
+     * not installed yet. Don't log dedup (exit code 5) — expected for
+     * rapid sends. Only log unexpected failures. */
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 1
+                          && WEXITSTATUS(status) != 5) {
         fprintf(stderr, "bus_bridge: nbs-bus publish exited with %d\n",
                 WEXITSTATUS(status));
     }
@@ -317,6 +319,33 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
         bus_publish(events_dir, "nbs-chat", "chat-mention", "high",
                     mention_payload);
     }
+
+    /* Postcondition: always returns 0 — bus bridge never fails */
+    return 0;
+}
+
+int bus_bridge_human_input(const char *chat_path, const char *handle,
+                            const char *message) {
+    ASSERT_MSG(chat_path != NULL,
+               "bus_bridge_human_input: chat_path is NULL");
+    ASSERT_MSG(handle != NULL,
+               "bus_bridge_human_input: handle is NULL");
+    ASSERT_MSG(message != NULL,
+               "bus_bridge_human_input: message is NULL");
+
+    /* Find the events directory */
+    char events_dir[MAX_PATH_LEN];
+    if (bus_find_events_dir(chat_path, events_dir, sizeof(events_dir)) != 0) {
+        /* No bus directory — silently return */
+        return 0;
+    }
+
+    /* Build payload: "handle: message" */
+    char payload[MAX_PAYLOAD_LEN];
+    snprintf(payload, sizeof(payload), "%s: %s", handle, message);
+
+    /* Publish human-input event at high priority */
+    bus_publish(events_dir, "nbs-chat-terminal", "human-input", "high", payload);
 
     /* Postcondition: always returns 0 — bus bridge never fails */
     return 0;
