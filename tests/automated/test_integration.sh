@@ -20,6 +20,8 @@
 #   T12 (51-58): Sidecar detection layer interaction
 #   T13 (59-65): Skill failure detection boundary and broken symlink simulation
 #   T14 (66-72): Plan mode detection robustness
+#   T15 (73-79): Concurrent chat under SIGKILL (Phase 2d)
+#   T16 (80-87): Bus event delivery under contention (Phase 2e)
 
 set -euo pipefail
 
@@ -1475,6 +1477,341 @@ PLAN_WITH_BYPASS="Would you like to proceed?
   2. Yes, and don't ask again for this project
   ⏵⏵ bypass permissions on (shift+tab to cycle)"
 check "Plan mode detected with bypass bar" "$( detect_plan_mode "$PLAN_WITH_BYPASS" && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T15: Concurrent chat under SIGKILL (Phase 2d)
+# ============================================================
+# Verify chat file integrity when writers are killed mid-write
+# with SIGKILL (no cleanup possible). Tests:
+# - file-length header matches actual file size
+# - every message base64-decodes successfully
+# - surviving agents' cursors are unaffected
+# - the chat file remains usable after the kill
+
+echo "T15: Concurrent chat under SIGKILL"
+echo ""
+
+T15_SIGKILL_DIR="$TEST_DIR/t15-sigkill"
+mkdir -p "$T15_SIGKILL_DIR/.nbs/chat" "$T15_SIGKILL_DIR/.nbs/events/processed"
+T15_CHAT="$T15_SIGKILL_DIR/.nbs/chat/sigkill.chat"
+"$NBS_CHAT" create "$T15_CHAT" >/dev/null 2>&1
+
+# --- Test 73: Concurrent writes — 4 agents, no kill, verify baseline ---
+echo "73. Concurrent writes baseline — 4 agents, all complete..."
+for agent in alpha beta gamma delta; do
+    for i in $(seq 1 5); do
+        "$NBS_CHAT" send "$T15_CHAT" "$agent" "Message $i from $agent" &
+    done
+done
+wait
+# Verify file-length header matches actual file size
+FILE_LEN_HEADER=$(grep '^file-length:' "$T15_CHAT" | awk '{print $2}')
+ACTUAL_SIZE=$(wc -c < "$T15_CHAT")
+check "file-length header matches actual size (baseline)" "$( [[ "$FILE_LEN_HEADER" -eq "$ACTUAL_SIZE" ]] && echo pass || echo fail )"
+# Verify every message base64-decodes
+MSG_BODY=$(awk '/^---$/{found=1; next} found && NF{print}' "$T15_CHAT")
+DECODE_FAILURES=0
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if ! echo "$line" | base64 -d >/dev/null 2>&1; then
+        DECODE_FAILURES=$((DECODE_FAILURES + 1))
+    fi
+done <<< "$MSG_BODY"
+check "All messages base64-decode (baseline)" "$( [[ "$DECODE_FAILURES" -eq 0 ]] && echo pass || echo fail )"
+# Verify message count: 4 agents * 5 messages = 20
+MSG_COUNT=$(echo "$MSG_BODY" | grep -c '^.' || true)
+check "20 messages present (4 agents × 5)" "$( [[ "$MSG_COUNT" -eq 20 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 74: Set cursors, then verify cursor integrity ---
+echo "74. Cursor integrity after concurrent writes..."
+# Read with each handle to establish cursors
+for agent in alpha beta gamma delta; do
+    "$NBS_CHAT" read "$T15_CHAT" --unread="$agent" >/dev/null 2>&1
+done
+# Verify cursor file exists and has entries
+check "Cursor file exists" "$( [[ -f "${T15_CHAT}.cursors" ]] && echo pass || echo fail )"
+# Store cursor values before new writes
+ALPHA_CURSOR_BEFORE=$(awk -F= '/^alpha/{print $2}' "${T15_CHAT}.cursors" 2>/dev/null)
+check "Alpha cursor set" "$( [[ -n "$ALPHA_CURSOR_BEFORE" && "$ALPHA_CURSOR_BEFORE" -gt 0 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 75: SIGKILL during concurrent writes — chat file survives ---
+echo "75. SIGKILL during concurrent writes — file integrity..."
+T75_CHAT="$T15_SIGKILL_DIR/.nbs/chat/sigkill75.chat"
+"$NBS_CHAT" create "$T75_CHAT" >/dev/null 2>&1
+# Write some baseline messages first
+for i in $(seq 1 5); do
+    "$NBS_CHAT" send "$T75_CHAT" baseline "Baseline message $i"
+done
+# Launch 4 rapid-fire writers in background
+for agent in w1 w2 w3 w4; do
+    (
+        for i in $(seq 1 50); do
+            "$NBS_CHAT" send "$T75_CHAT" "$agent" "Rapid message $i from $agent" 2>/dev/null || true
+        done
+    ) &
+done
+# Wait briefly for writers to be in progress, then kill 2
+WRITER_PIDS=$(jobs -p)
+sleep 0.2
+KILLED=0
+for pid in $WRITER_PIDS; do
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+        KILLED=$((KILLED + 1))
+        [[ $KILLED -ge 2 ]] && break
+    fi
+done
+# Wait for remaining writers to finish
+wait 2>/dev/null || true
+# Verify file integrity: file-length matches actual size
+FILE_LEN_75=$(grep '^file-length:' "$T75_CHAT" | awk '{print $2}')
+ACTUAL_SIZE_75=$(wc -c < "$T75_CHAT")
+check "file-length matches actual size after SIGKILL" "$( [[ "$FILE_LEN_75" -eq "$ACTUAL_SIZE_75" ]] && echo pass || echo fail )"
+# Verify all surviving messages base64-decode
+MSG_BODY_75=$(awk '/^---$/{found=1; next} found && NF{print}' "$T75_CHAT")
+DECODE_FAIL_75=0
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if ! echo "$line" | base64 -d >/dev/null 2>&1; then
+        DECODE_FAIL_75=$((DECODE_FAIL_75 + 1))
+    fi
+done <<< "$MSG_BODY_75"
+check "All surviving messages base64-decode after SIGKILL" "$( [[ "$DECODE_FAIL_75" -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 76: Chat remains writable after SIGKILL ---
+echo "76. Chat remains writable after SIGKILL..."
+# The lock file should have been released when the process died
+# (flock is released on fd close, which happens on process death)
+"$NBS_CHAT" send "$T75_CHAT" survivor "Post-kill message" 2>/dev/null
+POST_KILL_RC=$?
+check "send succeeds after writer killed" "$( [[ $POST_KILL_RC -eq 0 ]] && echo pass || echo fail )"
+# Verify the new message is readable
+LAST_MSG=$("$NBS_CHAT" read "$T75_CHAT" --last=1 2>/dev/null)
+check "Post-kill message readable" "$( echo "$LAST_MSG" | grep -q 'Post-kill message' && echo pass || echo fail )"
+echo ""
+
+# --- Test 77: Cursor integrity — non-killed agent cursors survive ---
+echo "77. Non-killed agent cursors unaffected..."
+# Use the original T15 chat which has cursors set
+# Write new messages after the kill
+"$NBS_CHAT" send "$T15_CHAT" newcomer "New message after kill scenario"
+# Alpha's cursor should still be valid (unchanged from before)
+ALPHA_CURSOR_AFTER=$(awk -F= '/^alpha/{print $2}' "${T15_CHAT}.cursors" 2>/dev/null)
+check "Alpha cursor unchanged by other writes" "$( [[ "$ALPHA_CURSOR_AFTER" -eq "$ALPHA_CURSOR_BEFORE" ]] && echo pass || echo fail )"
+# Alpha should see the new message as unread
+ALPHA_UNREAD=$("$NBS_CHAT" read "$T15_CHAT" --unread=alpha 2>/dev/null)
+check "Alpha sees new message as unread" "$( echo "$ALPHA_UNREAD" | grep -q 'New message after kill' && echo pass || echo fail )"
+echo ""
+
+# --- Test 78: Lock not held after SIGKILL (flock released on process death) ---
+echo "78. Lock released after writer SIGKILL..."
+T78_CHAT="$T15_SIGKILL_DIR/.nbs/chat/sigkill78.chat"
+"$NBS_CHAT" create "$T78_CHAT" >/dev/null 2>&1
+# Start a writer that sends many messages (will take some time)
+(
+    for i in $(seq 1 200); do
+        "$NBS_CHAT" send "$T78_CHAT" slowwriter "Message $i" 2>/dev/null || true
+    done
+) &
+SLOW_PID=$!
+sleep 0.1
+# Kill it
+kill -9 $SLOW_PID 2>/dev/null || true
+wait $SLOW_PID 2>/dev/null || true
+# Immediately try to write — should not be blocked
+START_TIME=$(date +%s%N)
+timeout 5 "$NBS_CHAT" send "$T78_CHAT" "fastwriter" "Should not block" 2>/dev/null
+WRITE_RC=$?
+END_TIME=$(date +%s%N)
+ELAPSED_MS=$(( (END_TIME - START_TIME) / 1000000 ))
+check "Write after SIGKILL completes (rc=0)" "$( [[ $WRITE_RC -eq 0 ]] && echo pass || echo fail )"
+check "Write after SIGKILL is fast (<3000ms)" "$( [[ $ELAPSED_MS -lt 3000 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 79: File-length self-consistency after SIGKILL recovery ---
+echo "79. File-length self-consistency after recovery writes..."
+# After the kill + recovery write in T78, verify the file is still consistent
+T79_LEN=$(grep '^file-length:' "$T78_CHAT" | awk '{print $2}')
+T79_ACTUAL=$(wc -c < "$T78_CHAT")
+check "file-length matches actual size after recovery" "$( [[ "$T79_LEN" -eq "$T79_ACTUAL" ]] && echo pass || echo fail )"
+# Verify the chat file has the standard header format
+check "Header starts with '=== nbs-chat ==='" "$( head -1 "$T78_CHAT" | grep -qF '=== nbs-chat ===' && echo pass || echo fail )"
+check "Header has --- separator" "$( grep -q '^---$' "$T78_CHAT" && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T16: Bus event delivery under contention (Phase 2e)
+# ============================================================
+# Verify bus event delivery when multiple publishers and consumers
+# operate concurrently. No events lost, priority ordering holds,
+# acked events stay acked.
+
+T16_DIR="$TEST_DIR/t16-contention"
+mkdir -p "$T16_DIR"
+
+# --- Test 80: Rapid concurrent publish — no events lost ---
+echo "80. Rapid concurrent publish — no events lost..."
+T80_DIR="$T16_DIR/t80"
+mkdir -p "$T80_DIR/processed"
+# 20 publishers, each publishing 1 event concurrently
+for i in $(seq 1 20); do
+    "$NBS_BUS" publish "$T80_DIR" "agent-$i" "test-event" normal "payload-$i" &
+done
+wait
+EVENT_COUNT=$(ls "$T80_DIR"/*.event 2>/dev/null | wc -l)
+check "20 concurrent publishes produce 20 events" "$( [[ "$EVENT_COUNT" -eq 20 ]] && echo pass || echo fail )"
+# Verify each event has valid YAML structure
+VALID_COUNT=0
+for f in "$T80_DIR"/*.event; do
+    if grep -q "^source:" "$f" && grep -q "^type:" "$f" && grep -q "^priority:" "$f"; then
+        VALID_COUNT=$((VALID_COUNT + 1))
+    fi
+done
+check "All 20 events have valid YAML structure" "$( [[ "$VALID_COUNT" -eq 20 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 81: Priority ordering under contention ---
+echo "81. Priority ordering under contention..."
+T81_DIR="$T16_DIR/t81"
+mkdir -p "$T81_DIR/processed"
+# Publish events with mixed priorities concurrently
+"$NBS_BUS" publish "$T81_DIR" "src" "low-evt" low "low" &
+"$NBS_BUS" publish "$T81_DIR" "src" "crit-evt" critical "critical" &
+"$NBS_BUS" publish "$T81_DIR" "src" "high-evt" high "high" &
+"$NBS_BUS" publish "$T81_DIR" "src" "norm-evt" normal "normal" &
+wait
+# bus_check sorts by priority then timestamp
+CHECK_OUTPUT=$("$NBS_BUS" check "$T81_DIR" 2>/dev/null)
+FIRST_LINE=$(echo "$CHECK_OUTPUT" | head -1)
+LAST_LINE=$(echo "$CHECK_OUTPUT" | tail -1)
+check "Critical priority listed first" "$( echo "$FIRST_LINE" | grep -q '\[critical\]' && echo pass || echo fail )"
+check "Low priority listed last" "$( echo "$LAST_LINE" | grep -q '\[low\]' && echo pass || echo fail )"
+echo ""
+
+# --- Test 82: Acked events don't reappear ---
+echo "82. Acked events stay acked..."
+T82_DIR="$T16_DIR/t82"
+mkdir -p "$T82_DIR/processed"
+"$NBS_BUS" publish "$T82_DIR" "src" "ack-test" normal "test-payload"
+EVENT_FILE=$(ls "$T82_DIR"/*.event 2>/dev/null | head -1 | xargs basename)
+"$NBS_BUS" ack "$T82_DIR" "$EVENT_FILE" 2>/dev/null
+check "Event file removed from events dir" "$( [[ ! -f "$T82_DIR/$EVENT_FILE" ]] && echo pass || echo fail )"
+check "Event file exists in processed/" "$( [[ -f "$T82_DIR/processed/$EVENT_FILE" ]] && echo pass || echo fail )"
+REMAINING=$("$NBS_BUS" check "$T82_DIR" 2>/dev/null)
+check "bus_check returns empty after ack" "$( [[ -z "$REMAINING" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 83: Concurrent ack of same event — race safety ---
+echo "83. Concurrent ack of same event — only one succeeds..."
+T83_DIR="$T16_DIR/t83"
+mkdir -p "$T83_DIR/processed"
+"$NBS_BUS" publish "$T83_DIR" "src" "race-test" normal "race-payload"
+EVENT_FILE=$(ls "$T83_DIR"/*.event 2>/dev/null | head -1 | xargs basename)
+# Two concurrent acks — rename is atomic, only one succeeds
+"$NBS_BUS" ack "$T83_DIR" "$EVENT_FILE" 2>/dev/null &
+PID1=$!
+"$NBS_BUS" ack "$T83_DIR" "$EVENT_FILE" 2>/dev/null &
+PID2=$!
+R1=0; wait $PID1 || R1=$?
+R2=0; wait $PID2 || R2=$?
+SUCCESS_COUNT=0
+[[ $R1 -eq 0 ]] && SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+[[ $R2 -eq 0 ]] && SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+check "Exactly one concurrent ack succeeds" "$( [[ "$SUCCESS_COUNT" -eq 1 ]] && echo pass || echo fail )"
+check "Event in processed/ exactly once" "$( [[ -f "$T83_DIR/processed/$EVENT_FILE" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 84: Publish during concurrent check — no corruption ---
+echo "84. Publish during concurrent check — no corruption..."
+T84_DIR="$T16_DIR/t84"
+mkdir -p "$T84_DIR/processed"
+for i in $(seq 1 5); do
+    "$NBS_BUS" publish "$T84_DIR" "src" "base-$i" normal "base-$i"
+done
+# Publish 5 more while checking concurrently
+"$NBS_BUS" check "$T84_DIR" > /dev/null 2>&1 &
+for i in $(seq 6 10); do
+    "$NBS_BUS" publish "$T84_DIR" "src" "concurrent-$i" normal "concurrent-$i" &
+done
+wait
+TOTAL=$(ls "$T84_DIR"/*.event 2>/dev/null | wc -l)
+check "All 10 events present after concurrent publish+check" "$( [[ "$TOTAL" -eq 10 ]] && echo pass || echo fail )"
+VALID=0
+for f in "$T84_DIR"/*.event; do
+    grep -q "^source:" "$f" && VALID=$((VALID + 1))
+done
+check "No corrupted events after concurrent publish+check" "$( [[ "$VALID" -eq 10 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 85: Ack during concurrent publish — no interference ---
+echo "85. Ack during concurrent publish — no interference..."
+T85_DIR="$T16_DIR/t85"
+mkdir -p "$T85_DIR/processed"
+for i in $(seq 1 5); do
+    "$NBS_BUS" publish "$T85_DIR" "src" "ack-during-$i" normal "payload-$i"
+done
+EVENTS_TO_ACK=$(ls "$T85_DIR"/*.event 2>/dev/null | head -3)
+for f in $EVENTS_TO_ACK; do
+    "$NBS_BUS" ack "$T85_DIR" "$(basename "$f")" 2>/dev/null &
+done
+for i in $(seq 6 10); do
+    "$NBS_BUS" publish "$T85_DIR" "src" "new-$i" normal "payload-$i" &
+done
+wait
+REMAINING_COUNT=$(ls "$T85_DIR"/*.event 2>/dev/null | wc -l)
+PROCESSED_COUNT=$(ls "$T85_DIR/processed/"*.event 2>/dev/null | wc -l)
+check "7 events remain pending (5-3+5)" "$( [[ "$REMAINING_COUNT" -eq 7 ]] && echo pass || echo fail )"
+check "3 events in processed/" "$( [[ "$PROCESSED_COUNT" -eq 3 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 86: High-volume publish — 100 events ---
+echo "86. High-volume publish — 100 events, none lost..."
+T86_DIR="$T16_DIR/t86"
+mkdir -p "$T86_DIR/processed"
+# 10 concurrent publishers, each publishing 10 events
+for pub in $(seq 1 10); do
+    (
+        for evt in $(seq 1 10); do
+            "$NBS_BUS" publish "$T86_DIR" "pub-$pub" "bulk-$evt" normal "p${pub}-e${evt}"
+        done
+    ) &
+done
+wait
+TOTAL_EVENTS=$(ls "$T86_DIR"/*.event 2>/dev/null | wc -l)
+check "100 concurrent events — none lost" "$( [[ "$TOTAL_EVENTS" -eq 100 ]] && echo pass || echo fail )"
+CHECK_OUT=$("$NBS_BUS" check "$T86_DIR" 2>/dev/null)
+LINE_COUNT=$(echo "$CHECK_OUT" | wc -l)
+check "bus_check lists all 100 events" "$( [[ "$LINE_COUNT" -eq 100 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 87: Ack-all under contention ---
+echo "87. Ack-all under contention — selective ack..."
+T87_DIR="$T16_DIR/t87"
+mkdir -p "$T87_DIR/processed"
+for i in $(seq 1 20); do
+    "$NBS_BUS" publish "$T87_DIR" "ack-src" "batch-$i" normal "payload-$i"
+done
+for i in $(seq 1 5); do
+    "$NBS_BUS" publish "$T87_DIR" "other-src" "other-$i" normal "other-$i"
+done
+# Ack all from ack-src while more events arrive
+"$NBS_BUS" ack-all "$T87_DIR" --handle=ack-src 2>/dev/null &
+ACK_PID=$!
+for i in $(seq 21 25); do
+    "$NBS_BUS" publish "$T87_DIR" "ack-src" "late-$i" normal "late-$i" &
+done
+wait $ACK_PID || true  # ack-all may have partial failures from race
+wait  # wait for publishers
+# Count other-src events remaining (grep may not match — use || true)
+OTHER_REMAINING=$(grep -rl "source: other-src" "$T87_DIR"/*.event 2>/dev/null | wc -l || echo 0)
+check "other-src events untouched by ack-all" "$( [[ "$OTHER_REMAINING" -eq 5 ]] && echo pass || echo fail )"
+# Count ack-src events in processed/ (some late events may or may not have been caught)
+PROCESSED_ACK_SRC=$(grep -rl "source: ack-src" "$T87_DIR/processed/"*.event 2>/dev/null | wc -l || echo 0)
+check "ack-all moved ack-src events to processed/" "$( [[ "$PROCESSED_ACK_SRC" -ge 20 ]] && echo pass || echo fail )"
 echo ""
 
 cd "$SCRIPT_DIR"
