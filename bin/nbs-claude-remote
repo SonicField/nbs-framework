@@ -1,0 +1,199 @@
+#!/bin/bash
+# nbs-claude-remote: Launch Claude Code on a remote machine via SSH
+#
+# SSHs to a remote machine, starts nbs-claude in a tmux session there,
+# and attaches your local terminal. All file access (bus, chat, scribe)
+# happens on the remote machine where .nbs/ lives.
+#
+# Usage:
+#   nbs-claude-remote --host=USER@HOST --root=PATH [OPTIONS]
+#
+# Required:
+#   --host=USER@HOST      SSH target (e.g. user@remote-host)
+#   --root=PATH           Project root on the remote machine (must contain .nbs/)
+#
+# Options:
+#   --handle=NAME         Agent handle (default: remote)
+#   --name=NAME           Chat name for tmux session naming (default: live)
+#   --ssh-key=PATH        SSH key file (default: use ssh-agent)
+#   --ssh-opts=OPTS       Additional SSH options (e.g. '-o ControlPath=none')
+#   --resume              Attach to existing remote tmux session instead of creating
+#   --list                List existing NBS tmux sessions on the remote
+#   --help                Show usage
+#
+# Examples:
+#   nbs-claude-remote --host=user@remote-host --root=~/project
+#   nbs-claude-remote --host=user@remote-host --root=~/project --handle=worker1
+#   nbs-claude-remote --host=user@remote-host --root=~/project --resume
+#   nbs-claude-remote --host=user@remote-host --list
+#
+# Exit codes:
+#   0 - Clean exit
+#   1 - General error
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+# --- Configuration ---
+
+HOST=""
+ROOT=""
+HANDLE="remote"
+CHAT_NAME="live"
+SSH_KEY=""
+SSH_OPTS=""
+RESUME=false
+LIST=false
+
+# --- Output helpers ---
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}[nbs-claude-remote]${NC} $*"; }
+ok()    { echo -e "${GREEN}[nbs-claude-remote]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[nbs-claude-remote]${NC} $*"; }
+error() { echo -e "${RED}[nbs-claude-remote]${NC} $*" >&2; }
+
+# --- Argument parsing ---
+
+for arg in "$@"; do
+    case "$arg" in
+        --host=*)
+            HOST="${arg#--host=}"
+            ;;
+        --root=*)
+            ROOT="${arg#--root=}"
+            ;;
+        --handle=*)
+            HANDLE="${arg#--handle=}"
+            ;;
+        --name=*)
+            CHAT_NAME="${arg#--name=}"
+            ;;
+        --ssh-key=*)
+            SSH_KEY="${arg#--ssh-key=}"
+            ;;
+        --ssh-opts=*)
+            SSH_OPTS="${arg#--ssh-opts=}"
+            ;;
+        --resume)
+            RESUME=true
+            ;;
+        --list)
+            LIST=true
+            ;;
+        --help|-h)
+            cat <<'USAGE'
+nbs-claude-remote: Launch Claude Code on a remote machine via SSH
+
+Usage: nbs-claude-remote --host=USER@HOST --root=PATH [OPTIONS]
+
+Required:
+  --host=USER@HOST      SSH target (e.g. user@remote-host)
+  --root=PATH           Project root on the remote machine (must contain .nbs/)
+
+Options:
+  --handle=NAME         Agent handle (default: remote)
+  --name=NAME           Chat name for tmux session naming (default: live)
+  --ssh-key=PATH        SSH key file
+  --ssh-opts=OPTS       Additional SSH options (e.g. '-o ControlPath=none')
+  --resume              Attach to existing remote tmux session
+  --list                List existing NBS tmux sessions on remote
+  --help                Show this help
+
+The script SSHs to the remote, starts nbs-claude in a tmux session
+there, and attaches your terminal. All file access happens on the
+remote machine where .nbs/ lives.
+
+Exit codes:
+  0 - Success
+  1 - General error
+  4 - Invalid arguments
+USAGE
+            exit 0
+            ;;
+        *)
+            error "Unknown argument: $arg"
+            error "Run: nbs-claude-remote --help"
+            exit 4
+            ;;
+    esac
+done
+
+# --- Validate arguments ---
+
+if [[ -z "$HOST" ]]; then
+    error "Missing required argument: --host=USER@HOST"
+    error "Run: nbs-claude-remote --help"
+    exit 4
+fi
+
+if [[ "$LIST" == "true" ]]; then
+    # List remote NBS tmux sessions and exit
+    info "Listing NBS tmux sessions on $HOST..."
+    SSH_CMD=(ssh)
+    [[ -n "$SSH_KEY" ]] && SSH_CMD+=(-i "$SSH_KEY")
+    [[ -n "$SSH_OPTS" ]] && SSH_CMD+=($SSH_OPTS)
+    SSH_CMD+=("$HOST" "tmux ls 2>/dev/null | grep nbs- || echo 'No NBS sessions found'")
+    "${SSH_CMD[@]}"
+    exit 0
+fi
+
+if [[ -z "$ROOT" ]]; then
+    error "Missing required argument: --root=PATH"
+    error "Run: nbs-claude-remote --help"
+    exit 4
+fi
+
+# --- Build SSH command ---
+
+SSH_BASE=(ssh -t)
+[[ -n "$SSH_KEY" ]] && SSH_BASE+=(-i "$SSH_KEY")
+[[ -n "$SSH_OPTS" ]] && SSH_BASE+=($SSH_OPTS)
+SSH_BASE+=("$HOST")
+
+SESSION_NAME="nbs-${HANDLE}-${CHAT_NAME}"
+
+# --- Resume mode ---
+
+if [[ "$RESUME" == "true" ]]; then
+    info "Attaching to remote session: $SESSION_NAME on $HOST"
+    "${SSH_BASE[@]}" "tmux attach-session -t '$SESSION_NAME' 2>/dev/null || echo 'Session not found: $SESSION_NAME'"
+    exit $?
+fi
+
+# --- Launch mode ---
+
+echo ""
+echo -e "${BOLD}NBS Claude Remote${NC}"
+echo "  Host:     $HOST"
+echo "  Root:     $ROOT"
+echo "  Handle:   $HANDLE"
+echo "  Chat:     $CHAT_NAME"
+echo "  Session:  $SESSION_NAME"
+echo ""
+
+# Check if session already exists on remote
+info "Checking for existing session..."
+if "${SSH_BASE[@]}" "tmux has-session -t '$SESSION_NAME' 2>/dev/null" 2>/dev/null; then
+    warn "Session '$SESSION_NAME' already exists on $HOST"
+    info "Attaching to existing session..."
+    "${SSH_BASE[@]}" "tmux attach-session -t '$SESSION_NAME'"
+    exit $?
+fi
+
+# Create remote tmux session, start nbs-claude, then attach
+info "Creating remote session and launching nbs-claude..."
+
+REMOTE_CMD="cd '$ROOT' && \
+    tmux new-session -d -s '$SESSION_NAME' -c '$ROOT' && \
+    tmux send-keys -t '$SESSION_NAME' 'NBS_HANDLE=$HANDLE nbs-claude --dangerously-skip-permissions' Enter && \
+    sleep 2 && \
+    tmux attach-session -t '$SESSION_NAME'"
+
+"${SSH_BASE[@]}" "$REMOTE_CMD"

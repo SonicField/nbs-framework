@@ -11,6 +11,9 @@
 #   T3 (13-15): Dedup-window=0 bypass for chat events
 #   T4 (16-20): End-to-end bus event flow
 #   T5 (21-25): nbs-claude sidecar functions (integration-level)
+#   T6 (26-30): Full Scribe/Pythia pipeline
+#   T7 (31-33): Multi-handle concurrent cursor tracking
+#   T8 (34-38): nbs-chat-init --compact-log decision log archival
 
 set -euo pipefail
 
@@ -385,6 +388,407 @@ check "Returns 0 (critical bypasses cooldown)" "$( [[ $RC -eq 0 ]] && echo pass 
 for f in "$T5_DIR/.nbs/events/"*.event; do
     "$NBS_BUS" ack "$T5_DIR/.nbs/events/" "$(basename "$f")" 2>/dev/null || true
 done
+echo ""
+
+# ============================================================
+# T6: Full Scribe/Pythia pipeline
+# ============================================================
+
+echo "T6: Full Scribe/Pythia pipeline"
+echo ""
+
+T6_DIR="$TEST_DIR/t6"
+mkdir -p "$T6_DIR/.nbs/chat" "$T6_DIR/.nbs/events/processed" "$T6_DIR/.nbs/scribe"
+"$NBS_CHAT" create "$T6_DIR/.nbs/chat/pipeline.chat" >/dev/null 2>&1
+
+# Write config with pythia-interval=3 so we hit the threshold quickly
+cat > "$T6_DIR/.nbs/events/config.yaml" << 'EOF'
+dedup-window: 300
+pythia-interval: 3
+EOF
+
+# Initialise scribe log
+cat > "$T6_DIR/.nbs/scribe/pipeline-log.md" << 'EOF'
+# Decision Log
+
+Project: test-pipeline
+Created: 2026-02-16T00:00:00Z
+Scribe: scribe
+Chat: pipeline.chat
+Decision count: 0
+
+---
+EOF
+
+# --- Test 26: Scribe logs a decision to the decision log ---
+echo "26. Scribe logs a decision to the decision log..."
+# Simulate a chat decision
+"$NBS_CHAT" send "$T6_DIR/.nbs/chat/pipeline.chat" alice "Let's use file-based events, not sockets" >/dev/null 2>&1
+"$NBS_CHAT" send "$T6_DIR/.nbs/chat/pipeline.chat" bob "Agreed — file-based events it is" >/dev/null 2>&1
+
+# Simulate Scribe appending a decision entry
+TIMESTAMP_1=$(date +%s)
+cat >> "$T6_DIR/.nbs/scribe/pipeline-log.md" << ENTRY
+
+---
+
+### D-${TIMESTAMP_1} Use file-based events instead of sockets
+- **Chat ref:** pipeline.chat:~L1
+- **Participants:** alice, bob
+- **Artefacts:** —
+- **Risk tags:** none
+- **Status:** decided
+- **Rationale:** Team agreed on file-based events for simplicity and atomicity.
+ENTRY
+
+# Verify entry format
+check "Decision entry has D- header" "$( grep -q "^### D-${TIMESTAMP_1}" "$T6_DIR/.nbs/scribe/pipeline-log.md" && echo pass || echo fail )"
+check "Decision entry has Chat ref" "$( grep -q 'Chat ref.\+pipeline.chat' "$T6_DIR/.nbs/scribe/pipeline-log.md" && echo pass || echo fail )"
+check "Decision entry has Participants" "$( grep -q 'Participants.\+alice, bob' "$T6_DIR/.nbs/scribe/pipeline-log.md" && echo pass || echo fail )"
+check "Decision entry has Status" "$( grep -q 'Status.\+decided' "$T6_DIR/.nbs/scribe/pipeline-log.md" && echo pass || echo fail )"
+echo ""
+
+# --- Test 27: Scribe publishes decision-logged event to bus ---
+echo "27. Scribe publishes decision-logged event to bus..."
+"$NBS_BUS" publish "$T6_DIR/.nbs/events/" scribe decision-logged normal \
+  "D-${TIMESTAMP_1} Use file-based events instead of sockets" --dedup-window=0 >/dev/null 2>&1
+DLOG_EVENT=$(ls "$T6_DIR/.nbs/events/"*decision-logged*.event 2>/dev/null | head -1)
+check "decision-logged event exists" "$( [[ -n "$DLOG_EVENT" ]] && echo pass || echo fail )"
+if [[ -n "$DLOG_EVENT" ]]; then
+    check "event payload contains D-timestamp" "$( grep -q "D-${TIMESTAMP_1}" "$DLOG_EVENT" && echo pass || echo fail )"
+    "$NBS_BUS" ack "$T6_DIR/.nbs/events/" "$(basename "$DLOG_EVENT")" >/dev/null 2>&1
+fi
+echo ""
+
+# --- Test 28: Pythia checkpoint published at pythia-interval threshold ---
+echo "28. Pythia checkpoint published at pythia-interval=3 threshold..."
+# Log two more decisions to reach count=3
+for i in 2 3; do
+    TS=$(date +%s)${i}
+    cat >> "$T6_DIR/.nbs/scribe/pipeline-log.md" << ENTRY
+
+---
+
+### D-${TS} Test decision number ${i}
+- **Chat ref:** pipeline.chat:~L${i}
+- **Participants:** alice
+- **Artefacts:** —
+- **Risk tags:** none
+- **Status:** decided
+- **Rationale:** Test decision for pipeline integration test.
+ENTRY
+done
+
+DECISION_COUNT=$(grep -c "^### D-" "$T6_DIR/.nbs/scribe/pipeline-log.md")
+check "Decision count is 3" "$( [[ $DECISION_COUNT -eq 3 ]] && echo pass || echo fail )"
+
+# Read pythia-interval from config
+PYTHIA_INTERVAL=$(grep "pythia-interval:" "$T6_DIR/.nbs/events/config.yaml" 2>/dev/null | awk '{print $2}')
+PYTHIA_INTERVAL=${PYTHIA_INTERVAL:-20}
+check "Pythia interval read as 3" "$( [[ $PYTHIA_INTERVAL -eq 3 ]] && echo pass || echo fail )"
+
+# Publish pythia-checkpoint (as Scribe would when count % interval == 0)
+if (( DECISION_COUNT % PYTHIA_INTERVAL == 0 )); then
+    "$NBS_BUS" publish "$T6_DIR/.nbs/events/" scribe pythia-checkpoint high \
+      "Decision count: $DECISION_COUNT. Pythia assessment requested." --dedup-window=0 >/dev/null 2>&1
+fi
+CHECKPOINT_EVENT=$(ls "$T6_DIR/.nbs/events/"*pythia-checkpoint*.event 2>/dev/null | head -1)
+check "pythia-checkpoint event exists" "$( [[ -n "$CHECKPOINT_EVENT" ]] && echo pass || echo fail )"
+if [[ -n "$CHECKPOINT_EVENT" ]]; then
+    check "checkpoint payload has decision count" "$( grep -q "Decision count: 3" "$CHECKPOINT_EVENT" && echo pass || echo fail )"
+fi
+echo ""
+
+# --- Test 29: Pythia reads checkpoint, acks, posts assessment to chat ---
+echo "29. Pythia reads checkpoint, acks, posts assessment to chat..."
+if [[ -n "$CHECKPOINT_EVENT" ]]; then
+    # Read the event (as Pythia would)
+    EVENT_CONTENT=$("$NBS_BUS" read "$T6_DIR/.nbs/events/" "$(basename "$CHECKPOINT_EVENT")" 2>/dev/null)
+    check "Pythia can read checkpoint event" "$( echo "$EVENT_CONTENT" | grep -q "pythia-checkpoint" && echo pass || echo fail )"
+
+    # Ack the event
+    "$NBS_BUS" ack "$T6_DIR/.nbs/events/" "$(basename "$CHECKPOINT_EVENT")" >/dev/null 2>&1
+    check "Checkpoint event acked" "$( [[ ! -f "$CHECKPOINT_EVENT" ]] && echo pass || echo fail )"
+
+    # Post assessment to chat (as Pythia would)
+    "$NBS_CHAT" send "$T6_DIR/.nbs/chat/pipeline.chat" pythia "PYTHIA CHECKPOINT — Assessment #1
+
+**Hidden assumption:** Team assumes file-based events are atomic on target filesystem (D-${TIMESTAMP_1}).
+
+**Second-order risk:** If event volume exceeds filesystem inode limits, the bus silently fails.
+
+**Missing validation:** No test for concurrent file-based event writes under load.
+
+**Six-month regret:** A bridge that carries one cart will not carry a caravan.
+File-based events (D-${TIMESTAMP_1}) work at current scale but lack backpressure.
+
+**Confidence:** moderate — pipeline works but scalability untested.
+
+---
+End of checkpoint. Pythia out." >/dev/null 2>&1
+
+    PYTHIA_MSG=$("$NBS_CHAT" read "$T6_DIR/.nbs/chat/pipeline.chat" 2>/dev/null)
+    check "Pythia assessment in chat" "$( echo "$PYTHIA_MSG" | grep -q "PYTHIA CHECKPOINT" && echo pass || echo fail )"
+    check "Assessment contains Hidden assumption" "$( echo "$PYTHIA_MSG" | grep -q "Hidden assumption" && echo pass || echo fail )"
+    check "Assessment contains Confidence" "$( echo "$PYTHIA_MSG" | grep -q "Confidence" && echo pass || echo fail )"
+else
+    check "Pythia can read checkpoint event" "fail"
+    check "Checkpoint event acked" "fail"
+    check "Pythia assessment in chat" "fail"
+    check "Assessment contains Hidden assumption" "fail"
+    check "Assessment contains Confidence" "fail"
+fi
+echo ""
+
+# --- Test 30: Full pipeline round-trip verification ---
+echo "30. Full pipeline round-trip: chat → scribe → bus → pythia → chat..."
+# Verify the complete sequence of artefacts
+CHAT_MSG_COUNT=$("$NBS_CHAT" read "$T6_DIR/.nbs/chat/pipeline.chat" 2>/dev/null | wc -l)
+LOG_ENTRIES=$(grep -c "^### D-" "$T6_DIR/.nbs/scribe/pipeline-log.md")
+PROCESSED_EVENTS=$(ls "$T6_DIR/.nbs/events/processed/"*.event 2>/dev/null | wc -l)
+check "Chat has messages from all pipeline stages" "$( [[ $CHAT_MSG_COUNT -ge 3 ]] && echo pass || echo fail )"
+check "Decision log has 3 entries" "$( [[ $LOG_ENTRIES -eq 3 ]] && echo pass || echo fail )"
+check "Bus events were processed (in processed/)" "$( [[ $PROCESSED_EVENTS -ge 1 ]] && echo pass || echo fail )"
+# Verify Pythia's assessment-posted event
+"$NBS_BUS" publish "$T6_DIR/.nbs/events/" pythia assessment-posted normal \
+  "Pythia checkpoint posted to pipeline.chat" --dedup-window=0 >/dev/null 2>&1
+AP_EVENT=$(ls "$T6_DIR/.nbs/events/"*assessment-posted*.event 2>/dev/null | head -1)
+check "assessment-posted event exists" "$( [[ -n "$AP_EVENT" ]] && echo pass || echo fail )"
+# Clean up
+if [[ -n "$AP_EVENT" ]]; then
+    "$NBS_BUS" ack "$T6_DIR/.nbs/events/" "$(basename "$AP_EVENT")" >/dev/null 2>&1
+fi
+echo ""
+
+# ============================================================
+# T7: Multi-handle concurrent cursor tracking
+# ============================================================
+
+echo "T7: Multi-handle concurrent cursor tracking"
+echo ""
+
+# --- Test 31: Interleaved sends, --since tracks independently ---
+echo "31. Interleaved sends, --since tracks independently per handle..."
+T7_DIR="$TEST_DIR/t7"
+mkdir -p "$T7_DIR/.nbs/chat"
+"$NBS_CHAT" create "$T7_DIR/.nbs/chat/cursors.chat" >/dev/null 2>&1
+
+# Alpha sends, then reads with --since
+"$NBS_CHAT" send "$T7_DIR/.nbs/chat/cursors.chat" alpha "Alpha message 1" >/dev/null 2>&1
+"$NBS_CHAT" send "$T7_DIR/.nbs/chat/cursors.chat" beta "Beta message 1" >/dev/null 2>&1
+"$NBS_CHAT" send "$T7_DIR/.nbs/chat/cursors.chat" alpha "Alpha message 2" >/dev/null 2>&1
+"$NBS_CHAT" send "$T7_DIR/.nbs/chat/cursors.chat" beta "Beta message 2" >/dev/null 2>&1
+
+# Alpha's --since should show messages after alpha's last post
+ALPHA_SINCE=$("$NBS_CHAT" read "$T7_DIR/.nbs/chat/cursors.chat" --since=alpha 2>/dev/null)
+# Beta's --since should show messages after beta's last post
+BETA_SINCE=$("$NBS_CHAT" read "$T7_DIR/.nbs/chat/cursors.chat" --since=beta 2>/dev/null)
+
+# Alpha's last post was "Alpha message 2" (3rd msg), so --since should show "Beta message 2" (4th msg)
+ALPHA_SINCE_COUNT=$(echo "$ALPHA_SINCE" | grep -c "message" || true)
+check "Alpha --since sees 1 message after last post" "$( [[ $ALPHA_SINCE_COUNT -eq 1 ]] && echo pass || echo fail )"
+check "Alpha --since sees Beta's last message" "$( echo "$ALPHA_SINCE" | grep -q "Beta message 2" && echo pass || echo fail )"
+
+# Beta's last post was "Beta message 2" (4th msg), so --since should show nothing
+check "Beta --since sees nothing after last post" "$( [[ -z "$BETA_SINCE" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 32: --unread returns only unread messages per handle ---
+echo "32. --unread tracks independently under concurrent writes..."
+T32_DIR="$TEST_DIR/t32"
+mkdir -p "$T32_DIR/.nbs/chat"
+"$NBS_CHAT" create "$T32_DIR/.nbs/chat/unread.chat" >/dev/null 2>&1
+
+# Send initial batch
+"$NBS_CHAT" send "$T32_DIR/.nbs/chat/unread.chat" writer1 "W1 initial" >/dev/null 2>&1
+"$NBS_CHAT" send "$T32_DIR/.nbs/chat/unread.chat" writer2 "W2 initial" >/dev/null 2>&1
+
+# Reader A reads — advances A's cursor
+"$NBS_CHAT" read "$T32_DIR/.nbs/chat/unread.chat" --unread=readerA >/dev/null 2>&1
+
+# More messages arrive concurrently
+"$NBS_CHAT" send "$T32_DIR/.nbs/chat/unread.chat" writer1 "W1 second" >/dev/null 2>&1 &
+"$NBS_CHAT" send "$T32_DIR/.nbs/chat/unread.chat" writer2 "W2 second" >/dev/null 2>&1 &
+wait
+
+# Reader B reads for the first time — should see all 4 messages
+B_UNREAD=$("$NBS_CHAT" read "$T32_DIR/.nbs/chat/unread.chat" --unread=readerB 2>/dev/null)
+B_COUNT=$(echo "$B_UNREAD" | wc -l)
+check "Reader B (first read) sees all 4 messages" "$( [[ $B_COUNT -eq 4 ]] && echo pass || echo fail )"
+
+# Reader A reads again — should see only the 2 new messages
+A_UNREAD=$("$NBS_CHAT" read "$T32_DIR/.nbs/chat/unread.chat" --unread=readerA 2>/dev/null)
+A_COUNT=$(echo "$A_UNREAD" | grep -c "second" || true)
+check "Reader A sees only 2 new messages" "$( [[ $A_COUNT -eq 2 ]] && echo pass || echo fail )"
+
+# Both read again — neither should see anything new
+A_AGAIN=$("$NBS_CHAT" read "$T32_DIR/.nbs/chat/unread.chat" --unread=readerA 2>/dev/null)
+B_AGAIN=$("$NBS_CHAT" read "$T32_DIR/.nbs/chat/unread.chat" --unread=readerB 2>/dev/null)
+check "Reader A second re-read is empty" "$( [[ -z "$A_AGAIN" ]] && echo pass || echo fail )"
+check "Reader B second re-read is empty" "$( [[ -z "$B_AGAIN" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 33: Three handles concurrent sends, all cursors independent ---
+echo "33. Three handles concurrent sends, cursor independence..."
+T33_DIR="$TEST_DIR/t33"
+mkdir -p "$T33_DIR/.nbs/chat"
+"$NBS_CHAT" create "$T33_DIR/.nbs/chat/triple.chat" >/dev/null 2>&1
+
+# Three handles each send 3 messages concurrently
+for i in 1 2 3; do
+    "$NBS_CHAT" send "$T33_DIR/.nbs/chat/triple.chat" handleX "X-$i" >/dev/null 2>&1 &
+    "$NBS_CHAT" send "$T33_DIR/.nbs/chat/triple.chat" handleY "Y-$i" >/dev/null 2>&1 &
+    "$NBS_CHAT" send "$T33_DIR/.nbs/chat/triple.chat" handleZ "Z-$i" >/dev/null 2>&1 &
+done
+wait
+
+# Verify all 9 messages present
+TOTAL=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" 2>/dev/null | wc -l)
+check "All 9 concurrent messages present" "$( [[ $TOTAL -eq 9 ]] && echo pass || echo fail )"
+
+# handleX reads with --unread, then more messages arrive, then reads again
+X_FIRST=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleX 2>/dev/null)
+X_FIRST_COUNT=$(echo "$X_FIRST" | wc -l)
+check "handleX first --unread sees all 9" "$( [[ $X_FIRST_COUNT -eq 9 ]] && echo pass || echo fail )"
+
+# Send one more from Y
+"$NBS_CHAT" send "$T33_DIR/.nbs/chat/triple.chat" handleY "Y-extra" >/dev/null 2>&1
+
+# handleX should see only the new message
+X_SECOND=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleX 2>/dev/null)
+check "handleX second --unread sees only Y-extra" "$( echo "$X_SECOND" | grep -q "Y-extra" && [[ $(echo "$X_SECOND" | wc -l) -eq 1 ]] && echo pass || echo fail )"
+
+# handleZ has never read — should see all 10
+Z_FIRST=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleZ 2>/dev/null)
+Z_COUNT=$(echo "$Z_FIRST" | wc -l)
+check "handleZ (never read) sees all 10" "$( [[ $Z_COUNT -eq 10 ]] && echo pass || echo fail )"
+
+# Verify cursor file has entries for X and Z (not Y, since Y only sent, never read with --unread)
+CURSOR_FILE="$T33_DIR/.nbs/chat/triple.chat.cursors"
+check "Cursor file exists" "$( [[ -f "$CURSOR_FILE" ]] && echo pass || echo fail )"
+if [[ -f "$CURSOR_FILE" ]]; then
+    check "Cursor has handleX entry" "$( grep -q "handleX=" "$CURSOR_FILE" && echo pass || echo fail )"
+    check "Cursor has handleZ entry" "$( grep -q "handleZ=" "$CURSOR_FILE" && echo pass || echo fail )"
+fi
+echo ""
+
+# ============================================================
+# T8: nbs-chat-init --compact-log decision log archival
+# ============================================================
+
+echo "T8: nbs-chat-init --compact-log"
+echo ""
+
+# Helper: generate a decision log with N entries
+generate_log_entries() {
+    local log_file="$1"
+    local count="$2"
+    cat > "$log_file" << 'LOGEOF'
+# Decision Log
+
+Project: test-compact
+Created: 2026-02-16T00:00:00Z
+Scribe: scribe
+Chat: compact.chat
+Decision count: 0
+
+---
+LOGEOF
+    for i in $(seq 1 "$count"); do
+        cat >> "$log_file" << ENTRY
+
+---
+
+### D-${i}00000 Test decision $i
+- **Chat ref:** compact.chat:~L${i}
+- **Participants:** alice
+- **Artefacts:** —
+- **Risk tags:** none
+- **Status:** decided
+- **Rationale:** Test entry number $i for compaction testing.
+ENTRY
+    done
+}
+
+# --- Test 34: Log below threshold is not compacted ---
+echo "34. Log below threshold (50 entries) is not compacted..."
+T34_DIR="$TEST_DIR/t34"
+mkdir -p "$T34_DIR/.nbs/chat" "$T34_DIR/.nbs/events/processed" "$T34_DIR/.nbs/scribe"
+"$NBS_CHAT" create "$T34_DIR/.nbs/chat/compact.chat" >/dev/null 2>&1
+generate_log_entries "$T34_DIR/.nbs/scribe/compact-log.md" 50
+
+(cd "$T34_DIR" && "$NBS_CHAT_INIT" --name=compact --force >/dev/null 2>&1)
+ARCHIVE_FILES=$(find "$T34_DIR/.nbs/scribe/" -name "compact-log-archive-*.md" 2>/dev/null | wc -l)
+ENTRY_COUNT=$(grep -c '^### D-' "$T34_DIR/.nbs/scribe/compact-log.md" 2>/dev/null || echo 0)
+check "No archive created (below threshold)" "$( [[ $ARCHIVE_FILES -eq 0 ]] && echo pass || echo fail )"
+check "Original log intact (50 entries)" "$( [[ $ENTRY_COUNT -eq 50 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 35: Log at threshold is archived ---
+echo "35. Log at threshold (100 entries) is archived..."
+T35_DIR="$TEST_DIR/t35"
+mkdir -p "$T35_DIR/.nbs/chat" "$T35_DIR/.nbs/events/processed" "$T35_DIR/.nbs/scribe"
+"$NBS_CHAT" create "$T35_DIR/.nbs/chat/compact.chat" >/dev/null 2>&1
+generate_log_entries "$T35_DIR/.nbs/scribe/compact-log.md" 100
+
+(cd "$T35_DIR" && "$NBS_CHAT_INIT" --name=compact --force >/dev/null 2>&1)
+ARCHIVE_FILE=$(find "$T35_DIR/.nbs/scribe/" -name "compact-log-archive-*.md" 2>/dev/null | head -1)
+check "Archive file created" "$( [[ -n "$ARCHIVE_FILE" ]] && echo pass || echo fail )"
+if [[ -n "$ARCHIVE_FILE" ]]; then
+    ARCHIVE_ENTRIES=$(grep -c '^### D-' "$ARCHIVE_FILE" 2>/dev/null || echo 0)
+    check "Archive has 100 entries" "$( [[ $ARCHIVE_ENTRIES -eq 100 ]] && echo pass || echo fail )"
+fi
+# New log should exist with linked-list header
+check "New log created" "$( [[ -f "$T35_DIR/.nbs/scribe/compact-log.md" ]] && echo pass || echo fail )"
+check "New log has ARCHIVE-LINK" "$( grep -q '### ARCHIVE-LINK' "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+check "New log has Previous log header" "$( grep -q '^Previous log:' "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+echo ""
+
+# --- Test 36: New log linked-list header content ---
+echo "36. New log linked-list header has correct content..."
+if [[ -n "$ARCHIVE_FILE" ]]; then
+    check "ARCHIVE-LINK references archive file" "$( grep -q "$(basename "$ARCHIVE_FILE")" "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+    check "Entries archived count is 100" "$( grep -q 'Entries archived.*100' "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+    check "Project preserved in new log" "$( grep -q '^Project: test-compact' "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+    check "Chat ref preserved in new log" "$( grep -q '^Chat: compact.chat' "$T35_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+else
+    check "ARCHIVE-LINK references archive file" "fail"
+    check "Entries archived count is 100" "fail"
+    check "Project preserved in new log" "fail"
+    check "Chat ref preserved in new log" "fail"
+fi
+echo ""
+
+# --- Test 37: --compact-log forces compaction below threshold ---
+echo "37. --compact-log forces compaction below threshold..."
+T37_DIR="$TEST_DIR/t37"
+mkdir -p "$T37_DIR/.nbs/chat" "$T37_DIR/.nbs/events/processed" "$T37_DIR/.nbs/scribe"
+"$NBS_CHAT" create "$T37_DIR/.nbs/chat/compact.chat" >/dev/null 2>&1
+generate_log_entries "$T37_DIR/.nbs/scribe/compact-log.md" 5
+
+(cd "$T37_DIR" && "$NBS_CHAT_INIT" --name=compact --force --compact-log >/dev/null 2>&1)
+FORCE_ARCHIVE=$(find "$T37_DIR/.nbs/scribe/" -name "compact-log-archive-*.md" 2>/dev/null | head -1)
+check "Archive created despite only 5 entries" "$( [[ -n "$FORCE_ARCHIVE" ]] && echo pass || echo fail )"
+if [[ -n "$FORCE_ARCHIVE" ]]; then
+    FORCE_ENTRIES=$(grep -c '^### D-' "$FORCE_ARCHIVE" 2>/dev/null || echo 0)
+    check "Archive has 5 entries" "$( [[ $FORCE_ENTRIES -eq 5 ]] && echo pass || echo fail )"
+fi
+check "New log has ARCHIVE-LINK" "$( grep -q '### ARCHIVE-LINK' "$T37_DIR/.nbs/scribe/compact-log.md" && echo pass || echo fail )"
+echo ""
+
+# --- Test 38: --dry-run with --compact-log does not modify files ---
+echo "38. --dry-run with --compact-log does not modify files..."
+T38_DIR="$TEST_DIR/t38"
+mkdir -p "$T38_DIR/.nbs/chat" "$T38_DIR/.nbs/events/processed" "$T38_DIR/.nbs/scribe"
+"$NBS_CHAT" create "$T38_DIR/.nbs/chat/compact.chat" >/dev/null 2>&1
+generate_log_entries "$T38_DIR/.nbs/scribe/compact-log.md" 10
+BEFORE_MD5=$(md5sum "$T38_DIR/.nbs/scribe/compact-log.md" | awk '{print $1}')
+
+(cd "$T38_DIR" && "$NBS_CHAT_INIT" --name=compact --force --compact-log --dry-run >/dev/null 2>&1)
+AFTER_MD5=$(md5sum "$T38_DIR/.nbs/scribe/compact-log.md" | awk '{print $1}')
+DRY_ARCHIVE=$(find "$T38_DIR/.nbs/scribe/" -name "compact-log-archive-*.md" 2>/dev/null | wc -l)
+check "Log file unchanged by --dry-run" "$( [[ "$BEFORE_MD5" == "$AFTER_MD5" ]] && echo pass || echo fail )"
+check "No archive created by --dry-run" "$( [[ $DRY_ARCHIVE -eq 0 ]] && echo pass || echo fail )"
 echo ""
 
 # ============================================================

@@ -16,7 +16,8 @@
 #   --spawn-scribe        Launch Scribe in tmux session
 #   --spawn-pythia        Launch Pythia in tmux session
 #   --spawn-all           Launch Scribe + Pythia + main Claude instance
-#   --spawn-only          Skip infrastructure creation, just spawn agents (for restart)
+#   --spawn-only          Skip infrastructure, just spawn agents (for restart)
+#   --compact-log         Archive decision log if it exceeds threshold
 #   --help                Show usage
 #
 # Exit codes:
@@ -50,6 +51,7 @@ SPAWN_SCRIBE=false
 SPAWN_PYTHIA=false
 SPAWN_ALL=false
 SPAWN_ONLY=false
+COMPACT_LOG=false
 PROJECT_ID=""
 CHAT_NAME=""  # Set via --name= (required)
 
@@ -174,6 +176,9 @@ for arg in "$@"; do
         --spawn-only)
             SPAWN_ONLY=true
             ;;
+        --compact-log)
+            COMPACT_LOG=true
+            ;;
         --help|-h)
             cat <<'USAGE'
 nbs-chat-init: Bootstrap NBS framework infrastructure
@@ -191,6 +196,7 @@ Options:
   --spawn-pythia          Launch Pythia in tmux session
   --spawn-all             Launch Scribe + Pythia + main Claude instance
   --spawn-only            Skip infrastructure creation, just spawn agents (for restart)
+  --compact-log           Archive decision log if it exceeds threshold (100 entries)
   --help                  Show this help
 
 Infrastructure created:
@@ -431,6 +437,79 @@ else
     info "  ${CHAT_NAME}-log.md already exists — keeping"
 fi
 
+# --- Log compaction (progressive archival) ---
+# If the decision log exceeds 100 entries, archive it and start a new one.
+# The first record in the new log points to the archive (linked list).
+# Triggered automatically during init or manually with --compact-log.
+
+COMPACT_THRESHOLD=100
+
+compact_decision_log() {
+    local log_file="$1"
+    local entry_count
+    entry_count=$(grep -c '^### D-' "$log_file" 2>/dev/null || echo 0)
+
+    if [[ "$entry_count" -lt "$COMPACT_THRESHOLD" ]] && [[ "$COMPACT_LOG" != "true" ]]; then
+        info "  Decision log: $entry_count entries (threshold: $COMPACT_THRESHOLD) — no compaction needed"
+        return 0
+    fi
+
+    if [[ "$entry_count" -eq 0 ]]; then
+        info "  Decision log: empty — nothing to compact"
+        return 0
+    fi
+
+    local archive_ts
+    archive_ts=$(date +%Y%m%d-%H%M%S)
+    local archive_file=".nbs/scribe/${CHAT_NAME}-log-archive-${archive_ts}.md"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} Archive $log_file ($entry_count entries) → $archive_file"
+        echo -e "  ${YELLOW}[DRY-RUN]${NC} Create new $log_file with link to archive"
+        return 0
+    fi
+
+    # Move current log to archive
+    mv "$log_file" "$archive_file"
+
+    # Extract header fields from the archive for the new log
+    local project_name
+    project_name=$(grep '^Project:' "$archive_file" | head -1 | sed 's/^Project: //')
+    local chat_ref
+    chat_ref=$(grep '^Chat:' "$archive_file" | head -1 | sed 's/^Chat: //')
+    local created_ts
+    created_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Create new log with link to archive as first record
+    cat > "$log_file" << COMPACTEOF
+# Decision Log
+
+Project: ${project_name:-$PROJECT_NAME}
+Created: $created_ts
+Scribe: scribe
+Chat: ${chat_ref:-${CHAT_NAME}.chat}
+Decision count: 0
+Previous log: $archive_file
+
+---
+
+### ARCHIVE-LINK
+- **Previous log:** \`$archive_file\`
+- **Entries archived:** $entry_count
+- **Archived at:** $created_ts
+- **Rationale:** Decision log exceeded compaction threshold ($COMPACT_THRESHOLD entries). All previous decisions are preserved in the archive file. This is the continuation log.
+
+---
+COMPACTEOF
+
+    ok "  Compacted: $entry_count entries archived → $archive_file"
+    info "  New log created with link to archive"
+}
+
+if [[ -f "$SCRIBE_LOG" ]]; then
+    compact_decision_log "$SCRIBE_LOG"
+fi
+
 # ============================================================
 # PHASE 4: Project Identity
 # ============================================================
@@ -533,16 +612,20 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             # Send the Scribe role prompt
             SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor $CHAT_FILE and log decisions to $SCRIBE_LOG. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
 
-            # Wait for Claude Code prompt to appear
+            # Wait for sidecar handle injection (proves CLI is fully ready)
             wait_count=0
-            max_wait=30
+            max_wait=60
             while [ $wait_count -lt $max_wait ]; do
-                if tmux capture-pane -t "$SCRIBE_SESSION" -p 2>/dev/null | grep -q '❯'; then
+                if tmux capture-pane -t "$SCRIBE_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                     break
                 fi
                 sleep 1
                 wait_count=$((wait_count + 1))
             done
+
+            if [ $wait_count -ge $max_wait ]; then
+                warn "  Scribe CLI did not become ready within ${max_wait}s"
+            fi
 
             tmux send-keys -t "$SCRIBE_SESSION" "$SCRIBE_PROMPT" Enter
 
@@ -583,15 +666,20 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
 
                 PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. You are a persistent agent monitoring the bus for pythia-checkpoint events. Read the decision log at $SCRIBE_LOG and post structured assessments to $CHAT_FILE. You accumulate context across checkpoints. Start by reading the decision log and posting your first assessment."
 
+                # Wait for sidecar handle injection (proves CLI is fully ready)
                 wait_count=0
-                max_wait=30
+                max_wait=60
                 while [ $wait_count -lt $max_wait ]; do
-                    if tmux capture-pane -t "$PYTHIA_SESSION" -p 2>/dev/null | grep -q '❯'; then
+                    if tmux capture-pane -t "$PYTHIA_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                         break
                     fi
                     sleep 1
                     wait_count=$((wait_count + 1))
                 done
+
+                if [ $wait_count -ge $max_wait ]; then
+                    warn "  Pythia CLI did not become ready within ${max_wait}s"
+                fi
 
                 tmux send-keys -t "$PYTHIA_SESSION" "$PYTHIA_PROMPT" Enter
                 sleep 1
