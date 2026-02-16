@@ -108,12 +108,18 @@ sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sideca
 
 # Run in a subshell with the test dir as working directory
 REGISTRY_AFTER=$(cd "$TEST_DIR" && {
-    # Override paths for the test directory
+    # Set variables needed by sourced functions
+    NBS_ROOT="$PWD"
+    NBS_REMOTE_HOST=""
+    NBS_LOG_FILE="/dev/null"
+    SIDECAR_HANDLE="test"
+
+    source "$_EXTRACT_TMP"
+
+    # Override paths after sourcing (source sets them from NBS_ROOT/SIDECAR_HANDLE)
     CONTROL_INBOX=".nbs/control-inbox"
     CONTROL_REGISTRY=".nbs/control-registry"
     CONTROL_INBOX_LINE=0
-
-    source "$_EXTRACT_TMP"
 
     # Process the inbox
     check_control_inbox

@@ -1,6 +1,6 @@
 ---
 description: Bootstrap a project for NBS teams in one command
-allowed-tools: Write, AskUserQuestion, Bash(mkdir:*)
+allowed-tools: Write, Bash(mkdir:*)
 ---
 
 # Start NBS Teams

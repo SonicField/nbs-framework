@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -20,6 +21,8 @@
 
 /* Safe integer parse — returns 0 on success, -1 on error */
 static int safe_parse_int(const char *str, int *out) {
+    ASSERT_MSG(str != NULL, "safe_parse_int: str is NULL");
+    ASSERT_MSG(out != NULL, "safe_parse_int: out is NULL");
     char *endptr;
     errno = 0;
     long val = strtol(str, &endptr, 10);
@@ -30,6 +33,8 @@ static int safe_parse_int(const char *str, int *out) {
 }
 
 static int safe_parse_long(const char *str, long *out) {
+    ASSERT_MSG(str != NULL, "safe_parse_long: str is NULL");
+    ASSERT_MSG(out != NULL, "safe_parse_long: out is NULL");
     char *endptr;
     errno = 0;
     long val = strtol(str, &endptr, 10);
@@ -41,8 +46,9 @@ static int safe_parse_long(const char *str, long *out) {
 static void get_timestamp(char *buf, size_t buf_size) {
     time_t now = time(NULL);
     ASSERT_MSG(now != (time_t)-1, "get_timestamp: time() failed");
-    struct tm *tm = localtime(&now);
-    ASSERT_MSG(tm != NULL, "get_timestamp: localtime() returned NULL for time %ld", (long)now);
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&now, &tm_buf);
+    ASSERT_MSG(tm != NULL, "get_timestamp: localtime_r() returned NULL for time %ld", (long)now);
     strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%S%z", tm);
 }
 
@@ -54,20 +60,20 @@ static void get_timestamp(char *buf, size_t buf_size) {
  */
 static long compute_file_length(const char *content_without_length) {
     /* Write content without the file-length line, measure it */
-    size_t base_size = strlen(content_without_length); /* content already ends with \n */
+    long base_size = (long)strlen(content_without_length); /* content already ends with \n */
 
     /* The line we will insert is "file-length: N\n" = 14 + digits(N) chars */
     /* Try with current digit count */
     char size_str[32];
-    snprintf(size_str, sizeof(size_str), "%zu", base_size);
-    size_t digits = strlen(size_str);
+    snprintf(size_str, sizeof(size_str), "%ld", base_size);
+    long digits = (long)strlen(size_str);
 
     long candidate = base_size + 14 + digits;
 
     /* Check if adding the line changed the digit count */
     snprintf(size_str, sizeof(size_str), "%ld", candidate);
-    if (strlen(size_str) != digits) {
-        candidate = base_size + 14 + strlen(size_str);
+    if ((long)strlen(size_str) != digits) {
+        candidate = base_size + 14 + (long)strlen(size_str);
     }
 
     return candidate;
@@ -180,8 +186,10 @@ int chat_create(const char *path) {
     long file_len = compute_file_length(content);
 
     /* Now write the actual file with file-length inserted */
-    FILE *f = fopen(path, "w");
-    if (!f) return -2;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -2;
+    FILE *f = fdopen(fd, "w");
+    if (!f) { close(fd); return -2; }
 
     fprintf(f, "=== nbs-chat ===\n");
     fprintf(f, "last-writer: system\n");
@@ -294,6 +302,11 @@ int chat_read(const char *path, chat_state_t *state) {
                         continue;
                     }
                     msg->content_len = decoded_len - handle_len - 2;
+                    /* Invariant: content_len == strlen(content) — no embedded NULs */
+                    ASSERT_MSG(msg->content_len == strlen(msg->content),
+                               "chat_read: content_len %zu != strlen(content) %zu for message %d"
+                               " — embedded NUL detected",
+                               msg->content_len, strlen(msg->content), state->message_count);
                     state->message_count++;
                 }
             }
@@ -307,7 +320,18 @@ int chat_read(const char *path, chat_state_t *state) {
                "chat_read: message_count %d out of bounds [0, %d]",
                state->message_count, MAX_MESSAGES);
 
-    fclose(f);
+    /* Check for I/O errors during read */
+    if (ferror(f)) {
+        fprintf(stderr, "warning: chat_read: I/O error reading %s\n", path);
+        fclose(f);
+        chat_state_free(state);
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        fprintf(stderr, "warning: chat_read: fclose failed for %s: %s\n", path, strerror(errno));
+        chat_state_free(state);
+        return -1;
+    }
     return 0;
 }
 
@@ -365,6 +389,10 @@ int chat_send(const char *path, const char *handle, const char *message) {
     /* Build the file content without file-length line */
     /* First, calculate total size needed */
     char parts_str[4096];
+    /* Worst case per participant: handle(count), = MAX_HANDLE_LEN + ~12 + 2 (separator) ~= 78 bytes */
+    ASSERT_MSG((size_t)state.participant_count * (MAX_HANDLE_LEN + 14) < sizeof(parts_str),
+               "chat_send: participant count %d * max entry size exceeds parts_str buffer %zu",
+               state.participant_count, sizeof(parts_str));
     format_participants(state.participants, state.participant_count,
                         parts_str, sizeof(parts_str));
 
@@ -377,6 +405,9 @@ int chat_send(const char *path, const char *handle, const char *message) {
         "participants: %s\n"
         "---\n",
         state.last_writer, state.last_write, parts_str);
+    ASSERT_MSG(header_len > 0 && (size_t)header_len < sizeof(header),
+               "chat_send: header snprintf truncated or failed: %d (buffer %zu)",
+               header_len, sizeof(header));
 
     /* Calculate total content size (header + existing messages + new message) */
 
@@ -413,11 +444,26 @@ int chat_send(const char *path, const char *handle, const char *message) {
         if (ll > 0) {
             char **tmp = realloc(encoded_lines,
                                      sizeof(char *) * (encoded_line_count + 1));
-            ASSERT_MSG(tmp != NULL, "chat_send: realloc failed for %d encoded lines", encoded_line_count + 1);
+            if (!tmp) {
+                fprintf(stderr, "warning: chat_send: realloc failed for %d encoded lines\n", encoded_line_count + 1);
+                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+                free(encoded_lines);
+                free(encoded);
+                chat_state_free(&state);
+                chat_lock_release(lock_fd);
+                return -1;
+            }
             encoded_lines = tmp;
             encoded_lines[encoded_line_count] = strdup(line_buf);
-            ASSERT_MSG(encoded_lines[encoded_line_count] != NULL,
-                       "chat_send: strdup failed for encoded line %d", encoded_line_count);
+            if (!encoded_lines[encoded_line_count]) {
+                fprintf(stderr, "warning: chat_send: strdup failed for encoded line %d\n", encoded_line_count);
+                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+                free(encoded_lines);
+                free(encoded);
+                chat_state_free(&state);
+                chat_lock_release(lock_fd);
+                return -1;
+            }
             encoded_line_count++;
         }
     }
@@ -462,8 +508,19 @@ int chat_send(const char *path, const char *handle, const char *message) {
     long file_len = compute_file_length(content_no_fl);
 
     /* Write the file with file-length inserted after last-write line */
-    f = fopen(path, "w");
+    int wfd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (wfd < 0) {
+        free(content_no_fl);
+        for (int i = 0; i < encoded_line_count; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        free(encoded);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    f = fdopen(wfd, "w");
     if (!f) {
+        close(wfd);
         free(content_no_fl);
         for (int i = 0; i < encoded_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
@@ -529,7 +586,10 @@ int chat_poll(const char *path, const char *handle, int timeout_secs) {
     for (int elapsed = 0; elapsed < timeout_secs; elapsed++) {
         sleep(1);
 
-        if (chat_read(path, &state) < 0) return -1;
+        if (chat_read(path, &state) < 0) {
+            chat_state_free(&state); /* defensive: clean up partial allocation */
+            return -1;
+        }
 
         if (state.message_count > initial_count) {
             /* Check if any new message is from someone other than handle */
@@ -617,12 +677,10 @@ int chat_cursor_write(const char *chat_path, const char *handle, int index) {
     char cpath[MAX_PATH_LEN];
     cursor_path(chat_path, cpath, sizeof(cpath));
 
-    /* Lock the cursor file using the chat lock */
-    char lock_path[MAX_PATH_LEN];
-    snprintf(lock_path, sizeof(lock_path), "%s.lock", chat_path);
-    int lock_fd = chat_lock_acquire(lock_path);
+    /* Lock the cursor file using the chat lock (same lock as chat_send) */
+    int lock_fd = chat_lock_acquire(chat_path);
     if (lock_fd < 0) {
-        fprintf(stderr, "warning: chat_cursor_write: lock acquisition failed for %s\n", lock_path);
+        fprintf(stderr, "warning: chat_cursor_write: lock acquisition failed for %s\n", chat_path);
         return -1;
     }
 
@@ -671,8 +729,14 @@ int chat_cursor_write(const char *chat_path, const char *handle, int index) {
     char tmp_path[MAX_PATH_LEN + 8];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", cpath);
 
-    f = fopen(tmp_path, "w");
+    int tmp_fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (tmp_fd < 0) {
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    f = fdopen(tmp_fd, "w");
     if (!f) {
+        close(tmp_fd);
         chat_lock_release(lock_fd);
         return -1;
     }

@@ -99,10 +99,10 @@ else
     fail "Missing idle counter"
 fi
 
-if grep -q 'md5sum' "$NBS_CLAUDE"; then
-    pass "Uses content hashing for change detection"
+if grep -q 'sha256sum' "$NBS_CLAUDE"; then
+    pass "Uses content hashing for change detection (sha256sum)"
 else
-    fail "Missing content hashing"
+    fail "Missing content hashing (sha256sum)"
 fi
 
 # 5. Dual-mode support

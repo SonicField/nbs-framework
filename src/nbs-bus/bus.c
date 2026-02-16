@@ -59,7 +59,8 @@ const char *bus_priority_to_str(int p)
 static long long now_us(void)
 {
     struct timeval tv;
-    gettimeofday(&tv, NULL);
+    int rc = gettimeofday(&tv, NULL);
+    ASSERT_MSG(rc == 0, "now_us: gettimeofday failed: %s", strerror(errno));
     return (long long)tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
@@ -78,6 +79,7 @@ static void format_iso8601(char *buf, size_t len)
 /* Check if a string contains whitespace */
 static int has_whitespace(const char *s)
 {
+    ASSERT_MSG(s != NULL, "has_whitespace: s is NULL");
     for (const char *p = s; *p; p++) {
         if (isspace((unsigned char)*p))
             return 1;
@@ -178,16 +180,23 @@ static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_
 /* Read priority, source, and type from an event file in a single pass.
  * Populates the corresponding fields of the event struct.
  * source_buf and type_buf must be at least source_len / type_len bytes. */
-static void read_event_fields(const char *filepath, int *priority,
+static int read_event_fields(const char *filepath, int *priority,
                               char *source_buf, size_t source_len,
                               char *type_buf, size_t type_len)
 {
+    ASSERT_MSG(filepath != NULL, "read_event_fields: filepath is NULL");
+    ASSERT_MSG(priority != NULL, "read_event_fields: priority is NULL");
+    ASSERT_MSG(source_buf != NULL, "read_event_fields: source_buf is NULL");
+    ASSERT_MSG(source_len > 0, "read_event_fields: source_len is 0");
+    ASSERT_MSG(type_buf != NULL, "read_event_fields: type_buf is NULL");
+    ASSERT_MSG(type_len > 0, "read_event_fields: type_len is 0");
+
     *priority = BUS_PRIORITY_NORMAL;
     source_buf[0] = '\0';
     type_buf[0] = '\0';
 
     FILE *fp = fopen(filepath, "r");
-    if (!fp) return;
+    if (!fp) return -1;
 
     char line[512];
     int found = 0; /* bitmask: 1=priority, 2=source, 4=type */
@@ -219,6 +228,7 @@ static void read_event_fields(const char *filepath, int *priority,
     }
 
     fclose(fp);
+    return 0;
 }
 
 /* Format an age string from microsecond delta into buf.
@@ -289,9 +299,10 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
 
         /* Read priority, source, and type from file content */
         bus_event_t *ev = &events[count];
-        read_event_fields(fullpath, &ev->priority,
-                          ev->source, sizeof(ev->source),
-                          ev->type, sizeof(ev->type));
+        if (read_event_fields(fullpath, &ev->priority,
+                              ev->source, sizeof(ev->source),
+                              ev->type, sizeof(ev->type)) != 0)
+            continue; /* skip events whose file cannot be read */
 
         snprintf(ev->filename, sizeof(ev->filename), "%s", name);
         ev->timestamp_us = ts_us;
@@ -342,6 +353,7 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
         char *val = colon + 1;
         while (*val && isspace((unsigned char)*val))
             val++;
+        if (strlen(val) == 0) continue;
         char *end = val + strlen(val) - 1;
         while (end > val && isspace((unsigned char)*end))
             *end-- = '\0';
@@ -357,13 +369,15 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
             char *endp;
             errno = 0;
             long long v = strtoll(val, &endp, 10);
-            if (errno == 0 && *endp == '\0' && v >= 0)
+            if (errno == 0 && *endp == '\0' && v >= 0 &&
+                v <= LLONG_MAX / 1000000LL)
                 cfg->dedup_window_s = v;
         } else if (key_len == 11 && strncmp(line, "ack-timeout", 11) == 0) {
             char *endp;
             errno = 0;
             long long v = strtoll(val, &endp, 10);
-            if (errno == 0 && *endp == '\0' && v >= 0)
+            if (errno == 0 && *endp == '\0' && v >= 0 &&
+                v <= LLONG_MAX / 1000000LL)
                 cfg->ack_timeout_s = v;
         }
         /* Unknown keys silently ignored */
@@ -489,20 +503,26 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
     }
 
     if (fclose(fp) != 0) {
-        unlink(tmp_path);
+        if (unlink(tmp_path) != 0)
+            fprintf(stderr, "Warning: failed to remove temp file %s: %s\n",
+                    tmp_path, strerror(errno));
         fprintf(stderr, "Error: failed to flush event file: %s\n", strerror(errno));
         return -1;
     }
 
     if (write_err) {
-        unlink(tmp_path);
+        if (unlink(tmp_path) != 0)
+            fprintf(stderr, "Warning: failed to remove temp file %s: %s\n",
+                    tmp_path, strerror(errno));
         fprintf(stderr, "Error: write error creating event file\n");
         return -1;
     }
 
     /* Atomic rename */
     if (rename(tmp_path, final_path) != 0) {
-        unlink(tmp_path);
+        if (unlink(tmp_path) != 0)
+            fprintf(stderr, "Warning: failed to remove temp file %s: %s\n",
+                    tmp_path, strerror(errno));
         fprintf(stderr, "Error: failed to finalise event file: %s\n",
                 strerror(errno));
         return -1;
@@ -523,6 +543,9 @@ int bus_check(const char *events_dir, const char *handle)
         return -1;
     }
 
+    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
+     * Requires sufficient stack size (e.g. 8 MB default on Linux).
+     * Flagged for architect review — do not refactor to heap without approval. */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {
@@ -559,6 +582,13 @@ int bus_read(const char *events_dir, const char *event_file)
     ASSERT_MSG(events_dir != NULL, "bus_read: events_dir is NULL");
     ASSERT_MSG(event_file != NULL, "bus_read: event_file is NULL");
 
+    /* SECURITY: reject path traversal — event_file must be a bare filename */
+    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL || strcmp(event_file, "..") == 0) {
+        fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
+                event_file);
+        return -1;
+    }
+
     char filepath[BUS_MAX_FULLPATH];
     snprintf(filepath, sizeof(filepath), "%s/%s", events_dir, event_file);
 
@@ -571,7 +601,11 @@ int bus_read(const char *events_dir, const char *event_file)
     char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
-        fwrite(buf, 1, n, stdout);
+        if (fwrite(buf, 1, n, stdout) != n) {
+            fprintf(stderr, "Error: failed to write event to stdout\n");
+            fclose(fp);
+            return -1;
+        }
     }
 
     fclose(fp);
@@ -582,6 +616,13 @@ int bus_ack(const char *events_dir, const char *event_file)
 {
     ASSERT_MSG(events_dir != NULL, "bus_ack: events_dir is NULL");
     ASSERT_MSG(event_file != NULL, "bus_ack: event_file is NULL");
+
+    /* SECURITY: reject path traversal — event_file must be a bare filename */
+    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL || strcmp(event_file, "..") == 0) {
+        fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
+                event_file);
+        return -1;
+    }
 
     char src_path[BUS_MAX_FULLPATH];
     char dst_path[BUS_MAX_FULLPATH];
@@ -625,6 +666,8 @@ int bus_ack_all(const char *events_dir, const char *handle)
         return -1;
     }
 
+    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
+     * Requires sufficient stack size. See bus_check for details. */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {
@@ -719,6 +762,9 @@ int bus_prune(const char *events_dir, long long max_bytes)
         if (unlink(del_path) == 0) {
             total_size -= entries[i].size;
             pruned++;
+        } else {
+            fprintf(stderr, "Warning: failed to prune %s: %s\n",
+                    entries[i].filename, strerror(errno));
         }
     }
 
@@ -740,6 +786,8 @@ int bus_status(const char *events_dir)
     }
 
     /* Count pending events by priority */
+    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
+     * Requires sufficient stack size. See bus_check for details. */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {

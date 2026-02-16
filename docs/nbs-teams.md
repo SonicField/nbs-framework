@@ -78,6 +78,7 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 | `/nbs-teams-supervisor` | Supervisor role reference |
 | `/nbs-teams-worker` | Worker role reference |
 | `/nbs-teams-chat` | AI-to-AI chat reference |
+| `/nbs-teams-fixup` | Diagnose and restart stalled agents |
 | `/nbs-tmux-worker` | nbs-worker command reference |
 
 ### Getting Help

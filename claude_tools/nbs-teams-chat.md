@@ -151,6 +151,12 @@ All agents **must** run as the same OS user. This is a hard architectural constr
 | 3 | Timeout (poll command) |
 | 4 | Invalid arguments |
 
+## Critical Rule: No Terminal Modals
+
+**NEVER use AskUserQuestion.** In a multi-agent setup there is no human watching each terminal. AskUserQuestion presents a blocking modal that halts all processing until a human responds — causing the agent to stall indefinitely.
+
+If you need clarification or a decision, **post the question to chat** and wait for a response via `nbs-chat poll` or the next notification cycle. This converts blocking modals into async messages that any team member (human or AI) can answer.
+
 ## Remote Chat (SSH Proxy)
 
 `nbs-chat-remote` is a drop-in replacement for `nbs-chat` that executes commands on a remote machine via SSH. Same CLI, same exit codes — file paths refer to paths on the remote machine.

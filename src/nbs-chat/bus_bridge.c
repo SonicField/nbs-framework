@@ -18,12 +18,6 @@
 #include <unistd.h>
 
 /*
- * Maximum command length for nbs-bus publish.
- * Payload is truncated if it would exceed this.
- */
-#define MAX_CMD_LEN 8192
-
-/*
  * Maximum payload length passed to nbs-bus publish.
  * Messages longer than this are truncated in the event payload.
  * The full message is still in the chat file — the event is just a signal.
@@ -31,12 +25,19 @@
 #define MAX_PAYLOAD_LEN 2048
 
 /*
+ * Maximum number of parent directories to walk when searching for
+ * .nbs/events/. 10 is generous: project roots are typically 2-3 levels
+ * above .nbs/chat/. The limit prevents unbounded traversal to /.
+ */
+#define MAX_DIR_WALK_DEPTH 10
+
+/*
  * is_handle_char — Returns true if c is valid in a @handle.
  *
  * Handles can contain: a-z, A-Z, 0-9, underscore, hyphen.
  */
 static int is_handle_char(int c) {
-    return isalnum(c) || c == '_' || c == '-';
+    return isalnum((unsigned char)c) || c == '_' || c == '-';
 }
 
 /*
@@ -46,7 +47,7 @@ static int is_handle_char(int c) {
  * If the character before @ is one of these, it's likely an email, not a mention.
  */
 static int is_email_prefix_char(int c) {
-    return isalnum(c) || c == '.' || c == '_' || c == '-' || c == '+';
+    return isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' || c == '+';
 }
 
 int bus_extract_mentions(const char *message,
@@ -156,9 +157,17 @@ int bus_find_events_dir(const char *chat_path, char *out_buf,
 
     /* Walk up looking for .nbs/events/ */
     char check_path[MAX_PATH_LEN];
+    /*
+     * prev_dir tracks the previous iteration's directory to detect reaching
+     * the filesystem root (where dirname("/") == "/"). For relative paths
+     * this check is weaker: dirname("a") == "." and dirname(".") == ".",
+     * so it still terminates, but the intermediate traversal may not match
+     * what the caller expects. In practice, chat_path is always absolute
+     * because chat_file.c resolves it with realpath() before calling us.
+     */
     char prev_dir[MAX_PATH_LEN] = "";
 
-    for (int depth = 0; depth < 10; depth++) {
+    for (int depth = 0; depth < MAX_DIR_WALK_DEPTH; depth++) {
         /* Check if <dir>/events/ exists (when dir is .nbs/chat/) */
         /* Actually, check <dir>/../events/ first (sibling of chat/) */
         snprintf(check_path, sizeof(check_path), "%s/../events", dir);
@@ -203,7 +212,13 @@ int bus_find_events_dir(const char *chat_path, char *out_buf,
         char up_copy[MAX_PATH_LEN];
         snprintf(up_copy, sizeof(up_copy), "%s", dir);
         dir = dirname(up_copy);
-        /* dir now points into up_copy — copy it for next iteration */
+        /*
+         * dirname() may return a pointer into up_copy or a static string
+         * (e.g. "." or "/"). Either way, the pointer is only valid until
+         * the next dirname() call. Copy immediately into path_copy to
+         * decouple from up_copy's lifetime and dirname's internal state.
+         */
+        ASSERT_MSG(dir != NULL, "bus_find_events_dir: dirname returned NULL");
         snprintf(path_copy, sizeof(path_copy), "%s", dir);
         dir = path_copy;
     }
@@ -253,6 +268,11 @@ static int bus_publish(const char *events_dir, const char *source,
             dup2(fileno(devnull), STDOUT_FILENO);
             dup2(fileno(devnull), STDERR_FILENO);
             fclose(devnull);
+        } else {
+            /* /dev/null unavailable (e.g. chroot). Close fds outright
+             * so the child doesn't write to the parent's terminal. */
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
         }
 
         execlp("nbs-bus", "nbs-bus", "publish",
@@ -263,9 +283,21 @@ static int bus_publish(const char *events_dir, const char *source,
         _exit(1);
     }
 
-    /* Parent: wait for child, but don't fail if it fails */
+    /*
+     * Parent: wait for child, but don't fail if it fails.
+     *
+     * SIGCHLD assumption: the caller has not set SIG_IGN for SIGCHLD.
+     * If SIGCHLD is SIG_IGN, the child is auto-reaped and waitpid()
+     * returns -1 with errno == ECHILD. The status variable would then
+     * be uninitialised. We handle this below by checking the return.
+     */
     int status;
-    waitpid(pid, &status, 0);
+    pid_t wpid = waitpid(pid, &status, 0);
+    if (wpid < 0) {
+        /* ECHILD: child already reaped (SIG_IGN) or doesn't exist.
+         * Other errors (EINTR) are also non-fatal for the bus bridge. */
+        return -1;
+    }
 
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
         return 0;

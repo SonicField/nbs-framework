@@ -18,8 +18,6 @@ int main(void) {
     fprintf(stderr, "FAIL: NDEBUG is defined — standard asserts are disabled\n");
     return 1;
 #else
-    /* Verify assert() actually works by not crashing on a true condition */
-    assert(1 == 1);
     printf("PASS: asserts enabled (NDEBUG not defined)\n");
     return 0;
 #endif

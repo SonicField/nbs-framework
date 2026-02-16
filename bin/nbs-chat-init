@@ -43,7 +43,8 @@ set -euo pipefail
 
 # --- Configuration ---
 
-PROJECT_ROOT="$(pwd)"
+# Violation 11 (HARDENING): Resolve PROJECT_ROOT to absolute path.
+PROJECT_ROOT="$(cd "$(pwd)" && pwd -P)"
 PROJECT_NAME=""
 FORCE=false
 DRY_RUN=false
@@ -68,6 +69,18 @@ info()  { echo -e "${BLUE}[nbs-chat-init]${NC} $*"; }
 ok()    { echo -e "${GREEN}[nbs-chat-init]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[nbs-chat-init]${NC} $*"; }
 error() { echo -e "${RED}[nbs-chat-init]${NC} $*" >&2; }
+
+# --- CHAT_NAME validation ---
+# Violation 3 (SECURITY): CHAT_NAME used unsanitised in tmux session names.
+# Restrict to safe characters to prevent tmux session name injection.
+validate_chat_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        error "CHAT_NAME contains invalid characters: '$name'"
+        error "Allowed: alphanumeric, hyphen, underscore (regex: ^[a-zA-Z0-9_-]+\$)"
+        exit 4
+    fi
+}
 
 # --- Dry-run wrapper ---
 # Every side-effectful operation goes through run().
@@ -138,7 +151,13 @@ confirm() {
 generate_project_id() {
     local path="$1"
     assert_not_empty "path" "$path"
-    echo -n "$path" | sha256sum | head -c 4
+    # Violation 10 (HARDENING): Check sha256sum return value.
+    local hash
+    hash=$(echo -n "$path" | sha256sum) || {
+        error "sha256sum failed for project ID generation"
+        exit 1
+    }
+    echo "$hash" | head -c 4
 }
 
 tmux_session_name() {
@@ -237,23 +256,36 @@ if [[ -z "$CHAT_NAME" ]]; then
     exit 4
 fi
 
+# Violation 3 (SECURITY): Validate CHAT_NAME before use in tmux session names.
+validate_chat_name "$CHAT_NAME"
+
+# Violation 8 (HARDENING): Assert PROJECT_ROOT is a valid directory.
+assert_directory_exists "$PROJECT_ROOT"
+
 if [[ "$SPAWN_ONLY" == "true" ]] && [[ "$SPAWN_SCRIBE" != "true" ]] && [[ "$SPAWN_PYTHIA" != "true" ]] && [[ "$SPAWN_ALL" != "true" ]]; then
     error "--spawn-only requires --spawn-scribe, --spawn-pythia, or --spawn-all"
     exit 4
 fi
 
 # --- Derived paths (all resource names derive from CHAT_NAME) ---
+# Violation 11 (HARDENING): Resolve all derived paths to absolute.
 
-CHAT_FILE=".nbs/chat/${CHAT_NAME}.chat"
+CHAT_FILE="${PROJECT_ROOT}/.nbs/chat/${CHAT_NAME}.chat"
 CHAT_CURSORS="${CHAT_FILE}.cursors"
 CHAT_LOCK="${CHAT_FILE}.lock"
-SCRIBE_LOG=".nbs/scribe/${CHAT_NAME}-log.md"
+SCRIBE_LOG="${PROJECT_ROOT}/.nbs/scribe/${CHAT_NAME}-log.md"
 
 # --- Validate prerequisites ---
 
 info "Checking prerequisites..."
+# Violation 14 (HARDENING): Assert all required binaries exist.
 assert_tool_exists "nbs-chat"
 assert_tool_exists "nbs-bus"
+assert_tool_exists "sha256sum"
+assert_tool_exists "date"
+assert_tool_exists "grep"
+assert_tool_exists "sed"
+assert_tool_exists "basename"
 
 if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     assert_tool_exists "tmux"
@@ -311,6 +343,9 @@ if [[ ! -f ".nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
         echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/events/config.yaml (defaults)"
     else
+        # Violation 7 (BUG): cat heredoc bypasses run(). This is intentional:
+        # the enclosing DRY_RUN guard prevents execution in dry-run mode,
+        # and cat heredocs cannot be meaningfully routed through run().
         cat > .nbs/events/config.yaml << 'CONFIGEOF'
 # NBS Event Bus Configuration
 #
@@ -341,12 +376,20 @@ else
     SELF_TEST_TYPE="self-test-$(date +%s)"
 
     # Publish a test event
-    nbs-bus publish .nbs/events/ nbs-chat-init "$SELF_TEST_TYPE" low "nbs-chat-init self-test" >/dev/null 2>&1
+    # Violation 4 (BUG): Check nbs-bus publish return value.
+    if ! nbs-bus publish .nbs/events/ nbs-chat-init "$SELF_TEST_TYPE" low "nbs-chat-init self-test" >/dev/null 2>&1; then
+        warn "  nbs-bus publish failed during self-test (exit $?)"
+    fi
 
     # Find and acknowledge it
-    SELF_TEST_EVENT=$(ls .nbs/events/*nbs-chat-init*self-test*.event 2>/dev/null | head -1 | xargs -r basename)
+    # Violation 1 (SECURITY): Use find with -print0 instead of unquoted glob + ls + xargs.
+    SELF_TEST_EVENT=$(find .nbs/events/ -maxdepth 1 -name "*nbs-chat-init*self-test*.event" -print0 2>/dev/null \
+        | xargs -0 -r -n1 basename 2>/dev/null | head -1)
     if [[ -n "$SELF_TEST_EVENT" ]]; then
-        nbs-bus ack .nbs/events/ "$SELF_TEST_EVENT" >/dev/null 2>&1
+        # Violation 13 (HARDENING): Check nbs-bus ack return value, log warning on failure.
+        if ! nbs-bus ack .nbs/events/ "$SELF_TEST_EVENT" >/dev/null 2>&1; then
+            warn "  nbs-bus ack failed for self-test event '$SELF_TEST_EVENT'"
+        fi
 
         # Verify it reached processed/
         if [[ -f ".nbs/events/processed/$SELF_TEST_EVENT" ]]; then
@@ -393,7 +436,11 @@ fi
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat create $CHAT_FILE"
 else
-    nbs-chat create "$CHAT_FILE" >/dev/null 2>&1
+    # Violation 5 (BUG): Check nbs-chat create return value.
+    if ! nbs-chat create "$CHAT_FILE" >/dev/null 2>&1; then
+        error "nbs-chat create failed for '$CHAT_FILE'"
+        exit 1
+    fi
     ok "  ${CHAT_NAME}.chat created"
 fi
 
@@ -401,9 +448,13 @@ fi
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat send init message"
 else
-    nbs-chat send "$CHAT_FILE" nbs-chat-init \
+    # Violation 5 (BUG): Check nbs-chat send return value.
+    if ! nbs-chat send "$CHAT_FILE" nbs-chat-init \
         "Project '$PROJECT_NAME' initialised (project-id: $PROJECT_ID). Bus, chat, and scribe log are ready." \
-        >/dev/null 2>&1
+        >/dev/null 2>&1; then
+        error "nbs-chat send failed for init message"
+        exit 1
+    fi
     ok "  Init message posted"
 fi
 
@@ -420,6 +471,7 @@ if [[ ! -f "$SCRIBE_LOG" ]] || [[ "$DRY_RUN" == "true" ]]; then
         echo -e "  ${YELLOW}[DRY-RUN]${NC} Write $SCRIBE_LOG (header)"
     else
         CREATED_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        # Violation 7 (BUG): cat heredoc bypasses run(). Intentional — guarded by DRY_RUN check above.
         cat > "$SCRIBE_LOG" << LOGEOF
 # Decision Log
 
@@ -449,12 +501,12 @@ compact_decision_log() {
     local entry_count
     entry_count=$(grep -c '^### D-' "$log_file" 2>/dev/null || echo 0)
 
-    if [[ "$entry_count" -lt "$COMPACT_THRESHOLD" ]] && [[ "$COMPACT_LOG" != "true" ]]; then
+    if [[ "${entry_count:-0}" -lt "$COMPACT_THRESHOLD" ]] && [[ "$COMPACT_LOG" != "true" ]]; then
         info "  Decision log: $entry_count entries (threshold: $COMPACT_THRESHOLD) — no compaction needed"
         return 0
     fi
 
-    if [[ "$entry_count" -eq 0 ]]; then
+    if [[ "${entry_count:-0}" -eq 0 ]]; then
         info "  Decision log: empty — nothing to compact"
         return 0
     fi
@@ -470,7 +522,8 @@ compact_decision_log() {
     fi
 
     # Move current log to archive
-    mv "$log_file" "$archive_file"
+    # Violation 7 (BUG): Route mv through run() for dry-run compatibility.
+    run mv "$log_file" "$archive_file"
 
     # Extract header fields from the archive for the new log
     local project_name
@@ -481,6 +534,7 @@ compact_decision_log() {
     created_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     # Create new log with link to archive as first record
+    # Violation 7 (BUG): cat heredoc bypasses run(). Intentional — guarded by DRY_RUN check above.
     cat > "$log_file" << COMPACTEOF
 # Decision Log
 
@@ -519,6 +573,7 @@ info "Phase 4: Project identity..."
 if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/project-id ($PROJECT_ID)"
 else
+    # Violation 7 (BUG): echo redirect bypasses run(). Intentional — guarded by DRY_RUN check above.
     echo "$PROJECT_ID" > .nbs/project-id
     ok "  project-id: $PROJECT_ID"
 fi
@@ -604,6 +659,11 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             sleep 2
 
             # Launch nbs-claude inside the session with unique handle
+            # SECURITY RISK (Violation 2): --dangerously-skip-permissions bypasses Claude's
+            # permission system, allowing the AI to execute any tool without user confirmation.
+            # This is required for autonomous operation but means the AI can modify files,
+            # execute commands, and access network resources without human approval.
+            # TODO: Architectural decision needed — consider scoped permissions or audit logging.
             tmux send-keys -t "$SCRIBE_SESSION" "NBS_HANDLE=scribe nbs-claude --dangerously-skip-permissions" Enter
 
             # Wait for Claude to start
@@ -615,15 +675,16 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             # Wait for sidecar handle injection (proves CLI is fully ready)
             wait_count=0
             max_wait=60
-            while [ $wait_count -lt $max_wait ]; do
+            # Violation 12 (HARDENING): Use ${var:-0} in arithmetic to guard against unset.
+            while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
                 if tmux capture-pane -t "$SCRIBE_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                     break
                 fi
                 sleep 1
-                wait_count=$((wait_count + 1))
+                wait_count=$((${wait_count:-0} + 1))
             done
 
-            if [ $wait_count -ge $max_wait ]; then
+            if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
                 warn "  Scribe CLI did not become ready within ${max_wait}s"
             fi
 
@@ -661,6 +722,7 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             else
                 tmux new-session -d -s "$PYTHIA_SESSION" -c "$PROJECT_ROOT"
                 sleep 2
+                # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
                 tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter
                 sleep 3
 
@@ -669,15 +731,16 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                 # Wait for sidecar handle injection (proves CLI is fully ready)
                 wait_count=0
                 max_wait=60
-                while [ $wait_count -lt $max_wait ]; do
+                # Violation 12 (HARDENING): Use ${var:-0} in arithmetic.
+                while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
                     if tmux capture-pane -t "$PYTHIA_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                         break
                     fi
                     sleep 1
-                    wait_count=$((wait_count + 1))
+                    wait_count=$((${wait_count:-0} + 1))
                 done
 
-                if [ $wait_count -ge $max_wait ]; then
+                if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
                     warn "  Pythia CLI did not become ready within ${max_wait}s"
                 fi
 
@@ -713,6 +776,7 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             else
                 tmux new-session -d -s "$CLAUDE_SESSION" -c "$PROJECT_ROOT"
                 sleep 2
+                # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
                 tmux send-keys -t "$CLAUDE_SESSION" "nbs-claude --dangerously-skip-permissions" Enter
 
                 ok "  Claude spawned: $CLAUDE_SESSION"
@@ -722,9 +786,12 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
     fi
 
     # Publish spawn event
+    # Violation 6 (BUG): Replace || true with proper error handling — log warning but continue.
     if [[ "$DRY_RUN" != "true" ]]; then
-        nbs-bus publish .nbs/events/ nbs-chat-init ai-spawned normal \
-            "AI instances spawned by nbs-chat-init" >/dev/null 2>&1 || true
+        if ! nbs-bus publish .nbs/events/ nbs-chat-init ai-spawned normal \
+            "AI instances spawned by nbs-chat-init" >/dev/null 2>&1; then
+            warn "nbs-bus publish failed for ai-spawned event (non-fatal, continuing)"
+        fi
     fi
 fi
 

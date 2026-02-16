@@ -27,13 +27,14 @@
 #   NBS_NOTIFY_COOLDOWN     Min seconds between /nbs-notify injections (default: 15)
 #   NBS_HANDLE              Agent handle for cursor peeking (default: claude)
 #   NBS_ROOT                Project root containing .nbs/ (default: current directory)
+#   NBS_STARTUP_GRACE       Seconds after init before allowing notifications (default: 30)
 #
 # Exit codes:
 #   0 - Clean exit
 #   1 - General error
 #   4 - Invalid arguments
 
-set -uo pipefail
+set -euo pipefail
 
 # --- Configuration ---
 
@@ -43,8 +44,34 @@ BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
+STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
+
+# Resolve NBS_ROOT to absolute path
+NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
+    echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT:-<unset>}" >&2
+    exit 1
+}
+
+# Validate numeric config variables
+for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE; do
+    eval "_nbs_var_val=\${$_nbs_var_name}"
+    if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
+        echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
+        exit 4
+    fi
+done
+unset _nbs_var_name _nbs_var_val
+
+# Validate SIDECAR_HANDLE: must be safe for tmux send-keys and file paths
+if [[ ! "$SIDECAR_HANDLE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: NBS_HANDLE must match ^[a-zA-Z0-9_-]+\$, got '$SIDECAR_HANDLE'" >&2
+    exit 4
+fi
 NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
 NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
+
+# Log file for stderr redirection (instead of /dev/null)
+NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,18 +93,20 @@ SESSION_NAME=""
 MODE=""
 
 cleanup() {
+    local EXIT_CODE=$?
+
     # Kill sidecar if running
     if [[ -n "$SIDECAR_PID" ]] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
-        kill "$SIDECAR_PID" 2>/dev/null
-        wait "$SIDECAR_PID" 2>/dev/null
+        kill "$SIDECAR_PID" 2>/dev/null || true
+        wait "$SIDECAR_PID" 2>/dev/null || true
     fi
 
     # Kill pty-session if we created one
     if [[ "$MODE" == "pty" && -n "$SESSION_NAME" ]]; then
-        "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null
+        "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
     fi
 
-    exit 0
+    exit "$EXIT_CODE"
 }
 trap cleanup INT TERM EXIT
 
@@ -89,6 +118,22 @@ trap cleanup INT TERM EXIT
 detect_plan_mode() {
     local content="$1"
     echo "$content" | grep -qF 'Would you like to proceed?'
+}
+
+# --- AskUserQuestion modal detection ---
+# The AskUserQuestion tool presents a blocking modal with numbered options.
+# In multi-agent setups no human is watching, so the agent stalls indefinitely.
+# The sidecar detects this modal and auto-selects option 1 (the default/recommended
+# choice) to unblock the agent. The agent should not use AskUserQuestion at all
+# (skill prompts prohibit it), but this is a safety net for when it slips through.
+
+detect_ask_modal() {
+    local content="$1"
+    # AskUserQuestion shows "? N. <label>" options followed by "Type something."
+    # The combination of numbered options and "Type something" is distinctive.
+    echo "$content" | grep -qF 'Type something.' && \
+    echo "$content" | grep -qE '^\s*[?>]?\s*[1-4]\.' && return 0
+    return 1
 }
 
 # --- Context stress detection ---
@@ -129,11 +174,15 @@ CONTROL_INBOX_LINE=0
 remote_cmd() {
     if [[ -n "$NBS_REMOTE_HOST" ]]; then
         local ssh_cmd=(ssh -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=5)
-        [[ -n "$NBS_REMOTE_SSH_OPTS" ]] && ssh_cmd+=($NBS_REMOTE_SSH_OPTS)
+        if [[ -n "$NBS_REMOTE_SSH_OPTS" ]]; then
+            local ssh_opts
+            IFS=' ' read -ra ssh_opts <<< "$NBS_REMOTE_SSH_OPTS"
+            ssh_cmd+=("${ssh_opts[@]}")
+        fi
         ssh_cmd+=("$NBS_REMOTE_HOST" "$@")
-        "${ssh_cmd[@]}" 2>/dev/null
+        "${ssh_cmd[@]}" 2>>"${NBS_LOG_FILE}"
     else
-        eval "$@" 2>/dev/null
+        "$@" 2>>"${NBS_LOG_FILE}"
     fi
 }
 
@@ -152,7 +201,7 @@ seed_registry() {
     if is_remote; then
         # Remote mode: discover resources via SSH
         local remote_chats
-        remote_chats=$(remote_cmd "ls ${NBS_ROOT}/.nbs/chat/*.chat 2>/dev/null") || true
+        remote_chats=$(remote_cmd "ls $(printf '%q' "${NBS_ROOT}")/.nbs/chat/*.chat 2>/dev/null") || true
         while IFS= read -r chat; do
             [[ -z "$chat" ]] && continue
             if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
@@ -161,7 +210,7 @@ seed_registry() {
         done <<< "$remote_chats"
 
         # Register bus directory if it exists on remote
-        if remote_cmd "test -d ${NBS_ROOT}/.nbs/events" 2>/dev/null; then
+        if remote_cmd "test -d $(printf '%q' "${NBS_ROOT}")/.nbs/events" 2>/dev/null; then
             if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
                 echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
             fi
@@ -194,7 +243,7 @@ process_control_command() {
     path=$(echo "$line" | awk '{print $2}')
 
     # Require both verb and path
-    [[ -z "$verb" || -z "$path" ]] && return
+    [[ -z "$verb" || -z "$path" ]] && return 0
 
     case "$verb" in
         register-chat)
@@ -205,7 +254,7 @@ process_control_command() {
             ;;
         unregister-chat)
             if grep -qF "chat:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                grep -vF "chat:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
+                { grep -vF "chat:${path}" "$CONTROL_REGISTRY" || true; } > "${CONTROL_REGISTRY}.tmp"
                 mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
                 echo "[nbs-claude] Unregistered chat: $path" >&2
             fi
@@ -218,7 +267,7 @@ process_control_command() {
             ;;
         unregister-bus)
             if grep -qF "bus:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                grep -vF "bus:${path}" "$CONTROL_REGISTRY" > "${CONTROL_REGISTRY}.tmp"
+                { grep -vF "bus:${path}" "$CONTROL_REGISTRY" || true; } > "${CONTROL_REGISTRY}.tmp"
                 mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
                 echo "[nbs-claude] Unregistered bus: $path" >&2
             fi
@@ -231,7 +280,8 @@ process_control_command() {
             fi
             ;;
         *)
-            # Unknown command — silently ignore
+            # Unknown command — log to stderr for debugging
+            echo "[nbs-claude] Unknown control command: $verb" >&2
             ;;
     esac
 }
@@ -240,15 +290,24 @@ process_control_command() {
 # Forward-only: tracks line offset, never re-processes old lines, never truncates.
 # Called every sidecar iteration (1 second).
 check_control_inbox() {
-    [[ -f "$CONTROL_INBOX" ]] || return
+    [[ -f "$CONTROL_INBOX" ]] || return 0
+
+    # Read file atomically into variable to avoid TOCTOU race
+    # between wc -l and tail.
+    # Note: $(<file 2>/dev/null) is broken in bash <5.2 — the redirect
+    # interferes with the internal read mechanism, producing empty output.
+    # Use $(cat ...) instead.
+    local inbox_content
+    inbox_content=$(cat "$CONTROL_INBOX" 2>/dev/null) || return 0
+    [[ -n "$inbox_content" ]] || return 0
 
     local total_lines
-    total_lines=$(wc -l < "$CONTROL_INBOX" 2>/dev/null) || return
+    total_lines=$(printf '%s\n' "$inbox_content" | wc -l)
     total_lines=$((total_lines + 0))  # ensure numeric
 
     if [[ $total_lines -gt $CONTROL_INBOX_LINE ]]; then
         local new_lines
-        new_lines=$(tail -n +"$((CONTROL_INBOX_LINE + 1))" "$CONTROL_INBOX")
+        new_lines=$(printf '%s\n' "$inbox_content" | tail -n +"$((CONTROL_INBOX_LINE + 1))")
 
         while IFS= read -r line; do
             # Strip leading/trailing whitespace
@@ -276,6 +335,7 @@ CHAT_UNREAD_COUNT=0
 CHAT_UNREAD_SUMMARY=""
 NOTIFY_MESSAGE=""
 LAST_NOTIFY_TIME=0
+SIDECAR_START_TIME=0
 
 # check_bus_events — peek at the event bus without consuming anything.
 # Reads the control registry for bus: entries, runs nbs-bus check on each.
@@ -297,7 +357,7 @@ check_bus_events() {
                 local bus_dir="${line#bus:}"
                 if is_remote; then
                     has_bus=1
-                    output=$(remote_cmd "nbs-bus check '$bus_dir'") || continue
+                    output=$(remote_cmd "nbs-bus check $(printf '%q' "$bus_dir")") || continue
                 elif [[ -d "$bus_dir" ]]; then
                     has_bus=1
                     output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
@@ -342,16 +402,16 @@ check_chat_unread() {
 
                 if is_remote; then
                     # Remote mode: check file existence and read via SSH
-                    remote_cmd "test -f '$chat_path'" || continue
+                    remote_cmd "test -f $(printf '%q' "$chat_path")" || continue
                     has_chat=1
 
                     local total
-                    total=$(remote_cmd "awk '/^---\$/{found=1; next} found && NF{count++} END{print count+0}' '$chat_path'")
+                    total=$(remote_cmd "awk '/^---\$/{found=1; next} found && NF{count++} END{print count+0}' $(printf '%q' "$chat_path")")
                     total=$((${total:-0} + 0))
 
                     local cursor=0
                     local cursor_val
-                    cursor_val=$(remote_cmd "awk -F= -v h='$SIDECAR_HANDLE' '\$1==h{print \$2}' '${chat_path}.cursors' 2>/dev/null") || true
+                    cursor_val=$(remote_cmd "awk -F= -v h='$SIDECAR_HANDLE' '\$1==h{print \$2}' $(printf '%q' "${chat_path}.cursors") 2>/dev/null") || true
                     cursor=$((${cursor_val:-0} + 0))
                 else
                     # Local mode: direct file access
@@ -359,12 +419,12 @@ check_chat_unread() {
                     has_chat=1
 
                     local total
-                    total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null)
-                    total=$((total + 0))
+                    total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null) || true
+                    total=$((${total:-0} + 0))
 
                     local cursor=0
                     if [[ -f "${chat_path}.cursors" ]]; then
-                        cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null)
+                        cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null) || true
                         cursor=$((${cursor:-0} + 0))
                     fi
                 fi
@@ -403,11 +463,23 @@ check_chat_unread() {
 should_inject_notify() {
     NOTIFY_MESSAGE=""
 
-    check_bus_events
-    local bus_rc=$?
+    # Startup grace period: do not inject notifications until the agent has
+    # had time to process any manually-sent role prompts. This prevents the
+    # sidecar from racing ahead of the user's initial prompt.
+    local now
+    now=$(date +%s)
+    if [[ $SIDECAR_START_TIME -gt 0 ]]; then
+        local grace_elapsed=$((now - SIDECAR_START_TIME))
+        if [[ $grace_elapsed -lt $STARTUP_GRACE ]]; then
+            return 1
+        fi
+    fi
 
-    check_chat_unread
-    local chat_rc=$?
+    local bus_rc=0
+    check_bus_events || bus_rc=$?
+
+    local chat_rc=0
+    check_chat_unread || chat_rc=$?
 
     # Nothing pending
     if [[ $bus_rc -ne 0 && $chat_rc -ne 0 ]]; then
@@ -476,10 +548,11 @@ poll_sidecar_tmux() {
         local init_content
         init_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
         if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
-            tmux send-keys -t "$pane_id" -l "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+            tmux send-keys -t "$pane_id" -l "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands." || true
             sleep 0.3
-            tmux send-keys -t "$pane_id" Enter
+            tmux send-keys -t "$pane_id" Enter || true
             sleep 5
+            SIDECAR_START_TIME=$(date +%s)
             last_content_hash=""
             break
         fi
@@ -503,7 +576,7 @@ poll_sidecar_tmux() {
 
         # Hash the content to detect changes
         local current_hash
-        current_hash=$(echo "$content" | md5sum | cut -d' ' -f1)
+        current_hash=$(echo "$content" | sha256sum | cut -d' ' -f1)
 
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
@@ -514,9 +587,20 @@ poll_sidecar_tmux() {
             # Plan mode blocks the worker — resolve it without waiting for idle
             if detect_plan_mode "$content"; then
                 sleep 1
-                tmux send-keys -t "$pane_id" '2'
+                tmux send-keys -t "$pane_id" '2' || true
                 sleep 0.5
-                tmux send-keys -t "$pane_id" Enter
+                tmux send-keys -t "$pane_id" Enter || true
+                idle_seconds=0
+                last_content_hash=""
+                sleep 5
+            fi
+
+            # Check for AskUserQuestion modal — auto-select option 1
+            if detect_ask_modal "$content"; then
+                sleep 1
+                tmux send-keys -t "$pane_id" '1' || true
+                sleep 0.5
+                tmux send-keys -t "$pane_id" Enter || true
                 idle_seconds=0
                 last_content_hash=""
                 sleep 5
@@ -526,9 +610,20 @@ poll_sidecar_tmux() {
 
         # Also check for plan mode when content is stable (already idle)
         if detect_plan_mode "$content"; then
-            tmux send-keys -t "$pane_id" '2'
+            tmux send-keys -t "$pane_id" '2' || true
             sleep 0.5
-            tmux send-keys -t "$pane_id" Enter
+            tmux send-keys -t "$pane_id" Enter || true
+            idle_seconds=0
+            last_content_hash=""
+            sleep 5
+            continue
+        fi
+
+        # Check for AskUserQuestion modal when content is stable
+        if detect_ask_modal "$content"; then
+            tmux send-keys -t "$pane_id" '1' || true
+            sleep 0.5
+            tmux send-keys -t "$pane_id" Enter || true
             idle_seconds=0
             last_content_hash=""
             sleep 5
@@ -553,9 +648,9 @@ poll_sidecar_tmux() {
                     continue
                 fi
                 if should_inject_notify; then
-                    tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}"
+                    tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.3
-                    tmux send-keys -t "$pane_id" Enter
+                    tmux send-keys -t "$pane_id" Enter || true
 
                     # Verify injection was consumed: prompt should disappear
                     sleep 2
@@ -563,7 +658,7 @@ poll_sidecar_tmux() {
                     verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
                     if is_prompt_visible "$verify_content"; then
                         # Prompt still visible — injection was not consumed, retry once
-                        tmux send-keys -t "$pane_id" Enter
+                        tmux send-keys -t "$pane_id" Enter || true
                         sleep 1
                     fi
 
@@ -587,9 +682,9 @@ poll_sidecar_tmux() {
                     sleep 30
                     continue
                 fi
-                tmux send-keys -t "$pane_id" -l '/nbs-poll'
+                tmux send-keys -t "$pane_id" -l '/nbs-poll' || true
                 sleep 0.3
-                tmux send-keys -t "$pane_id" Enter
+                tmux send-keys -t "$pane_id" Enter || true
 
                 idle_seconds=0
                 last_content_hash=""
@@ -622,10 +717,11 @@ poll_sidecar_pty() {
         local init_content
         init_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
         if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
-            "$pty" send "$session" "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
+            "$pty" send "$session" "Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands." || true
             sleep 0.5
-            "$pty" send "$session" ''
+            "$pty" send "$session" '' || true
             sleep 5
+            SIDECAR_START_TIME=$(date +%s)
             last_content_hash=""
             break
         fi
@@ -638,7 +734,7 @@ poll_sidecar_pty() {
         # Check control inbox for new registration commands
         check_control_inbox
 
-        if ! "$pty" list 2>/dev/null | grep -q "$session"; then
+        if ! "$pty" list 2>/dev/null | grep -qxF "$session"; then
             break
         fi
 
@@ -646,7 +742,7 @@ poll_sidecar_pty() {
         content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || continue
 
         local current_hash
-        current_hash=$(echo "$content" | md5sum | cut -d' ' -f1)
+        current_hash=$(echo "$content" | sha256sum | cut -d' ' -f1)
 
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
@@ -656,9 +752,20 @@ poll_sidecar_pty() {
             # Check for plan mode immediately on content change
             if detect_plan_mode "$content"; then
                 sleep 1
-                "$pty" send "$session" --no-enter '2'
+                "$pty" send "$session" --no-enter '2' || true
                 sleep 0.5
-                "$pty" send "$session" ''
+                "$pty" send "$session" '' || true
+                idle_seconds=0
+                last_content_hash=""
+                sleep 5
+            fi
+
+            # Check for AskUserQuestion modal — auto-select option 1
+            if detect_ask_modal "$content"; then
+                sleep 1
+                "$pty" send "$session" --no-enter '1' || true
+                sleep 0.5
+                "$pty" send "$session" '' || true
                 idle_seconds=0
                 last_content_hash=""
                 sleep 5
@@ -668,9 +775,20 @@ poll_sidecar_pty() {
 
         # Check for plan mode when content is stable
         if detect_plan_mode "$content"; then
-            "$pty" send "$session" --no-enter '2'
+            "$pty" send "$session" --no-enter '2' || true
             sleep 0.5
-            "$pty" send "$session" ''
+            "$pty" send "$session" '' || true
+            idle_seconds=0
+            last_content_hash=""
+            sleep 5
+            continue
+        fi
+
+        # Check for AskUserQuestion modal when content is stable
+        if detect_ask_modal "$content"; then
+            "$pty" send "$session" --no-enter '1' || true
+            sleep 0.5
+            "$pty" send "$session" '' || true
             idle_seconds=0
             last_content_hash=""
             sleep 5
@@ -693,9 +811,9 @@ poll_sidecar_pty() {
                     continue
                 fi
                 if should_inject_notify; then
-                    "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}"
+                    "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.5
-                    "$pty" send "$session" ''
+                    "$pty" send "$session" '' || true
 
                     # Verify injection was consumed: prompt should disappear
                     sleep 2
@@ -703,7 +821,7 @@ poll_sidecar_pty() {
                     verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
                     if is_prompt_visible "$verify_content"; then
                         # Prompt still visible — injection was not consumed, retry once
-                        "$pty" send "$session" ''
+                        "$pty" send "$session" '' || true
                         sleep 1
                     fi
 
@@ -725,9 +843,9 @@ poll_sidecar_pty() {
                     sleep 30
                     continue
                 fi
-                "$pty" send "$session" '/nbs-poll'
+                "$pty" send "$session" '/nbs-poll' || true
                 sleep 0.5
-                "$pty" send "$session" ''
+                "$pty" send "$session" '' || true
 
                 idle_seconds=0
                 last_content_hash=""
@@ -760,11 +878,29 @@ for arg in "$@"; do
     esac
 done
 
+# Re-resolve NBS_ROOT to absolute if overridden by --root=
+NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
+    echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT}" >&2
+    exit 1
+}
+
+# Assert NBS_ROOT exists as a directory
+if [[ ! -d "$NBS_ROOT" ]]; then
+    echo "Error: NBS_ROOT is not a directory: $NBS_ROOT" >&2
+    exit 1
+fi
+
+# Re-set control paths after potential --root= override
+CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
+NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
+
 echo "Starting Claude Code with NBS bus-aware polling..."
 echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
 echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
 echo "  Safety net poll: ${POLL_INTERVAL}s idle"
 echo "  Handle: ${SIDECAR_HANDLE}"
+echo "  Startup grace: ${STARTUP_GRACE}s"
 echo "  Root: ${NBS_ROOT}"
 if [[ -n "$NBS_REMOTE_HOST" ]]; then
     echo "  Remote: ${NBS_REMOTE_HOST}"
@@ -802,6 +938,11 @@ else
     echo ""
 
     # Build command string for pty-session (skip --root= which is sidecar-only)
+    # EVAL CONTRACT: CLAUDE_CMD is a single string passed to pty-session, which
+    # evaluates it via the shell. Each argument is individually shell-quoted via
+    # printf '%q' to prevent injection. The only inputs are our own argv elements
+    # after filtering out --root=, --remote-host=, --remote-ssh-opts= prefixes.
+    # No environment variables or external data are interpolated unquoted.
     CLAUDE_CMD="claude"
     if [[ $# -gt 0 ]]; then
         CLAUDE_CMD_ARGS=""
@@ -817,9 +958,11 @@ else
     fi
 
     # Create pty-session running claude
-    "$PTY_SESSION" create "$SESSION_NAME" "$CLAUDE_CMD"
-
-    if [[ $? -ne 0 ]]; then
+    # NOTE: eval is required here because CLAUDE_CMD is a single string
+    # containing shell-quoted arguments built by printf '%q' above.
+    # This is safe because the string is constructed entirely from our own
+    # argv processing — no external input reaches it unquoted.
+    if ! "$PTY_SESSION" create "$SESSION_NAME" "$CLAUDE_CMD"; then
         echo "Error: Failed to create pty-session" >&2
         exit 1
     fi
@@ -831,7 +974,14 @@ else
     fi
 
     # Attach to the session
-    tmux attach-session -t "pty_${SESSION_NAME}"
+    # NOTE: pty-session creates tmux sessions with a "pty_" prefix convention.
+    # Verify the session exists before attaching.
+    TMUX_SESSION="pty_${SESSION_NAME}"
+    if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        echo "Error: tmux session '$TMUX_SESSION' does not exist after pty-session create" >&2
+        exit 1
+    fi
+    tmux attach-session -t "$TMUX_SESSION"
 fi
 
 # When user exits, cleanup runs via trap

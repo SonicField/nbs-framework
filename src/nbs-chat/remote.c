@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +88,14 @@ static int load_config(remote_config_t *cfg)
     if (cfg->ssh_opts && cfg->ssh_opts[0] == '\0')
         cfg->ssh_opts = NULL;
 
+    /* Postcondition: on success, host is non-NULL and non-empty */
+    ASSERT_MSG(cfg->host != NULL && cfg->host[0] != '\0',
+               "load_config postcondition: host is NULL or empty after successful load");
+    ASSERT_MSG(cfg->port >= 1 && cfg->port <= 65535,
+               "load_config postcondition: port %d out of range [1, 65535]", cfg->port);
+    ASSERT_MSG(cfg->remote_bin != NULL && cfg->remote_bin[0] != '\0',
+               "load_config postcondition: remote_bin is NULL or empty");
+
     return 0;
 }
 
@@ -135,10 +144,38 @@ static int shell_escape(const char *arg, char *buf, size_t buf_size)
     buf[pos++] = '\'';
 
     buf[pos] = '\0';
+
+    /* Guard against size_t -> int truncation */
+    if (pos > (size_t)INT_MAX) return -1;
+
     return (int)pos;
 }
 
 /* ── Command construction ────────────────────────────────────────── */
+
+/*
+ * contains_shell_metachar — Check if a string contains shell injection characters.
+ *
+ * Rejects strings containing: ; ` $ ( ) | & < > { } ! \ newline
+ * These could be used for command injection when passed to SSH -o options.
+ *
+ * Returns 1 if dangerous characters found, 0 if clean.
+ */
+static int contains_shell_metachar(const char *s)
+{
+    ASSERT_MSG(s != NULL, "contains_shell_metachar: s is NULL");
+    for (const char *p = s; *p != '\0'; p++) {
+        switch (*p) {
+        case ';': case '`': case '$': case '(': case ')':
+        case '|': case '&': case '<': case '>': case '{':
+        case '}': case '!': case '\\': case '\n': case '\r':
+            return 1;
+        default:
+            break;
+        }
+    }
+    return 0;
+}
 
 /*
  * build_ssh_argv — Construct the ssh command argument vector.
@@ -151,21 +188,23 @@ static int shell_escape(const char *arg, char *buf, size_t buf_size)
  * Postconditions: Returns heap-allocated, NULL-terminated argv array.
  *                 argv[0] = "ssh", last element = NULL.
  *                 Caller must free argv, the remote command string (last non-NULL),
- *                 and *opts_out (if non-NULL).
+ *                 port_str_out (if non-NULL), and *opts_out (if non-NULL).
  *
- * Returns NULL on allocation failure.
+ * Returns NULL on allocation failure or if inputs are invalid.
  */
 static char **build_ssh_argv(const remote_config_t *cfg,
                               int chat_argc, char **chat_argv,
-                              char **opts_out)
+                              char **opts_out, char **port_str_out)
 {
     ASSERT_MSG(cfg != NULL, "build_ssh_argv: cfg is NULL");
     ASSERT_MSG(cfg->host != NULL, "build_ssh_argv: cfg->host is NULL");
     ASSERT_MSG(chat_argc >= 2, "build_ssh_argv: chat_argc < 2, got %d", chat_argc);
     ASSERT_MSG(chat_argv != NULL, "build_ssh_argv: chat_argv is NULL");
     ASSERT_MSG(opts_out != NULL, "build_ssh_argv: opts_out is NULL");
+    ASSERT_MSG(port_str_out != NULL, "build_ssh_argv: port_str_out is NULL");
 
     *opts_out = NULL;
+    *port_str_out = NULL;
 
     /*
      * Build the remote command string with shell escaping.
@@ -176,12 +215,31 @@ static char **build_ssh_argv(const remote_config_t *cfg,
      */
     size_t remote_cmd_size = 0;
 
-    /* Size for the remote binary name */
-    remote_cmd_size += strlen(cfg->remote_bin) * 4 + 3; /* worst case escape + quotes + space */
+    /* Size for the remote binary name — with overflow guard */
+    size_t bin_len = strlen(cfg->remote_bin);
+    if (bin_len > SIZE_MAX / 4 - 3) {
+        fprintf(stderr, "Error: remote binary name too long\n");
+        return NULL;
+    }
+    remote_cmd_size += bin_len * 4 + 3; /* worst case escape + quotes + space */
 
     /* Size for each nbs-chat argument (skip argv[0] which is our binary name) */
     for (int i = 1; i < chat_argc; i++) {
-        remote_cmd_size += strlen(chat_argv[i]) * 4 + 3;
+        size_t arg_len = strlen(chat_argv[i]);
+        if (arg_len > SIZE_MAX / 4 - 3) {
+            fprintf(stderr, "Error: argument %d too long\n", i);
+            return NULL;
+        }
+        size_t arg_size = arg_len * 4 + 3;
+        if (remote_cmd_size > SIZE_MAX - arg_size) {
+            fprintf(stderr, "Error: total command size overflow\n");
+            return NULL;
+        }
+        remote_cmd_size += arg_size;
+    }
+    if (remote_cmd_size > SIZE_MAX - 1) {
+        fprintf(stderr, "Error: total command size overflow\n");
+        return NULL;
     }
     remote_cmd_size += 1; /* NUL */
 
@@ -189,52 +247,100 @@ static char **build_ssh_argv(const remote_config_t *cfg,
     if (!remote_cmd) return NULL;
 
     size_t cmd_pos = 0;
-    char esc_buf[8192];
+
+    /* Dynamically allocate escape buffer sized to the largest argument */
+    size_t max_esc_needed = bin_len * 4 + 3;
+    for (int i = 1; i < chat_argc; i++) {
+        size_t need = strlen(chat_argv[i]) * 4 + 3;
+        if (need > max_esc_needed) max_esc_needed = need;
+    }
+    char *esc_buf = malloc(max_esc_needed);
+    if (!esc_buf) { free(remote_cmd); return NULL; }
 
     /* Escape and append remote binary name */
-    int elen = shell_escape(cfg->remote_bin, esc_buf, sizeof(esc_buf));
-    ASSERT_MSG(elen > 0, "build_ssh_argv: failed to escape remote_bin '%s'", cfg->remote_bin);
+    int elen = shell_escape(cfg->remote_bin, esc_buf, max_esc_needed);
+    if (elen < 0) {
+        fprintf(stderr, "Error: failed to escape remote binary name '%s'\n",
+                cfg->remote_bin);
+        free(esc_buf);
+        free(remote_cmd);
+        return NULL;
+    }
     memcpy(remote_cmd + cmd_pos, esc_buf, (size_t)elen);
     cmd_pos += (size_t)elen;
 
     /* Escape and append each argument */
     for (int i = 1; i < chat_argc; i++) {
         remote_cmd[cmd_pos++] = ' ';
-        elen = shell_escape(chat_argv[i], esc_buf, sizeof(esc_buf));
-        ASSERT_MSG(elen > 0, "build_ssh_argv: failed to escape argv[%d] '%s'",
-                   i, chat_argv[i]);
+        elen = shell_escape(chat_argv[i], esc_buf, max_esc_needed);
+        if (elen < 0) {
+            fprintf(stderr, "Error: failed to escape argument %d '%s'\n",
+                    i, chat_argv[i]);
+            free(esc_buf);
+            free(remote_cmd);
+            return NULL;
+        }
         memcpy(remote_cmd + cmd_pos, esc_buf, (size_t)elen);
         cmd_pos += (size_t)elen;
     }
     remote_cmd[cmd_pos] = '\0';
 
+    free(esc_buf);
+
     /*
      * Build SSH argv.
-     * Maximum elements: ssh -p PORT -i KEY -o OPT1 -o OPT2 -o OPT3 -o OPT4 host REMOTE_CMD NULL = 15
+     * Maximum elements: ssh -p PORT -i KEY -o OPT1 -o OPT2 -o OPT3 -o OPT4 host REMOTE_CMD NULL
+     *                    1    2       2      2       2       2       2       1     1          1 = 16
      */
-    int max_args = 15;
+    const int max_args = 16;
     char **argv = calloc((size_t)max_args, sizeof(char *));
     if (!argv) { free(remote_cmd); return NULL; }
 
     int ai = 0;
-    argv[ai++] = "ssh";
+    /* ai < max_args checked before every write */
+    ASSERT_MSG(ai < max_args, "build_ssh_argv: argv overflow before 'ssh'");
+    argv[ai++] = (char *)"ssh";
 
-    /* Port (only if non-default) */
-    char port_str[8];
+    /* Port (only if non-default) — heap-allocated to avoid dangling stack pointer */
     if (cfg->port != 22) {
-        snprintf(port_str, sizeof(port_str), "%d", cfg->port);
-        argv[ai++] = "-p";
-        argv[ai++] = port_str;
+        char port_buf[8];
+        snprintf(port_buf, sizeof(port_buf), "%d", cfg->port);
+        char *port_heap = strdup(port_buf);
+        if (!port_heap) { free(remote_cmd); free(argv); return NULL; }
+        *port_str_out = port_heap;
+
+        ASSERT_MSG(ai + 1 < max_args,
+                   "build_ssh_argv: argv overflow before '-p PORT', ai=%d", ai);
+        argv[ai++] = (char *)"-p";
+        argv[ai++] = port_heap;
     }
 
     /* Identity file */
     if (cfg->key_path) {
-        argv[ai++] = "-i";
+        ASSERT_MSG(ai + 1 < max_args,
+                   "build_ssh_argv: argv overflow before '-i KEY', ai=%d", ai);
+        argv[ai++] = (char *)"-i";
         argv[ai++] = (char *)cfg->key_path;
     }
 
     /* Extra SSH options (comma-separated, each becomes -o <option>) */
     if (cfg->ssh_opts) {
+        /*
+         * SECURITY: Validate SSH options to prevent command injection.
+         * NBS_CHAT_OPTS is an environment variable under the user's control,
+         * but defence-in-depth: reject options containing shell metacharacters
+         * that could be exploited via ProxyCommand or similar directives.
+         */
+        if (contains_shell_metachar(cfg->ssh_opts)) {
+            fprintf(stderr, "Error: NBS_CHAT_OPTS contains dangerous characters "
+                    "(;`$()| etc.) — refusing to proceed\n");
+            free(remote_cmd);
+            free(*port_str_out);
+            *port_str_out = NULL;
+            free(argv);
+            return NULL;
+        }
+
         /* Make a mutable copy for strtok — caller frees via opts_out */
         char *opts_buf = strdup(cfg->ssh_opts);
         if (opts_buf) {
@@ -246,7 +352,9 @@ static char **build_ssh_argv(const remote_config_t *cfg,
                 /* Skip leading whitespace */
                 while (*opt == ' ') opt++;
                 if (*opt != '\0') {
-                    argv[ai++] = "-o";
+                    ASSERT_MSG(ai + 1 < max_args,
+                               "build_ssh_argv: argv overflow before '-o OPT', ai=%d", ai);
+                    argv[ai++] = (char *)"-o";
                     argv[ai++] = opt;
                     opt_count++;
                 }
@@ -256,13 +364,18 @@ static char **build_ssh_argv(const remote_config_t *cfg,
     }
 
     /* Host */
+    ASSERT_MSG(ai < max_args,
+               "build_ssh_argv: argv overflow before host, ai=%d", ai);
     argv[ai++] = (char *)cfg->host;
 
     /* Remote command (single string, properly escaped) */
+    ASSERT_MSG(ai < max_args,
+               "build_ssh_argv: argv overflow before remote_cmd, ai=%d", ai);
     argv[ai++] = remote_cmd;
 
+    ASSERT_MSG(ai < max_args,
+               "build_ssh_argv: no room for NULL terminator, ai=%d", ai);
     argv[ai] = NULL;
-    ASSERT_MSG(ai < max_args, "build_ssh_argv: argv overflow, ai=%d max=%d", ai, max_args);
 
     return argv;
 }
@@ -275,13 +388,14 @@ static char **build_ssh_argv(const remote_config_t *cfg,
  * Uses fork+execvp (same pattern as hub_commands.c run_passthrough).
  * stdout and stderr pass through directly — no capture.
  *
- * Preconditions:  argv != NULL, argv[0] = "ssh"
+ * Preconditions:  argv != NULL, argv[0] = "ssh", host != NULL
  * Postconditions: Returns remote exit code (0-254), or 1 on SSH/exec failure.
  */
 static int run_ssh(char **argv, const char *host)
 {
     ASSERT_MSG(argv != NULL, "run_ssh: argv is NULL");
     ASSERT_MSG(argv[0] != NULL, "run_ssh: argv[0] is NULL");
+    ASSERT_MSG(host != NULL, "run_ssh: host is NULL");
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -296,9 +410,14 @@ static int run_ssh(char **argv, const char *host)
         _exit(127);
     }
 
-    /* Parent: wait for child */
+    /* Parent: wait for child, retrying on EINTR (e.g. from SIGCHLD) */
     int status;
-    if (waitpid(pid, &status, 0) < 0) {
+    pid_t wpid;
+    do {
+        wpid = waitpid(pid, &status, 0);
+    } while (wpid < 0 && errno == EINTR);
+
+    if (wpid < 0) {
         fprintf(stderr, "Error: waitpid failed: %s\n", strerror(errno));
         return 1;
     }
@@ -312,6 +431,7 @@ static int run_ssh(char **argv, const char *host)
 
     /* SSH uses exit code 255 for its own errors (connection refused, auth failure, etc.) */
     if (exit_code == 255) {
+        /* host is passed via %s to prevent format string injection */
         fprintf(stderr, "Error: SSH connection to %s failed\n", host);
         return 1;
     }
@@ -380,7 +500,8 @@ int main(int argc, char **argv)
 
     /* Build SSH command with shell-escaped arguments */
     char *opts_buf = NULL;
-    char **ssh_argv = build_ssh_argv(&cfg, argc, argv, &opts_buf);
+    char *port_str_heap = NULL;
+    char **ssh_argv = build_ssh_argv(&cfg, argc, argv, &opts_buf, &port_str_heap);
     if (!ssh_argv) {
         fprintf(stderr, "Error: Failed to allocate SSH command\n");
         return 1;
@@ -389,14 +510,18 @@ int main(int argc, char **argv)
     /* Execute and proxy exit code */
     int exit_code = run_ssh(ssh_argv, cfg.host);
 
-    /* Cleanup: free the remote command string (second-to-last element) */
-    /* Find it: it's the last non-NULL element */
+    /*
+     * Cleanup: free heap-allocated resources.
+     * The remote_cmd is the last non-NULL element in argv.
+     * port_str_heap and opts_buf are tracked explicitly (not fragile search).
+     */
     for (int i = 0; ssh_argv[i] != NULL; i++) {
         if (ssh_argv[i + 1] == NULL) {
             free(ssh_argv[i]); /* This is the malloc'd remote_cmd */
             break;
         }
     }
+    free(port_str_heap);
     free(opts_buf);
     free(ssh_argv);
 

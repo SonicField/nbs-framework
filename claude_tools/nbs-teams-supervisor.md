@@ -1,6 +1,6 @@
 ---
 description: "NBS Teams: Supervisor Role"
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task, AskUserQuestion
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task
 ---
 
 # NBS Teams: Supervisor Role
@@ -17,6 +17,7 @@ You do not:
 - Make decisions without evidence
 - Continue when goal clarity is lost
 - Micromanage workers (see Task Scope below)
+- **Use AskUserQuestion** — this blocks the terminal with a modal. Post questions to chat instead
 
 ## Terminal Goal
 

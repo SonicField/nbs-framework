@@ -11,22 +11,35 @@
  *   7. Whitespace stripping in decode
  *   8. Output buffer too small (recoverable error, not assertion)
  *   9. INT_MAX overflow guard (via assertion, tested separately)
+ *  10. Padding followed by non-padding rejection (AB=C bug)
+ *  11. Valid padding acceptance (AB==, QQ==, AAA=)
+ *  12. Thread safety of static const decode table
+ *  13. Empty input postcondition (return 0 without assertion)
+ *  14. Assertion ordering (defence-in-depth checks before computation)
  *
- * Build:
+ * Build (from tests/ directory):
  *   gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -O2 \
- *       -o test_base64_unit test_base64_unit.c base64.c chat_file.c lock.c
+ *       -I../src/nbs-chat \
+ *       -o test_base64_unit test_base64_unit.c \
+ *       ../src/nbs-chat/base64.c ../src/nbs-chat/chat_file.c \
+ *       ../src/nbs-chat/lock.c \
+ *       -lpthread
  *
  * Or with ASan:
  *   clang -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -O1 -g \
  *       -fsanitize=address,undefined -fno-omit-frame-pointer \
- *       -o test_base64_unit test_base64_unit.c base64.c chat_file.c lock.c \
- *       -fsanitize=address,undefined
+ *       -I../src/nbs-chat \
+ *       -o test_base64_unit test_base64_unit.c \
+ *       ../src/nbs-chat/base64.c ../src/nbs-chat/chat_file.c \
+ *       ../src/nbs-chat/lock.c \
+ *       -fsanitize=address,undefined -lpthread
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 
 /* Include the headers from the source directory */
 #include "chat_file.h"
@@ -454,6 +467,228 @@ static void test_encode_output_charset(void) {
     TEST_PASS("encoded output contains only valid base64 characters");
 }
 
+/* --- Test "AB=C" padding bug: padding followed by non-padding must be rejected --- */
+
+static void test_padding_followed_by_nonpadding_rejected(void) {
+    unsigned char output[64];
+
+    /* "AB=C": '=' at position 2, 'C' at position 3. This is invalid
+     * because once padding begins, all subsequent characters in the
+     * 4-byte block must also be '='. The old code allowed this because
+     * its check (i < input_len - 2) only rejected '=' before the last
+     * two positions, but did not enforce that characters after '=' are
+     * also '='. */
+    int ret = base64_decode("AB=C", 4, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"AB=C\" should be rejected (padding followed by non-padding), "
+                "got %d", ret);
+
+    /* Additional invalid patterns within a single block */
+    ret = base64_decode("A=BC", 4, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"A=BC\" should be rejected (padding at position 1), got %d", ret);
+
+    ret = base64_decode("A==C", 4, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"A==C\" should be rejected (padding at position 1), got %d", ret);
+
+    ret = base64_decode("A=B=", 4, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"A=B=\" should be rejected (padding at position 1), got %d", ret);
+
+    /* Multi-block: padding in non-final block */
+    ret = base64_decode("AB==AAAA", 8, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"AB==AAAA\" should be rejected (padding in non-final block), "
+                "got %d", ret);
+
+    ret = base64_decode("AAA=AAAA", 8, output, sizeof(output));
+    TEST_ASSERT(ret == -1,
+                "\"AAA=AAAA\" should be rejected (padding in non-final block), "
+                "got %d", ret);
+
+    TEST_PASS("padding followed by non-padding rejected (AB=C bug fixed)");
+}
+
+/* --- Test "AB==" valid padding is accepted and decodes correctly --- */
+
+static void test_valid_padding_AB_equals_equals(void) {
+    unsigned char output[64];
+
+    /* "AB==" is valid: two data characters + two padding = 1 decoded byte.
+     * 'A' = 0, 'B' = 1. Sextets: 000000 000001 (padding) (padding)
+     * Combined: 00000000 0001xxxx => first byte = 0x00, and only 1 byte output.
+     * Actually: sextet_a=0, sextet_b=1, so triple = (0<<18)|(1<<12) = 0x1000.
+     * Byte 0 = (0x1000 >> 16) & 0xFF = 0x00. out_len = 1. */
+    int ret = base64_decode("AB==", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 1,
+                "\"AB==\" should decode to 1 byte, got %d", ret);
+    TEST_ASSERT(output[0] == 0x00,
+                "\"AB==\" should decode to 0x00, got 0x%02x", output[0]);
+
+    /* "QQ==" decodes to 'A' (0x41). Already tested in test_decode_A_character
+     * but verify it still works after padding validation changes. */
+    ret = base64_decode("QQ==", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 1,
+                "\"QQ==\" should decode to 1 byte, got %d", ret);
+    TEST_ASSERT(output[0] == 0x41,
+                "\"QQ==\" should decode to 0x41 ('A'), got 0x%02x", output[0]);
+
+    /* "AAA=" decodes to 2 bytes (both 0x00). */
+    ret = base64_decode("AAA=", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 2,
+                "\"AAA=\" should decode to 2 bytes, got %d", ret);
+    TEST_ASSERT(output[0] == 0x00 && output[1] == 0x00,
+                "\"AAA=\" should decode to {0x00, 0x00}, got {0x%02x, 0x%02x}",
+                output[0], output[1]);
+
+    TEST_PASS("valid padding patterns (AB==, QQ==, AAA=) accepted and decode correctly");
+}
+
+/* --- Test thread safety: concurrent decodes must not corrupt output --- */
+
+#define THREAD_COUNT 8
+#define THREAD_ITERATIONS 1000
+
+struct thread_result {
+    int failures;
+    int thread_id;
+};
+
+static void *thread_decode_func(void *arg) {
+    struct thread_result *result = (struct thread_result *)arg;
+    result->failures = 0;
+
+    /* Each thread decodes "Zm9vYmFy" ("foobar") repeatedly */
+    const char *input = "Zm9vYmFy";
+    const unsigned char expected[] = "foobar";
+    size_t input_len = 8;
+    unsigned char output[8];
+
+    for (int i = 0; i < THREAD_ITERATIONS; i++) {
+        int ret = base64_decode(input, input_len, output, sizeof(output));
+        if (ret != 6) {
+            result->failures++;
+            continue;
+        }
+        if (memcmp(output, expected, 6) != 0) {
+            result->failures++;
+        }
+    }
+
+    return NULL;
+}
+
+static void test_thread_safety_decode_table(void) {
+    pthread_t threads[THREAD_COUNT];
+    struct thread_result results[THREAD_COUNT];
+
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        results[i].thread_id = i;
+        results[i].failures = 0;
+        int rc = pthread_create(&threads[i], NULL, thread_decode_func,
+                                &results[i]);
+        TEST_ASSERT(rc == 0, "pthread_create failed for thread %d: %d", i, rc);
+    }
+
+    int total_failures = 0;
+    for (int i = 0; i < THREAD_COUNT; i++) {
+        int rc = pthread_join(threads[i], NULL);
+        TEST_ASSERT(rc == 0, "pthread_join failed for thread %d: %d", i, rc);
+        total_failures += results[i].failures;
+    }
+
+    TEST_ASSERT(total_failures == 0,
+                "thread safety: %d decode failures across %d threads x %d iterations",
+                total_failures, THREAD_COUNT, THREAD_ITERATIONS);
+
+    TEST_PASS("thread safety: concurrent decodes produce correct results");
+}
+
+/* --- Test empty input postcondition: decode returns 0, no assertion failure --- */
+
+static void test_empty_input_postcondition(void) {
+    /* Empty string with length 0 */
+    unsigned char output[4];
+    int ret = base64_decode("", 0, output, sizeof(output));
+    TEST_ASSERT(ret == 0,
+                "empty input (len=0) should return 0, got %d", ret);
+
+    /* All-whitespace input (stripped to empty) */
+    ret = base64_decode("   \n\r\n  ", 8, output, sizeof(output));
+    TEST_ASSERT(ret == 0,
+                "all-whitespace input should return 0 after stripping, got %d",
+                ret);
+
+    /* Verify encode empty also works with postcondition */
+    char enc_output[8];
+    ret = base64_encode((const unsigned char *)"", 0, enc_output,
+                        sizeof(enc_output));
+    TEST_ASSERT(ret == 0,
+                "empty encode should return 0, got %d", ret);
+    TEST_ASSERT(enc_output[0] == '\0',
+                "empty encode should produce null-terminated empty string");
+
+    TEST_PASS("empty input postcondition (returns 0 without assertion failure)");
+}
+
+/* --- Test assertion ordering: sextets checked before computation --- */
+
+static void test_assertion_ordering_valid_inputs(void) {
+    /* This test verifies that the defence-in-depth assertions do not
+     * fire for valid inputs. If assertions were incorrectly ordered
+     * (after computation), a valid '=' padding character would have
+     * its decode_table value (64) masked to 0 by & 0x3F before the
+     * assertion could check for 0xFF. With correct ordering, the
+     * assertion sees the raw table value (64 for '=', not 0xFF) and
+     * passes.
+     *
+     * We cannot directly test that assertions fire before computation
+     * without triggering abort(), but we CAN verify that all valid
+     * base64 inputs (including padding) pass through without assertion
+     * failures. If the assertions were incorrectly placed, certain
+     * inputs might cause incorrect behaviour detectable in output. */
+
+    unsigned char output[64];
+
+    int ret;
+    ret = base64_decode("AAAA", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 3, "AAAA: expected 3, got %d", ret);
+
+    ret = base64_decode("AAA=", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 2, "AAA=: expected 2, got %d", ret);
+
+    ret = base64_decode("AA==", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 1, "AA==: expected 1, got %d", ret);
+
+    ret = base64_decode("Zm9v", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 3, "Zm9v: expected 3, got %d", ret);
+    TEST_ASSERT(memcmp(output, "foo", 3) == 0,
+                "Zm9v should decode to 'foo'");
+
+    ret = base64_decode("Zm8=", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 2, "Zm8=: expected 2, got %d", ret);
+    TEST_ASSERT(memcmp(output, "fo", 2) == 0,
+                "Zm8= should decode to 'fo'");
+
+    ret = base64_decode("Zg==", 4, output, sizeof(output));
+    TEST_ASSERT(ret == 1, "Zg==: expected 1, got %d", ret);
+    TEST_ASSERT(output[0] == 'f',
+                "Zg== should decode to 'f', got 0x%02x", output[0]);
+
+    /* Multi-block with padding in final block */
+    ret = base64_decode("AAAAAAAA", 8, output, sizeof(output));
+    TEST_ASSERT(ret == 6, "AAAAAAAA: expected 6, got %d", ret);
+
+    ret = base64_decode("AAAAAAA=", 8, output, sizeof(output));
+    TEST_ASSERT(ret == 5, "AAAAAAA=: expected 5, got %d", ret);
+
+    ret = base64_decode("AAAAAA==", 8, output, sizeof(output));
+    TEST_ASSERT(ret == 4, "AAAAAA==: expected 4, got %d", ret);
+
+    TEST_PASS("assertion ordering: all valid inputs pass without assertion failure");
+}
+
 int main(void) {
     printf("=== base64 unit tests ===\n\n");
 
@@ -471,6 +706,11 @@ int main(void) {
     test_binary_roundtrip();
     test_large_input();
     test_encode_output_charset();
+    test_padding_followed_by_nonpadding_rejected();
+    test_valid_padding_AB_equals_equals();
+    test_thread_safety_decode_table();
+    test_empty_input_postcondition();
+    test_assertion_ordering_valid_inputs();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

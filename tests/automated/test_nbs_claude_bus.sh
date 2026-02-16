@@ -25,6 +25,8 @@
 #  11. Injection verification: post-injection prompt check, retry, both modes
 #  12. nbs-poll.md safety net language
 #  13. docs/nbs-claude.md updated
+#  14. detect_context_stress: functional and structural
+#  15. Startup grace period: no notifications during grace window
 
 set -uo pipefail
 
@@ -1132,6 +1134,147 @@ if [[ "$STRESS_LINE" -lt "$NOTIFY_LINE" ]]; then
     pass "Context stress check before should_inject_notify in pty"
 else
     fail "Context stress check NOT before should_inject_notify in pty"
+fi
+
+# =========================================================================
+# 14. Startup grace period: no notifications during grace window
+# =========================================================================
+echo "15. Startup grace period..."
+
+# Structural: STARTUP_GRACE variable exists
+if grep -q 'STARTUP_GRACE' "$NBS_CLAUDE"; then
+    pass "Has STARTUP_GRACE variable"
+else
+    fail "Missing STARTUP_GRACE variable"
+fi
+
+# Structural: NBS_STARTUP_GRACE environment variable documented
+if grep -q 'NBS_STARTUP_GRACE' "$NBS_CLAUDE"; then
+    pass "NBS_STARTUP_GRACE env var documented"
+else
+    fail "NBS_STARTUP_GRACE env var not documented"
+fi
+
+# Structural: SIDECAR_START_TIME is set after initial handle prompt (tmux)
+TMUX_INIT=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE")
+if echo "$TMUX_INIT" | grep -q 'SIDECAR_START_TIME'; then
+    pass "SIDECAR_START_TIME set in tmux sidecar"
+else
+    fail "SIDECAR_START_TIME not set in tmux sidecar"
+fi
+
+# Structural: SIDECAR_START_TIME is set after initial handle prompt (pty)
+PTY_INIT=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE")
+if echo "$PTY_INIT" | grep -q 'SIDECAR_START_TIME'; then
+    pass "SIDECAR_START_TIME set in pty sidecar"
+else
+    fail "SIDECAR_START_TIME not set in pty sidecar"
+fi
+
+# Structural: should_inject_notify checks SIDECAR_START_TIME
+INJECT_FN=$(sed -n '/^should_inject_notify/,/^}/p' "$NBS_CLAUDE")
+if echo "$INJECT_FN" | grep -q 'SIDECAR_START_TIME'; then
+    pass "should_inject_notify checks SIDECAR_START_TIME"
+else
+    fail "should_inject_notify does not check SIDECAR_START_TIME"
+fi
+
+# Structural: should_inject_notify checks STARTUP_GRACE
+if echo "$INJECT_FN" | grep -q 'STARTUP_GRACE'; then
+    pass "should_inject_notify checks STARTUP_GRACE"
+else
+    fail "should_inject_notify does not check STARTUP_GRACE"
+fi
+
+# Functional: grace period blocks injection when within window
+# Set up: unread chat messages exist (would normally trigger injection)
+cat > .nbs/chat/test.chat <<'CHAT'
+---
+testhandle: test message 1
+testhandle: test message 2
+testhandle: test message 3
+testhandle: test message 4
+testhandle: test message 5
+CHAT
+cat > .nbs/chat/test.chat.cursors <<'CURSORS'
+testhandle=0
+CURSORS
+cat > $CONTROL_REGISTRY <<'REG'
+chat:.nbs/chat/test.chat
+REG
+LAST_NOTIFY_TIME=0
+
+# Without grace period (SIDECAR_START_TIME=0): should inject
+SIDECAR_START_TIME=0
+should_inject_notify
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "No grace active (START_TIME=0) → allows injection"
+else
+    fail "No grace active → expected rc=0, got rc=$rc"
+fi
+
+# With grace period active (recent start time): should block
+SIDECAR_START_TIME=$(date +%s)
+STARTUP_GRACE=30
+LAST_NOTIFY_TIME=0
+should_inject_notify
+rc=$?
+if [[ $rc -eq 1 ]]; then
+    pass "Grace period active → blocks injection (rc=1)"
+else
+    fail "Grace period active → expected rc=1, got rc=$rc"
+fi
+
+# With grace period expired (old start time): should allow
+SIDECAR_START_TIME=$(($(date +%s) - 31))
+STARTUP_GRACE=30
+LAST_NOTIFY_TIME=0
+should_inject_notify
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "Grace period expired → allows injection (rc=0)"
+else
+    fail "Grace period expired → expected rc=0, got rc=$rc"
+fi
+
+# With grace period = 0 (disabled): should allow immediately
+SIDECAR_START_TIME=$(date +%s)
+STARTUP_GRACE=0
+LAST_NOTIFY_TIME=0
+should_inject_notify
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "Grace period = 0 → allows injection immediately"
+else
+    fail "Grace period = 0 → expected rc=0, got rc=$rc"
+fi
+
+# Edge: exactly at grace boundary (elapsed == STARTUP_GRACE): should allow
+SIDECAR_START_TIME=$(($(date +%s) - 30))
+STARTUP_GRACE=30
+LAST_NOTIFY_TIME=0
+should_inject_notify
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "Exactly at grace boundary → allows injection"
+else
+    fail "Exactly at grace boundary → expected rc=0, got rc=$rc"
+fi
+
+# Structural: STARTUP_GRACE default is 30
+DEFAULT_GRACE=$(grep 'NBS_STARTUP_GRACE:-' "$NBS_CLAUDE" | head -1 | sed 's/.*:-\([0-9]*\)}.*/\1/')
+if [[ "$DEFAULT_GRACE" == "30" ]]; then
+    pass "Default STARTUP_GRACE is 30 seconds"
+else
+    fail "Default STARTUP_GRACE is '$DEFAULT_GRACE', expected 30"
+fi
+
+# Structural: STARTUP_GRACE is in numeric validation loop
+if grep 'STARTUP_GRACE' "$NBS_CLAUDE" | grep -q '_nbs_var_name'; then
+    pass "STARTUP_GRACE included in numeric validation"
+else
+    fail "STARTUP_GRACE missing from numeric validation"
 fi
 
 # =========================================================================

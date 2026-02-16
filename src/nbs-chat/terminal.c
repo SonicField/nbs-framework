@@ -26,9 +26,11 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,8 +82,15 @@ static const char *get_colour(const char *handle) {
         }
     }
     if (handle_colour_count < MAX_PARTICIPANTS) {
-        snprintf(handle_colours[handle_colour_count].handle, MAX_HANDLE_LEN,
-                 "%s", handle);
+        int sn_ret = snprintf(handle_colours[handle_colour_count].handle,
+                              MAX_HANDLE_LEN, "%s", handle);
+        /* Detect truncation: snprintf returns the number of characters
+         * that would have been written.  If >= MAX_HANDLE_LEN, the
+         * handle was truncated and colour lookups may fail to match. */
+        if (sn_ret < 0 || sn_ret >= MAX_HANDLE_LEN) {
+            fprintf(stderr, "warning: handle truncated in colour table: "
+                    "length %d exceeds %d\n", sn_ret, MAX_HANDLE_LEN - 1);
+        }
         handle_colours[handle_colour_count].colour_index = next_colour;
         handle_colour_count++;
 
@@ -239,7 +248,15 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
     ASSERT_MSG(tw > 0,
                "line_redraw: terminal width must be positive, got %d"
                " — ioctl failure or invalid terminal", tw);
-    int prompt_vlen = (int)strlen(handle) + 2;  /* visible: "handle> " */
+
+    /* Guard against handle length overflowing int arithmetic.
+     * MAX_HANDLE_LEN is 64 so this should never fire in practice,
+     * but defends against a corrupted or adversarial handle pointer. */
+    size_t handle_len = strlen(handle);
+    ASSERT_MSG(handle_len <= (size_t)(INT_MAX - 2),
+               "line_redraw: handle length %zu would overflow int arithmetic",
+               handle_len);
+    int prompt_vlen = (int)handle_len + 2;  /* visible: "handle> " */
 
     /* Move cursor up to the first row of the input area */
     if (g_cursor_row > 0) {
@@ -253,7 +270,13 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
 
     /* Print buffer content */
     if (ls->len > 0) {
-        write(STDOUT_FILENO, ls->buf, ls->len);
+        ssize_t wr = write(STDOUT_FILENO, ls->buf, ls->len);
+        if (wr < 0) {
+            /* Write to stdout failed -- terminal may be disconnected.
+             * Log but do not abort; the main loop will detect POLLHUP. */
+            fprintf(stderr, "warning: write to stdout failed: %s\n",
+                    strerror(errno));
+        }
     }
 
     /* Calculate where the cursor needs to be vs where it is now.
@@ -265,6 +288,18 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
      * This means a position at a multiple of tw is still on the previous
      * row, not the next one. We use (pos - 1) / tw for row calculation
      * when pos > 0 to account for this. */
+
+    /* Overflow guards: ls->len and ls->cursor are size_t; adding to
+     * prompt_vlen (int) could overflow int.  In practice MAX_HANDLE_LEN
+     * is 64 and line buffers are bounded by available memory, but we
+     * guard defensively.  Clamp to INT_MAX to avoid UB. */
+    ASSERT_MSG(ls->len <= (size_t)(INT_MAX - prompt_vlen),
+               "line_redraw: len %zu + prompt_vlen %d would overflow int",
+               ls->len, prompt_vlen);
+    ASSERT_MSG(ls->cursor <= (size_t)(INT_MAX - prompt_vlen),
+               "line_redraw: cursor %zu + prompt_vlen %d would overflow int",
+               ls->cursor, prompt_vlen);
+
     int end_abs = prompt_vlen + (int)ls->len;
     int target_abs = prompt_vlen + (int)ls->cursor;
 
@@ -294,8 +329,21 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
 
 static void line_ensure_cap(line_state_t *ls, size_t needed) {
     if (needed >= ls->cap) {
-        size_t new_cap = ls->cap * 2;
-        while (new_cap <= needed) new_cap *= 2;
+        /* Overflow guard: if needed is anywhere near SIZE_MAX / 2,
+         * doubling will wrap around size_t.  Abort rather than
+         * silently allocating a tiny (wrapped) buffer. */
+        ASSERT_MSG(needed < SIZE_MAX / 2,
+                   "line_ensure_cap: needed %zu is too large (overflow risk)",
+                   needed);
+
+        size_t new_cap = ls->cap;
+        if (new_cap == 0) new_cap = LINE_INIT_CAP;
+        while (new_cap <= needed) {
+            ASSERT_MSG(new_cap <= SIZE_MAX / 2,
+                       "line_ensure_cap: capacity %zu would overflow on doubling",
+                       new_cap);
+            new_cap *= 2;
+        }
         char *newbuf = realloc(ls->buf, new_cap);
         ASSERT_MSG(newbuf != NULL, "line_ensure_cap: realloc failed for %zu", new_cap);
         ls->buf = newbuf;
@@ -559,6 +607,14 @@ static void send_and_display(line_state_t *ls) {
     ASSERT_MSG(ls->len > 0, "send_and_display: called with empty buffer");
 
     if (chat_send(g_chat_file, g_handle, ls->buf) == 0) {
+        /* HARDENING NOTE: g_msg_count is incremented optimistically here
+         * under the assumption that chat_send returning 0 means the message
+         * was durably written.  If the file was concurrently truncated or
+         * the write was only partially flushed, this count could diverge
+         * from the actual message count.  The next poll_and_display call
+         * will reconcile via chat_read, so the window of inconsistency
+         * is bounded by POLL_INTERVAL_MS.  A postcondition check here
+         * would require a redundant chat_read, which is too expensive. */
         g_msg_count++;
         /* Publish bus events: standard chat-message + human-input priority signal */
         bus_bridge_after_send(g_chat_file, g_handle, ls->buf);
@@ -570,9 +626,39 @@ static void send_and_display(line_state_t *ls) {
 
 /* --- Editor mode --- */
 
+/*
+ * Validate EDITOR value against an allowlist of known editors, then
+ * fall back to rejecting shell metacharacters for unlisted-but-safe
+ * editors (e.g. micro, helix).  This prevents command injection via
+ * EDITOR="vi; rm -rf /" being passed to execlp.
+ */
+static int editor_is_valid(const char *editor) {
+    if (!editor || editor[0] == '\0') return 0;
+
+    /* Extract basename for allowlist comparison */
+    const char *base = strrchr(editor, '/');
+    base = base ? base + 1 : editor;
+
+    const char *allowed[] = {
+        "vi", "vim", "nvim", "nano", "emacs", "ed", NULL
+    };
+    for (int i = 0; allowed[i] != NULL; i++) {
+        if (strcmp(base, allowed[i]) == 0) return 1;
+    }
+
+    /* Not in allowlist -- reject if any shell metacharacter present */
+    const char *bad = ";|&$`\\\"'(){}[]<>!~#*? \t\n\r";
+    for (const char *p = editor; *p; p++) {
+        if (strchr(bad, *p) != NULL) return 0;
+    }
+
+    /* Unlisted but no metacharacters -- accept */
+    return 1;
+}
+
 static char *open_editor(void) {
     const char *editor = getenv("EDITOR");
-    if (!editor) editor = "vim";
+    if (!editor || !editor_is_valid(editor)) editor = "vim";
 
     /* Create temp file */
     char tmppath[] = "/tmp/nbs-chat-edit.XXXXXX";
@@ -588,14 +674,25 @@ static char *open_editor(void) {
     }
 
     if (pid == 0) {
-        /* Child: run editor with /dev/tty */
+        /* Child: run editor with /dev/tty
+         *
+         * SECURITY NOTE: The child inherits the full parent environment.
+         * This may leak sensitive environment variables to the editor
+         * process.  A full fix would use execle() with a sanitised
+         * environment (PATH, HOME, TERM, LANG only), but that is a
+         * larger refactor -- flagged for future work. */
         int tty = open("/dev/tty", O_RDONLY);
         if (tty < 0) {
             fprintf(stderr, "error: cannot open /dev/tty for editor: %s\n",
                     strerror(errno));
             _exit(1);
         }
-        dup2(tty, STDIN_FILENO);
+        if (dup2(tty, STDIN_FILENO) < 0) {
+            fprintf(stderr, "error: dup2 failed for editor stdin: %s\n",
+                    strerror(errno));
+            close(tty);
+            _exit(1);
+        }
         close(tty);
         execlp(editor, editor, tmppath, (char *)NULL);
         _exit(127);
@@ -610,8 +707,11 @@ static char *open_editor(void) {
         return NULL;
     }
 
-    /* Read result */
-    FILE *f = fopen(tmppath, "r");
+    /* Read result -- use binary mode ("rb") so fseek/ftell give byte
+     * counts rather than opaque text-mode positions.  On platforms where
+     * text mode translates \r\n, the ftell offset is not necessarily a
+     * byte count, causing incorrect malloc size and fread length. */
+    FILE *f = fopen(tmppath, "rb");
     if (!f) {
         unlink(tmppath);
         return NULL;
@@ -714,8 +814,14 @@ int main(int argc, char **argv) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_signal;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    if (sigaction(SIGINT, &sa, NULL) != 0) {
+        fprintf(stderr, "warning: sigaction(SIGINT) failed: %s\n",
+                strerror(errno));
+    }
+    if (sigaction(SIGTERM, &sa, NULL) != 0) {
+        fprintf(stderr, "warning: sigaction(SIGTERM) failed: %s\n",
+                strerror(errno));
+    }
 
     /* Put terminal in raw-ish mode (disable echo and canonical mode,
      * but keep signal generation for Ctrl-C) */
@@ -727,7 +833,10 @@ int main(int argc, char **argv) {
         raw.c_lflag &= ~(ECHO | ICANON);
         raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+            fprintf(stderr, "warning: tcsetattr(raw) failed: %s\n",
+                    strerror(errno));
+        }
     }
 
     /* Show existing messages */
@@ -817,8 +926,12 @@ int main(int argc, char **argv) {
             /* Check for commands */
             if (strcmp(edit.buf, "/exit") == 0) {
                 line_state_free(&edit);
-                if (have_termios)
-                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+                if (have_termios) {
+                    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) != 0) {
+                        fprintf(stderr, "warning: tcsetattr(restore) failed: %s\n",
+                                strerror(errno));
+                    }
+                }
                 printf("%sLeft chat.%s\n", DIM, RESET);
                 return 0;
             }
@@ -833,13 +946,27 @@ int main(int argc, char **argv) {
             if (strcmp(edit.buf, "/edit") == 0) {
                 line_state_reset(&edit);
                 /* Restore terminal for editor */
-                if (have_termios)
-                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+                if (have_termios) {
+                    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) != 0) {
+                        fprintf(stderr, "warning: tcsetattr(restore for editor) failed: %s\n",
+                                strerror(errno));
+                    }
+                }
                 char *msg = open_editor();
                 /* Back to raw mode */
-                if (have_termios)
-                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                if (have_termios) {
+                    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+                        fprintf(stderr, "warning: tcsetattr(raw after editor) failed: %s\n",
+                                strerror(errno));
+                    }
+                }
                 if (msg) {
+                    /* HARDENING NOTE: This send logic duplicates
+                     * send_and_display().  A refactor to unify both paths
+                     * would reduce the risk of them diverging.  Not done
+                     * here because the /edit path needs format_message
+                     * with the editor content, which send_and_display
+                     * does not provide.  Flagged for future cleanup. */
                     if (chat_send(g_chat_file, g_handle, msg) == 0) {
                         format_message(g_handle, msg, g_handle);
                         g_msg_count++;
@@ -952,8 +1079,12 @@ int main(int argc, char **argv) {
 
     /* Cleanup */
     line_state_free(&edit);
-    if (have_termios)
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    if (have_termios) {
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) != 0) {
+            fprintf(stderr, "warning: tcsetattr(final restore) failed: %s\n",
+                    strerror(errno));
+        }
+    }
     printf("\n%sLeft chat.%s\n", DIM, RESET);
 
     return 0;

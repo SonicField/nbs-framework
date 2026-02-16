@@ -14,6 +14,7 @@
 
 #include "bus.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
@@ -70,6 +71,9 @@ static void print_usage(void)
 /* Parse --handle=<name> from argv. Returns handle string or NULL. */
 static const char *parse_handle_opt(int argc, char **argv, int start)
 {
+    ASSERT_MSG(argv != NULL, "parse_handle_opt: argv is NULL");
+    ASSERT_MSG(start >= 0 && start <= argc,
+               "parse_handle_opt: start %d out of range [0, %d]", start, argc);
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--handle=", 9) == 0) {
             const char *h = argv[i] + 9;
@@ -84,6 +88,9 @@ static const char *parse_handle_opt(int argc, char **argv, int start)
 static long long parse_max_bytes_opt(int argc, char **argv, int start,
                                      long long cfg_default)
 {
+    ASSERT_MSG(argv != NULL, "parse_max_bytes_opt: argv is NULL");
+    ASSERT_MSG(start >= 0 && start <= argc,
+               "parse_max_bytes_opt: start %d out of range [0, %d]", start, argc);
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--max-bytes=", 12) == 0) {
             const char *s = argv[i] + 12;
@@ -105,6 +112,10 @@ static long long parse_max_bytes_opt(int argc, char **argv, int start,
 static long long parse_dedup_window_opt(int argc, char **argv, int start,
                                         long long cfg_default_us)
 {
+    ASSERT_MSG(argv != NULL, "parse_dedup_window_opt: argv is NULL");
+    ASSERT_MSG(start >= 0 && start <= argc,
+               "parse_dedup_window_opt: start %d out of range [0, %d]",
+               start, argc);
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--dedup-window=", 15) == 0) {
             const char *s = argv[i] + 15;
@@ -113,6 +124,11 @@ static long long parse_dedup_window_opt(int argc, char **argv, int start,
             long long val = strtoll(s, &endp, 10);
             if (errno != 0 || *endp != '\0' || val < 0) {
                 fprintf(stderr, "Error: invalid --dedup-window value: %s\n", s);
+                return -1;
+            }
+            if (val > LLONG_MAX / 1000000LL) {
+                fprintf(stderr,
+                        "Error: --dedup-window value too large (overflow): %s\n", s);
                 return -1;
             }
             return val * 1000000LL; /* seconds to microseconds */
@@ -124,6 +140,12 @@ static long long parse_dedup_window_opt(int argc, char **argv, int start,
 /* Verify events directory exists, print appropriate error if not. */
 static int verify_events_dir(const char *dir)
 {
+    ASSERT_MSG(dir != NULL, "verify_events_dir: dir is NULL");
+    if (strlen(dir) >= BUS_MAX_PATH) {
+        fprintf(stderr, "Error: directory path too long (%zu >= %d): %s\n",
+                strlen(dir), BUS_MAX_PATH, dir);
+        return BUS_EXIT_BAD_ARGS;
+    }
     struct stat st;
     if (stat(dir, &st) != 0) {
         fprintf(stderr, "Error: events directory not found: %s\n", dir);
@@ -138,6 +160,24 @@ static int verify_events_dir(const char *dir)
 
 /* --- Command handlers --- */
 
+/* Validate that a string is non-empty and contains no whitespace.
+ * Returns 0 if valid, -1 if invalid. */
+static int validate_non_empty_no_whitespace(const char *s, const char *label)
+{
+    if (s == NULL || s[0] == '\0') {
+        fprintf(stderr, "Error: %s must not be empty\n", label);
+        return -1;
+    }
+    for (const char *p = s; *p; p++) {
+        if (isspace((unsigned char)*p)) {
+            fprintf(stderr, "Error: %s must not contain whitespace: '%s'\n",
+                    label, s);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int cmd_publish(int argc, char **argv)
 {
     /* nbs-bus publish <dir> <source> <type> <priority> [payload] [--dedup-window=N] */
@@ -150,6 +190,12 @@ static int cmd_publish(int argc, char **argv)
     const char *source = argv[3];
     const char *type = argv[4];
     const char *priority_str = argv[5];
+
+    /* Validate source and type: non-empty, no whitespace (header invariant) */
+    if (validate_non_empty_no_whitespace(source, "source") != 0)
+        return BUS_EXIT_BAD_ARGS;
+    if (validate_non_empty_no_whitespace(type, "type") != 0)
+        return BUS_EXIT_BAD_ARGS;
 
     /* Payload is the first positional arg after priority that doesn't start with -- */
     const char *payload = NULL;
@@ -165,11 +211,19 @@ static int cmd_publish(int argc, char **argv)
                 priority_str);
         return BUS_EXIT_BAD_ARGS;
     }
+    ASSERT_MSG(priority >= 0 && priority <= 3,
+               "bus_priority_from_str returned out-of-range value: %d", priority);
 
     /* Load config for defaults; CLI args override */
-    bus_config_t cfg;
-    bus_load_config(dir, &cfg);
+    bus_config_t cfg = {0};
+    if (bus_load_config(dir, &cfg) != 0) {
+        fprintf(stderr, "Error: failed to load config from %s\n", dir);
+        return BUS_EXIT_ERROR;
+    }
 
+    ASSERT_MSG(cfg.dedup_window_s <= LLONG_MAX / 1000000LL,
+               "cfg.dedup_window_s overflows microsecond conversion: %lld",
+               cfg.dedup_window_s);
     long long dedup_window_us = parse_dedup_window_opt(argc, argv, 6,
                                                         cfg.dedup_window_s * 1000000LL);
     if (dedup_window_us < 0)
@@ -224,8 +278,12 @@ static int cmd_read(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    if (bus_read(dir, event_file) != 0)
-        return BUS_EXIT_NOT_FOUND;
+    if (bus_read(dir, event_file) != 0) {
+        /* Distinguish "not found" from I/O errors */
+        if (errno == ENOENT)
+            return BUS_EXIT_NOT_FOUND;
+        return BUS_EXIT_ERROR;
+    }
 
     return BUS_EXIT_OK;
 }
@@ -244,8 +302,12 @@ static int cmd_ack(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    if (bus_ack(dir, event_file) != 0)
-        return BUS_EXIT_NOT_FOUND;
+    if (bus_ack(dir, event_file) != 0) {
+        /* Distinguish "not found" from I/O errors */
+        if (errno == ENOENT)
+            return BUS_EXIT_NOT_FOUND;
+        return BUS_EXIT_ERROR;
+    }
 
     return BUS_EXIT_OK;
 }
@@ -283,8 +345,11 @@ static int cmd_prune(int argc, char **argv)
     if (rc != 0) return rc;
 
     /* Load config for defaults; CLI args override */
-    bus_config_t cfg;
-    bus_load_config(dir, &cfg);
+    bus_config_t cfg = {0};
+    if (bus_load_config(dir, &cfg) != 0) {
+        fprintf(stderr, "Error: failed to load config from %s\n", dir);
+        return BUS_EXIT_ERROR;
+    }
 
     long long max_bytes = parse_max_bytes_opt(argc, argv, 3,
                                               cfg.retention_max_bytes);
@@ -317,6 +382,10 @@ static int cmd_status(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    /* POSIX permits argc == 0 (no argv[0]). Guard against this. */
+    ASSERT_MSG(argc > 0 && argv[0] != NULL,
+               "main: argc == 0 or argv[0] is NULL (invalid invocation)");
+
     if (argc < 2) {
         print_usage();
         return BUS_EXIT_BAD_ARGS;

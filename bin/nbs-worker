@@ -24,11 +24,11 @@
 #   3 - Timeout
 #   4 - Invalid arguments
 
-set -uo pipefail
+set -euo pipefail
 
 PREFIX="pty_"
-WORKERS_DIR=".nbs/workers"
-EVENTS_DIR=".nbs/events"
+WORKERS_DIR="$(pwd)/.nbs/workers"
+EVENTS_DIR="$(pwd)/.nbs/events"
 
 # --- Bus integration ---
 
@@ -54,9 +54,13 @@ bus_publish() {
     [[ -d "$EVENTS_DIR" ]] || return 0
 
     if [[ -n "$payload" ]]; then
-        $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" "$payload" >/dev/null 2>&1 || true
+        if ! $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" "$payload" >/dev/null 2>&1; then
+            echo "Warning: bus publish failed (source=$source type=$type)" >&2
+        fi
     else
-        $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" >/dev/null 2>&1 || true
+        if ! $nbs_bus publish "$EVENTS_DIR" "$source" "$type" "$priority" >/dev/null 2>&1; then
+            echo "Warning: bus publish failed (source=$source type=$type)" >&2
+        fi
     fi
 }
 
@@ -133,8 +137,16 @@ generate_name() {
     assert_not_empty "slug" "$slug"
 
     local hash
-    hash=$(date +%s%N | sha256sum | head -c 4)
-    echo "${slug}-${hash}"
+    hash=$(head -c 32 /dev/urandom | sha256sum | head -c 4)
+    local name="${slug}-${hash}"
+
+    # Postcondition: name matches expected format (fix 15)
+    if [[ ! "$name" =~ ^[a-z0-9]+-[a-f0-9]{4}$ ]]; then
+        echo "ASSERTION FAILED: generate_name produced invalid name: $name" >&2
+        exit 1
+    fi
+
+    echo "$name"
 }
 
 task_file_path() {
@@ -172,7 +184,7 @@ get_state_field() {
     fi
 
     local state
-    state=$(grep '^State:' "$task_file" 2>/dev/null | head -1 | sed 's/^State:[[:space:]]*//')
+    state=$(grep '^State:' "$task_file" 2>/dev/null | head -1 | sed 's/^State:[[:space:]]*//' || true)
 
     if [[ -z "$state" ]]; then
         echo "unknown"
@@ -191,6 +203,12 @@ cmd_spawn() {
     if [[ -z "$slug" ]] || [[ -z "$project_dir" ]] || [[ -z "$task_description" ]]; then
         echo "Error: spawn requires <slug> <project-dir> <task-description>" >&2
         echo "Usage: nbs-worker spawn <slug> <project-dir> <task-description>" >&2
+        return 4
+    fi
+
+    # Validate slug format: lowercase alphanumeric only (fix 16)
+    if [[ ! "$slug" =~ ^[a-z0-9]+$ ]]; then
+        echo "Error: slug must match ^[a-z0-9]+$ (got: $slug)" >&2
         return 4
     fi
 
@@ -259,7 +277,9 @@ TASKEOF
     assert_file_exists "$task_file"
 
     # Create tmux session
-    if ! tmux new-session -d -s "$session" "cd '$abs_project_dir' && exec bash -l"; then
+    # Escape single quotes in path to prevent shell injection (fix 2)
+    local escaped_project_dir="${abs_project_dir//\'/\'\\\'\'}"
+    if ! tmux new-session -d -s "$session" "cd '${escaped_project_dir}' && exec bash -l"; then
         echo "Error: Failed to create tmux session" >&2
         rm -f "$task_file"
         return 1
@@ -267,7 +287,10 @@ TASKEOF
 
     # Start persistent logging via pipe-pane
     # This captures ALL output from session start, surviving session exit
-    tmux pipe-pane -t "$session" -o "cat >> '${log_file}'"
+    local escaped_log_file="${log_file//\'/\'\\\'\'}"
+    if ! tmux pipe-pane -t "$session" -o "cat >> '${escaped_log_file}'"; then
+        echo "Warning: pipe-pane failed — log capture may not work" >&2
+    fi
 
     # Postcondition: tmux session is alive
     if ! tmux_alive "$name"; then
@@ -280,6 +303,10 @@ TASKEOF
     sleep 2
 
     # Send the initial Claude command
+    # SECURITY: --dangerously-skip-permissions is intentional for automated workers.
+    # Workers run in isolated tmux sessions on tasks defined by the supervisor.
+    # The supervisor (human) is responsible for reviewing worker output via
+    # nbs-worker results/search before acting on it.
     tmux send-keys -t "$session" "claude --dangerously-skip-permissions" Enter
 
     # Allow Claude to start
@@ -300,6 +327,11 @@ TASKEOF
         sleep 1
         wait_count=$((wait_count + 1))
     done
+
+    # Warn if we timed out waiting for Claude UI (fix 7)
+    if [[ $wait_count -ge $max_wait ]]; then
+        echo "Warning: timed out waiting for Claude UI prompt (${max_wait}s)" >&2
+    fi
 
     # Extra Enter for reliability — ensures prompt submission
     sleep 1
@@ -378,10 +410,15 @@ cmd_status() {
 }
 
 cmd_search() {
-    local name="${1:-}"
-    shift 2>/dev/null || true
-    local pattern="${1:-}"
-    shift 2>/dev/null || true
+    # Fix 6: Explicit argument count check instead of fragile shift
+    if [[ $# -lt 2 ]]; then
+        echo "Error: search requires <name> <regex> [--context=N]" >&2
+        return 4
+    fi
+
+    local name="$1"
+    local pattern="$2"
+    shift 2
     local context=50
 
     # Parse --context option
@@ -392,6 +429,8 @@ cmd_search() {
                 shift
                 ;;
             *)
+                # Fix 14 (partial): warn on unknown args in search
+                echo "Warning: unknown argument ignored: $1" >&2
                 shift
                 ;;
         esac
@@ -399,6 +438,12 @@ cmd_search() {
 
     if [[ -z "$name" ]] || [[ -z "$pattern" ]]; then
         echo "Error: search requires <name> <regex> [--context=N]" >&2
+        return 4
+    fi
+
+    # Fix 5 (SECURITY): Validate name against path traversal
+    if [[ ! "$name" =~ ^[a-z0-9]+-[a-f0-9]{4}$ ]]; then
+        echo "Error: invalid worker name format: $name (expected <slug>-<4hex>)" >&2
         return 4
     fi
 
@@ -411,11 +456,23 @@ cmd_search() {
         return 2
     fi
 
+    # Fix 4 (SECURITY): Validate regex with a dry-run against empty input
+    # grep returns 1 for "no match" and 2 for "invalid regex"
+    local regex_test_rc=0
+    echo "" | grep -E "$pattern" >/dev/null 2>&1 || regex_test_rc=$?
+    if [[ $regex_test_rc -eq 2 ]]; then
+        echo "Error: invalid regex pattern: $pattern" >&2
+        return 4
+    fi
+
     # Strip ANSI escape codes then search with context
     # Handles: CSI sequences (colours, cursor), OSC sequences, simple escapes
-    sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\][^\x07]*\x07//g; s/\x1b[()][0-9A-B]//g' "$log_file" \
-        | grep -E -C "$context" "$pattern"
-    local rc=$?
+    # Fix 8 (BUG): Separate sed and grep to capture grep's actual return code
+    local cleaned_log
+    cleaned_log=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\][^\x07]*\x07//g; s/\x1b[()][0-9A-B]//g' "$log_file")
+
+    local rc=0
+    echo "$cleaned_log" | grep -E -C "$context" "$pattern" || rc=$?
 
     if [[ $rc -eq 1 ]]; then
         echo "No matches found for pattern: $pattern" >&2
@@ -489,8 +546,12 @@ cmd_dismiss() {
 
     # Kill tmux session if alive
     if tmux_alive "$name"; then
-        tmux kill-session -t "$session" 2>/dev/null
-        echo "Killed tmux session: $session"
+        # Fix 9 (BUG): Check return code of kill-session, warn on failure
+        if tmux kill-session -t "$session" 2>/dev/null; then
+            echo "Killed tmux session: $session"
+        else
+            echo "Warning: tmux kill-session failed for $session" >&2
+        fi
     else
         echo "tmux session already dead"
     fi
@@ -555,7 +616,7 @@ cmd_list() {
         # nbs-worker names always have a 4-char hash suffix after a dash
 
         local state
-        state=$(grep '^State:' "$task_file" 2>/dev/null | head -1 | sed 's/^State:[[:space:]]*//')
+        state=$(grep '^State:' "$task_file" 2>/dev/null | head -1 | sed 's/^State:[[:space:]]*//' || true)
         [[ -z "$state" ]] && state="unknown"
 
         local alive="dead"
@@ -566,7 +627,7 @@ cmd_list() {
         local log_exists="no-log"
         if [[ -f "${WORKERS_DIR}/${filename}.log" ]]; then
             local log_size
-            log_size=$(wc -c < "${WORKERS_DIR}/${filename}.log" 2>/dev/null)
+            log_size=$(wc -c < "${WORKERS_DIR}/${filename}.log" 2>/dev/null || echo "0")
             log_exists="log:${log_size}B"
         fi
 

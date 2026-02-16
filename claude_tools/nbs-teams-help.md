@@ -1,6 +1,6 @@
 ---
 description: Interactive guidance for NBS teams usage
-allowed-tools: Read, Glob, AskUserQuestion
+allowed-tools: Read, Glob
 ---
 
 # NBS Teams Help
@@ -36,7 +36,8 @@ Options:
 4. **Task scope** - "How big should worker tasks be?"
 5. **Monitoring workers** - "How do I check on worker progress?"
 6. **3Ws and self-check** - "What are these and when do I use them?"
-7. **Something else** - Open-ended question
+7. **Agents are stalled** - "How do I diagnose and restart agents?"
+8. **Something else** - Open-ended question
 
 ### Step 3: Respond Based on Selection
 
@@ -201,6 +202,22 @@ Worker: Implement the parser. Pass all 84 tests.
 
 **Check understanding:**
 > "Is there a completed worker you need to capture 3Ws for now?"
+
+---
+
+### Agents are stalled
+
+**Brief answer:**
+> "Run `/nbs-teams-fixup`. It checks all agent sessions, diagnoses why they stalled, and restarts them."
+
+**Common causes:**
+- **Poll exhaustion** — empty `/nbs-poll` cycles burning context
+- **Notification race** — sidecar notification queued ahead of the role prompt
+- **Context depletion** — long-running agents hit <15% context
+- **Permission modal** — prompt stuck at `bypass permissions on`
+
+**Check understanding:**
+> "Are agents currently unresponsive, or are you preparing for future maintenance?"
 
 ---
 

@@ -735,10 +735,10 @@ set +e
 $NBS_BUS publish "$EVENTS" src typ normal "payload" --dedup-window=0 > /dev/null 2>&1
 EXIT_CODE=$?
 set -e
-if [[ "$EXIT_CODE" -eq 4 ]]; then
-    check "Zero dedup-window rejected (exit 4)" "pass"
+if [[ "$EXIT_CODE" -eq 0 ]]; then
+    check "Zero dedup-window accepted (means disabled)" "pass"
 else
-    check "Zero dedup-window rejected (exit 4, got: $EXIT_CODE)" "fail"
+    check "Zero dedup-window accepted (means disabled, got exit: $EXIT_CODE)" "fail"
 fi
 
 set +e

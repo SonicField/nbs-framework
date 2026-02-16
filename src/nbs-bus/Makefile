@@ -3,12 +3,13 @@ CC = gcc
 # Build modes
 # Default: optimised with asserts ON (no -DNDEBUG).
 # Asserts are executable specifications, not debugging aids.
-COMMON_CFLAGS = -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+COMMON_CFLAGS = -Wall -Wextra -Wshadow -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 CFLAGS ?= $(COMMON_CFLAGS) -O2
 LDFLAGS =
 
 BIN_DIR = ../../bin
 TEST_DIR = ../../tests/automated
+UNIT_TEST_DIR = ../../tests
 
 # Bus sources
 BUS_SRCS = main.c bus.c
@@ -18,7 +19,11 @@ BUS_TARGET = nbs-bus
 # NDEBUG verification
 ASSERT_CHECK = assert_check
 
-.PHONY: all clean install debug asan test test-debug test-asan test-all
+# Unit test binaries (built in tests/ directory)
+UNIT_TEST_BUS = $(UNIT_TEST_DIR)/test_bus_unit
+UNIT_TEST_BUS_MAIN = $(UNIT_TEST_DIR)/test_bus_main_unit
+
+.PHONY: all clean install debug asan test test-debug test-asan test-unit test-all
 
 all: $(BUS_TARGET) $(ASSERT_CHECK)
 
@@ -45,6 +50,14 @@ asan: CFLAGS = $(COMMON_CFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-fr
 asan: LDFLAGS = -fsanitize=address,undefined
 asan: clean all
 
+# --- Unit test compilation ---
+
+$(UNIT_TEST_BUS): $(UNIT_TEST_DIR)/test_bus_unit.c bus.c bus.h
+	$(CC) $(COMMON_CFLAGS) -Wno-format-truncation -O2 -I. -o $@ $(UNIT_TEST_DIR)/test_bus_unit.c bus.c $(LDFLAGS)
+
+$(UNIT_TEST_BUS_MAIN): $(UNIT_TEST_DIR)/test_bus_main_unit.c bus.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_bus_main_unit.c $(LDFLAGS)
+
 # --- Test targets ---
 
 test: clean all install
@@ -59,8 +72,12 @@ test-asan: asan install
 	./$(ASSERT_CHECK)
 	bash $(TEST_DIR)/test_nbs_bus.sh
 
-# Full test run: release + ASan
-test-all: test test-asan
+test-unit: $(UNIT_TEST_BUS) $(UNIT_TEST_BUS_MAIN)
+	$(UNIT_TEST_BUS)
+	$(UNIT_TEST_BUS_MAIN)
+
+# Full test run: unit tests + release integration + ASan integration
+test-all: test-unit test test-asan
 	@echo "=== All test modes passed ==="
 
 # Dependencies
@@ -68,4 +85,4 @@ main.o: main.c bus.h
 bus.o: bus.c bus.h
 
 clean:
-	rm -f $(BUS_OBJS) $(BUS_TARGET) $(ASSERT_CHECK)
+	rm -f $(BUS_OBJS) $(BUS_TARGET) $(ASSERT_CHECK) $(UNIT_TEST_BUS) $(UNIT_TEST_BUS_MAIN)

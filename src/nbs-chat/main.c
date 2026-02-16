@@ -59,6 +59,51 @@ static void print_usage(void) {
     printf("  4 - Invalid arguments\n");
 }
 
+/*
+ * resolve_path — Resolve a potentially relative path to absolute.
+ *
+ * Preconditions:
+ *   - path != NULL
+ *   - out_buf has at least MAX_PATH_LEN bytes
+ *
+ * Postconditions:
+ *   - On success (returns 0): out_buf contains NUL-terminated absolute path
+ *   - On failure (returns -1): error printed to stderr, out_buf undefined
+ *   - If path is already absolute, it is copied verbatim (no resolution)
+ */
+static int resolve_path(const char *path, char *out_buf, const char *caller) {
+    ASSERT_MSG(path != NULL, "%s: resolve_path called with NULL path", caller);
+    ASSERT_MSG(out_buf != NULL, "%s: resolve_path called with NULL out_buf", caller);
+
+    if (path[0] == '/') {
+        /* Already absolute — copy directly */
+        size_t len = strlen(path);
+        if (len >= MAX_PATH_LEN) {
+            fprintf(stderr, "Error: Path too long (%zu bytes, max %d): %.60s...\n",
+                    len, MAX_PATH_LEN - 1, path);
+            return -1;
+        }
+        memcpy(out_buf, path, len + 1);
+        return 0;
+    }
+
+    /* Relative path — prepend cwd */
+    char cwd[MAX_PATH_LEN];
+    char *cwdp = getcwd(cwd, sizeof(cwd));
+    if (cwdp == NULL) {
+        fprintf(stderr, "Error: getcwd failed: %s — cannot resolve relative path '%s'\n",
+                strerror(errno), path);
+        return -1;
+    }
+    int snp_rc = snprintf(out_buf, MAX_PATH_LEN, "%s/%s", cwd, path);
+    if (snp_rc < 0 || (size_t)snp_rc >= MAX_PATH_LEN) {
+        fprintf(stderr, "Error: Resolved path too long (cwd='%s', file='%s', need %d, have %d)\n",
+                cwd, path, snp_rc, MAX_PATH_LEN);
+        return -1;
+    }
+    return 0;
+}
+
 static int cmd_create(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "Usage: nbs-chat create <file>\n");
@@ -70,16 +115,12 @@ static int cmd_create(int argc, char **argv) {
     /* Precondition: path validated from argv */
     ASSERT_MSG(path != NULL, "cmd_create: path argument is NULL after argv extraction — this indicates an internal argument parsing error");
 
-    /* Resolve to absolute path */
-    char abs_path[MAX_PATH_LEN * 2];
-    if (path[0] != '/') {
-        char cwd[MAX_PATH_LEN];
-        char *cwdp = getcwd(cwd, sizeof(cwd));
-        ASSERT_MSG(cwdp != NULL, "cmd_create: getcwd failed: %s — cannot resolve relative path '%s'",
-                   strerror(errno), path);
-        snprintf(abs_path, sizeof(abs_path), "%s/%s", cwd, path);
-        path = abs_path;
+    /* Resolve to absolute path consistently (Violation 11 fix) */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_create") < 0) {
+        return 4;
     }
+    path = abs_path;
 
     int result = chat_create(path);
     if (result == -1) {
@@ -110,23 +151,25 @@ static int cmd_send(int argc, char **argv) {
     ASSERT_MSG(handle != NULL, "cmd_send: handle argument is NULL after argv extraction — this indicates an internal argument parsing error");
     ASSERT_MSG(message != NULL, "cmd_send: message argument is NULL after argv extraction — this indicates an internal argument parsing error");
 
-    /* Check file exists */
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
+    /* Resolve to absolute path consistently */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_send") < 0) {
+        return 4;
     }
-    fclose(f);
+    path = abs_path;
 
     int result = chat_send(path, handle, message);
     if (result < 0) {
-        fprintf(stderr, "Error: Failed to send message\n");
+        fprintf(stderr, "Error: Failed to send message to '%s' (chat_send returned %d, errno=%d: %s)\n",
+                path, result, errno, strerror(errno));
         return 1;
     }
 
     /* Publish bus events (if bus directory exists).
-     * Bus failure is non-fatal — chat send already succeeded. */
-    bus_bridge_after_send(path, handle, message);
+     * Bus failure is non-fatal — chat send already succeeded.
+     * Return value intentionally discarded: bus_bridge_after_send
+     * documents "returns 0 always" as a design invariant. */
+    (void)bus_bridge_after_send(path, handle, message);
 
     return 0;
 }
@@ -141,6 +184,13 @@ static int cmd_read(int argc, char **argv) {
 
     /* Precondition: path validated from argv */
     ASSERT_MSG(path != NULL, "cmd_read: path argument is NULL after argv extraction — this indicates an internal argument parsing error");
+
+    /* Resolve to absolute path consistently */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_read") < 0) {
+        return 4;
+    }
+    path = abs_path;
 
     int last_n = -1;
     const char *since_handle = NULL;
@@ -157,31 +207,43 @@ static int cmd_read(int argc, char **argv) {
                 return 4;
             }
             last_n = (int)val;
+            /* Note: --last=0 is valid and means "show zero messages" */
         } else if (strncmp(argv[i], "--since=", 8) == 0) {
             since_handle = argv[i] + 8;
+            if (since_handle[0] == '\0') {
+                fprintf(stderr, "Warning: --since= value is empty, ignoring\n");
+                since_handle = NULL;
+            }
         } else if (strncmp(argv[i], "--unread=", 9) == 0) {
             unread_handle = argv[i] + 9;
+            if (unread_handle[0] == '\0') {
+                fprintf(stderr, "Warning: --unread= value is empty, ignoring\n");
+                unread_handle = NULL;
+            }
         } else {
             fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
         }
     }
 
-    /* Check file exists */
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-    fclose(f);
-
     chat_state_t state;
-    if (chat_read(path, &state) < 0) {
-        fprintf(stderr, "Error: Failed to read chat file\n");
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        /* Distinguish file-not-found from other read errors via errno */
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
+                path, read_rc, errno, strerror(errno));
         return 1;
     }
 
     int start = 0;
     int end = state.message_count;
+
+    /* Violation 4 fix: assert bounds before array indexing */
+    ASSERT_MSG(start >= 0 && start <= end,
+               "cmd_read: start=%d end=%d out of bounds after filter computation", start, end);
 
     /* Apply --unread filter (takes precedence over --since) */
     if (unread_handle) {
@@ -206,6 +268,11 @@ static int cmd_read(int argc, char **argv) {
     if (last_n >= 0 && end - start > last_n) {
         start = end - last_n;
     }
+
+    /* Postcondition: bounds validated before array access */
+    ASSERT_MSG(start >= 0 && start <= end && end <= state.message_count,
+               "cmd_read: array bounds violated: start=%d end=%d message_count=%d",
+               start, end, state.message_count);
 
     /* Print messages */
     for (int i = start; i < end; i++) {
@@ -237,6 +304,13 @@ static int cmd_poll(int argc, char **argv) {
     ASSERT_MSG(path != NULL, "cmd_poll: path argument is NULL after argv extraction — this indicates an internal argument parsing error");
     ASSERT_MSG(handle != NULL, "cmd_poll: handle argument is NULL after argv extraction — this indicates an internal argument parsing error");
 
+    /* Resolve to absolute path consistently */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_poll") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
     int timeout = 10;
 
     for (int i = 4; i < argc; i++) {
@@ -249,39 +323,46 @@ static int cmd_poll(int argc, char **argv) {
                 return 4;
             }
             timeout = (int)val;
+            /* Note: --timeout=0 is valid and means "check once, return immediately" */
         } else {
             fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
         }
     }
 
-    /* Check file exists */
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-    fclose(f);
-
     int result = chat_poll(path, handle, timeout);
     if (result == 3) return 3; /* Timeout */
     if (result < 0) {
-        fprintf(stderr, "Error: Poll failed\n");
+        /* Distinguish file-not-found from other errors */
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Poll failed on '%s' (chat_poll returned %d, errno=%d: %s)\n",
+                path, result, errno, strerror(errno));
         return 1;
     }
+    /* chat_poll documents return values: 0 (success), 3 (timeout), -1 (error).
+     * Any other value is a contract violation. */
+    ASSERT_MSG(result == 0, "cmd_poll: unexpected chat_poll return value %d (expected 0, 3, or <0)", result);
 
     /* Print new messages */
     chat_state_t state;
-    if (chat_read(path, &state) == 0) {
-        /* Print the last message from someone other than the polling handle */
-        for (int i = state.message_count - 1; i >= 0; i--) {
-            if (strcmp(state.messages[i].handle, handle) != 0) {
-                printf("%s: %s\n", state.messages[i].handle,
-                       state.messages[i].content);
-                break;
-            }
-        }
-        chat_state_free(&state);
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        fprintf(stderr, "Error: Poll succeeded but failed to read chat file '%s' "
+                "(chat_read returned %d, errno=%d: %s)\n",
+                path, read_rc, errno, strerror(errno));
+        return 1;
     }
+    /* Print the last message from someone other than the polling handle */
+    for (int i = state.message_count - 1; i >= 0; i--) {
+        if (strcmp(state.messages[i].handle, handle) != 0) {
+            printf("%s: %s\n", state.messages[i].handle,
+                   state.messages[i].content);
+            break;
+        }
+    }
+    chat_state_free(&state);
 
     return 0;
 }
@@ -297,16 +378,22 @@ static int cmd_participants(int argc, char **argv) {
     /* Precondition: path validated from argv */
     ASSERT_MSG(path != NULL, "cmd_participants: path argument is NULL after argv extraction — this indicates an internal argument parsing error");
 
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
+    /* Resolve to absolute path consistently */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_participants") < 0) {
+        return 4;
     }
-    fclose(f);
+    path = abs_path;
 
     chat_state_t state;
-    if (chat_read(path, &state) < 0) {
-        fprintf(stderr, "Error: Failed to read chat file\n");
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
+                path, read_rc, errno, strerror(errno));
         return 1;
     }
 
@@ -357,26 +444,35 @@ static int cmd_search(int argc, char **argv) {
     ASSERT_MSG(path != NULL, "cmd_search: path argument is NULL");
     ASSERT_MSG(pattern != NULL, "cmd_search: pattern argument is NULL");
 
+    /* Resolve to absolute path consistently */
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_search") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
     /* Parse options */
     for (int i = 4; i < argc; i++) {
         if (strncmp(argv[i], "--handle=", 9) == 0) {
             filter_handle = argv[i] + 9;
+            if (filter_handle[0] == '\0') {
+                fprintf(stderr, "Warning: --handle= value is empty, ignoring\n");
+                filter_handle = NULL;
+            }
         } else {
             fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
         }
     }
 
-    /* Check file exists */
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-    fclose(f);
-
     chat_state_t state;
-    if (chat_read(path, &state) < 0) {
-        fprintf(stderr, "Error: Failed to read chat file\n");
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
+                path, read_rc, errno, strerror(errno));
         return 1;
     }
 
@@ -413,15 +509,24 @@ int main(int argc, char **argv) {
 
     const char *cmd = argv[1];
 
-    if (strcmp(cmd, "create") == 0) return cmd_create(argc, argv);
-    if (strcmp(cmd, "send") == 0) return cmd_send(argc, argv);
-    if (strcmp(cmd, "read") == 0) return cmd_read(argc, argv);
-    if (strcmp(cmd, "poll") == 0) return cmd_poll(argc, argv);
-    if (strcmp(cmd, "search") == 0) return cmd_search(argc, argv);
-    if (strcmp(cmd, "participants") == 0) return cmd_participants(argc, argv);
-    if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
+    /* Documented exit codes: 0 (success), 1 (error), 2 (not found),
+     * 3 (timeout), 4 (invalid args). Validate postcondition. */
+    int rc = -1;
 
-    fprintf(stderr, "Error: Unknown command: %s\n", cmd);
-    fprintf(stderr, "Run 'nbs-chat help' for usage\n");
-    return 4;
+    if (strcmp(cmd, "create") == 0) rc = cmd_create(argc, argv);
+    else if (strcmp(cmd, "send") == 0) rc = cmd_send(argc, argv);
+    else if (strcmp(cmd, "read") == 0) rc = cmd_read(argc, argv);
+    else if (strcmp(cmd, "poll") == 0) rc = cmd_poll(argc, argv);
+    else if (strcmp(cmd, "search") == 0) rc = cmd_search(argc, argv);
+    else if (strcmp(cmd, "participants") == 0) rc = cmd_participants(argc, argv);
+    else if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
+    else {
+        fprintf(stderr, "Error: Unknown command: %s\n", cmd);
+        fprintf(stderr, "Run 'nbs-chat help' for usage\n");
+        return 4;
+    }
+
+    ASSERT_MSG(rc >= 0 && rc <= 4,
+               "main: cmd_%s returned undocumented exit code %d (expected 0-4)", cmd, rc);
+    return rc;
 }

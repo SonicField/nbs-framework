@@ -85,6 +85,7 @@ For each worker file, check the Status field. If a worker has completed:
 
 ## Important
 
+- **Never use AskUserQuestion.** In multi-agent setups, this blocks the terminal with a modal that no human is watching. If you need clarification, post the question to chat and wait for a response.
 - This skill may be injected automatically. Do not be surprised if it appears mid-session.
 - Be fast. Check, act if needed, return. Do not start new work from a poll.
 - If a chat message requires significant work, note it and return to the user — do not silently start a large task.

@@ -11,6 +11,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <limits.h>
+/*
+ * Architectural note: chat_file.h is included solely for the ASSERT_MSG
+ * macro. This couples base64.h to the chat subsystem, which is
+ * undesirable. A future refactoring should extract ASSERT_MSG into its
+ * own header (e.g., nbs_assert.h) to break this dependency.
+ */
 #include "chat_file.h"
 
 /*
@@ -51,6 +57,12 @@ int base64_decode(const char *input, size_t input_len,
  * Precondition: input_len must not cause arithmetic overflow.
  * The maximum safe input_len for encoding is (SIZE_MAX - 4) / 4 * 3,
  * which ensures (input_len + 2) / 3 * 4 + 1 does not wrap.
+ *
+ * These are static inline so each translation unit gets its own copy.
+ * The ASSERT_MSG macro (from chat_file.h) is NOT gated by NDEBUG — it
+ * always fires. This is intentional: these overflow checks are
+ * executable specifications, not optional debug aids. The safety of
+ * these inline functions depends on this NDEBUG-independence.
  */
 static inline size_t base64_encoded_size(size_t input_len) {
     ASSERT_MSG(input_len <= (SIZE_MAX - 4) / 4 * 3,

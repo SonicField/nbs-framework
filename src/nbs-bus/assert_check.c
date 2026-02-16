@@ -8,16 +8,25 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 int main(void)
 {
 #ifdef NDEBUG
-    fprintf(stderr, "FATAL: NDEBUG is defined — asserts are disabled.\n");
-    fprintf(stderr, "ASSERT_MSG is an executable specification, not a debugging aid.\n");
-    fprintf(stderr, "Remove -DNDEBUG from CFLAGS.\n");
+    if (fprintf(stderr, "FATAL: NDEBUG is defined — asserts are disabled.\n") < 0) {
+        _exit(1);
+    }
+    if (fprintf(stderr, "ASSERT_MSG is an executable specification, not a debugging aid.\n") < 0) {
+        _exit(1);
+    }
+    if (fprintf(stderr, "Remove -DNDEBUG from CFLAGS.\n") < 0) {
+        _exit(1);
+    }
     return 1;
 #else
-    printf("OK: NDEBUG is not defined — asserts are active.\n");
+    if (printf("OK: NDEBUG is not defined — asserts are active.\n") < 0) {
+        _exit(1);
+    }
     return 0;
 #endif
 }

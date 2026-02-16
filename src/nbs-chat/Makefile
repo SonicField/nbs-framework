@@ -3,12 +3,13 @@ CC = gcc
 # Build modes
 # Default: optimised with asserts ON (no -DNDEBUG).
 # Asserts are executable specifications, not debugging aids.
-COMMON_CFLAGS = -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+COMMON_CFLAGS = -Wall -Wextra -Wshadow -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 CFLAGS ?= $(COMMON_CFLAGS) -O2
 LDFLAGS =
 
 BIN_DIR = ../../bin
 TEST_DIR = ../../tests/automated
+UNIT_TEST_DIR = ../../tests
 
 # Shared library objects (used by both binaries)
 LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c
@@ -32,7 +33,15 @@ REMOTE_TARGET = nbs-chat-remote
 # NDEBUG verification
 ASSERT_CHECK = assert_check
 
-.PHONY: all clean install debug asan test test-debug test-asan test-all
+# Unit test binaries (built in tests/ directory)
+UNIT_TEST_CHAT_FILE = $(UNIT_TEST_DIR)/test_chat_file_unit
+UNIT_TEST_BASE64 = $(UNIT_TEST_DIR)/test_base64_unit
+UNIT_TEST_BUS_BRIDGE = $(UNIT_TEST_DIR)/test_bus_bridge_unit
+UNIT_TEST_LOCK = $(UNIT_TEST_DIR)/test_lock_unit
+UNIT_TEST_REMOTE = $(UNIT_TEST_DIR)/test_remote_unit
+UNIT_TEST_TERMINAL = $(UNIT_TEST_DIR)/test_terminal_unit
+
+.PHONY: all clean install debug asan test test-debug test-asan test-unit test-all
 
 all: $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
 
@@ -67,6 +76,26 @@ asan: CFLAGS = $(COMMON_CFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-fr
 asan: LDFLAGS = -fsanitize=address,undefined
 asan: clean all
 
+# --- Unit test compilation ---
+
+$(UNIT_TEST_CHAT_FILE): $(UNIT_TEST_DIR)/test_chat_file_unit.c chat_file.c lock.c base64.c chat_file.h lock.h base64.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_chat_file_unit.c chat_file.c lock.c base64.c $(LDFLAGS)
+
+$(UNIT_TEST_BASE64): $(UNIT_TEST_DIR)/test_base64_unit.c base64.c chat_file.c lock.c base64.h chat_file.h lock.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_base64_unit.c base64.c chat_file.c lock.c $(LDFLAGS) -lpthread
+
+$(UNIT_TEST_BUS_BRIDGE): $(UNIT_TEST_DIR)/test_bus_bridge_unit.c bus_bridge.c chat_file.c lock.c base64.c bus_bridge.h chat_file.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -I. -o $@ $(UNIT_TEST_DIR)/test_bus_bridge_unit.c bus_bridge.c chat_file.c lock.c base64.c $(LDFLAGS)
+
+$(UNIT_TEST_LOCK): $(UNIT_TEST_DIR)/test_lock_unit.c lock.c chat_file.c base64.c lock.h chat_file.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_lock_unit.c lock.c chat_file.c base64.c $(LDFLAGS)
+
+$(UNIT_TEST_REMOTE): $(UNIT_TEST_DIR)/test_remote_unit.c remote.c
+	$(CC) $(CFLAGS) -o $@ $(UNIT_TEST_DIR)/test_remote_unit.c $(LDFLAGS)
+
+$(UNIT_TEST_TERMINAL): $(UNIT_TEST_DIR)/test_terminal_unit.c
+	$(CC) $(CFLAGS) -o $@ $(UNIT_TEST_DIR)/test_terminal_unit.c $(LDFLAGS)
+
 # --- Test targets ---
 
 test: all install
@@ -87,8 +116,16 @@ test-asan: asan install
 	bash $(TEST_DIR)/test_nbs_chat_terminal.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 
+test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL)
+	$(UNIT_TEST_CHAT_FILE)
+	$(UNIT_TEST_BASE64)
+	$(UNIT_TEST_BUS_BRIDGE)
+	$(UNIT_TEST_LOCK)
+	$(UNIT_TEST_REMOTE)
+	$(UNIT_TEST_TERMINAL)
+
 # Full test run: release + ASan
-test-all: test test-asan
+test-all: test-unit test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h
@@ -101,3 +138,4 @@ remote.o: remote.c
 
 clean:
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(TERM_OBJS) $(REMOTE_OBJS) $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
+	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL)
