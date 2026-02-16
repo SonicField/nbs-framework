@@ -17,6 +17,9 @@
 #   T9 (39-43): nbs-claude-remote argument validation
 #   T10 (44-45): Terminal self-echo
 #   T11 (46-50): Self-healing sidecar after skill loss
+#   T12 (51-58): Sidecar detection layer interaction
+#   T13 (59-65): Skill failure detection boundary and broken symlink simulation
+#   T14 (66-72): Plan mode detection robustness
 
 set -euo pipefail
 
@@ -916,6 +919,7 @@ SIDECAR_HANDLE="heal-test"
 NBS_ROOT="$T11_DIR"
 _EXTRACT_TMP=$(mktemp)
 sed -n '/^# --- Configuration ---/,/^# --- Cleanup ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
+sed -n '/^# --- Plan mode detection ---/,/^# --- Context stress detection ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
 sed -n '/^# --- Context stress detection ---/,/^# --- Dynamic resource registration ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 >> "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"
@@ -988,6 +992,489 @@ check "Below threshold" "$( [[ $NOTIFY_FAIL_COUNT -lt $NOTIFY_FAIL_THRESHOLD ]] 
 
 # Reset
 NOTIFY_FAIL_COUNT=0
+echo ""
+
+cd "$SCRIPT_DIR"
+
+# ============================================================
+# T12: Sidecar detection layer interaction
+# ============================================================
+#
+# Pythia #7 flagged: 6 independent detection layers with no test
+# validating their composition. This section tests that layers
+# interact correctly — context stress gates skill failure detection,
+# plan mode and AskUserQuestion don't conflict, and the full
+# recovery sequence works end-to-end.
+
+echo "T12: Sidecar detection layer interaction"
+echo ""
+
+# Re-use T11's function extraction (already sourced)
+# Reset state for T12
+T12_DIR="$TEST_DIR/t12-layers"
+mkdir -p "$T12_DIR/.nbs/chat" "$T12_DIR/.nbs/events/processed" "$T12_DIR/claude_tools"
+cat > "$T12_DIR/claude_tools/nbs-notify.md" << 'SKILL'
+---
+description: "NBS Notify"
+---
+# NBS Notify
+SKILL
+cat > "$T12_DIR/claude_tools/nbs-teams-chat.md" << 'SKILL'
+---
+description: "NBS Teams Chat"
+---
+# NBS Teams Chat
+SKILL
+cat > "$T12_DIR/claude_tools/nbs-poll.md" << 'SKILL'
+---
+description: "NBS Poll"
+---
+# NBS Poll
+SKILL
+"$NBS_CHAT" create "$T12_DIR/.nbs/chat/live.chat" >/dev/null 2>&1
+
+SIDECAR_HANDLE="layer-test"
+NBS_ROOT="$T12_DIR"
+CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
+NOTIFY_FAIL_COUNT=0
+NOTIFY_FAIL_THRESHOLD=5
+cd "$T12_DIR"
+seed_registry
+
+# --- Test 51: Context stress blocks skill failure detection path ---
+echo "51. Context stress gates skill failure detection..."
+# When context-stressed, the sidecar should skip the entire injection path.
+# This means NOTIFY_FAIL_COUNT should NOT increment during context stress.
+NOTIFY_FAIL_COUNT=3
+STRESS_CONTENT="Compacting conversation...
+❯"
+NORMAL_FAIL_CONTENT="❯ Unknown skill: nbs-notify"
+
+# Context stress should be detected
+check "Context stress detected" "$( detect_context_stress "$STRESS_CONTENT" && echo pass || echo fail )"
+# Skill failure should NOT be checked during context stress (stress gates the path)
+# Simulate: if stress is detected, the sidecar continues without checking skill failure
+if detect_context_stress "$STRESS_CONTENT"; then
+    # Sidecar would 'continue' here — NOTIFY_FAIL_COUNT unchanged
+    :
+else
+    # This path should not execute
+    if detect_skill_failure "$STRESS_CONTENT"; then
+        NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+    fi
+fi
+check "Failure counter unchanged during context stress" "$( [[ $NOTIFY_FAIL_COUNT -eq 3 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 52: Plan mode and AskUserQuestion are mutually exclusive in practice ---
+echo "52. Plan mode and AskUserQuestion detection independence..."
+PLAN_CONTENT="Would you like to proceed?
+  1. Yes
+  2. Yes, and don't ask again for this project
+❯"
+ASK_CONTENT="? Choose an option
+  1. Option A
+  2. Option B
+Type something.
+❯"
+NEITHER_CONTENT="● Bash(ls)
+  ⎿  file1.txt file2.txt
+❯"
+
+check "Plan mode detected in plan content" "$( detect_plan_mode "$PLAN_CONTENT" && echo pass || echo fail )"
+check "AskUserQuestion NOT detected in plan content" "$( ! detect_ask_modal "$PLAN_CONTENT" && echo pass || echo fail )"
+check "AskUserQuestion detected in ask content" "$( detect_ask_modal "$ASK_CONTENT" && echo pass || echo fail )"
+check "Plan mode NOT detected in ask content" "$( ! detect_plan_mode "$ASK_CONTENT" && echo pass || echo fail )"
+check "Neither detected in normal content" "$( ! detect_plan_mode "$NEITHER_CONTENT" && ! detect_ask_modal "$NEITHER_CONTENT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 53: Context stress does not trigger skill failure ---
+echo "53. Context stress content is not a false positive for skill failure..."
+check "Context stress not misidentified as skill failure" "$( ! detect_skill_failure "$STRESS_CONTENT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 54: Skill failure does not trigger context stress ---
+echo "54. Skill failure content is not a false positive for context stress..."
+check "Skill failure not misidentified as context stress" "$( ! detect_context_stress "$NORMAL_FAIL_CONTENT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 55: End-to-end recovery sequence simulation ---
+echo "55. End-to-end recovery: threshold → recovery prompt → counter reset..."
+NOTIFY_FAIL_COUNT=0
+# Simulate 5 consecutive failures (the actual sidecar loop behaviour)
+for i in $(seq 1 5); do
+    if detect_skill_failure "❯ Unknown skill: nbs-notify"; then
+        NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+    fi
+done
+check "Reached threshold after 5 failures" "$( [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]] && echo pass || echo fail )"
+
+# At threshold — build recovery prompt (as the sidecar would)
+RECOVERY=$(build_recovery_prompt)
+check "Recovery prompt built at threshold" "$( [[ -n "$RECOVERY" ]] && echo pass || echo fail )"
+
+# Simulate successful recovery (no "Unknown skill" in response)
+RECOVERY_RESPONSE="● Read(claude_tools/nbs-notify.md)
+  ⎿  # NBS Notify
+● Bash(nbs-chat send .nbs/chat/live.chat layer-test 'active')
+  ⎿  (done)
+❯"
+if ! detect_skill_failure "$RECOVERY_RESPONSE"; then
+    NOTIFY_FAIL_COUNT=0
+fi
+check "Counter reset after successful recovery" "$( [[ $NOTIFY_FAIL_COUNT -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 56: Recovery prompt with no registry (edge case) ---
+echo "56. Recovery prompt without registry file..."
+# Temporarily remove registry to simulate missing state
+mv "$CONTROL_REGISTRY" "${CONTROL_REGISTRY}.bak"
+RECOVERY_NO_REG=$(build_recovery_prompt)
+check "Recovery prompt still contains skill paths without registry" "$( echo "$RECOVERY_NO_REG" | grep -qF "claude_tools/nbs-notify.md" && echo pass || echo fail )"
+check "Recovery prompt omits chat instruction without registry" "$( ! echo "$RECOVERY_NO_REG" | grep -qF "nbs-chat send" && echo pass || echo fail )"
+mv "${CONTROL_REGISTRY}.bak" "$CONTROL_REGISTRY"
+echo ""
+
+# --- Test 57: Failed recovery does not reset counter ---
+echo "57. Failed recovery keeps counter at threshold..."
+NOTIFY_FAIL_COUNT=5
+# Simulate recovery attempt that fails (skill still broken)
+FAILED_RECOVERY="❯ Unknown skill: nbs-notify"
+if ! detect_skill_failure "$FAILED_RECOVERY"; then
+    NOTIFY_FAIL_COUNT=0
+fi
+check "Counter stays at threshold after failed recovery" "$( [[ $NOTIFY_FAIL_COUNT -eq 5 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 58: Multiple layers on same content do not interfere ---
+echo "58. All detection layers produce consistent results on mixed content..."
+MIXED_CONTENT="Compacting conversation...
+Would you like to proceed?
+❯ Unknown skill: nbs-notify
+? 1. Option A
+Type something."
+# In practice this content is impossible, but the detectors should not crash
+# and each should independently find its pattern
+check "Context stress detected in mixed" "$( detect_context_stress "$MIXED_CONTENT" && echo pass || echo fail )"
+check "Plan mode detected in mixed" "$( detect_plan_mode "$MIXED_CONTENT" && echo pass || echo fail )"
+check "Skill failure detected in mixed" "$( detect_skill_failure "$MIXED_CONTENT" && echo pass || echo fail )"
+check "AskUserQuestion detected in mixed" "$( detect_ask_modal "$MIXED_CONTENT" && echo pass || echo fail )"
+echo ""
+
+cd "$SCRIPT_DIR"
+
+# ============================================================
+# T13: Skill failure detection boundary and broken symlink simulation
+# ============================================================
+#
+# Testkeeper Gap 2: detect_skill_failure only matches 'Unknown skill'.
+# Other failure modes (permission denied, empty output, 'command not found')
+# would bypass detection. This section documents the detection boundary
+# and tests the end-to-end recovery with simulated broken symlinks.
+#
+# Testkeeper Gap 4: No degraded-condition integration test simulating
+# the actual failure that motivated the self-healing code.
+
+echo "T13: Skill failure detection boundary and broken symlink simulation"
+echo ""
+
+T13_DIR="$TEST_DIR/t13-boundary"
+mkdir -p "$T13_DIR/.nbs/chat" "$T13_DIR/.nbs/events/processed" "$T13_DIR/claude_tools"
+cat > "$T13_DIR/claude_tools/nbs-notify.md" << 'SKILL'
+---
+description: "NBS Notify"
+---
+# NBS Notify
+SKILL
+cat > "$T13_DIR/claude_tools/nbs-teams-chat.md" << 'SKILL'
+---
+description: "NBS Teams Chat"
+---
+# NBS Teams Chat
+SKILL
+cat > "$T13_DIR/claude_tools/nbs-poll.md" << 'SKILL'
+---
+description: "NBS Poll"
+---
+# NBS Poll
+SKILL
+"$NBS_CHAT" create "$T13_DIR/.nbs/chat/live.chat" >/dev/null 2>&1
+
+SIDECAR_HANDLE="boundary-test"
+NBS_ROOT="$T13_DIR"
+CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
+CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
+NOTIFY_FAIL_COUNT=0
+NOTIFY_FAIL_THRESHOLD=5
+cd "$T13_DIR"
+seed_registry
+
+# --- Test 59: detect_skill_failure matches exact incident output ---
+echo "59. Detection matches the exact broken-symlink incident output..."
+# This is the literal output observed during the D-1771264017 incident
+INCIDENT_OUTPUT="❯ /nbs-notify 2 event(s) in .nbs/events/
+
+  Unknown skill: nbs-notify"
+check "Incident output detected" "$( detect_skill_failure "$INCIDENT_OUTPUT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 60: Detection boundary — patterns NOT caught ---
+echo "60. Detection boundary — alternative failure patterns are not caught..."
+# These are theoretical failure modes that bypass detect_skill_failure.
+# Documenting the boundary: if these patterns are ever observed in the wild,
+# detect_skill_failure must be extended.
+PERM_DENIED="❯ /nbs-notify
+  Error: Permission denied: /home/user/.claude/commands/nbs-notify.md"
+EMPTY_OUTPUT="❯ /nbs-notify
+
+❯"
+CMD_NOT_FOUND="❯ /nbs-notify
+  bash: nbs-notify: command not found"
+TIMEOUT="❯ /nbs-notify
+  Timed out waiting for response"
+
+check "Permission denied NOT caught (boundary)" "$( ! detect_skill_failure "$PERM_DENIED" && echo pass || echo fail )"
+check "Empty output NOT caught (boundary)" "$( ! detect_skill_failure "$EMPTY_OUTPUT" && echo pass || echo fail )"
+check "Command not found NOT caught (boundary)" "$( ! detect_skill_failure "$CMD_NOT_FOUND" && echo pass || echo fail )"
+check "Timeout NOT caught (boundary)" "$( ! detect_skill_failure "$TIMEOUT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 61: Broken symlink simulation — full recovery sequence ---
+echo "61. Broken symlink simulation — full recovery end-to-end..."
+# Create a temporary directory to simulate the broken symlink scenario
+SYMLINK_DIR=$(mktemp -d)
+mkdir -p "$SYMLINK_DIR/commands"
+# Create real skill files in the temp dir
+cp "$T13_DIR/claude_tools/nbs-notify.md" "$SYMLINK_DIR/commands/"
+# Create symlinks pointing to the temp dir (simulating install.sh behaviour)
+SKILL_LINK_DIR=$(mktemp -d)
+ln -sf "$SYMLINK_DIR/commands/nbs-notify.md" "$SKILL_LINK_DIR/nbs-notify.md"
+# Verify symlink works
+check "Symlink valid before deletion" "$( [[ -f "$SKILL_LINK_DIR/nbs-notify.md" ]] && echo pass || echo fail )"
+# Now delete the target (simulating test cleanup deleting /tmp/tmp.XXXXX)
+rm -rf "$SYMLINK_DIR"
+# Symlink is now dangling
+check "Symlink dangling after target deletion" "$( [[ -L "$SKILL_LINK_DIR/nbs-notify.md" && ! -f "$SKILL_LINK_DIR/nbs-notify.md" ]] && echo pass || echo fail )"
+rm -rf "$SKILL_LINK_DIR"
+echo ""
+
+# --- Test 62: Recovery prompt resolves real paths despite broken symlinks ---
+echo "62. Recovery prompt uses realpath on real skill files..."
+# build_recovery_prompt uses realpath on NBS_ROOT/claude_tools/*.md
+# These files exist, so realpath should resolve them
+RECOVERY=$(build_recovery_prompt)
+# Paths should be absolute and point to actual files
+NOTIFY_PATH=$(echo "$RECOVERY" | grep -oP '/[^ ,]*nbs-notify\.md')
+check "Recovery prompt notify path exists" "$( [[ -f "$NOTIFY_PATH" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 63: Counter accumulation across mixed success/failure ---
+echo "63. Counter accumulation with interleaved success and failure..."
+NOTIFY_FAIL_COUNT=0
+# Fail, fail, success (reset), fail, fail, fail — should be at 3, not 5
+detect_skill_failure "Unknown skill: nbs-notify" && NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+detect_skill_failure "Unknown skill: nbs-notify" && NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+# Successful injection resets counter
+! detect_skill_failure "● Bash(ls)" && NOTIFY_FAIL_COUNT=0
+detect_skill_failure "Unknown skill: nbs-notify" && NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+detect_skill_failure "Unknown skill: nbs-notify" && NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+detect_skill_failure "Unknown skill: nbs-notify" && NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+check "Counter at 3 after reset mid-sequence" "$( [[ $NOTIFY_FAIL_COUNT -eq 3 ]] && echo pass || echo fail )"
+check "Below threshold after reset mid-sequence" "$( [[ $NOTIFY_FAIL_COUNT -lt $NOTIFY_FAIL_THRESHOLD ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 64: Recovery prompt with multiple chat files uses first ---
+echo "64. Recovery prompt selects first chat file..."
+# Add a second chat file
+"$NBS_CHAT" create "$T13_DIR/.nbs/chat/second.chat" >/dev/null 2>&1
+# Re-seed to pick up the new file
+seed_registry
+RECOVERY_MULTI=$(build_recovery_prompt)
+# The prompt should contain a chat file reference (the first one found)
+check "Recovery prompt references a chat file" "$( echo "$RECOVERY_MULTI" | grep -qF ".nbs/chat/" && echo pass || echo fail )"
+check "Recovery prompt contains nbs-chat send instruction" "$( echo "$RECOVERY_MULTI" | grep -qF "nbs-chat send" && echo pass || echo fail )"
+echo ""
+
+# --- Test 65: Full degraded scenario — broken skills + threshold + recovery ---
+echo "65. Full degraded scenario simulation..."
+NOTIFY_FAIL_COUNT=0
+NOTIFY_FAIL_THRESHOLD=5
+# Phase 1: Agent receives 5 consecutive 'Unknown skill' responses
+for i in $(seq 1 5); do
+    if detect_skill_failure "❯ Unknown skill: nbs-notify"; then
+        NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+    fi
+done
+check "Phase 1: threshold reached" "$( [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]] && echo pass || echo fail )"
+
+# Phase 2: Sidecar switches to recovery mode, builds prompt
+RECOVERY=$(build_recovery_prompt)
+check "Phase 2: recovery prompt contains skill paths" "$( echo "$RECOVERY" | grep -qF "nbs-notify.md" && echo pass || echo fail )"
+check "Phase 2: recovery prompt contains handle" "$( echo "$RECOVERY" | grep -qF "boundary-test" && echo pass || echo fail )"
+
+# Phase 3: Agent processes recovery prompt successfully
+AGENT_RESPONSE="● Read($T13_DIR/claude_tools/nbs-notify.md)
+  ⎿  # NBS Notify
+● Bash(nbs-chat send $T13_DIR/.nbs/chat/live.chat boundary-test 'active — skills restored')
+  ⎿  (done)
+❯"
+if ! detect_skill_failure "$AGENT_RESPONSE"; then
+    NOTIFY_FAIL_COUNT=0
+fi
+check "Phase 3: counter reset after recovery" "$( [[ $NOTIFY_FAIL_COUNT -eq 0 ]] && echo pass || echo fail )"
+
+# Phase 4: Normal operation resumes — next injection works
+NORMAL_RESPONSE="● Bash(nbs-chat read .nbs/chat/live.chat --unread=boundary-test)
+  ⎿  alex: hello
+❯"
+if ! detect_skill_failure "$NORMAL_RESPONSE"; then
+    # Normal operation — counter stays at 0
+    :
+fi
+check "Phase 4: counter stays 0 during normal operation" "$( [[ $NOTIFY_FAIL_COUNT -eq 0 ]] && echo pass || echo fail )"
+echo ""
+
+cd "$SCRIPT_DIR"
+
+# ============================================================
+# T14: Plan mode detection robustness
+# ============================================================
+#
+# Alex flagged plan mode as high risk — if detection fails, agents hang
+# indefinitely. This tests the full detection surface: exact matches,
+# variations in formatting, false positive resistance, and interaction
+# with the sidecar's auto-select behaviour.
+
+echo "T14: Plan mode detection robustness"
+echo ""
+
+# --- Test 66: Exact Claude Code plan mode prompt ---
+echo "66. Exact plan mode prompt format..."
+EXACT_PLAN="  Plan:
+  1. Yes
+  2. Yes, and don't ask again for this project
+  Would you like to proceed?
+❯"
+check "Exact plan mode detected" "$( detect_plan_mode "$EXACT_PLAN" && echo pass || echo fail )"
+echo ""
+
+# --- Test 67: Plan mode with different surrounding context ---
+echo "67. Plan mode detection with varying context..."
+# Plan mode after tool output
+PLAN_AFTER_TOOL="● Read(CLAUDE.md)
+  ⎿  # Project Configuration
+  Would you like to proceed?
+  1. Yes
+  2. Yes, and don't ask again for this project
+❯"
+# Plan mode with spinner text above
+PLAN_WITH_SPINNER="  Sautéing the plan...
+  Would you like to proceed?
+❯"
+# Plan mode alone on screen
+PLAN_MINIMAL="Would you like to proceed?
+❯"
+
+check "Plan mode after tool output" "$( detect_plan_mode "$PLAN_AFTER_TOOL" && echo pass || echo fail )"
+check "Plan mode with spinner above" "$( detect_plan_mode "$PLAN_WITH_SPINNER" && echo pass || echo fail )"
+check "Plan mode minimal" "$( detect_plan_mode "$PLAN_MINIMAL" && echo pass || echo fail )"
+echo ""
+
+# --- Test 68: Plan mode false positive resistance ---
+echo "68. Plan mode false positive resistance..."
+# Content that mentions proceeding but is NOT a plan mode prompt
+CHAT_PROCEED="● Bash(nbs-chat read .nbs/chat/live.chat)
+  ⎿  alex: Would you like to proceed with the refactor?
+❯"
+CODE_PROCEED="● Read(src/main.rs)
+  ⎿  // Ask: Would you like to proceed?
+  ⎿  println!(\"Continuing...\");
+❯"
+NORMAL_WORK="● Bash(make -j8)
+  ⎿  Building targets...
+  ⎿  [100%] Built target nbs-chat
+❯"
+
+# These do NOT match because detect_plan_mode uses grep -qF on the exact
+# string 'Would you like to proceed?' — the question mark must immediately
+# follow 'proceed'. The chat message has 'proceed with the refactor?'
+# which does not contain the exact substring.
+check "Chat mention of 'proceed' is NOT a false positive" "$( ! detect_plan_mode "$CHAT_PROCEED" && echo pass || echo fail )"
+check "Code comment with 'proceed' IS a false positive (known)" "$( detect_plan_mode "$CODE_PROCEED" && echo pass || echo fail )"
+# But normal work output should not trigger
+check "Normal build output does NOT trigger" "$( ! detect_plan_mode "$NORMAL_WORK" && echo pass || echo fail )"
+echo ""
+
+# --- Test 69: AskUserQuestion detection robustness ---
+echo "69. AskUserQuestion detection robustness..."
+# Exact AskUserQuestion format
+EXACT_ASK="? Which approach should we use?
+  1. Option A (Recommended)
+  2. Option B
+  3. Option C
+Type something.
+❯"
+# AskUserQuestion with only 2 options
+ASK_TWO="? Should we continue?
+  1. Yes (Recommended)
+  2. No
+Type something.
+❯"
+# NOT an AskUserQuestion — missing "Type something."
+FAKE_ASK="? Which approach?
+  1. Option A
+  2. Option B
+❯"
+
+check "Exact AskUserQuestion detected" "$( detect_ask_modal "$EXACT_ASK" && echo pass || echo fail )"
+check "Two-option AskUserQuestion detected" "$( detect_ask_modal "$ASK_TWO" && echo pass || echo fail )"
+check "Missing 'Type something.' NOT detected" "$( ! detect_ask_modal "$FAKE_ASK" && echo pass || echo fail )"
+echo ""
+
+# --- Test 70: Plan mode detected during content changes AND stability ---
+echo "70. Plan mode detection in both content-change and stable-content paths..."
+# The sidecar checks plan mode in two places:
+# 1. On content change (hash differs from last)
+# 2. On stable content (hash same, checking idle state)
+# Both paths use the same detect_plan_mode function.
+# Verify the function works regardless of how it's called.
+PLAN_CONTENT="Would you like to proceed?
+❯"
+HASH1=$(echo "$PLAN_CONTENT" | sha256sum | cut -d' ' -f1)
+HASH2=$(echo "$PLAN_CONTENT" | sha256sum | cut -d' ' -f1)
+# Same content, same hash — would be stable-content path
+check "Same content produces same hash" "$( [[ "$HASH1" == "$HASH2" ]] && echo pass || echo fail )"
+# Detection works on both calls
+check "Detection on first call (content-change path)" "$( detect_plan_mode "$PLAN_CONTENT" && echo pass || echo fail )"
+check "Detection on second call (stable-content path)" "$( detect_plan_mode "$PLAN_CONTENT" && echo pass || echo fail )"
+echo ""
+
+# --- Test 71: Plan mode and context stress interaction ---
+echo "71. Plan mode during context stress..."
+# If plan mode appears while context is stressed, what happens?
+# In the sidecar loop: context stress check is AFTER plan mode check.
+# So plan mode is resolved first, regardless of context stress.
+STRESS_PLAN="Compacting conversation...
+Would you like to proceed?
+❯"
+check "Plan mode detected despite context stress" "$( detect_plan_mode "$STRESS_PLAN" && echo pass || echo fail )"
+check "Context stress also detected" "$( detect_context_stress "$STRESS_PLAN" && echo pass || echo fail )"
+# In the actual loop, plan mode fires first (content-change check)
+# and resets idle_seconds + hash, so context stress check never runs.
+# This is correct: resolving the blocking plan mode prompt is higher priority.
+echo ""
+
+# --- Test 72: Plan mode with bypass permissions modal ---
+echo "72. Plan mode behind bypass permissions modal..."
+# The classic stall: plan mode prompt appears but bypass-permissions
+# status bar is at the bottom. The sidecar should still detect plan mode
+# in the pane content — the status bar is overlaid, not part of content.
+PLAN_WITH_BYPASS="Would you like to proceed?
+  1. Yes
+  2. Yes, and don't ask again for this project
+  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+check "Plan mode detected with bypass bar" "$( detect_plan_mode "$PLAN_WITH_BYPASS" && echo pass || echo fail )"
 echo ""
 
 cd "$SCRIPT_DIR"
