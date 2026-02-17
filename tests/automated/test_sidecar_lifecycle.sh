@@ -436,6 +436,69 @@ else
 fi
 
 # =========================================================================
+# 8. Startup grace 10x reliability: no notification race across 10 runs
+# =========================================================================
+echo "8. Startup grace 10x reliability test..."
+#
+# The notification race occurs when the sidecar injects /nbs-notify before
+# the agent has finished processing its initial prompt. The startup grace
+# period (NBS_STARTUP_GRACE) prevents this. This test verifies the invariant
+# holds across 10 independent runs — a single-run test might pass by luck
+# if the race window is narrow.
+#
+# Falsification: if the grace period check in should_inject_notify() is
+# removed or broken, at least one of the 10 runs should show /nbs-notify
+# appearing during the grace window (NBS_STARTUP_GRACE=8, checked at ~6s).
+# If the test passes 10/10 with a broken grace check, the test is useless.
+
+GRACE_10X_PASS=0
+GRACE_10X_FAIL=0
+GRACE_10X_SESSION="nbs-test-grace10x-$$"
+
+for run in $(seq 1 10); do
+    # Fresh chat file each run to ensure unread messages exist
+    # (sidecar needs something to notify about)
+    GRACE_RUN_DIR=$(mktemp -d)
+    mkdir -p "$GRACE_RUN_DIR/.nbs/chat" "$GRACE_RUN_DIR/.nbs/events/processed" "$GRACE_RUN_DIR/.nbs/scribe"
+    "$PROJECT_ROOT/bin/nbs-chat" create "$GRACE_RUN_DIR/.nbs/chat/live.chat" 2>/dev/null || true
+    "$PROJECT_ROOT/bin/nbs-chat" send "$GRACE_RUN_DIR/.nbs/chat/live.chat" alex "unread message $run" 2>/dev/null || true
+    cat > "$GRACE_RUN_DIR/.nbs/events/config.yaml" <<'YAML'
+dedup-window: 300
+ack-timeout: 120
+YAML
+    # Use the same mock claude from test setup
+    cp "$TEST_DIR/claude" "$GRACE_RUN_DIR/claude"
+
+    # Start nbs-claude with short grace period (8s) and fast bus check (1s)
+    tmux new-session -d -s "$GRACE_10X_SESSION" -c "$GRACE_RUN_DIR" \
+        "PATH='$GRACE_RUN_DIR:$PATH' NBS_HANDLE=grace-run-$run NBS_STARTUP_GRACE=8 NBS_BUS_CHECK_INTERVAL=1 NBS_NOTIFY_COOLDOWN=3 '$NBS_CLAUDE' --dangerously-skip-permissions 2>'$GRACE_RUN_DIR/sidecar.log'" 2>/dev/null
+
+    # Wait long enough for sidecar to initialise but within grace period
+    sleep 6
+
+    # Capture pane — /nbs-notify should NOT be present during grace
+    GRACE_CONTENT=$(tmux capture-pane -t "$GRACE_10X_SESSION" -p -S -30 2>/dev/null) || true
+
+    if echo "$GRACE_CONTENT" | grep -qF "/nbs-notify"; then
+        GRACE_10X_FAIL=$((GRACE_10X_FAIL + 1))
+        echo "   Run $run/10: FAIL — /nbs-notify injected during grace period"
+    else
+        GRACE_10X_PASS=$((GRACE_10X_PASS + 1))
+    fi
+
+    # Kill session and clean up run directory
+    tmux kill-session -t "$GRACE_10X_SESSION" 2>/dev/null || true
+    sleep 1
+    rm -rf "$GRACE_RUN_DIR"
+done
+
+if [[ $GRACE_10X_FAIL -eq 0 ]]; then
+    pass "Startup grace held across 10/10 runs (no notification race)"
+else
+    fail "Startup grace violated in $GRACE_10X_FAIL/10 runs (notification race detected)"
+fi
+
+# =========================================================================
 # Cleanup
 # =========================================================================
 # Cleanup handled by trap
