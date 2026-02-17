@@ -524,9 +524,9 @@ check_standup_trigger() {
 
     # Post standup to chat
     if is_remote; then
-        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar '@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.'" 2>/dev/null || true
+        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar 'Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.'" 2>/dev/null || true
     else
-        nbs-chat send "$chat_path" sidecar '@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.' 2>/dev/null || true
+        nbs-chat send "$chat_path" sidecar 'Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.' 2>/dev/null || true
     fi
 
     # Update shared timestamp (atomic write)
