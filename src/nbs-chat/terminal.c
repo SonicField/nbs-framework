@@ -189,24 +189,26 @@ static void format_message(const char *handle, const char *content,
     ASSERT_MSG(my_handle != NULL, "format_message: my_handle is NULL");
 
     /* Format timestamp prefix */
-    char ts_prefix[16] = "";
+    char ts_prefix[32] = "";
     if (timestamp > 0) {
         struct tm tm_buf;
         struct tm *tm = gmtime_r(&timestamp, &tm_buf);
         if (tm) {
-            snprintf(ts_prefix, sizeof(ts_prefix), "[%02d:%02d UTC] ",
-                     tm->tm_hour, tm->tm_min);
+            char ts[24];
+            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
+            snprintf(ts_prefix, sizeof(ts_prefix), "[%s] ", ts);
         }
     }
 
     const char *colour = get_colour(handle);
     if (strcmp(handle, my_handle) == 0) {
-        /* Own messages slightly dimmer */
-        printf("  %s%s%s\033[%sm%s%s%s: %s%s\n",
-               DIM, ts_prefix, DIM, colour, handle, RESET, DIM, content, RESET);
+        /* Own messages slightly dimmer — timestamp dim, handle coloured+dim */
+        printf("  %s%s\033[%sm%s%s%s: %s%s\n",
+               DIM, ts_prefix, colour, handle, RESET, DIM, content, RESET);
     } else {
-        printf("  %s%s\033[%sm%s%s%s: %s\n",
-               DIM, ts_prefix, colour, BOLD, handle, RESET, content);
+        /* Others — timestamp dim, handle bold+coloured */
+        printf("  %s%s%s\033[%sm%s%s%s: %s\n",
+               DIM, ts_prefix, RESET, colour, BOLD, handle, RESET, content);
     }
 }
 

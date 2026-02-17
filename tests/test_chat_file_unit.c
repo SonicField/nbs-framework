@@ -10,7 +10,7 @@
  *   6. fclose/ferror return checking
  *   7. OOM-graceful realloc path (cannot inject OOM, but verify non-abort path)
  *   8. chat_poll memory leak on failure (defensive chat_state_free)
- *   9. Mixed size_t/long consistency in compute_file_length
+ *   9. Mixed size_t/int64_t consistency in compute_file_length
  *  10. Lock path consistency (chat_cursor_write vs chat_send)
  *  11. parts_str buffer overflow assertion
  *
@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <time.h>
 
@@ -573,9 +574,9 @@ static void test_file_length_header_accuracy(void) {
 
     int stat_rc = stat(path, &st);
     TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
-    TEST_ASSERT(state.file_length == (long)st.st_size,
-                "empty chat: file_length %ld != actual %ld",
-                state.file_length, (long)st.st_size);
+    TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                "empty chat: file_length %" PRId64 " != actual %" PRId64,
+                state.file_length, (int64_t)st.st_size);
     chat_state_free(&state);
 
     /* After one message */
@@ -587,9 +588,9 @@ static void test_file_length_header_accuracy(void) {
 
     stat_rc = stat(path, &st);
     TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
-    TEST_ASSERT(state.file_length == (long)st.st_size,
-                "one-msg chat: file_length %ld != actual %ld",
-                state.file_length, (long)st.st_size);
+    TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                "one-msg chat: file_length %" PRId64 " != actual %" PRId64,
+                state.file_length, (int64_t)st.st_size);
     chat_state_free(&state);
 
     /* After several messages */
@@ -603,9 +604,9 @@ static void test_file_length_header_accuracy(void) {
 
     stat_rc = stat(path, &st);
     TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
-    TEST_ASSERT(state.file_length == (long)st.st_size,
-                "multi-msg chat: file_length %ld != actual %ld",
-                state.file_length, (long)st.st_size);
+    TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                "multi-msg chat: file_length %" PRId64 " != actual %" PRId64,
+                state.file_length, (int64_t)st.st_size);
     chat_state_free(&state);
 
     /* Clean up */
@@ -786,11 +787,11 @@ static void test_timestamp_round_trip(void) {
                 "expected 1 message, got %d", state.message_count);
 
     TEST_ASSERT(state.messages[0].timestamp >= before,
-                "T22a: timestamp %ld is before send start %ld",
-                (long)state.messages[0].timestamp, (long)before);
+                "T22a: timestamp %" PRId64 " is before send start %" PRId64,
+                (int64_t)state.messages[0].timestamp, (int64_t)before);
     TEST_ASSERT(state.messages[0].timestamp <= after + 1,
-                "T22a: timestamp %ld is after send end %ld",
-                (long)state.messages[0].timestamp, (long)(after + 1));
+                "T22a: timestamp %" PRId64 " is after send end %" PRId64,
+                (int64_t)state.messages[0].timestamp, (int64_t)(after + 1));
 
     /* Verify content is still correct (no timestamp leaking into content) */
     TEST_ASSERT(strcmp(state.messages[0].content, "timestamped message") == 0,
@@ -847,8 +848,8 @@ static void test_timestamp_backward_compat(void) {
     TEST_ASSERT(strcmp(state.messages[0].content, "hello world") == 0,
                 "T22b: content mismatch: got '%s'", state.messages[0].content);
     TEST_ASSERT(state.messages[0].timestamp == 0,
-                "T22b: legacy message should have timestamp=0, got %ld",
-                (long)state.messages[0].timestamp);
+                "T22b: legacy message should have timestamp=0, got %" PRId64,
+                (int64_t)state.messages[0].timestamp);
 
     chat_state_free(&state);
     cleanup_path(path);
@@ -890,9 +891,9 @@ static void test_timestamp_multiple_messages(void) {
     /* Timestamps should be non-decreasing */
     for (int i = 1; i < state.message_count; i++) {
         TEST_ASSERT(state.messages[i].timestamp >= state.messages[i-1].timestamp,
-                    "T22c: timestamps not non-decreasing: msg %d (%ld) < msg %d (%ld)",
-                    i, (long)state.messages[i].timestamp,
-                    i-1, (long)state.messages[i-1].timestamp);
+                    "T22c: timestamps not non-decreasing: msg %d (%" PRId64 ") < msg %d (%" PRId64 ")",
+                    i, (int64_t)state.messages[i].timestamp,
+                    i-1, (int64_t)state.messages[i-1].timestamp);
     }
 
     /* Verify content integrity */
@@ -933,9 +934,9 @@ static void test_timestamp_file_length_invariant(void) {
     struct stat st;
     int stat_rc = stat(path, &st);
     TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
-    TEST_ASSERT(state.file_length == (long)st.st_size,
-                "T22d: file_length %ld != actual %ld",
-                state.file_length, (long)st.st_size);
+    TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                "T22d: file_length %" PRId64 " != actual %" PRId64,
+                state.file_length, (int64_t)st.st_size);
 
     chat_state_free(&state);
 
