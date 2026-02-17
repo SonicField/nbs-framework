@@ -32,6 +32,7 @@
 
 #  18. Deterministic Pythia trigger: check_pythia_trigger function
 #  19. Deterministic standup trigger: check_standup_trigger function
+#  20. Idle standup suppression: are_chat_unread_sidecar_only function
 
 set -uo pipefail
 
@@ -1888,8 +1889,157 @@ CONTROL_REGISTRY="$SAVE_CONTROL_REGISTRY"
 rm -rf "$STANDUP_TEST_DIR"
 
 # =========================================================================
-# Cleanup
+# 20. Idle standup suppression: are_chat_unread_sidecar_only
 # =========================================================================
+echo "20. are_chat_unread_sidecar_only: idle standup suppression..."
+
+# --- Structural: function exists ---
+if grep -q 'are_chat_unread_sidecar_only' "$NBS_CLAUDE"; then
+    pass "are_chat_unread_sidecar_only function exists"
+else
+    fail "are_chat_unread_sidecar_only function missing"
+fi
+
+# --- Structural: called from should_inject_notify ---
+if grep -A 60 'should_inject_notify' "$NBS_CLAUDE" | grep -q 'are_chat_unread_sidecar_only'; then
+    pass "are_chat_unread_sidecar_only called from should_inject_notify"
+else
+    fail "are_chat_unread_sidecar_only not called from should_inject_notify"
+fi
+
+# --- Structural: does NOT call nbs-chat (would advance cursors) ---
+if grep -A 40 'are_chat_unread_sidecar_only()' "$NBS_CLAUDE" | grep -q 'nbs-chat'; then
+    fail "are_chat_unread_sidecar_only calls nbs-chat (would advance cursors!)"
+else
+    pass "are_chat_unread_sidecar_only does NOT call nbs-chat"
+fi
+
+# --- Functional tests: set up a real chat file via nbs-chat ---
+IDLE_TEST_DIR=$(mktemp -d)
+mkdir -p "$IDLE_TEST_DIR/.nbs/chat" "$IDLE_TEST_DIR/.nbs/events/processed"
+nbs-chat create "$IDLE_TEST_DIR/.nbs/chat/test.chat" >/dev/null 2>&1
+
+IDLE_REG="$IDLE_TEST_DIR/.nbs/control-registry-idle-test"
+echo "chat:$IDLE_TEST_DIR/.nbs/chat/test.chat" > "$IDLE_REG"
+
+SAVE_CONTROL_REGISTRY2="$CONTROL_REGISTRY"
+SAVE_SIDECAR_HANDLE2="$SIDECAR_HANDLE"
+CONTROL_REGISTRY="$IDLE_REG"
+SIDECAR_HANDLE="test-agent"
+
+# --- T20a: sidecar-only unread → returns 0 (suppressed) ---
+# Send a message from alice, set cursor to caught up, then send sidecar-only
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" alice "Hello from alice" >/dev/null 2>&1
+# Read to advance cursor to current position
+nbs-chat read "$IDLE_TEST_DIR/.nbs/chat/test.chat" --unread=test-agent >/dev/null 2>&1
+# Now send sidecar-only messages
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar '@all Check-in: what are you working on?' >/dev/null 2>&1
+
+are_chat_unread_sidecar_only
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "T20a: sidecar-only unread → returns 0 (suppress)"
+else
+    fail "T20a: sidecar-only unread → expected rc=0, got rc=$rc"
+fi
+
+# --- T20b: mixed unread (sidecar + non-sidecar) → returns 1 (allow) ---
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" bob "I have a task for you" >/dev/null 2>&1
+
+are_chat_unread_sidecar_only
+rc=$?
+if [[ $rc -eq 1 ]]; then
+    pass "T20b: mixed unread (sidecar + bob) → returns 1 (allow)"
+else
+    fail "T20b: mixed unread (sidecar + bob) → expected rc=1, got rc=$rc"
+fi
+
+# --- T20c: no unread → returns 1 (nothing to suppress) ---
+nbs-chat read "$IDLE_TEST_DIR/.nbs/chat/test.chat" --unread=test-agent >/dev/null 2>&1
+
+are_chat_unread_sidecar_only
+rc=$?
+if [[ $rc -eq 1 ]]; then
+    pass "T20c: no unread → returns 1 (nothing to suppress)"
+else
+    fail "T20c: no unread → expected rc=1, got rc=$rc"
+fi
+
+# --- T20d: multiple sidecar messages only → returns 0 (suppress) ---
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar 'Check-in 1' >/dev/null 2>&1
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar 'Check-in 2' >/dev/null 2>&1
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar 'Check-in 3' >/dev/null 2>&1
+
+are_chat_unread_sidecar_only
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "T20d: multiple sidecar-only unread → returns 0 (suppress)"
+else
+    fail "T20d: multiple sidecar-only unread → expected rc=0, got rc=$rc"
+fi
+
+# --- T20e: cursor file NOT modified by are_chat_unread_sidecar_only ---
+CURSOR_FILE="$IDLE_TEST_DIR/.nbs/chat/test.chat.cursors"
+CURSOR_BEFORE=""
+if [[ -f "$CURSOR_FILE" ]]; then
+    CURSOR_BEFORE=$(md5sum "$CURSOR_FILE" | cut -d' ' -f1)
+fi
+are_chat_unread_sidecar_only >/dev/null 2>&1
+CURSOR_AFTER=""
+if [[ -f "$CURSOR_FILE" ]]; then
+    CURSOR_AFTER=$(md5sum "$CURSOR_FILE" | cut -d' ' -f1)
+fi
+if [[ "$CURSOR_BEFORE" == "$CURSOR_AFTER" ]]; then
+    pass "T20e: cursor file NOT modified by are_chat_unread_sidecar_only"
+else
+    fail "T20e: cursor file was modified by are_chat_unread_sidecar_only!"
+fi
+
+# --- T20f: should_inject_notify suppresses when chat-only + sidecar-only ---
+# Clear any bus events, set up for suppression test
+echo "chat:$IDLE_TEST_DIR/.nbs/chat/test.chat" > "$IDLE_REG"
+echo "bus:$IDLE_TEST_DIR/.nbs/events" >> "$IDLE_REG"
+# Ensure no bus events
+rm -f "$IDLE_TEST_DIR"/.nbs/events/*.event 2>/dev/null
+# Reset cooldown
+LAST_NOTIFY_TIME=0
+# Sidecar-only unread is already set from T20d (3 sidecar messages unread)
+# Ensure standup/pythia don't fire during this test
+SAVE_STANDUP="$STANDUP_INTERVAL"
+STANDUP_INTERVAL=0
+SAVE_PYTHIA_INTERVAL="${PYTHIA_INTERVAL:-0}"
+PYTHIA_INTERVAL=0
+
+should_inject_notify
+rc=$?
+if [[ $rc -eq 1 ]]; then
+    pass "T20f: should_inject_notify suppresses sidecar-only unread (no bus events)"
+else
+    fail "T20f: should_inject_notify should suppress sidecar-only unread, got rc=$rc"
+fi
+
+# --- T20g: should_inject_notify allows when bus events + sidecar-only chat ---
+nbs-bus publish "$IDLE_TEST_DIR/.nbs/events/" test-source test-type normal "test event" 2>/dev/null
+LAST_NOTIFY_TIME=0
+
+should_inject_notify
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "T20g: should_inject_notify allows when bus events present (even if chat is sidecar-only)"
+else
+    fail "T20g: should_inject_notify should allow when bus events present, got rc=$rc"
+fi
+
+# Cleanup bus event
+for f in "$IDLE_TEST_DIR"/.nbs/events/*.event; do
+    nbs-bus ack "$IDLE_TEST_DIR/.nbs/events/" "$(basename "$f")" 2>/dev/null || true
+done
+
+STANDUP_INTERVAL="$SAVE_STANDUP"
+PYTHIA_INTERVAL="${SAVE_PYTHIA_INTERVAL}"
+CONTROL_REGISTRY="$SAVE_CONTROL_REGISTRY2"
+SIDECAR_HANDLE="$SAVE_SIDECAR_HANDLE2"
+rm -rf "$IDLE_TEST_DIR"
 cd "$ORIG_DIR" || true
 rm -rf "$TEST_DIR"
 

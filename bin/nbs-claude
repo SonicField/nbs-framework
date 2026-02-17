@@ -536,6 +536,86 @@ check_standup_trigger() {
     return 0
 }
 
+# are_chat_unread_sidecar_only — check if ALL unread chat messages are from 'sidecar'.
+# Reads chat files and cursor positions directly (no nbs-chat CLI, no cursor advancement).
+# Decodes base64 messages and checks the handle prefix.
+# Handles both legacy ("handle: content") and timestamped ("handle|epoch: content") formats.
+# Returns: 0 = all unread are sidecar-only (safe to suppress), 1 = otherwise.
+are_chat_unread_sidecar_only() {
+    [[ -f "$CONTROL_REGISTRY" ]] || return 1
+
+    local has_unread=0
+
+    while IFS= read -r line; do
+        case "$line" in
+            chat:*)
+                local chat_path="${line#chat:}"
+
+                if is_remote; then
+                    # Remote mode not supported for this check — allow injection
+                    return 1
+                fi
+
+                [[ -f "$chat_path" ]] || continue
+
+                # Count total messages (non-empty lines after ---)
+                local total
+                total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null) || true
+                total=$((${total:-0} + 0))
+
+                # Read cursor position (read-only, no modification)
+                local cursor=0
+                if [[ -f "${chat_path}.cursors" ]]; then
+                    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null) || true
+                    cursor=$((${cursor:-0} + 0))
+                fi
+
+                # No unread in this chat — skip
+                if (( total <= cursor + 1 )); then
+                    continue
+                fi
+
+                has_unread=1
+
+                # Extract unread messages: lines after --- separator, skip to cursor position
+                # cursor=N means messages 0..N have been read, so skip N+1 lines
+                local skip=$((cursor + 1))
+                local unread_lines
+                unread_lines=$(awk -v skip="$skip" '
+                    /^---$/ { found=1; next }
+                    found && NF {
+                        count++
+                        if (count > skip) print
+                    }
+                ' "$chat_path" 2>/dev/null)
+
+                # Check each unread message: decode base64 and extract handle
+                # Format: "handle: content" (legacy) or "handle|epoch: content" (timestamped)
+                while IFS= read -r encoded_line; do
+                    [[ -z "$encoded_line" ]] && continue
+                    local decoded
+                    decoded=$(echo "$encoded_line" | base64 -d 2>/dev/null) || return 1
+                    # Extract handle (everything before first ': ')
+                    local msg_handle="${decoded%%: *}"
+                    # Strip timestamp suffix if present (handle|epoch → handle)
+                    msg_handle="${msg_handle%%|*}"
+                    if [[ "$msg_handle" != "sidecar" ]]; then
+                        return 1  # Non-sidecar message found — allow injection
+                    fi
+                done <<< "$unread_lines"
+                ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    # If we found unread messages and all were from sidecar, suppress
+    if [[ $has_unread -eq 1 ]]; then
+        return 0
+    fi
+
+    # No unread messages — nothing to suppress
+    return 1
+}
+
 # check_bus_events — peek at the event bus without consuming anything.
 # Reads the control registry for bus: entries, runs nbs-bus check on each.
 # Sets BUS_EVENT_COUNT, BUS_MAX_PRIORITY, BUS_EVENT_SUMMARY.
@@ -689,6 +769,16 @@ should_inject_notify() {
     # Nothing pending
     if [[ $bus_rc -ne 0 && $chat_rc -ne 0 ]]; then
         return 1
+    fi
+
+    # Idle standup suppression: if only chat is pending (no bus events)
+    # and ALL unread messages are from 'sidecar', suppress the injection.
+    # This prevents idle agents from being woken by standup check-ins
+    # that produce non-compactable "standing by" responses (context rot).
+    if [[ $bus_rc -ne 0 && $chat_rc -eq 0 ]]; then
+        if are_chat_unread_sidecar_only; then
+            return 1
+        fi
     fi
 
     # Apply cooldown (critical bypasses)
