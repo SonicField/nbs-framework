@@ -26,6 +26,7 @@
 #   T18 (96-102): Handle collision guard (pre-spawn pidfile check)
 #   T19 (103-110): CSMA/CD standup trigger (temporal carrier sense)
 #   T20 (111-117): Conditional notification (event-gated /nbs-notify)
+#   T21 (118-122): UTC timestamp display in nbs-chat read/search output
 
 set -euo pipefail
 
@@ -2525,6 +2526,55 @@ if [[ -n "$CHAT_UNREAD_SUMMARY" ]]; then
     fi
 fi
 check "Summary with bus only" "$( [[ "$parts" == "3 event(s) in .nbs/events" ]] && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T21: UTC timestamp display in nbs-chat read output
+# ============================================================
+echo "=== T21: UTC timestamp display ==="
+
+T21_DIR="$TEST_DIR/t21_timestamp"
+mkdir -p "$T21_DIR"
+
+# T21 test 118: nbs-chat read output includes [YYYY-MM-DDTHH:MM:SSZ] prefix
+T21_CHAT="$T21_DIR/ts.chat"
+"$NBS_CHAT" create "$T21_CHAT"
+"$NBS_CHAT" send "$T21_CHAT" alice "hello world"
+T21_OUTPUT=$("$NBS_CHAT" read "$T21_CHAT")
+check "T21: read output contains ISO 8601 UTC timestamp" "$( echo "$T21_OUTPUT" | grep -qE '^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] alice: hello world$' && echo pass || echo fail )"
+
+# T21 test 119: Multiple messages all have UTC timestamps
+"$NBS_CHAT" send "$T21_CHAT" bob "second message"
+"$NBS_CHAT" send "$T21_CHAT" alice "third message"
+T21_ALL=$("$NBS_CHAT" read "$T21_CHAT")
+T21_TS_COUNT=$(echo "$T21_ALL" | grep -cE '^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\]')
+check "T21: all 3 messages have UTC timestamps" "$( [[ "$T21_TS_COUNT" -eq 3 ]] && echo pass || echo fail )"
+
+# T21 test 120: --last=1 output has UTC timestamp
+T21_LAST=$("$NBS_CHAT" read "$T21_CHAT" --last=1)
+check "T21: --last=1 output has UTC timestamp" "$( echo "$T21_LAST" | grep -qE '^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] alice: third message$' && echo pass || echo fail )"
+
+# T21 test 121: search output includes UTC timestamp
+T21_SEARCH=$("$NBS_CHAT" search "$T21_CHAT" "second")
+check "T21: search output has UTC timestamp" "$( echo "$T21_SEARCH" | grep -qE '^\[1\] \[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] bob: second message$' && echo pass || echo fail )"
+
+# T21 test 122: backward compat — legacy messages (no timestamp) have no [UTC] prefix
+T21_LEGACY="$T21_DIR/legacy.chat"
+# Manually create a chat file with old-format messages (handle: content, no pipe)
+cat > "$T21_LEGACY" << 'LEGACY_EOF'
+=== nbs-chat ===
+last-writer: alice
+last-write: 2025-01-01T00:00:00+0000
+file-length: 0
+participants: alice(1)
+---
+LEGACY_EOF
+# Encode a legacy-format message: "alice: old message" with no pipe/epoch
+LEGACY_MSG=$(echo -n "alice: old message" | base64)
+echo "$LEGACY_MSG" >> "$T21_LEGACY"
+T21_LEGACY_OUT=$("$NBS_CHAT" read "$T21_LEGACY" 2>/dev/null || true)
+check "T21: legacy message has no UTC prefix" "$( echo "$T21_LEGACY_OUT" | grep -qE '^alice: old message$' && echo pass || echo fail )"
+
 echo ""
 
 # ============================================================

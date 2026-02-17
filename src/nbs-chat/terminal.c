@@ -182,20 +182,31 @@ typedef struct {
 /* --- Display functions --- */
 
 static void format_message(const char *handle, const char *content,
-                           const char *my_handle) {
+                           const char *my_handle, time_t timestamp) {
     /* Preconditions */
     ASSERT_MSG(handle != NULL, "format_message: handle is NULL");
     ASSERT_MSG(content != NULL, "format_message: content is NULL");
     ASSERT_MSG(my_handle != NULL, "format_message: my_handle is NULL");
 
+    /* Format timestamp prefix */
+    char ts_prefix[16] = "";
+    if (timestamp > 0) {
+        struct tm tm_buf;
+        struct tm *tm = gmtime_r(&timestamp, &tm_buf);
+        if (tm) {
+            snprintf(ts_prefix, sizeof(ts_prefix), "[%02d:%02d UTC] ",
+                     tm->tm_hour, tm->tm_min);
+        }
+    }
+
     const char *colour = get_colour(handle);
     if (strcmp(handle, my_handle) == 0) {
         /* Own messages slightly dimmer */
-        printf("  %s\033[%sm%s%s%s: %s%s\n",
-               DIM, colour, handle, RESET, DIM, content, RESET);
+        printf("  %s%s%s\033[%sm%s%s%s: %s%s\n",
+               DIM, ts_prefix, DIM, colour, handle, RESET, DIM, content, RESET);
     } else {
-        printf("  \033[%sm%s%s%s: %s\n",
-               colour, BOLD, handle, RESET, content);
+        printf("  %s%s\033[%sm%s%s%s: %s\n",
+               DIM, ts_prefix, colour, BOLD, handle, RESET, content);
     }
 }
 
@@ -589,7 +600,8 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
     for (int i = g_msg_count; i < state.message_count; i++) {
         if (strcmp(state.messages[i].handle, g_handle) == 0) continue;
         format_message(state.messages[i].handle,
-                      state.messages[i].content, g_handle);
+                      state.messages[i].content, g_handle,
+                      state.messages[i].timestamp);
     }
 
     g_msg_count = state.message_count;
@@ -844,7 +856,8 @@ int main(int argc, char **argv) {
     if (chat_read(g_chat_file, &init_state) == 0) {
         for (int i = 0; i < init_state.message_count; i++) {
             format_message(init_state.messages[i].handle,
-                          init_state.messages[i].content, g_handle);
+                          init_state.messages[i].content, g_handle,
+                          init_state.messages[i].timestamp);
         }
         g_msg_count = init_state.message_count;
         if (init_state.message_count > 0) printf("\n");
@@ -968,7 +981,7 @@ int main(int argc, char **argv) {
                      * with the editor content, which send_and_display
                      * does not provide.  Flagged for future cleanup. */
                     if (chat_send(g_chat_file, g_handle, msg) == 0) {
-                        format_message(g_handle, msg, g_handle);
+                        format_message(g_handle, msg, g_handle, time(NULL));
                         g_msg_count++;
                         /* Publish bus events: standard chat-message + human-input priority signal */
                         bus_bridge_after_send(g_chat_file, g_handle, msg);
@@ -1003,7 +1016,8 @@ int main(int argc, char **argv) {
                                 printf("  %s[%d]%s ", DIM, si, RESET);
                                 format_message(search_state.messages[si].handle,
                                               search_state.messages[si].content,
-                                              g_handle);
+                                              g_handle,
+                                              search_state.messages[si].timestamp);
                                 match_count++;
                             }
                         }

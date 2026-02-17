@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 /*
  * ASSERT_MSG — Assert with context-aware message.
@@ -54,11 +55,14 @@
  *   - handle is always NUL-terminated, length < MAX_HANDLE_LEN
  *   - content is heap-allocated (via strdup) and must be freed by caller
  *   - content_len == strlen(content) when content is valid text
+ *   - timestamp is 0 for legacy messages without embedded timestamps,
+ *     or a positive epoch-seconds value for timestamped messages
  */
 typedef struct {
     char handle[MAX_HANDLE_LEN];
     char *content;     /* Dynamically allocated */
     size_t content_len;
+    time_t timestamp;  /* Epoch seconds, 0 = no timestamp (legacy message) */
 } chat_message_t;
 
 /* Participant info

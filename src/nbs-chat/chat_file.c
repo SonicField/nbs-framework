@@ -287,11 +287,35 @@ int chat_read(const char *path, chat_state_t *state) {
             }
             decoded[decoded_len] = '\0';
 
-            /* Parse "handle: content" */
+            /* Parse "handle|EPOCH: content" or legacy "handle: content" */
             char *colon = strstr((char *)decoded, ": ");
             if (colon) {
-                size_t handle_len = colon - (char *)decoded;
-                if (handle_len < MAX_HANDLE_LEN) {
+                size_t prefix_len = colon - (char *)decoded;
+                /* Check for pipe separator (timestamped format) */
+                char *pipe = memchr((char *)decoded, '|', prefix_len);
+                size_t handle_len;
+                time_t msg_timestamp = 0;
+
+                if (pipe) {
+                    /* New format: handle|EPOCH: content */
+                    handle_len = pipe - (char *)decoded;
+                    /* Parse epoch between pipe and colon */
+                    size_t epoch_len = colon - (pipe + 1);
+                    if (epoch_len > 0 && epoch_len < 20) {
+                        char epoch_buf[20];
+                        memcpy(epoch_buf, pipe + 1, epoch_len);
+                        epoch_buf[epoch_len] = '\0';
+                        long parsed_epoch;
+                        if (safe_parse_long(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
+                            msg_timestamp = (time_t)parsed_epoch;
+                        }
+                    }
+                } else {
+                    /* Legacy format: handle: content */
+                    handle_len = prefix_len;
+                }
+
+                if (handle_len < MAX_HANDLE_LEN && handle_len > 0) {
                     chat_message_t *msg = &state->messages[state->message_count];
                     strncpy(msg->handle, (char *)decoded, handle_len);
                     msg->handle[handle_len] = '\0';
@@ -301,7 +325,8 @@ int chat_read(const char *path, chat_state_t *state) {
                         free(decoded);
                         continue;
                     }
-                    msg->content_len = decoded_len - handle_len - 2;
+                    msg->content_len = decoded_len - (colon + 2 - (char *)decoded);
+                    msg->timestamp = msg_timestamp;
                     /* Invariant: content_len == strlen(content) — no embedded NULs */
                     ASSERT_MSG(msg->content_len == strlen(msg->content),
                                "chat_read: content_len %zu != strlen(content) %zu for message %d"
@@ -350,15 +375,20 @@ int chat_send(const char *path, const char *handle, const char *message) {
         return -1;
     }
 
-    /* Build the message line: "handle: message" */
-    size_t raw_len = strlen(handle) + 2 + strlen(message); /* "handle: msg" */
+    /* Build the message line: "handle|EPOCH: message" */
+    time_t now = time(NULL);
+    ASSERT_MSG(now != (time_t)-1, "chat_send: time() failed");
+    char epoch_str[24];
+    snprintf(epoch_str, sizeof(epoch_str), "%ld", (long)now);
+    /* Format: handle|epoch: message */
+    size_t raw_len = strlen(handle) + 1 + strlen(epoch_str) + 2 + strlen(message);
     char *raw = malloc(raw_len + 1);
     if (!raw) {
         chat_state_free(&state);
         chat_lock_release(lock_fd);
         return -1;
     }
-    snprintf(raw, raw_len + 1, "%s: %s", handle, message);
+    snprintf(raw, raw_len + 1, "%s|%s: %s", handle, epoch_str, message);
 
     /* Postcondition: raw message was fully written */
     ASSERT_MSG(raw_len > 0,

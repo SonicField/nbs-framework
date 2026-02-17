@@ -276,7 +276,20 @@ static int cmd_read(int argc, char **argv) {
 
     /* Print messages */
     for (int i = start; i < end; i++) {
-        printf("%s: %s\n", state.messages[i].handle, state.messages[i].content);
+        if (state.messages[i].timestamp > 0) {
+            struct tm tm_buf;
+            struct tm *tm = gmtime_r(&state.messages[i].timestamp, &tm_buf);
+            if (tm) {
+                char ts[32];
+                strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
+                printf("[%s] %s: %s\n", ts,
+                       state.messages[i].handle, state.messages[i].content);
+            } else {
+                printf("%s: %s\n", state.messages[i].handle, state.messages[i].content);
+            }
+        } else {
+            printf("%s: %s\n", state.messages[i].handle, state.messages[i].content);
+        }
     }
 
     /* Advance read cursor after displaying */
@@ -357,8 +370,21 @@ static int cmd_poll(int argc, char **argv) {
     /* Print the last message from someone other than the polling handle */
     for (int i = state.message_count - 1; i >= 0; i--) {
         if (strcmp(state.messages[i].handle, handle) != 0) {
-            printf("%s: %s\n", state.messages[i].handle,
-                   state.messages[i].content);
+            if (state.messages[i].timestamp > 0) {
+                struct tm tm_buf;
+                struct tm *tm = gmtime_r(&state.messages[i].timestamp, &tm_buf);
+                if (tm) {
+                    char ts[32];
+                    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
+                    printf("[%s] %s: %s\n", ts,
+                           state.messages[i].handle, state.messages[i].content);
+                } else {
+                    printf("%s: %s\n", state.messages[i].handle, state.messages[i].content);
+                }
+            } else {
+                printf("%s: %s\n", state.messages[i].handle,
+                       state.messages[i].content);
+            }
             break;
         }
     }
@@ -485,8 +511,22 @@ static int cmd_search(int argc, char **argv) {
 
         /* Case-insensitive search in message content */
         if (strcasestr_portable(state.messages[i].content, pattern) != NULL) {
-            printf("[%d] %s: %s\n", i, state.messages[i].handle,
-                   state.messages[i].content);
+            if (state.messages[i].timestamp > 0) {
+                struct tm tm_buf;
+                struct tm *tm = gmtime_r(&state.messages[i].timestamp, &tm_buf);
+                if (tm) {
+                    char ts[32];
+                    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
+                    printf("[%d] [%s] %s: %s\n", i, ts,
+                           state.messages[i].handle, state.messages[i].content);
+                } else {
+                    printf("[%d] %s: %s\n", i, state.messages[i].handle,
+                           state.messages[i].content);
+                }
+            } else {
+                printf("[%d] %s: %s\n", i, state.messages[i].handle,
+                       state.messages[i].content);
+            }
             match_count++;
         }
     }

@@ -39,6 +39,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
+#include <time.h>
 
 /* Include the headers from the source directory */
 #include "chat_file.h"
@@ -759,6 +760,235 @@ static void test_cursor_on_write_sequential_sends(void) {
     TEST_PASS("T21d: sequential sends update cursor each time");
 }
 
+/* --- Test T22: Per-message timestamps --- */
+
+static void test_timestamp_round_trip(void) {
+    /*
+     * T22a: Send a message and verify the timestamp is within ±2 seconds
+     * of the current time.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/timestamp_rt.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    time_t before = time(NULL);
+    rc = chat_send(path, "alice", "timestamped message");
+    time_t after = time(NULL);
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    TEST_ASSERT(state.message_count == 1,
+                "expected 1 message, got %d", state.message_count);
+
+    TEST_ASSERT(state.messages[0].timestamp >= before,
+                "T22a: timestamp %ld is before send start %ld",
+                (long)state.messages[0].timestamp, (long)before);
+    TEST_ASSERT(state.messages[0].timestamp <= after + 1,
+                "T22a: timestamp %ld is after send end %ld",
+                (long)state.messages[0].timestamp, (long)(after + 1));
+
+    /* Verify content is still correct (no timestamp leaking into content) */
+    TEST_ASSERT(strcmp(state.messages[0].content, "timestamped message") == 0,
+                "T22a: content mismatch: got '%s'", state.messages[0].content);
+    TEST_ASSERT(strcmp(state.messages[0].handle, "alice") == 0,
+                "T22a: handle mismatch: got '%s'", state.messages[0].handle);
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T22a: timestamp round-trip within ±2 seconds");
+}
+
+static void test_timestamp_backward_compat(void) {
+    /*
+     * T22b: Manually write a chat file with old-format messages (no timestamps)
+     * and verify they parse with timestamp=0 and correct handle/content.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/timestamp_compat.chat", test_dir);
+
+    /* Create a chat file manually with old-format base64 messages */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    TEST_ASSERT(fd >= 0, "open failed: %s", strerror(errno));
+
+    /* Old format: base64("alice: hello world") */
+    /* "alice: hello world" base64 = "YWxpY2U6IGhlbGxvIHdvcmxk" */
+    const char *content =
+        "=== nbs-chat ===\n"
+        "last-writer: alice\n"
+        "last-write: 2026-02-17T12:00:00+0000\n"
+        "file-length: 999\n"       /* won't match but that's OK for read */
+        "participants: alice(1)\n"
+        "---\n"
+        "YWxpY2U6IGhlbGxvIHdvcmxk\n";
+    ssize_t written = write(fd, content, strlen(content));
+    TEST_ASSERT(written == (ssize_t)strlen(content), "write failed");
+    close(fd);
+
+    chat_state_t state;
+    int rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    TEST_ASSERT(state.message_count == 1,
+                "expected 1 message, got %d", state.message_count);
+    TEST_ASSERT(strcmp(state.messages[0].handle, "alice") == 0,
+                "T22b: handle mismatch: got '%s'", state.messages[0].handle);
+    TEST_ASSERT(strcmp(state.messages[0].content, "hello world") == 0,
+                "T22b: content mismatch: got '%s'", state.messages[0].content);
+    TEST_ASSERT(state.messages[0].timestamp == 0,
+                "T22b: legacy message should have timestamp=0, got %ld",
+                (long)state.messages[0].timestamp);
+
+    chat_state_free(&state);
+    cleanup_path(path);
+    TEST_PASS("T22b: backward compat — old messages parse with timestamp=0");
+}
+
+static void test_timestamp_multiple_messages(void) {
+    /*
+     * T22c: Send multiple messages, verify each has a non-zero timestamp
+     * and timestamps are non-decreasing.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/timestamp_multi.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "first");
+    TEST_ASSERT(rc == 0, "send 1 failed: %d", rc);
+
+    rc = chat_send(path, "bob", "second");
+    TEST_ASSERT(rc == 0, "send 2 failed: %d", rc);
+
+    rc = chat_send(path, "alice", "third");
+    TEST_ASSERT(rc == 0, "send 3 failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    TEST_ASSERT(state.message_count == 3,
+                "expected 3 messages, got %d", state.message_count);
+
+    for (int i = 0; i < state.message_count; i++) {
+        TEST_ASSERT(state.messages[i].timestamp > 0,
+                    "T22c: message %d has timestamp=0", i);
+    }
+
+    /* Timestamps should be non-decreasing */
+    for (int i = 1; i < state.message_count; i++) {
+        TEST_ASSERT(state.messages[i].timestamp >= state.messages[i-1].timestamp,
+                    "T22c: timestamps not non-decreasing: msg %d (%ld) < msg %d (%ld)",
+                    i, (long)state.messages[i].timestamp,
+                    i-1, (long)state.messages[i-1].timestamp);
+    }
+
+    /* Verify content integrity */
+    TEST_ASSERT(strcmp(state.messages[0].content, "first") == 0, "msg 0 content");
+    TEST_ASSERT(strcmp(state.messages[1].content, "second") == 0, "msg 1 content");
+    TEST_ASSERT(strcmp(state.messages[2].content, "third") == 0, "msg 2 content");
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T22c: multiple messages all have timestamps, non-decreasing");
+}
+
+static void test_timestamp_file_length_invariant(void) {
+    /*
+     * T22d: The file-length header must still match actual file size
+     * after the timestamp format change (longer payloads).
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/timestamp_flen.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "test message for file length check");
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    struct stat st;
+    int stat_rc = stat(path, &st);
+    TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
+    TEST_ASSERT(state.file_length == (long)st.st_size,
+                "T22d: file_length %ld != actual %ld",
+                state.file_length, (long)st.st_size);
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T22d: file-length header matches actual file size with timestamps");
+}
+
+static void test_timestamp_content_with_pipe(void) {
+    /*
+     * T22e: Messages containing pipe characters in content should
+     * parse correctly (pipe in content must not confuse the parser).
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/timestamp_pipe.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    const char *msg = "this | has | pipes | in it";
+    rc = chat_send(path, "alice", msg);
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    TEST_ASSERT(state.message_count == 1,
+                "expected 1 message, got %d", state.message_count);
+    TEST_ASSERT(strcmp(state.messages[0].handle, "alice") == 0,
+                "T22e: handle mismatch: got '%s'", state.messages[0].handle);
+    TEST_ASSERT(strcmp(state.messages[0].content, msg) == 0,
+                "T22e: content mismatch: got '%s'", state.messages[0].content);
+    TEST_ASSERT(state.messages[0].timestamp > 0,
+                "T22e: timestamp should be non-zero");
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T22e: message with pipes in content parses correctly");
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -792,6 +1022,13 @@ int main(void) {
     test_cursor_on_write_no_unread_for_sender();
     test_cursor_on_write_two_senders();
     test_cursor_on_write_sequential_sends();
+
+    /* PER-MESSAGE TIMESTAMP tests (T22) */
+    test_timestamp_round_trip();
+    test_timestamp_backward_compat();
+    test_timestamp_multiple_messages();
+    test_timestamp_file_length_invariant();
+    test_timestamp_content_with_pipe();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);
