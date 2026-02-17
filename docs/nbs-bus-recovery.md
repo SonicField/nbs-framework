@@ -120,7 +120,7 @@ Clean state. Either nothing happened while you were away, or someone already pro
 **Symptoms:** `.nbs/events/` fills with `.event` files. No one is reading them.
 
 **Checks:**
-1. Is the consumer running `nbs-bus check` in its poll loop?
+1. Is the consumer running `nbs-bus check` in her poll loop?
 2. Is the consumer acknowledging events after processing? Check for `nbs-bus ack` calls
 3. Is the consumer's handle correct? `nbs-bus check --handle=<name>` filters by relevance
 

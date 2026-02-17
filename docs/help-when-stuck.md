@@ -7,10 +7,10 @@ Symptom → diagnosis → fix. Find your problem, follow the steps.
 **Symptom:** You send messages on a chat channel but the agent never replies.
 
 **Check 1: Is the agent running?**
-Look for an active `nbs-claude` session in tmux. If the agent has crashed or been killed, restart it.
+Look for an active `nbs-claude` session in tmux. If the agent has crashed or been killed, restart her.
 
 **Check 2: Is the sidecar polling?**
-The sidecar injects `/nbs-poll` after 30 seconds of idle time. If the agent is busy with a long task, it will not check chat until the task completes. Wait for it to return to the prompt.
+The sidecar injects `/nbs-poll` after 30 seconds of idle time. If the agent is busy with a long task, she will not check chat until the task completes. Wait for her to return to the prompt.
 
 **Check 3: Is the agent watching the right chat file?**
 ```bash
@@ -19,7 +19,7 @@ cat .nbs/control-registry
 The chat file should appear as `chat:<path>`. If it is missing, the agent does not know about it. Either the agent needs to register it (`echo "register-chat <path>" >> .nbs/control-inbox`) or the agent was started before the chat file was created.
 
 **Check 4: Are you using the right handle?**
-`@mentions` must match the agent's handle exactly. Check the agent's handle in its worker file or by looking at its previous chat messages.
+`@mentions` must match the agent's handle exactly. Check the agent's handle in her worker file or by looking at her previous chat messages.
 
 ## Events are not being processed
 

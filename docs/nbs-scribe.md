@@ -10,7 +10,7 @@ The Scribe solves this by maintaining a structured decision log separate from ch
 
 ## How It Works
 
-Scribe is a persistent Claude instance with a long context window (up to 1M tokens). It reads all chat channels continuously and distils decisions into per-chat decision logs at `.nbs/scribe/<chat-name>-log.md` (e.g. `live.chat` → `.nbs/scribe/live-log.md`). It does not participate in conversation — it observes, records, and makes the record available.
+Scribe is a persistent Claude instance with a long context window (up to 1M tokens). She reads all chat channels continuously and distils decisions into per-chat decision logs at `.nbs/scribe/<chat-name>-log.md` (e.g. `live.chat` → `.nbs/scribe/live-log.md`). She does not participate in conversation — she observes, records, and makes the record available.
 
 ### What Scribe Records
 
@@ -31,7 +31,7 @@ Scribe does not record:
 
 ### Activation
 
-Scribe runs as a persistent instance with the `/nbs-scribe` skill loaded. It polls chat channels using `nbs-chat read` and monitors the bus for relevant events. When it identifies a decision, it appends a structured entry to the log.
+Scribe runs as a persistent instance with the `/nbs-scribe` skill loaded. She polls chat channels using `nbs-chat read` and monitors the bus for relevant events. When she identifies a decision, she appends a structured entry to the log.
 
 ### Pythia Integration
 
@@ -41,7 +41,7 @@ Scribe reads from chat. Pythia reads from Scribe. This separation prevents persu
 
 ## Log Format
 
-The decision log for each chat lives at `.nbs/scribe/<chat-name>-log.md`. It is a markdown file with structured entries.
+The decision log for each chat lives at `.nbs/scribe/<chat-name>-log.md`. This is a markdown file with structured entries.
 
 ### File Structure
 

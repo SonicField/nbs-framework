@@ -60,7 +60,7 @@ sleep 60
 
 ### Trust Prompt
 
-When Claude enters a new directory, it shows "Do you trust the files in this folder?" This blocks all input until accepted.
+When Claude enters a new directory, she shows "Do you trust the files in this folder?" This blocks all input until accepted.
 
 **Solution**: Wait for 'trust' pattern and send Enter to accept.
 
@@ -117,9 +117,9 @@ Wait for prompts before sending commands. The process may not be ready immediate
 
 Run tests in isolated temporary git repositories, not in the framework directory itself.
 
-**Why**: Claude can see and reason about visible files. If it sees test infrastructure, planning documents about the test, or obviously synthetic fixtures, it may reason about the *meta-situation* rather than behaving normally.
+**Why**: Claude can see and reason about visible files. If she sees test infrastructure, planning documents about the test, or obviously synthetic fixtures, she may reason about the *meta-situation* rather than behaving normally.
 
-**Example**: A test for investigation dispatch failed because Claude saw `test_investigation_*.sh` files, a plan file titled "investigation-testing-plan.md", and correctly deduced it was being tested.
+**Example**: A test for investigation dispatch failed because Claude saw `test_investigation_*.sh` files, a plan file titled "investigation-testing-plan.md", and correctly deduced she was being tested.
 
 **Solution**: Create a clean temporary repository with only the files needed for the test scenario.
 

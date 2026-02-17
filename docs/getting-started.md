@@ -111,7 +111,7 @@ After discovery, run `/nbs`. It detects you just did discovery and automatically
 /nbs-recovery
 ```
 
-The AI creates a plan. Each step is described, justified, reversible. You confirm each step before it executes. Nothing changes without your approval.
+The AI creates a plan. Each step is described, justified, reversible. You confirm each step before she executes. Nothing changes without your approval.
 
 **Step 4: Review**
 

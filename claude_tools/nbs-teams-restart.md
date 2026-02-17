@@ -273,7 +273,7 @@ For cross-machine deployments, remote agents may have additional failure modes:
 
 3. **If SSH is up but agent is zombie:** Apply the same escalation ladder as local agents, but using `nbs-chat-remote` and `nbs-bus-remote` for verification.
 
-4. **Cursor desync after partition:** If a remote agent was disconnected during a network partition, its cursor may be behind. On reconnection, the agent picks up from its last cursor position — no messages are lost, but it may need to process a backlog.
+4. **Cursor desync after partition:** If a remote agent was disconnected during a network partition, her cursor may be behind. On reconnection, the agent picks up from her last cursor position — no messages are lost, but she may need to process a backlog.
 
 For full cross-machine recovery procedures, see `docs/cross-machine-runbook.md` (Section 10.3).
 

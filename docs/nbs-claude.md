@@ -92,13 +92,13 @@ This prevents injection from interrupting:
 
 ### Plan Mode Auto-Select
 
-When Claude Code enters plan mode, it displays "Would you like to proceed?" with numbered options. Unattended agents (workers) would block indefinitely on this prompt.
+When Claude Code enters plan mode, she displays "Would you like to proceed?" with numbered options. Unattended agents (workers) would block indefinitely on this prompt.
 
 The sidecar detects this text in the pane content and automatically selects option 2 ("Yes, and bypass permissions"). This is checked on every content change and also during stable-content periods, so it is caught regardless of timing.
 
 ### Self-Healing After Skill Loss
 
-When Claude Code compacts context, it can lose its registered skills. The sidecar detects this by checking for "Unknown skill" in pane content after injecting `/nbs-notify`. If the skill is rejected, the sidecar increments a failure counter (`NOTIFY_FAIL_COUNT`).
+When Claude Code compacts context, she can lose her registered skills. The sidecar detects this by checking for "Unknown skill" in pane content after injecting `/nbs-notify`. If the skill is rejected, the sidecar increments a failure counter (`NOTIFY_FAIL_COUNT`).
 
 After `NBS_NOTIFY_FAIL_THRESHOLD` consecutive failures (default 5), the sidecar switches to a recovery mode: instead of injecting `/nbs-notify`, it sends a raw text prompt containing:
 

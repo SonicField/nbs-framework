@@ -61,7 +61,7 @@ Three distinct zombie failure modes, each requiring different treatment:
 
 **(b) Unresponsive zombie (<10% context):** Agent cannot process ANY commands — not even `/compact` or `/exit`. Commands concatenate on the input line without being processed. The API call either silently fails or times out. Skip directly to Level 4.
 
-**(c) Compaction floor zombie (10-15% context, compact does not reduce):** Agent at its compaction floor — the summarised session + skills + system context fill ~85-90% of the window. `/compact` runs but context percentage does not decrease. `--resume` will reload the same bloated session. Skip directly to Level 4.
+**(c) Compaction floor zombie (10-15% context, compact does not reduce):** Agent at her compaction floor — the summarised session + skills + system context fill ~85-90% of the window. `/compact` runs but context percentage does not decrease. `--resume` will reload the same bloated session. Skip directly to Level 4.
 
 **Note on thresholds:** The context percentages above (10%, 15%) are empirical observations from 16-17 Feb 2026, not guaranteed boundaries. They may vary by model, session complexity, and loaded skills. Treat them as heuristics and adjust based on observed behaviour.
 
@@ -202,7 +202,7 @@ Wait ~15 seconds for initialisation, then verify the agent is processing:
 sleep 15 && tmux capture-pane -t nbs-<handle>-live -p | tail -10
 ```
 
-The agent starts with 100% context. It will read chat history and self-brief from the conversation log — this is why institutional memory in chat is valuable.
+The agent starts with 100% context. She will read chat history and self-brief from the conversation log — this is why institutional memory in chat is valuable.
 
 ### Step 8: Verify
 

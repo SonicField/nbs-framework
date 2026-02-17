@@ -437,7 +437,7 @@ The supervisor holds the terminal goal, the ranked candidate list, and the evide
 - Run the epistemic garbage collector (see below)
 - Escalate to the human when uncertain
 
-**The supervisor does not convert code.** It delegates, monitors, and decides.
+**The supervisor does not convert code.** She delegates, monitors, and decides.
 
 ### Conversion Workers
 
@@ -461,7 +461,7 @@ A periodic, pure role that distils raw learnings into compressed patterns.
 - Write compressed patterns to `patterns.md`
 - This is a pure function: raw learnings in, compressed patterns out
 
-**The compression worker does not make decisions.** It summarises.
+**The compression worker does not make decisions.** She summarises.
 
 ---
 
@@ -473,7 +473,7 @@ Every 3 conversion workers, the supervisor must:
 2. **Run `/nbs`** for goal alignment and drift detection
 3. **Reset the counter** (`workers_since_check` in `status.md` → 0)
 
-This is mandatory, not optional. The counter is tracked in `status.md`. The compression worker is pure — it handles pattern extraction. `/nbs` handles the epistemic audit separately.
+This is mandatory, not optional. The counter is tracked in `status.md`. The compression worker is pure — she handles pattern extraction. `/nbs` handles the epistemic audit separately.
 
 **Why every 3?** Frequent enough to catch drift before it compounds. Infrequent enough not to dominate the work. This matches the nbs-teams self-check cadence.
 
@@ -522,7 +522,7 @@ Examples:
 - `weathering/pytree/tp_richcompare`
 - `weathering/tensor/tp_as_number`
 
-This enables parallel workers on different leaf slots without conflicts. Each worker operates on its own branch. Merges to main happen only after the Assess phase confirms benefit.
+This enables parallel workers on different leaf slots without conflicts. Each worker operates on her own branch. Merges to main happen only after the Assess phase confirms benefit.
 
 ---
 

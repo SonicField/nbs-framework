@@ -83,7 +83,7 @@ Tests that evaluate AI output using AI, with human-verifiable verdicts. Non-dete
 
 The framework does not enforce rules. It prompts questions.
 
-When you run `/nbs`, the AI reads the foundation document. If ambiguity arises, it reads the relevant pillar. It then produces a short report surfacing:
+When you run `/nbs`, the AI reads the foundation document. If ambiguity arises, she reads the relevant pillar. She then produces a short report surfacing:
 
 - Terminal goal status (clear? drifted? abandoned?)
 - Instrumental goal coherence (sequenced or scattered?)

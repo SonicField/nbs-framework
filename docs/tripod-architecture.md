@@ -38,7 +38,7 @@ Chat ──read──▶ Scribe ──threshold──▶ Bus ──trigger──
   └──────────────────── post ◀───────────────────────────┘
 ```
 
-1. **Chat → Scribe.** Scribe reads all chat channels continuously, watching for decisions. When it identifies one, it appends a structured entry to the corresponding log (e.g., `.nbs/scribe/live-log.md` for `live.chat`).
+1. **Chat → Scribe.** Scribe reads all chat channels continuously, watching for decisions. When she identifies one, she appends a structured entry to the corresponding log (e.g., `.nbs/scribe/live-log.md` for `live.chat`).
 
 2. **Scribe → Bus.** After each decision, Scribe publishes a `decision-logged` event. When the decision count reaches a threshold (configurable, default 20), Scribe publishes a `pythia-checkpoint` event at high priority.
 
@@ -61,12 +61,12 @@ Chat ──read──▶ Scribe ──threshold──▶ Bus ──trigger──
 
 ### Role
 
-Persistent agent instance with an elongated context window (up to 1M tokens). Reads the live chat, distils decisions into a structured log. The Scribe is not a participant in technical debate — it is an observer and recorder.
+Persistent agent instance with an elongated context window (up to 1M tokens). Reads the live chat, distils decisions into a structured log. The Scribe is not a participant in technical debate — she is an observer and recorder.
 
 Two advantages of a dedicated instance over a shared skill:
 
 1. **Concentrated context** — The Scribe's context contains the full decision history. A skill invoked by a working agent would compete for context with the agent's primary task, increasing coherence loss risk.
-2. **Elongated window** — A persistent Scribe instance can use a larger context window than a working agent, since it does not need fast tool-call latency.
+2. **Elongated window** — A persistent Scribe instance can use a larger context window than a working agent, since she does not need fast tool-call latency.
 
 ### Decision Log Format
 

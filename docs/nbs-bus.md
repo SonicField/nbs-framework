@@ -167,7 +167,7 @@ Within the dedup window, a second event with the same source and type is silentl
 
 | Type | Source | Description |
 |------|--------|-------------|
-| `task-complete` | worker | Worker finished its task |
+| `task-complete` | worker | Worker finished her task |
 | `task-blocked` | worker | Worker cannot proceed |
 | `task-failed` | worker | Worker failed |
 | `worker-spawned` | nbs-worker | Worker created and started |
@@ -196,7 +196,7 @@ The bus does not replace nbs-chat. Chat is for conversation. The bus is for coor
 
 Every `nbs-chat send` publishes a `chat-message` event to the bus (if `.nbs/events/` exists). Messages containing `@mentions` additionally publish a `chat-mention` event at higher priority. This means agents can overhear each other's conversations and react to relevant information — even when not directly addressed.
 
-This is by design. Alex's rationale: "we can get a lot of good collaborations from listening to each other's chat." An agent working on the parser might notice a chat message about a lexer edge case and adjust its approach, without anyone needing to @mention it explicitly.
+This is by design. Alex's rationale: "we can get a lot of good collaborations from listening to each other's chat." An agent working on the parser might notice a chat message about a lexer edge case and adjust her approach, without anyone needing to @mention her explicitly.
 
 ## Integration with nbs-worker
 

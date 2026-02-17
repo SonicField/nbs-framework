@@ -79,14 +79,14 @@ fi
 
 Traditional software testing isolates dependencies. AI testing must also isolate *context*.
 
-**The problem**: Claude can see and reason about visible files. If it sees test infrastructure, it may reason about the meta-situation rather than behaving as it would in production.
+**The problem**: Claude can see and reason about visible files. If she sees test infrastructure, she may reason about the meta-situation rather than behaving as she would in production.
 
 **Case study**: A test for investigation dispatch failed because Claude saw:
 - Test files named `test_investigation_*.sh`
 - A plan file about "investigation dispatch testing"
 - An `INVESTIGATION-STATUS.md` in a `scenarios/` subdirectory
 
-Claude correctly deduced it was being tested and asked for clarification instead of following dispatch logic.
+Claude correctly deduced she was being tested and asked for clarification instead of following dispatch logic.
 
 **Solution**: Run tests in isolated temporary repositories.
 
@@ -100,7 +100,7 @@ git init -q
 
 The AI sees a realistic scenario, not a test harness.
 
-**Key insight**: The AI's context window is part of its input. Everything visible shapes behaviour, including test infrastructure.
+**Key insight**: The AI's context window is part of her input. Everything visible shapes behaviour, including test infrastructure.
 
 See [~/docs/ai-meta-reasoning-in-testing.md](~/docs/ai-meta-reasoning-in-testing.md) for detailed analysis.
 
