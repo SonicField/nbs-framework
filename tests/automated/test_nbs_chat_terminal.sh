@@ -122,7 +122,7 @@ CHAT="$TEST_DIR/test4.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 printf 'Line one\nLine two\nLine three\n\x04' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" >/dev/null 2>&1 || true
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-MSG_COUNT=$(echo "$OUTPUT" | grep -c '^tester:' || true)
+MSG_COUNT=$(echo "$OUTPUT" | grep -c 'tester:' || true)
 check "3 separate messages sent" "$( [[ "$MSG_COUNT" -eq 3 ]] && echo pass || echo fail )"
 check "First is Line one" "$( echo "$OUTPUT" | head -1 | grep -qF 'Line one' && echo pass || echo fail )"
 check "Last is Line three" "$( echo "$OUTPUT" | tail -1 | grep -qF 'Line three' && echo pass || echo fail )"
@@ -392,7 +392,7 @@ CHAT="$TEST_DIR/test24.chat"
 printf 'Quick message\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "tester" >/dev/null 2>&1 || true
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
 check "Single enter sends" "$( echo "$OUTPUT" | grep -qF 'tester: Quick message' && echo pass || echo fail )"
-MSG_COUNT=$(echo "$OUTPUT" | grep -c '^tester:' || true)
+MSG_COUNT=$(echo "$OUTPUT" | grep -c 'tester:' || true)
 check "Exactly 1 message" "$( [[ "$MSG_COUNT" -eq 1 ]] && echo pass || echo fail )"
 
 echo ""
