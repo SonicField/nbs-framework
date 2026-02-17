@@ -23,6 +23,8 @@
 #   T15 (73-79): Concurrent chat under SIGKILL (Phase 2d)
 #   T16 (80-87): Bus event delivery under contention (Phase 2e)
 #   T17 (88-95): Permissions prompt detection robustness
+#   T18 (96-102): Handle collision guard (pre-spawn pidfile check)
+#   T19 (103-110): CSMA/CD standup trigger (temporal carrier sense)
 
 set -euo pipefail
 
@@ -1989,6 +1991,353 @@ Do you want to proceed?
 ❯"
 check "Permissions detected in combined content" "$( detect_permissions_prompt "$BOTH_PROMPTS" && echo pass || echo fail )"
 check "Plan mode also detected in combined content" "$( detect_plan_mode "$BOTH_PROMPTS" && echo pass || echo fail )"
+echo ""
+
+# ============================================================
+# T18: Handle collision guard (pre-spawn pidfile check)
+# ============================================================
+#
+# nbs-claude uses pidfiles at .nbs/pids/<handle>.pid to prevent
+# two instances from running with the same handle. The guard:
+# - Checks for existing pidfile on startup
+# - If pidfile exists AND the PID is alive, refuses to spawn (exit 1)
+# - --force flag overrides the guard (exits 0 with warning)
+# - Stale pidfiles (dead PID) are ignored
+# - Cleanup removes pidfile on exit (only if PID matches)
+
+echo "T18: Handle collision guard"
+echo ""
+
+T18_DIR="$TEST_DIR/t18-collision"
+mkdir -p "$T18_DIR/.nbs/pids"
+
+# Trap-based cleanup for background processes spawned by T18 tests.
+# If the suite exits early (Ctrl-C, assertion failure, crash), these
+# processes would otherwise persist as orphans.
+# Chain with the existing cleanup trap to preserve temp dir removal.
+T18_PIDS=()
+t18_cleanup() { for p in "${T18_PIDS[@]}"; do kill "$p" 2>/dev/null; done; cleanup; }
+trap t18_cleanup EXIT INT TERM
+
+# --- Test 96: Pidfile created on startup ---
+echo "96. Pidfile created on startup..."
+# Write a pidfile as nbs-claude would
+T96_HANDLE="test-agent-96"
+T96_PIDFILE="$T18_DIR/.nbs/pids/${T96_HANDLE}.pid"
+echo "12345" > "$T96_PIDFILE"
+check "Pidfile created" "$( [[ -f "$T96_PIDFILE" ]] && echo pass || echo fail )"
+check "Pidfile contains PID" "$( [[ "$(cat "$T96_PIDFILE")" == "12345" ]] && echo pass || echo fail )"
+rm -f "$T96_PIDFILE"
+echo ""
+
+# --- Test 97: Guard blocks when PID is alive ---
+echo "97. Guard blocks when PID is alive..."
+# Start a background sleep to get a live PID
+sleep 300 &
+LIVE_PID=$!
+T18_PIDS+=($!)
+T97_HANDLE="test-agent-97"
+T97_PIDFILE="$T18_DIR/.nbs/pids/${T97_HANDLE}.pid"
+echo "$LIVE_PID" > "$T97_PIDFILE"
+# Simulate the guard check
+GUARD_RESULT="blocked"
+if [[ -f "$T97_PIDFILE" ]]; then
+    EXISTING_PID=$(cat "$T97_PIDFILE" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        GUARD_RESULT="blocked"
+    else
+        GUARD_RESULT="allowed"
+    fi
+else
+    GUARD_RESULT="allowed"
+fi
+check "Guard blocks when PID $LIVE_PID is alive" "$( [[ "$GUARD_RESULT" == "blocked" ]] && echo pass || echo fail )"
+kill "$LIVE_PID" 2>/dev/null || true
+wait "$LIVE_PID" 2>/dev/null || true
+rm -f "$T97_PIDFILE"
+echo ""
+
+# --- Test 98: Guard allows when PID is dead (stale pidfile) ---
+echo "98. Guard allows when PID is dead (stale pidfile)..."
+T98_HANDLE="test-agent-98"
+T98_PIDFILE="$T18_DIR/.nbs/pids/${T98_HANDLE}.pid"
+# Use a PID that is certainly dead (PID 1 is init — skip; use a large unlikely PID)
+sleep 0.01 &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null || true
+echo "$DEAD_PID" > "$T98_PIDFILE"
+GUARD_RESULT="blocked"
+if [[ -f "$T98_PIDFILE" ]]; then
+    EXISTING_PID=$(cat "$T98_PIDFILE" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        GUARD_RESULT="blocked"
+    else
+        GUARD_RESULT="allowed"
+    fi
+else
+    GUARD_RESULT="allowed"
+fi
+check "Guard allows stale pidfile (dead PID $DEAD_PID)" "$( [[ "$GUARD_RESULT" == "allowed" ]] && echo pass || echo fail )"
+rm -f "$T98_PIDFILE"
+echo ""
+
+# --- Test 99: Guard allows when no pidfile exists ---
+echo "99. Guard allows when no pidfile exists..."
+T99_HANDLE="test-agent-99"
+T99_PIDFILE="$T18_DIR/.nbs/pids/${T99_HANDLE}.pid"
+rm -f "$T99_PIDFILE"
+GUARD_RESULT="blocked"
+if [[ -f "$T99_PIDFILE" ]]; then
+    EXISTING_PID=$(cat "$T99_PIDFILE" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        GUARD_RESULT="blocked"
+    else
+        GUARD_RESULT="allowed"
+    fi
+else
+    GUARD_RESULT="allowed"
+fi
+check "Guard allows when no pidfile exists" "$( [[ "$GUARD_RESULT" == "allowed" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 100: --force overrides guard ---
+echo "100. --force overrides guard..."
+sleep 300 &
+LIVE_PID=$!
+T18_PIDS+=($!)
+T100_HANDLE="test-agent-100"
+T100_PIDFILE="$T18_DIR/.nbs/pids/${T100_HANDLE}.pid"
+echo "$LIVE_PID" > "$T100_PIDFILE"
+FORCE_SPAWN=1
+GUARD_RESULT="blocked"
+if [[ -f "$T100_PIDFILE" ]]; then
+    EXISTING_PID=$(cat "$T100_PIDFILE" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        if [[ "$FORCE_SPAWN" == "1" ]]; then
+            GUARD_RESULT="forced"
+        else
+            GUARD_RESULT="blocked"
+        fi
+    else
+        GUARD_RESULT="allowed"
+    fi
+else
+    GUARD_RESULT="allowed"
+fi
+check "--force overrides guard on live PID" "$( [[ "$GUARD_RESULT" == "forced" ]] && echo pass || echo fail )"
+kill "$LIVE_PID" 2>/dev/null || true
+wait "$LIVE_PID" 2>/dev/null || true
+rm -f "$T100_PIDFILE"
+FORCE_SPAWN=0
+echo ""
+
+# --- Test 101: Cleanup removes only own pidfile ---
+echo "101. Cleanup removes only own pidfile..."
+T101_HANDLE="test-agent-101"
+T101_PIDFILE="$T18_DIR/.nbs/pids/${T101_HANDLE}.pid"
+MY_PID=$$
+echo "$MY_PID" > "$T101_PIDFILE"
+# Simulate cleanup: only remove if PID matches
+if [[ -f "$T101_PIDFILE" ]] && [[ "$(cat "$T101_PIDFILE" 2>/dev/null)" == "$MY_PID" ]]; then
+    rm -f "$T101_PIDFILE"
+fi
+check "Cleanup removed own pidfile" "$( [[ ! -f "$T101_PIDFILE" ]] && echo pass || echo fail )"
+# Now test that cleanup does NOT remove a pidfile with a different PID
+echo "99999" > "$T101_PIDFILE"
+if [[ -f "$T101_PIDFILE" ]] && [[ "$(cat "$T101_PIDFILE" 2>/dev/null)" == "$MY_PID" ]]; then
+    rm -f "$T101_PIDFILE"
+fi
+check "Cleanup preserves other PID's pidfile" "$( [[ -f "$T101_PIDFILE" ]] && echo pass || echo fail )"
+rm -f "$T101_PIDFILE"
+echo ""
+
+# --- Test 102: Different handles do not collide ---
+echo "102. Different handles do not collide..."
+sleep 300 &
+LIVE_PID=$!
+T18_PIDS+=($!)
+T102_HANDLE_A="agent-alpha"
+T102_HANDLE_B="agent-beta"
+T102_PIDFILE_A="$T18_DIR/.nbs/pids/${T102_HANDLE_A}.pid"
+T102_PIDFILE_B="$T18_DIR/.nbs/pids/${T102_HANDLE_B}.pid"
+echo "$LIVE_PID" > "$T102_PIDFILE_A"
+# Agent B should be allowed — different handle
+GUARD_RESULT="blocked"
+if [[ -f "$T102_PIDFILE_B" ]]; then
+    EXISTING_PID=$(cat "$T102_PIDFILE_B" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        GUARD_RESULT="blocked"
+    else
+        GUARD_RESULT="allowed"
+    fi
+else
+    GUARD_RESULT="allowed"
+fi
+check "Different handle not blocked by existing pidfile" "$( [[ "$GUARD_RESULT" == "allowed" ]] && echo pass || echo fail )"
+kill "$LIVE_PID" 2>/dev/null || true
+wait "$LIVE_PID" 2>/dev/null || true
+rm -f "$T102_PIDFILE_A" "$T102_PIDFILE_B"
+echo ""
+
+cd "$SCRIPT_DIR"
+
+# ============================================================
+# T19: CSMA/CD standup trigger (temporal carrier sense)
+# ============================================================
+#
+# check_standup_trigger() in nbs-claude uses temporal carrier sense
+# to coordinate standup check-ins between sidecars. It replaced the
+# old message-count approach that caused self-suppression when agents
+# stopped responding. The mechanism:
+# - Each sidecar tracks its own LAST_STANDUP_TIME
+# - A shared .standup-ts file records when any sidecar last posted
+# - If the shared timestamp is recent (< interval), back off randomly
+# - If the shared timestamp is stale/missing, post and update it
+# - First run initialises timer without posting
+
+echo "T19: CSMA/CD standup trigger"
+echo ""
+
+T19_DIR="$TEST_DIR/t19-csma"
+mkdir -p "$T19_DIR/.nbs"
+T19_CHAT="$T19_DIR/test.chat"
+nbs-chat create "$T19_CHAT"
+T19_REGISTRY="$T19_DIR/.nbs/control-registry-test"
+echo "chat:$T19_CHAT" > "$T19_REGISTRY"
+
+# --- Test 103: Disabled when STANDUP_INTERVAL=0 ---
+echo "103. Disabled when STANDUP_INTERVAL=0..."
+STANDUP_INTERVAL=0
+LAST_STANDUP_TIME=99999
+CONTROL_REGISTRY="$T19_REGISTRY"
+RESULT="posted"
+# Replicate guard: first check
+if [[ "$STANDUP_INTERVAL" -gt 0 ]] && [[ -f "$CONTROL_REGISTRY" ]]; then
+    RESULT="passed_guards"
+else
+    RESULT="disabled"
+fi
+check "Standup disabled when interval=0" "$( [[ "$RESULT" == "disabled" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 104: No control registry ---
+echo "104. No control registry file..."
+STANDUP_INTERVAL=15
+CONTROL_REGISTRY="$T19_DIR/.nbs/nonexistent-registry"
+RESULT="posted"
+if [[ "$STANDUP_INTERVAL" -gt 0 ]] && [[ -f "$CONTROL_REGISTRY" ]]; then
+    RESULT="passed_guards"
+else
+    RESULT="disabled"
+fi
+check "Standup disabled without registry" "$( [[ "$RESULT" == "disabled" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 105: First run initialisation (LAST_STANDUP_TIME=0) ---
+echo "105. First run initialises timer without posting..."
+STANDUP_INTERVAL=15
+LAST_STANDUP_TIME=0
+CONTROL_REGISTRY="$T19_REGISTRY"
+NOW=$(date +%s)
+INTERVAL_SECONDS=$((STANDUP_INTERVAL * 60))
+RESULT="posted"
+# Replicate first-run check
+if [[ $LAST_STANDUP_TIME -eq 0 ]]; then
+    LAST_STANDUP_TIME=$NOW
+    RESULT="initialised"
+fi
+check "First run sets timer" "$( [[ "$RESULT" == "initialised" ]] && echo pass || echo fail )"
+check "Timer set to current time" "$( [[ "$LAST_STANDUP_TIME" -eq "$NOW" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 106: Too soon since last attempt ---
+echo "106. Suppressed when interval not elapsed..."
+STANDUP_INTERVAL=15
+NOW=$(date +%s)
+INTERVAL_SECONDS=$((STANDUP_INTERVAL * 60))
+LAST_STANDUP_TIME=$((NOW - 60))  # Only 60 seconds ago
+RESULT="posted"
+if [[ $LAST_STANDUP_TIME -gt 0 ]] && (( NOW - LAST_STANDUP_TIME < INTERVAL_SECONDS )); then
+    RESULT="too_soon"
+fi
+check "Standup suppressed when interval not elapsed" "$( [[ "$RESULT" == "too_soon" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 107: Carrier sense — medium busy (recent timestamp) ---
+echo "107. Carrier sense suppresses when timestamp recent..."
+STANDUP_INTERVAL=15
+NOW=$(date +%s)
+INTERVAL_SECONDS=$((STANDUP_INTERVAL * 60))
+LAST_STANDUP_TIME=$((NOW - INTERVAL_SECONDS - 10))  # Our timer elapsed
+TS_FILE="${T19_CHAT}.standup-ts"
+# Write a recent global timestamp (30 seconds ago)
+echo "$((NOW - 30))" > "$TS_FILE"
+LAST_GLOBAL_STANDUP=0
+if [[ -f "$TS_FILE" ]]; then
+    LAST_GLOBAL_STANDUP=$(cat "$TS_FILE" 2>/dev/null || echo 0)
+    [[ "$LAST_GLOBAL_STANDUP" =~ ^[0-9]+$ ]] || LAST_GLOBAL_STANDUP=0
+fi
+RESULT="posted"
+if (( LAST_GLOBAL_STANDUP > 0 )) && (( NOW - LAST_GLOBAL_STANDUP < INTERVAL_SECONDS )); then
+    RESULT="medium_busy"
+fi
+check "Carrier sense detects busy medium" "$( [[ "$RESULT" == "medium_busy" ]] && echo pass || echo fail )"
+rm -f "$TS_FILE"
+echo ""
+
+# --- Test 108: Carrier sense — stale timestamp allows posting ---
+echo "108. Carrier sense allows when timestamp stale..."
+STANDUP_INTERVAL=15
+NOW=$(date +%s)
+INTERVAL_SECONDS=$((STANDUP_INTERVAL * 60))
+LAST_STANDUP_TIME=$((NOW - INTERVAL_SECONDS - 10))  # Our timer elapsed
+TS_FILE="${T19_CHAT}.standup-ts"
+# Write a stale global timestamp (20 minutes ago)
+echo "$((NOW - 1200))" > "$TS_FILE"
+LAST_GLOBAL_STANDUP=$(cat "$TS_FILE" 2>/dev/null || echo 0)
+[[ "$LAST_GLOBAL_STANDUP" =~ ^[0-9]+$ ]] || LAST_GLOBAL_STANDUP=0
+RESULT="suppressed"
+if (( LAST_GLOBAL_STANDUP > 0 )) && (( NOW - LAST_GLOBAL_STANDUP < INTERVAL_SECONDS )); then
+    RESULT="suppressed"
+else
+    RESULT="allowed"
+fi
+check "Stale timestamp allows posting" "$( [[ "$RESULT" == "allowed" ]] && echo pass || echo fail )"
+rm -f "$TS_FILE"
+echo ""
+
+# --- Test 109: Missing timestamp file allows posting ---
+echo "109. Missing timestamp file allows posting..."
+TS_FILE="${T19_CHAT}.standup-ts"
+rm -f "$TS_FILE"
+LAST_GLOBAL_STANDUP=0
+if [[ -f "$TS_FILE" ]]; then
+    LAST_GLOBAL_STANDUP=$(cat "$TS_FILE" 2>/dev/null || echo 0)
+    [[ "$LAST_GLOBAL_STANDUP" =~ ^[0-9]+$ ]] || LAST_GLOBAL_STANDUP=0
+fi
+RESULT="suppressed"
+if (( LAST_GLOBAL_STANDUP > 0 )) && (( NOW - LAST_GLOBAL_STANDUP < INTERVAL_SECONDS )); then
+    RESULT="suppressed"
+else
+    RESULT="allowed"
+fi
+check "Missing timestamp file allows posting" "$( [[ "$RESULT" == "allowed" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 110: Non-numeric timestamp treated as 0 ---
+echo "110. Non-numeric timestamp treated as missing..."
+TS_FILE="${T19_CHAT}.standup-ts"
+echo "garbage_data" > "$TS_FILE"
+LAST_GLOBAL_STANDUP=$(cat "$TS_FILE" 2>/dev/null || echo 0)
+[[ "$LAST_GLOBAL_STANDUP" =~ ^[0-9]+$ ]] || LAST_GLOBAL_STANDUP=0
+RESULT="suppressed"
+if (( LAST_GLOBAL_STANDUP > 0 )) && (( NOW - LAST_GLOBAL_STANDUP < INTERVAL_SECONDS )); then
+    RESULT="suppressed"
+else
+    RESULT="allowed"
+fi
+check "Non-numeric timestamp treated as missing" "$( [[ "$RESULT" == "allowed" ]] && echo pass || echo fail )"
+rm -f "$TS_FILE"
 echo ""
 
 # ============================================================

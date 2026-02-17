@@ -1771,17 +1771,17 @@ else
 fi
 
 # --- Structural: CSMA/CD collision detection ---
-if grep -A 60 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'Check-in:'; then
-    pass "check_standup_trigger has CSMA/CD collision detection"
+if grep -A 70 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'standup-ts'; then
+    pass "check_standup_trigger has temporal CSMA/CD via timestamp file"
 else
-    fail "check_standup_trigger missing CSMA/CD collision detection"
+    fail "check_standup_trigger missing temporal CSMA/CD (standup-ts)"
 fi
 
-# --- Structural: random jitter ---
-if grep -A 30 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'jitter'; then
-    pass "check_standup_trigger has random jitter"
+# --- Structural: random backoff ---
+if grep -A 70 'check_standup_trigger' "$NBS_CLAUDE" | grep -q 'backoff'; then
+    pass "check_standup_trigger has random backoff"
 else
-    fail "check_standup_trigger missing random jitter"
+    fail "check_standup_trigger missing random backoff"
 fi
 
 # --- Structural: posts to chat ---
@@ -1826,7 +1826,9 @@ else
 fi
 
 # --- Functional: fires after interval elapses ---
-LAST_STANDUP_TIME=$(($(date +%s) - 300))  # 5 minutes ago, exceeds max jittered interval
+LAST_STANDUP_TIME=$(($(date +%s) - 300))  # 5 minutes ago, exceeds interval
+# Remove any stale timestamp file so carrier sense doesn't block
+rm -f "$STANDUP_TEST_DIR/.nbs/chat/test.chat.standup-ts"
 check_standup_trigger
 rc=$?
 if [[ $rc -eq 0 ]]; then
@@ -1842,6 +1844,43 @@ if [[ $rc -ne 0 ]]; then
     pass "Standup does not re-fire immediately"
 else
     fail "Standup should not re-fire immediately"
+fi
+
+# --- Functional: temporal carrier sense suppresses duplicate ---
+# Simulate another sidecar having posted recently by writing a recent timestamp
+echo "$(date +%s)" > "$STANDUP_TEST_DIR/.nbs/chat/test.chat.standup-ts"
+LAST_STANDUP_TIME=$(($(date +%s) - 300))  # Our timer says fire
+check_standup_trigger
+rc=$?
+if [[ $rc -ne 0 ]]; then
+    pass "Temporal carrier sense suppresses duplicate standup"
+else
+    fail "Should not fire when another sidecar posted recently (timestamp file)"
+fi
+
+# --- Functional: temporal carrier sense allows after interval ---
+# Write an old timestamp — should allow posting
+echo "$(($(date +%s) - 600))" > "$STANDUP_TEST_DIR/.nbs/chat/test.chat.standup-ts"
+LAST_STANDUP_TIME=$(($(date +%s) - 300))  # Our timer says fire
+check_standup_trigger
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    pass "Temporal carrier sense allows standup after interval elapses"
+else
+    fail "Should fire when timestamp file is older than interval"
+fi
+
+# --- Functional: timestamp file updated after posting ---
+if [[ -f "$STANDUP_TEST_DIR/.nbs/chat/test.chat.standup-ts" ]]; then
+    ts_val=$(cat "$STANDUP_TEST_DIR/.nbs/chat/test.chat.standup-ts" 2>/dev/null)
+    now=$(date +%s)
+    if (( now - ts_val < 5 )); then
+        pass "Timestamp file updated after posting"
+    else
+        fail "Timestamp file not updated (val=$ts_val, now=$now)"
+    fi
+else
+    fail "Timestamp file not created after posting"
 fi
 
 # Restore

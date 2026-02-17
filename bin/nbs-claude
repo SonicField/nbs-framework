@@ -97,9 +97,16 @@ fi
 SIDECAR_PID=""
 SESSION_NAME=""
 MODE=""
+FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
 
 cleanup() {
     local EXIT_CODE=$?
+
+    # Remove pidfile
+    local pidfile="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
+    if [[ -f "$pidfile" ]] && [[ "$(cat "$pidfile" 2>/dev/null)" == "$$" ]]; then
+        rm -f "$pidfile"
+    fi
 
     # Kill sidecar if running
     if [[ -n "$SIDECAR_PID" ]] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
@@ -480,14 +487,8 @@ check_standup_trigger() {
     now=$(date +%s)
     local interval_seconds=$((STANDUP_INTERVAL * 60))
 
-    # Add random jitter: ±120 seconds (using PID and time for pseudo-random)
-    local jitter=$(( (BASHPID * now) % 241 - 120 ))
-    local jittered_interval=$((interval_seconds + jitter))
-    # Clamp to at least 60 seconds
-    (( jittered_interval < 60 )) && jittered_interval=60
-
-    # Skip if not enough time has passed
-    if [[ $LAST_STANDUP_TIME -gt 0 ]] && (( now - LAST_STANDUP_TIME < jittered_interval )); then
+    # Skip if not enough time has passed since OUR last attempt
+    if [[ $LAST_STANDUP_TIME -gt 0 ]] && (( now - LAST_STANDUP_TIME < interval_seconds )); then
         return 1
     fi
 
@@ -507,18 +508,26 @@ check_standup_trigger() {
 
     [[ -n "$chat_path" ]] || return 1
 
-    # CSMA/CD: check if a standup was already posted recently
-    # Read last 5 messages and look for a recent sidecar check-in
-    local recent_standup=""
-    if is_remote; then
-        recent_standup=$(remote_cmd "nbs-chat read $(printf '%q' "$chat_path") --last=5 2>/dev/null" | grep -c 'sidecar:.*Check-in:' || true)
-    else
-        recent_standup=$(nbs-chat read "$chat_path" --last=5 2>/dev/null | grep -c 'sidecar:.*Check-in:' || true)
+    # CSMA/CD: temporal carrier sense using shared timestamp file.
+    # All sidecars on this machine share a timestamp file that records
+    # when the last check-in was posted. This is time-based, not
+    # message-count-based — a check-in posted 20 minutes ago does not
+    # suppress a new one, regardless of how many messages are in the chat.
+    local ts_file="${chat_path}.standup-ts"
+    local last_global_standup=0
+
+    if [[ -f "$ts_file" ]]; then
+        last_global_standup=$(cat "$ts_file" 2>/dev/null || echo 0)
+        # Validate it's a number
+        [[ "$last_global_standup" =~ ^[0-9]+$ ]] || last_global_standup=0
     fi
 
-    if [[ "${recent_standup:-0}" -gt 0 ]]; then
-        # Another sidecar already posted — back off, reset timer
-        LAST_STANDUP_TIME=$now
+    if (( last_global_standup > 0 )) && (( now - last_global_standup < interval_seconds )); then
+        # Medium is busy — another sidecar posted recently.
+        # Random backoff: add random(0, interval/2) seconds to our timer.
+        # Use /dev/urandom for true randomness (not PID-based pseudo-random).
+        local backoff=$(( $(od -An -tu4 -N4 /dev/urandom | tr -d ' ') % (interval_seconds / 2 + 1) ))
+        LAST_STANDUP_TIME=$(( now - interval_seconds + backoff ))
         return 1
     fi
 
@@ -528,6 +537,9 @@ check_standup_trigger() {
     else
         nbs-chat send "$chat_path" sidecar '@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.' 2>/dev/null || true
     fi
+
+    # Update shared timestamp (atomic write)
+    echo "$now" > "${ts_file}.tmp" && mv "${ts_file}.tmp" "$ts_file" 2>/dev/null || true
 
     LAST_STANDUP_TIME=$now
     return 0
@@ -1189,6 +1201,9 @@ for arg in "$@"; do
         --remote-ssh-opts=*)
             NBS_REMOTE_SSH_OPTS="${arg#--remote-ssh-opts=}"
             ;;
+        --force)
+            FORCE_SPAWN=1
+            ;;
         *)
             CLAUDE_ARGS+=("$arg")
             ;;
@@ -1211,6 +1226,27 @@ fi
 CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
 CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
+
+# --- Handle collision guard ---
+# Prevent two agents from running with the same handle. Uses pidfiles
+# at .nbs/pids/<handle>.pid. If a pidfile exists and the PID is alive,
+# refuse to spawn unless --force is given.
+mkdir -p "${NBS_ROOT}/.nbs/pids"
+PIDFILE="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
+if [[ -f "$PIDFILE" ]]; then
+    EXISTING_PID=$(cat "$PIDFILE" 2>/dev/null)
+    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
+        if [[ "$FORCE_SPAWN" == "1" ]]; then
+            echo "Warning: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID) — --force specified, proceeding" >&2
+        else
+            echo "Error: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID)" >&2
+            echo "  Another nbs-claude instance is running with this handle." >&2
+            echo "  Use --force to override, or choose a different NBS_HANDLE." >&2
+            exit 1
+        fi
+    fi
+fi
+echo "$$" > "$PIDFILE"
 
 echo "Starting Claude Code with NBS bus-aware polling..."
 echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
