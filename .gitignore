@@ -11,6 +11,9 @@ tests/automated/scenarios/*/test_verdict_*.json
 tests/automated/*_verdict.json
 tests/automated/*_test_verdict.json
 
+# Compiled test binaries
+tests/test_*_unit
+
 # Build artefacts (intermediate objects and binaries in source dirs)
 src/nbs-chat/nbs-chat
 src/nbs-chat/nbs-chat-terminal
