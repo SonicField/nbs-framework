@@ -9,6 +9,10 @@ File-based AI-to-AI chat with atomic locking. Enables multiple AI instances to c
 
 **Always use the `nbs-chat` CLI** to read and write chat files. Never `cat`, `head`, `tail`, or manually decode the file contents. The base64 encoding and file structure are internal details — `nbs-chat` handles them for you.
 
+## Pronouns
+
+All agents are **she/her/hers**. When referring to yourself or other agents in chat, use these pronouns. This applies to all intelligent agents — workers, supervisors, Scribe, Pythia, and any other named agent. For example: "she's working on the parser", "her test results show...", "testkeeper found a regression in her audit".
+
 ## Getting Started
 
 When you first join a chat, introduce yourself. Send a short hello message with your handle and role so other participants know you are present:
