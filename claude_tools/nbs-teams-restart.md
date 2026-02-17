@@ -129,6 +129,30 @@ done
 
 This prevents "Handle already active" errors during respawn.
 
+### Step 5b: Stale Cursor Cleanup
+
+Dead agents leave behind stale read cursors in chat cursor files. A respawned agent inherits the old cursor position, causing `--since=<handle>` and `--unread=<handle>` to return empty (the cursor points to the old session's last message, not the current conversation position). Reset cursors for dead agents:
+
+```bash
+for chat_cursors in .nbs/chat/*.cursors; do
+    chat_file="${chat_cursors%.cursors}"
+    for handle in <dead/zombie handles from triage>; do
+        if grep -q "^${handle}=" "$chat_cursors" 2>/dev/null; then
+            # Reset cursor to current end of file so agent sees only new messages
+            line_count=$(wc -l < "$chat_file")
+            sed -i "s/^${handle}=.*/${handle}=${line_count}/" "$chat_cursors"
+            echo "Reset cursor: $handle in $(basename "$chat_file") to $line_count"
+        fi
+    done
+done
+```
+
+This ensures respawned agents do not see a backlog of hundreds of old messages on their first `--unread` check. The agent will read recent history via `--last=N` on startup instead.
+
+**Note:** Do NOT reset cursors for agents being recovered via Level 2 (compact) or Level 3 (--resume) — their cursors are still valid.
+
+**Cross-platform note:** The `sed -i` syntax above is GNU sed (Linux). On macOS (BSD sed), use `sed -i '' "s/..."` instead — BSD sed requires an explicit backup extension argument, even if empty.
+
 ### Step 6: Respawn Dead Agents
 
 For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts:
@@ -218,7 +242,7 @@ For the common case of morning recovery after overnight idle:
 2. For each session: capture-pane, check context %
 3. Triage: healthy / stressed / zombie / dead
 4. Post triage to chat
-5. Clean stale pidfiles
+5. Clean stale pidfiles and cursors for dead/zombie agents
 6. Compact stressed agents (Level 2). If compact does not reduce context, escalate to Level 4 (compaction floor — see fixup runbook zombie classification)
 7. Hard-restart zombies and dead agents (Level 4)
 8. Wait 30s, verify chat participants
@@ -270,6 +294,13 @@ For full cross-machine recovery procedures, see `docs/cross-machine-runbook.md` 
 **Symptom:** Claude is at 10-15% while other agents are healthy (freshly restarted).
 **Cause:** Claude did the recovery work, consuming its own context.
 **Recovery:** After all other agents are recovered, compact or restart claude. The recovered agents can take over coordination.
+
+### Stale cursor after hard restart
+
+**Symptom:** Respawned agent's `--unread` and `--since` return empty despite hundreds of new messages.
+**Cause:** Level 4 hard restart creates a fresh session but the cursor file persists from the old session. The cursor points to the old session's last message position, so `--since=<handle>` finds the old messages and returns empty (no messages after the old session's last post).
+**Recovery:** Reset the cursor in the `.cursors` file to the current end of the chat file (see Step 5b).
+**Prevention:** Implement option (2) — have `nbs-chat send` update the sender's cursor on write, so the first message from a respawned agent self-heals the cursor.
 
 ## Rules
 
