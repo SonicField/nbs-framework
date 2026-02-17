@@ -83,14 +83,13 @@ else
     fail "Numeric validation pattern not found"
 fi
 
-# Functional test: set invalid NBS_POLL_INTERVAL
-NBS_POLL_INTERVAL=abc NBS_ROOT="$PROJECT_ROOT" bash -c "source /dev/stdin" <<'SCRIPT' 2>/dev/null
+# Functional test: set invalid NBS_BUS_CHECK_INTERVAL (POLL_INTERVAL removed)
+NBS_BUS_CHECK_INTERVAL=abc NBS_ROOT="$PROJECT_ROOT" bash -c "source /dev/stdin" <<'SCRIPT' 2>/dev/null
 set -euo pipefail
-POLL_INTERVAL="${NBS_POLL_INTERVAL:-300}"
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
-for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN; do
+for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         exit 4
@@ -100,19 +99,18 @@ exit 0
 SCRIPT
 RESULT=$?
 if [[ $RESULT -eq 4 ]]; then
-    pass "NBS_POLL_INTERVAL=abc correctly rejected (exit 4)"
+    pass "NBS_BUS_CHECK_INTERVAL=abc correctly rejected (exit 4)"
 else
-    fail "NBS_POLL_INTERVAL=abc not rejected (exit $RESULT)"
+    fail "NBS_BUS_CHECK_INTERVAL=abc not rejected (exit $RESULT)"
 fi
 
 # Test valid value passes
-NBS_POLL_INTERVAL=60 bash -c "source /dev/stdin" <<'SCRIPT' 2>/dev/null
+NBS_BUS_CHECK_INTERVAL=5 bash -c "source /dev/stdin" <<'SCRIPT' 2>/dev/null
 set -euo pipefail
-POLL_INTERVAL="${NBS_POLL_INTERVAL:-300}"
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
-for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN; do
+for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         exit 4
@@ -122,9 +120,9 @@ exit 0
 SCRIPT
 RESULT=$?
 if [[ $RESULT -eq 0 ]]; then
-    pass "NBS_POLL_INTERVAL=60 correctly accepted"
+    pass "NBS_BUS_CHECK_INTERVAL=5 correctly accepted"
 else
-    fail "NBS_POLL_INTERVAL=60 rejected (exit $RESULT)"
+    fail "NBS_BUS_CHECK_INTERVAL=5 rejected (exit $RESULT)"
 fi
 
 # --- 4. NBS_ROOT resolution to absolute ---

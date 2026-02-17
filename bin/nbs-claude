@@ -5,7 +5,7 @@
 #   1. Checks the event bus every few seconds for pending events
 #   2. Checks chat cursors for unread messages
 #   3. Injects /nbs-notify only when there is something to process
-#   4. Injects /nbs-poll as a safety net after extended idle (5 min)
+#   4. CSMA/CD standup check-ins for periodic coordination
 #   5. Auto-selects plan mode prompts for unattended workers
 #
 # Works in two modes:
@@ -21,7 +21,6 @@
 #   nbs-claude --root=/path/to/project  # Use .nbs/ from another directory
 #
 # Environment:
-#   NBS_POLL_INTERVAL       Safety net poll interval in seconds (default: 300)
 #   NBS_POLL_DISABLE        Set to 1 to disable all polling (just wraps claude)
 #   NBS_BUS_CHECK_INTERVAL  Bus/chat check interval in seconds (default: 3)
 #   NBS_NOTIFY_COOLDOWN     Min seconds between /nbs-notify injections (default: 15)
@@ -41,7 +40,6 @@ set -euo pipefail
 
 # --- Configuration ---
 
-POLL_INTERVAL="${NBS_POLL_INTERVAL:-300}"
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
 NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
@@ -59,7 +57,7 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 }
 
 # Validate numeric config variables
-for _nbs_var_name in POLL_INTERVAL POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL; do
+for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
@@ -343,13 +341,6 @@ process_control_command() {
                 { grep -vF "bus:${path}" "$CONTROL_REGISTRY" || true; } > "${CONTROL_REGISTRY}.tmp"
                 mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
                 echo "[nbs-claude] Unregistered bus: $path" >&2
-            fi
-            ;;
-        set-poll-interval)
-            # Validate: must be a positive integer
-            if [[ "$path" =~ ^[0-9]+$ ]] && [[ "$path" -gt 0 ]]; then
-                POLL_INTERVAL="$path"
-                echo "[nbs-claude] Poll interval set to ${path}s" >&2
             fi
             ;;
         *)
@@ -741,7 +732,7 @@ is_prompt_visible() {
 # --- Idle detection sidecar (tmux mode) ---
 # Monitors the current tmux pane. Checks bus/chat every BUS_CHECK_INTERVAL
 # seconds and injects /nbs-notify when events or messages are pending.
-# Falls back to /nbs-poll as a safety net after POLL_INTERVAL seconds.
+# CSMA/CD standups handle periodic coordination; no blind polling.
 
 poll_sidecar_tmux() {
     local pane_id="$1"
@@ -938,30 +929,6 @@ poll_sidecar_tmux() {
                     sleep 8
                     continue
                 fi
-            fi
-        fi
-
-        # --- Track 2: Safety net poll ---
-        # Full /nbs-poll after extended idle. Catches bus failures,
-        # unregistered resources, anything the fast check missed.
-        if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
-            if is_prompt_visible "$content"; then
-                # Skip injection if Claude is context-stressed
-                if detect_context_stress "$content"; then
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 30
-                    continue
-                fi
-                tmux send-keys -t "$pane_id" -l '/nbs-poll' || true
-                sleep 0.3
-                tmux send-keys -t "$pane_id" Enter || true
-
-                idle_seconds=0
-                last_content_hash=""
-                sleep 10
-            else
-                idle_seconds=0
             fi
         fi
     done
@@ -1161,28 +1128,6 @@ poll_sidecar_pty() {
                 fi
             fi
         fi
-
-        # --- Track 2: Safety net poll ---
-        if [[ $idle_seconds -ge $POLL_INTERVAL ]]; then
-            if is_prompt_visible "$content"; then
-                # Skip injection if Claude is context-stressed
-                if detect_context_stress "$content"; then
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 30
-                    continue
-                fi
-                "$pty" send "$session" '/nbs-poll' || true
-                sleep 0.5
-                "$pty" send "$session" '' || true
-
-                idle_seconds=0
-                last_content_hash=""
-                sleep 10
-            else
-                idle_seconds=0
-            fi
-        fi
     done
 }
 
@@ -1251,7 +1196,7 @@ echo "$$" > "$PIDFILE"
 echo "Starting Claude Code with NBS bus-aware polling..."
 echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
 echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
-echo "  Safety net poll: ${POLL_INTERVAL}s idle"
+echo "  Standup interval: ${STANDUP_INTERVAL}m"
 echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Startup grace: ${STARTUP_GRACE}s"
 echo "  Self-heal threshold: ${NOTIFY_FAIL_THRESHOLD} failures"

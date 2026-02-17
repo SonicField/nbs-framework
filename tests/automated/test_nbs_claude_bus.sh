@@ -18,8 +18,8 @@
 #   4. check_bus_events: empty bus, pending events, no bus registered, missing dir
 #   5. check_chat_unread: caught up, unread, no chats registered, missing cursors
 #   6. should_inject_notify: nothing pending, events pending, cooldown, critical bypass
-#   7. Two-track loop structure: bus check and safety net in both sidecar modes
-#   8. Configuration defaults: correct values for bus-aware mode
+#   7. Event-driven structure: conditional notification, no blind polling
+#   8. Configuration defaults: correct values for event-driven mode
 #   9. Cursor peeking safety: cursor files NOT modified by check_chat_unread
 #  10. Edge cases: empty chat file, chat with no delimiter, multiple bus dirs
 #  11. Injection verification: post-injection prompt check, retry, both modes
@@ -111,11 +111,11 @@ else
     fail "Missing /nbs-notify injection"
 fi
 
-# Verify two-track structure: bus check AND safety net
-if grep -q 'Track 1.*Bus-aware' "$NBS_CLAUDE" && grep -q 'Track 2.*Safety net' "$NBS_CLAUDE"; then
-    pass "Has two-track loop structure (bus + safety net)"
+# Verify event-driven structure: bus check with conditional notification
+if grep -q 'Track 1.*Bus-aware' "$NBS_CLAUDE" && grep -q 'should_inject_notify' "$NBS_CLAUDE"; then
+    pass "Has event-driven notification structure (no blind polling)"
 else
-    fail "Missing two-track loop structure"
+    fail "Missing event-driven notification structure"
 fi
 
 # Verify bus_check_counter exists in both sidecar modes
@@ -717,11 +717,11 @@ else
     fail "tmux sidecar missing bus_check_counter comparison"
 fi
 
-# Verify POLL_INTERVAL comparison in tmux sidecar
-if grep -A2 'Track 2.*Safety net' "$NBS_CLAUDE" | grep -q 'idle_seconds.*POLL_INTERVAL'; then
-    pass "tmux sidecar checks idle_seconds against POLL_INTERVAL"
+# Verify no blind /nbs-poll injection (safety net removed — CSMA/CD standups replace it)
+if ! grep -q 'Track 2.*Safety net' "$NBS_CLAUDE"; then
+    pass "No blind /nbs-poll safety net (replaced by CSMA/CD standups)"
 else
-    fail "tmux sidecar missing idle_seconds comparison"
+    fail "Track 2 safety net still present — should be removed"
 fi
 
 # Verify /nbs-notify is injected with NOTIFY_MESSAGE
@@ -731,11 +731,11 @@ else
     fail "Missing NOTIFY_MESSAGE in /nbs-notify injection"
 fi
 
-# Verify /nbs-poll is injected as safety net (not /nbs-notify)
-if grep 'Track 2' -A10 "$NBS_CLAUDE" | grep -q '/nbs-poll'; then
-    pass "Safety net injects /nbs-poll (not /nbs-notify)"
+# Verify /nbs-poll is NOT injected as a blind poll (only in recovery prompt)
+if ! grep -q "send-keys.*'/nbs-poll'" "$NBS_CLAUDE" && ! grep -q 'send.*"/nbs-poll"' "$NBS_CLAUDE"; then
+    pass "No blind /nbs-poll injection (event-driven only)"
 else
-    fail "Safety net does not inject /nbs-poll"
+    fail "/nbs-poll still injected as blind poll"
 fi
 
 # Verify should_inject_notify is called before injection
@@ -758,11 +758,11 @@ fi
 # =========================================================================
 echo "8. Configuration defaults..."
 
-# Verify default POLL_INTERVAL is 300 (5 minutes), not 30
-if grep -q 'NBS_POLL_INTERVAL:-300' "$NBS_CLAUDE"; then
-    pass "Default POLL_INTERVAL is 300 (5 minutes)"
+# Verify POLL_INTERVAL removed (replaced by CSMA/CD standups)
+if ! grep -q 'NBS_POLL_INTERVAL' "$NBS_CLAUDE"; then
+    pass "POLL_INTERVAL removed (blind polling eliminated)"
 else
-    fail "Default POLL_INTERVAL is not 300"
+    fail "POLL_INTERVAL still present — should be removed"
 fi
 
 # Verify default BUS_CHECK_INTERVAL is 3
@@ -1039,17 +1039,17 @@ fi
 
 # Structural: referenced in both sidecar loops
 TMUX_CTX=$(sed -n '/^poll_sidecar_tmux/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_context_stress')
-if [[ "$TMUX_CTX" -ge 2 ]]; then
-    pass "detect_context_stress in tmux sidecar ($TMUX_CTX references, Track 1 + Track 2)"
+if [[ "$TMUX_CTX" -ge 1 ]]; then
+    pass "detect_context_stress in tmux sidecar ($TMUX_CTX references)"
 else
-    fail "detect_context_stress not in both tmux tracks (found $TMUX_CTX, expected >= 2)"
+    fail "detect_context_stress not in tmux sidecar (found $TMUX_CTX, expected >= 1)"
 fi
 
 PTY_CTX=$(sed -n '/^poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -c 'detect_context_stress')
-if [[ "$PTY_CTX" -ge 2 ]]; then
-    pass "detect_context_stress in pty sidecar ($PTY_CTX references, Track 1 + Track 2)"
+if [[ "$PTY_CTX" -ge 1 ]]; then
+    pass "detect_context_stress in pty sidecar ($PTY_CTX references)"
 else
-    fail "detect_context_stress not in both pty tracks (found $PTY_CTX, expected >= 2)"
+    fail "detect_context_stress not in pty sidecar (found $PTY_CTX, expected >= 1)"
 fi
 
 # Source just the detect_context_stress function

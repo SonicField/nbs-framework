@@ -25,6 +25,7 @@
 #   T17 (88-95): Permissions prompt detection robustness
 #   T18 (96-102): Handle collision guard (pre-spawn pidfile check)
 #   T19 (103-110): CSMA/CD standup trigger (temporal carrier sense)
+#   T20 (111-117): Conditional notification (event-gated /nbs-notify)
 
 set -euo pipefail
 
@@ -2016,7 +2017,7 @@ mkdir -p "$T18_DIR/.nbs/pids"
 # processes would otherwise persist as orphans.
 # Chain with the existing cleanup trap to preserve temp dir removal.
 T18_PIDS=()
-t18_cleanup() { for p in "${T18_PIDS[@]}"; do kill "$p" 2>/dev/null; done; cleanup; }
+t18_cleanup() { for p in "${T18_PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; cleanup; }
 trap t18_cleanup EXIT INT TERM
 
 # --- Test 96: Pidfile created on startup ---
@@ -2338,6 +2339,187 @@ else
 fi
 check "Non-numeric timestamp treated as missing" "$( [[ "$RESULT" == "allowed" ]] && echo pass || echo fail )"
 rm -f "$TS_FILE"
+echo ""
+
+# ============================================================
+# T20: Conditional notification (event-gated /nbs-notify)
+# ============================================================
+#
+# should_inject_notify() in nbs-claude gates /nbs-notify injection
+# on actual pending work. It calls check_bus_events() and
+# check_chat_unread(). If both return non-zero (nothing pending),
+# should_inject_notify returns 1 (do not inject). This prevents
+# empty notification cycles that cause terminal context rot.
+#
+# The tests replicate the conditional logic inline, verifying:
+# - No injection when bus and chat are both empty
+# - Injection when bus events exist
+# - Injection when unread chat messages exist
+# - Cooldown suppresses non-critical repeat notifications
+# - Critical priority bypasses cooldown
+# - Startup grace period blocks early injection
+# - Summary message built correctly from bus + chat
+
+echo "T20: Conditional notification"
+echo ""
+
+T20_DIR="$TEST_DIR/t20-notify"
+mkdir -p "$T20_DIR/.nbs/events"
+T20_CHAT="$T20_DIR/test.chat"
+nbs-chat create "$T20_CHAT"
+T20_REGISTRY="$T20_DIR/.nbs/control-registry-test"
+echo "bus:$T20_DIR/.nbs/events" > "$T20_REGISTRY"
+echo "chat:$T20_CHAT" >> "$T20_REGISTRY"
+
+# --- Test 111: No injection when bus and chat are empty ---
+echo "111. No injection when bus and chat are empty..."
+# check_bus_events: empty events dir → no output → BUS_EVENT_COUNT=0 → return 1
+BUS_EVENT_COUNT=0
+BUS_MAX_PRIORITY="none"
+BUS_EVENT_SUMMARY=""
+CONTROL_REGISTRY="$T20_REGISTRY"
+SIDECAR_HANDLE="test-notify"
+bus_output=$(nbs-bus check "$T20_DIR/.nbs/events" 2>/dev/null) || true
+if [[ -n "$bus_output" ]]; then
+    BUS_EVENT_COUNT=$(echo "$bus_output" | wc -l)
+fi
+bus_rc=1
+[[ $BUS_EVENT_COUNT -gt 0 ]] && bus_rc=0
+# check_chat_unread: no messages beyond header → return 1
+chat_rc=1
+CHAT_UNREAD_COUNT=0
+total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$T20_CHAT" 2>/dev/null) || true
+total=$((${total:-0} + 0))
+cursor=0
+if [[ -f "${T20_CHAT}.cursors" ]]; then
+    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${T20_CHAT}.cursors" 2>/dev/null) || true
+    cursor=$((${cursor:-0} + 0))
+fi
+(( total > cursor + 1 )) && chat_rc=0
+# should_inject_notify logic: both empty → return 1
+RESULT="inject"
+if [[ $bus_rc -ne 0 && $chat_rc -ne 0 ]]; then
+    RESULT="no_inject"
+fi
+check "No injection when bus and chat empty" "$( [[ "$RESULT" == "no_inject" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 112: Injection when bus events exist ---
+echo "112. Injection when bus events exist..."
+nbs-bus publish "$T20_DIR/.nbs/events" test test-event normal "test" >/dev/null 2>&1
+bus_rc=0
+nbs-bus check "$T20_DIR/.nbs/events" >/dev/null 2>&1 || bus_rc=$?
+RESULT="no_inject"
+if [[ $bus_rc -eq 0 ]]; then
+    RESULT="inject"
+fi
+check "Injection when bus events exist" "$( [[ "$RESULT" == "inject" ]] && echo pass || echo fail )"
+# Clean up event
+for f in "$T20_DIR/.nbs/events"/*.event; do
+    nbs-bus ack "$T20_DIR/.nbs/events" "$(basename "$f")" 2>/dev/null || true
+done
+echo ""
+
+# --- Test 113: Injection when unread chat messages exist ---
+echo "113. Injection when unread chat messages exist..."
+# Send 2 messages — cursor=0 means "read message 0", so need total > 1
+nbs-chat send "$T20_CHAT" sender "hello from test" >/dev/null 2>&1
+nbs-chat send "$T20_CHAT" sender "second message" >/dev/null 2>&1
+total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$T20_CHAT" 2>/dev/null) || true
+total=$((${total:-0} + 0))
+cursor=0
+if [[ -f "${T20_CHAT}.cursors" ]]; then
+    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${T20_CHAT}.cursors" 2>/dev/null) || true
+    cursor=$((${cursor:-0} + 0))
+fi
+chat_rc=1
+(( total > cursor + 1 )) && chat_rc=0
+RESULT="no_inject"
+if [[ $chat_rc -eq 0 ]]; then
+    RESULT="inject"
+fi
+check "Injection when unread chat exists" "$( [[ "$RESULT" == "inject" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 114: Cooldown suppresses non-critical events ---
+echo "114. Cooldown suppresses non-critical repeat notifications..."
+NOTIFY_COOLDOWN=60
+NOW=$(date +%s)
+LAST_NOTIFY_TIME=$((NOW - 10))  # 10 seconds ago — within cooldown
+BUS_MAX_PRIORITY="normal"
+# Both bus and chat have events (from previous tests)
+bus_rc=0
+chat_rc=0
+elapsed=$((NOW - LAST_NOTIFY_TIME))
+RESULT="inject"
+if [[ "$BUS_MAX_PRIORITY" != "critical" && $elapsed -lt $NOTIFY_COOLDOWN ]]; then
+    RESULT="cooldown"
+fi
+check "Cooldown suppresses normal priority" "$( [[ "$RESULT" == "cooldown" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 115: Critical priority bypasses cooldown ---
+echo "115. Critical priority bypasses cooldown..."
+BUS_MAX_PRIORITY="critical"
+RESULT="cooldown"
+if [[ "$BUS_MAX_PRIORITY" != "critical" && $elapsed -lt $NOTIFY_COOLDOWN ]]; then
+    RESULT="cooldown"
+else
+    RESULT="inject"
+fi
+check "Critical priority bypasses cooldown" "$( [[ "$RESULT" == "inject" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 116: Startup grace period blocks injection ---
+echo "116. Startup grace period blocks injection..."
+STARTUP_GRACE=30
+SIDECAR_START_TIME=$((NOW - 10))  # Started 10 seconds ago — within grace
+grace_elapsed=$((NOW - SIDECAR_START_TIME))
+RESULT="inject"
+if [[ $SIDECAR_START_TIME -gt 0 ]] && [[ $grace_elapsed -lt $STARTUP_GRACE ]]; then
+    RESULT="grace_blocked"
+fi
+check "Startup grace blocks injection" "$( [[ "$RESULT" == "grace_blocked" ]] && echo pass || echo fail )"
+# After grace period
+SIDECAR_START_TIME=$((NOW - 60))  # Started 60 seconds ago — past grace
+grace_elapsed=$((NOW - SIDECAR_START_TIME))
+RESULT="inject"
+if [[ $SIDECAR_START_TIME -gt 0 ]] && [[ $grace_elapsed -lt $STARTUP_GRACE ]]; then
+    RESULT="grace_blocked"
+fi
+check "Injection allowed after grace period" "$( [[ "$RESULT" == "inject" ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 117: Summary message built from bus + chat ---
+echo "117. Summary message built from bus and chat..."
+BUS_EVENT_SUMMARY="3 event(s) in .nbs/events"
+CHAT_UNREAD_SUMMARY="5 unread in live.chat"
+parts=""
+if [[ -n "$BUS_EVENT_SUMMARY" ]]; then
+    parts="$BUS_EVENT_SUMMARY"
+fi
+if [[ -n "$CHAT_UNREAD_SUMMARY" ]]; then
+    if [[ -n "$parts" ]]; then
+        parts="${parts}. ${CHAT_UNREAD_SUMMARY}"
+    else
+        parts="$CHAT_UNREAD_SUMMARY"
+    fi
+fi
+check "Summary combines bus and chat" "$( [[ "$parts" == "3 event(s) in .nbs/events. 5 unread in live.chat" ]] && echo pass || echo fail )"
+# Bus only
+CHAT_UNREAD_SUMMARY=""
+parts=""
+if [[ -n "$BUS_EVENT_SUMMARY" ]]; then
+    parts="$BUS_EVENT_SUMMARY"
+fi
+if [[ -n "$CHAT_UNREAD_SUMMARY" ]]; then
+    if [[ -n "$parts" ]]; then
+        parts="${parts}. ${CHAT_UNREAD_SUMMARY}"
+    else
+        parts="$CHAT_UNREAD_SUMMARY"
+    fi
+fi
+check "Summary with bus only" "$( [[ "$parts" == "3 event(s) in .nbs/events" ]] && echo pass || echo fail )"
 echo ""
 
 # ============================================================

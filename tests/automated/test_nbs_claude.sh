@@ -59,10 +59,10 @@ else
     fail "Missing pty-session reference"
 fi
 
-if grep -q 'NBS_POLL_INTERVAL' "$NBS_CLAUDE"; then
-    pass "Has configurable poll interval"
+if ! grep -q 'NBS_POLL_INTERVAL' "$NBS_CLAUDE"; then
+    pass "POLL_INTERVAL removed (blind polling eliminated)"
 else
-    fail "Missing poll interval config"
+    fail "POLL_INTERVAL still present"
 fi
 
 if grep -q 'NBS_POLL_DISABLE' "$NBS_CLAUDE"; then
@@ -78,9 +78,9 @@ else
 fi
 
 if grep -q '/nbs-poll' "$NBS_CLAUDE"; then
-    pass "Injects /nbs-poll command"
+    pass "References /nbs-poll in recovery prompt"
 else
-    fail "Missing /nbs-poll injection"
+    fail "Missing /nbs-poll reference in recovery prompt"
 fi
 
 # 3. Session name includes PID for uniqueness
@@ -380,30 +380,11 @@ else
     fail "register-bus did not add to registry"
 fi
 
-# Test: set-poll-interval
-POLL_INTERVAL=30
-process_control_command "set-poll-interval 300"
-if [[ "$POLL_INTERVAL" -eq 300 ]]; then
-    pass "set-poll-interval updates POLL_INTERVAL"
+# Test: set-poll-interval removed (blind polling eliminated)
+if ! grep -q 'set-poll-interval' "$NBS_CLAUDE"; then
+    pass "set-poll-interval command removed (blind polling eliminated)"
 else
-    fail "set-poll-interval did not update (expected 300, got $POLL_INTERVAL)"
-fi
-
-# Test: set-poll-interval rejects non-numeric
-POLL_INTERVAL=300
-process_control_command "set-poll-interval abc"
-if [[ "$POLL_INTERVAL" -eq 300 ]]; then
-    pass "set-poll-interval rejects non-numeric input"
-else
-    fail "set-poll-interval accepted non-numeric input"
-fi
-
-# Test: set-poll-interval rejects zero
-process_control_command "set-poll-interval 0"
-if [[ "$POLL_INTERVAL" -eq 300 ]]; then
-    pass "set-poll-interval rejects zero"
-else
-    fail "set-poll-interval accepted zero"
+    fail "set-poll-interval command still present"
 fi
 
 # Test: unknown command is silently ignored
@@ -562,23 +543,6 @@ if [[ "$CYCLE_COUNT" -eq 1 ]]; then
     pass "Register-unregister-register cycle produces exactly one entry"
 else
     fail "Cycle produced $CYCLE_COUNT entries (expected 1)"
-fi
-
-# Test: set-poll-interval with negative number
-POLL_INTERVAL=30
-process_control_command "set-poll-interval -1"
-if [[ "$POLL_INTERVAL" -eq 30 ]]; then
-    pass "set-poll-interval rejects negative number"
-else
-    fail "set-poll-interval accepted negative number (got $POLL_INTERVAL)"
-fi
-
-# Test: set-poll-interval with very large number
-process_control_command "set-poll-interval 999999"
-if [[ "$POLL_INTERVAL" -eq 999999 ]]; then
-    pass "set-poll-interval accepts large number"
-else
-    fail "set-poll-interval rejected large number"
 fi
 
 # Cleanup
