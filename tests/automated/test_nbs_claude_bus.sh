@@ -1933,7 +1933,7 @@ nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" alice "Hello from alice" >/de
 # Read to advance cursor to current position
 nbs-chat read "$IDLE_TEST_DIR/.nbs/chat/test.chat" --unread=test-agent >/dev/null 2>&1
 # Now send sidecar-only messages
-nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar '@all Check-in: what are you working on?' >/dev/null 2>&1
+nbs-chat send "$IDLE_TEST_DIR/.nbs/chat/test.chat" sidecar 'Check-in: what are you working on?' >/dev/null 2>&1
 
 are_chat_unread_sidecar_only
 rc=$?
