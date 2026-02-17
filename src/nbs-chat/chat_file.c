@@ -568,6 +568,22 @@ int chat_send(const char *path, const char *handle, const char *message) {
     chat_state_free(&state);
     chat_lock_release(lock_fd);
 
+    /* Cursor-on-write: update sender's read cursor to the index of the
+     * message just written. This prevents the sidecar from treating the
+     * sender's own message as "unread" and avoids cursor desync after
+     * restarts. The new message is at index encoded_line_count (0-based
+     * count of messages that existed before the append).
+     *
+     * This is called AFTER lock release so chat_cursor_write can acquire
+     * the lock independently. The race window (another message arriving
+     * between send and cursor update) is benign: the cursor will be at
+     * our message or later, which is correct either way. */
+    int cw_rc = chat_cursor_write(path, handle, encoded_line_count);
+    if (cw_rc < 0) {
+        fprintf(stderr, "warning: chat_send: cursor-on-write failed for handle '%s'\n", handle);
+        /* Non-fatal: the send succeeded, cursor update is best-effort */
+    }
+
     return 0;
 }
 

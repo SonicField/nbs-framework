@@ -134,18 +134,28 @@ This prevents "Handle already active" errors during respawn.
 Dead agents leave behind stale read cursors in chat cursor files. A respawned agent inherits the old cursor position, causing `--since=<handle>` and `--unread=<handle>` to return empty (the cursor points to the old session's last message, not the current conversation position). Reset cursors for dead agents:
 
 ```bash
+HEADER_LINES=6  # nbs-chat file header is exactly 6 lines (=== nbs-chat ===, last-writer, last-write, file-length, participants, ---)
+
 for chat_cursors in .nbs/chat/*.cursors; do
     chat_file="${chat_cursors%.cursors}"
+    # Message count = total lines minus header. Cursor is 0-indexed, so
+    # last valid cursor = message_count - 1 (meaning "I've read everything").
+    total_lines=$(wc -l < "$chat_file")
+    message_count=$((total_lines - HEADER_LINES))
+    cursor_value=$((message_count - 1))
+    if [ "$cursor_value" -lt 0 ]; then
+        cursor_value=0
+    fi
     for handle in <dead/zombie handles from triage>; do
         if grep -q "^${handle}=" "$chat_cursors" 2>/dev/null; then
-            # Reset cursor to current end of file so agent sees only new messages
-            line_count=$(wc -l < "$chat_file")
-            sed -i "s/^${handle}=.*/${handle}=${line_count}/" "$chat_cursors"
-            echo "Reset cursor: $handle in $(basename "$chat_file") to $line_count"
+            sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" "$chat_cursors"
+            echo "Reset cursor: $handle in $(basename "$chat_file") to ${cursor_value} (${message_count} messages)"
         fi
     done
 done
 ```
+
+**Why not `wc -l` directly?** The chat file has a 6-line header before the first message. Cursors are 0-indexed message indices. Using raw `wc -l` sets the cursor past the end of the message array, causing an array bounds violation on the next `--unread` read (`start > message_count`). The correct cursor value is `total_lines - HEADER_LINES - 1`.
 
 This ensures respawned agents do not see a backlog of hundreds of old messages on their first `--unread` check. The agent will read recent history via `--last=N` on startup instead.
 

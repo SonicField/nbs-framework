@@ -615,6 +615,150 @@ static void test_file_length_header_accuracy(void) {
     TEST_PASS("file-length header matches actual file size at all stages");
 }
 
+/* --- Test 13: Cursor-on-write (T21) — chat_send updates sender cursor --- */
+
+static void test_cursor_on_write_single_send(void) {
+    /*
+     * T21a: After chat_send, the sender's cursor should point to
+     * the index of the message just written.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cursor_on_write_1.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "first message");
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    /* After sending message 0, alice's cursor should be 0 */
+    int cursor = chat_cursor_read(path, "alice");
+    TEST_ASSERT(cursor == 0,
+                "T21a: after first send, cursor should be 0, got %d", cursor);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T21a: chat_send updates sender cursor to sent message index");
+}
+
+static void test_cursor_on_write_no_unread_for_sender(void) {
+    /*
+     * T21b: After chat_send, reading with --unread for the sender
+     * should show zero unread messages (cursor is at the latest).
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cursor_on_write_2.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "hello");
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    /* Read the state to get message count */
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    int cursor = chat_cursor_read(path, "alice");
+
+    /* cursor should be message_count - 1 (pointing at last message) */
+    /* So unread = messages from cursor+1 to end = none */
+    TEST_ASSERT(cursor == state.message_count - 1,
+                "T21b: cursor %d should equal message_count-1 (%d)",
+                cursor, state.message_count - 1);
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T21b: no unread messages for sender after send");
+}
+
+static void test_cursor_on_write_two_senders(void) {
+    /*
+     * T21c: Two different senders each have independent cursors
+     * pointing to their respective last-sent message index.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cursor_on_write_3.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "msg 0");   /* index 0 */
+    TEST_ASSERT(rc == 0, "send alice failed: %d", rc);
+
+    rc = chat_send(path, "bob", "msg 1");     /* index 1 */
+    TEST_ASSERT(rc == 0, "send bob failed: %d", rc);
+
+    rc = chat_send(path, "alice", "msg 2");   /* index 2 */
+    TEST_ASSERT(rc == 0, "send alice 2 failed: %d", rc);
+
+    /* alice sent last at index 2 */
+    int alice_cursor = chat_cursor_read(path, "alice");
+    TEST_ASSERT(alice_cursor == 2,
+                "T21c: alice cursor should be 2, got %d", alice_cursor);
+
+    /* bob sent last at index 1 */
+    int bob_cursor = chat_cursor_read(path, "bob");
+    TEST_ASSERT(bob_cursor == 1,
+                "T21c: bob cursor should be 1, got %d", bob_cursor);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T21c: two senders have independent cursors at their last message");
+}
+
+static void test_cursor_on_write_sequential_sends(void) {
+    /*
+     * T21d: Sending multiple messages from the same handle
+     * updates the cursor each time to the latest message index.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cursor_on_write_4.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    for (int i = 0; i < 5; i++) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "message %d", i);
+
+        rc = chat_send(path, "alice", msg);
+        TEST_ASSERT(rc == 0, "send %d failed: %d", i, rc);
+
+        int cursor = chat_cursor_read(path, "alice");
+        TEST_ASSERT(cursor == i,
+                    "T21d: after send %d, cursor should be %d, got %d",
+                    i, i, cursor);
+    }
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("T21d: sequential sends update cursor each time");
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -642,6 +786,12 @@ int main(void) {
     test_snprintf_truncation_in_header();
     test_chat_state_free_null();
     test_file_length_header_accuracy();
+
+    /* CURSOR-ON-WRITE tests (T21) */
+    test_cursor_on_write_single_send();
+    test_cursor_on_write_no_unread_for_sender();
+    test_cursor_on_write_two_senders();
+    test_cursor_on_write_sequential_sends();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

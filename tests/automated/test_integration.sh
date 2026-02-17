@@ -199,8 +199,10 @@ echo ""
 echo "12. Cursor file integrity under concurrent read..."
 "$NBS_CHAT" read "$T11_DIR/.nbs/chat/concurrent.chat" --unread=reader1 >/dev/null 2>&1
 "$NBS_CHAT" read "$T11_DIR/.nbs/chat/concurrent.chat" --unread=reader2 >/dev/null 2>&1
+# cursor-on-write: worker1 and worker2 each get a cursor from chat_send,
+# plus reader1 and reader2 from --unread reads = 4 entries
 CURSOR_HANDLES=$(grep -c "=" "$T11_DIR/.nbs/chat/concurrent.chat.cursors" 2>/dev/null || echo 0)
-check "Cursor file has exactly 2 handle entries" "$( [[ $CURSOR_HANDLES -eq 2 ]] && echo pass || echo fail )"
+check "Cursor file has 4 handle entries (2 senders + 2 readers)" "$( [[ $CURSOR_HANDLES -eq 4 ]] && echo pass || echo fail )"
 echo ""
 
 # ============================================================
@@ -659,10 +661,12 @@ wait
 TOTAL=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" 2>/dev/null | wc -l)
 check "All 9 concurrent messages present" "$( [[ $TOTAL -eq 9 ]] && echo pass || echo fail )"
 
-# handleX reads with --unread, then more messages arrive, then reads again
+# cursor-on-write: handleX already has a cursor at its last sent message.
+# On --unread, it sees only messages AFTER that cursor — not all 9.
+# Exact count depends on interleaving, but it must be < 9.
 X_FIRST=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleX 2>/dev/null)
-X_FIRST_COUNT=$(echo "$X_FIRST" | wc -l)
-check "handleX first --unread sees all 9" "$( [[ $X_FIRST_COUNT -eq 9 ]] && echo pass || echo fail )"
+X_FIRST_COUNT=$(echo "$X_FIRST" | grep -c . || echo 0)
+check "handleX first --unread sees < 9 (cursor-on-write)" "$( [[ $X_FIRST_COUNT -lt 9 ]] && echo pass || echo fail )"
 
 # Send one more from Y
 "$NBS_CHAT" send "$T33_DIR/.nbs/chat/triple.chat" handleY "Y-extra" >/dev/null 2>&1
@@ -671,10 +675,11 @@ check "handleX first --unread sees all 9" "$( [[ $X_FIRST_COUNT -eq 9 ]] && echo
 X_SECOND=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleX 2>/dev/null)
 check "handleX second --unread sees only Y-extra" "$( echo "$X_SECOND" | grep -q "Y-extra" && [[ $(echo "$X_SECOND" | wc -l) -eq 1 ]] && echo pass || echo fail )"
 
-# handleZ has never read — should see all 10
+# handleZ also has a cursor from cursor-on-write — sees messages after its last send, plus Y-extra
 Z_FIRST=$("$NBS_CHAT" read "$T33_DIR/.nbs/chat/triple.chat" --unread=handleZ 2>/dev/null)
-Z_COUNT=$(echo "$Z_FIRST" | wc -l)
-check "handleZ (never read) sees all 10" "$( [[ $Z_COUNT -eq 10 ]] && echo pass || echo fail )"
+Z_COUNT=$(echo "$Z_FIRST" | grep -c . || echo 0)
+# handleZ's cursor is at its last sent message, so it sees < 10 (not all)
+check "handleZ (cursor-on-write) sees < 10" "$( [[ $Z_COUNT -lt 10 ]] && echo pass || echo fail )"
 
 # Verify cursor file has entries for X and Z (not Y, since Y only sent, never read with --unread)
 CURSOR_FILE="$T33_DIR/.nbs/chat/triple.chat.cursors"
