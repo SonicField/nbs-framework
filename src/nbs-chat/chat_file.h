@@ -19,6 +19,7 @@
 #define NBS_CHAT_FILE_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -88,7 +89,7 @@ typedef struct {
 typedef struct {
     char last_writer[MAX_HANDLE_LEN];
     char last_write[64];  /* ISO 8601 timestamp */
-    long file_length;
+    int64_t file_length;
     participant_t participants[MAX_PARTICIPANTS];
     int participant_count;
     chat_message_t *messages;

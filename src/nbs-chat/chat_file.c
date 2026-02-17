@@ -8,6 +8,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,14 +33,14 @@ static int safe_parse_int(const char *str, int *out) {
     return 0;
 }
 
-static int safe_parse_long(const char *str, long *out) {
-    ASSERT_MSG(str != NULL, "safe_parse_long: str is NULL");
-    ASSERT_MSG(out != NULL, "safe_parse_long: out is NULL");
+static int safe_parse_int64(const char *str, int64_t *out) {
+    ASSERT_MSG(str != NULL, "safe_parse_int64: str is NULL");
+    ASSERT_MSG(out != NULL, "safe_parse_int64: out is NULL");
     char *endptr;
     errno = 0;
-    long val = strtol(str, &endptr, 10);
+    long long val = strtoll(str, &endptr, 10);
     if (errno != 0 || endptr == str || (*endptr != '\0' && *endptr != '\n' && *endptr != '\r')) return -1;
-    *out = val;
+    *out = (int64_t)val;
     return 0;
 }
 
@@ -48,7 +49,7 @@ static void get_timestamp(char *buf, size_t buf_size) {
     ASSERT_MSG(now != (time_t)-1, "get_timestamp: time() failed");
     struct tm tm_buf;
     struct tm *tm = localtime_r(&now, &tm_buf);
-    ASSERT_MSG(tm != NULL, "get_timestamp: localtime_r() returned NULL for time %ld", (long)now);
+    ASSERT_MSG(tm != NULL, "get_timestamp: localtime_r() returned NULL for time %" PRId64, (int64_t)now);
     strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%S%z", tm);
 }
 
@@ -58,22 +59,22 @@ static void get_timestamp(char *buf, size_t buf_size) {
  * where N is the total file size INCLUDING the line containing N.
  * This is self-referential: we must solve for N.
  */
-static long compute_file_length(const char *content_without_length) {
+static int64_t compute_file_length(const char *content_without_length) {
     /* Write content without the file-length line, measure it */
-    long base_size = (long)strlen(content_without_length); /* content already ends with \n */
+    int64_t base_size = (int64_t)strlen(content_without_length); /* content already ends with \n */
 
     /* The line we will insert is "file-length: N\n" = 14 + digits(N) chars */
     /* Try with current digit count */
     char size_str[32];
-    snprintf(size_str, sizeof(size_str), "%ld", base_size);
-    long digits = (long)strlen(size_str);
+    snprintf(size_str, sizeof(size_str), "%" PRId64, base_size);
+    int64_t digits = (int64_t)strlen(size_str);
 
-    long candidate = base_size + 14 + digits;
+    int64_t candidate = base_size + 14 + digits;
 
     /* Check if adding the line changed the digit count */
-    snprintf(size_str, sizeof(size_str), "%ld", candidate);
-    if ((long)strlen(size_str) != digits) {
-        candidate = base_size + 14 + (long)strlen(size_str);
+    snprintf(size_str, sizeof(size_str), "%" PRId64, candidate);
+    if ((int64_t)strlen(size_str) != digits) {
+        candidate = base_size + 14 + (int64_t)strlen(size_str);
     }
 
     return candidate;
@@ -183,7 +184,7 @@ int chat_create(const char *path) {
 
     if (len < 0 || (size_t)len >= sizeof(content)) return -2;
 
-    long file_len = compute_file_length(content);
+    int64_t file_len = compute_file_length(content);
 
     /* Now write the actual file with file-length inserted */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -194,7 +195,7 @@ int chat_create(const char *path) {
     fprintf(f, "=== nbs-chat ===\n");
     fprintf(f, "last-writer: system\n");
     fprintf(f, "last-write: %s\n", timestamp);
-    fprintf(f, "file-length: %ld\n", file_len);
+    fprintf(f, "file-length: %" PRId64 "\n", file_len);
     fprintf(f, "participants: \n");
     fprintf(f, "---\n");
     if (fclose(f) != 0) {
@@ -206,9 +207,9 @@ int chat_create(const char *path) {
     int stat_rc = stat(path, &st);
     ASSERT_MSG(stat_rc == 0,
                "chat_create: stat failed after write: %s", strerror(errno));
-    ASSERT_MSG(st.st_size == file_len,
-               "chat_create postcondition: file-length header %ld != actual size %ld",
-               file_len, (long)st.st_size);
+    ASSERT_MSG((int64_t)st.st_size == file_len,
+               "chat_create postcondition: file-length header %" PRId64 " != actual size %" PRId64,
+               file_len, (int64_t)st.st_size);
 
     return 0;
 }
@@ -261,7 +262,7 @@ int chat_read(const char *path, chat_state_t *state) {
                 snprintf(state->last_write, sizeof(state->last_write), "%.*s",
                          (int)(sizeof(state->last_write) - 1), line + 12);
             } else if (strncmp(line, "file-length: ", 13) == 0) {
-                if (safe_parse_long(line + 13, &state->file_length) != 0) {
+                if (safe_parse_int64(line + 13, &state->file_length) != 0) {
                     fprintf(stderr, "warning: chat_read: invalid file-length value: %s\n", line + 13);
                 }
             } else if (strncmp(line, "participants: ", 14) == 0) {
@@ -305,8 +306,8 @@ int chat_read(const char *path, chat_state_t *state) {
                         char epoch_buf[20];
                         memcpy(epoch_buf, pipe + 1, epoch_len);
                         epoch_buf[epoch_len] = '\0';
-                        long parsed_epoch;
-                        if (safe_parse_long(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
+                        int64_t parsed_epoch;
+                        if (safe_parse_int64(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
                             msg_timestamp = (time_t)parsed_epoch;
                         }
                     }
@@ -379,7 +380,7 @@ int chat_send(const char *path, const char *handle, const char *message) {
     time_t now = time(NULL);
     ASSERT_MSG(now != (time_t)-1, "chat_send: time() failed");
     char epoch_str[24];
-    snprintf(epoch_str, sizeof(epoch_str), "%ld", (long)now);
+    snprintf(epoch_str, sizeof(epoch_str), "%" PRId64, (int64_t)now);
     /* Format: handle|epoch: message */
     size_t raw_len = strlen(handle) + 1 + strlen(epoch_str) + 2 + strlen(message);
     char *raw = malloc(raw_len + 1);
@@ -535,7 +536,7 @@ int chat_send(const char *path, const char *handle, const char *message) {
     content_no_fl[offset++] = '\n';
     content_no_fl[offset] = '\0';
 
-    long file_len = compute_file_length(content_no_fl);
+    int64_t file_len = compute_file_length(content_no_fl);
 
     /* Write the file with file-length inserted after last-write line */
     int wfd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -563,7 +564,7 @@ int chat_send(const char *path, const char *handle, const char *message) {
     fprintf(f, "=== nbs-chat ===\n");
     fprintf(f, "last-writer: %s\n", state.last_writer);
     fprintf(f, "last-write: %s\n", state.last_write);
-    fprintf(f, "file-length: %ld\n", file_len);
+    fprintf(f, "file-length: %" PRId64 "\n", file_len);
     fprintf(f, "participants: %s\n", parts_str);
     fprintf(f, "---\n");
     for (int i = 0; i < encoded_line_count; i++) {
@@ -586,9 +587,9 @@ int chat_send(const char *path, const char *handle, const char *message) {
     int stat_rc = stat(path, &st);
     ASSERT_MSG(stat_rc == 0,
                "chat_send: stat failed after write: %s", strerror(errno));
-    ASSERT_MSG(st.st_size == file_len,
-               "chat_send postcondition: file-length header %ld != actual size %ld",
-               file_len, (long)st.st_size);
+    ASSERT_MSG((int64_t)st.st_size == file_len,
+               "chat_send postcondition: file-length header %" PRId64 " != actual size %" PRId64,
+               file_len, (int64_t)st.st_size);
 
     /* Cleanup */
     free(content_no_fl);
