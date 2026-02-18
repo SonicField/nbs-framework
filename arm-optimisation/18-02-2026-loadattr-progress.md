@@ -37,23 +37,42 @@ Iteratively fix CinderX JIT aarch64 LOAD_ATTR performance regression. Richards b
 2. Store operations nearly at parity (0.94x) because the store operation itself (Py_XDECREF + write) is heavy relative to call overhead
 3. Dict-based attrs (SplitMutator path) unchanged — separate optimisation needed
 
-## Iteration 2: Approach B (GuardType + LoadField) — NOT STARTED
+## Iteration 2: Option D (LIR inline type guard + slot load) — COMPLETE
 
-### Blocked on
+### Status: COMPLETE
 
-1. **HintType/FixedTypeProfiler is dead code**: Never emitted by the builder. Cannot "just wire up" profiled types.
-2. **No version→type reverse lookup**: CPython 3.12 has no API for this.
-3. **Agent context exhaustion**: Claude and theologian both at 0-2% context.
+### What was done
 
-### Design Options
+**Commit 3c4ff942 on build-host (aarch64-jit-generators branch):**
+- Modified 5 files: bytecode.cpp, builder.cpp, inline_cache.cpp, inline_cache.h, generator.cpp
+- Added version-tag lookup at compile time (builder.cpp reads CPython inline cache)
+- Added fast_type_ / fast_offset_ fields to LoadAttrCache (inline_cache.h/cpp)
+- Emits inline LIR type-pointer check + direct slot load, bypassing BLR to invoke() on cache hit
+- Falls through to existing invoke() slow path on type mismatch
+- Cache invalidation via typeChanged() resets fast fields
 
-| Option | Description | Pros | Cons |
-|--------|-------------|------|------|
-| A | Scan live types for version match at compile time | Simple prototype | GC safety risk, O(n) scan |
-| C | Wire up FixedTypeProfiler emission in builder | Correct architecture | Invasive, large scope |
-| D | Version-tag guard (new guard kind in LIR) | Matches interpreter approach, no type lookup needed | Requires new LIR guard type |
+### Results
 
-### Awaiting Alex's decision on which option.
+- slot_read: 0.80x → 0.96x (+16pp)
+- 42/42 LOAD_ATTR tests PASS
+- 30/33 generator tests PASS (same 3 async baseline)
+- Polymorphic: -5.1% (documented trade-off from guard overhead)
+- No crashes
+
+### Key Findings
+
+1. HintType/FixedTypeProfiler is dead code — never emitted by builder. Had to use version-tag lookup instead.
+2. LIR phi-node limitation blocked full multi-block output definitions — worked around with fast-path fields in cache object.
+3. The remaining 4% gap (0.96x vs 1.0x) is likely memory loads for fast_type_/fast_offset_ from cache object (vs embedding as immediates).
+
+## Cumulative Progress (Iterations 1+2)
+
+| Benchmark | Original | After A-lite | After Option D |
+|-----------|----------|-------------|----------------|
+| Richards | 0.82x | 0.93x | ~0.96x+ |
+| Slot read | 0.73x | 0.80x | 0.96x |
+| Slot write | ~0.73x | 0.94x | 0.94x |
+| Regular write | ? | 0.95x | 0.95x |
 
 ## Architecture Insights
 
@@ -61,14 +80,18 @@ Iteratively fix CinderX JIT aarch64 LOAD_ATTR performance regression. Richards b
 - Any LOAD_ATTR fix benefits both architectures
 - CinderX's GuardType + LoadField codegen pattern exists and works on aarch64 (used by kHasType)
 - The interpreter's approach (version-tag guard + cached offset) is the gold standard
+- V1 Richards (inner classes) 0.41x is caused by inline cache misses from type-pointer identity mismatch, not JIT recompilation. Fix requires layout-based caching (future work).
 
-## Remaining Benchmark Gaps (after A-lite)
+## Remaining Benchmark Gaps (after Option D)
 
 | Benchmark | Ratio | Root Cause |
 |-----------|-------|------------|
-| slot_read | 0.80x | Function call overhead (LOAD_ATTR) |
+| slot_read | 0.96x | Near parity — remaining gap is cache object memory loads |
 | nbody | 0.74x | Float arithmetic codegen (separate issue) |
 | yield_from | 0.79x | Generator yield_from overhead (separate issue) |
 | regular_read | 0.74x | SplitMutator path (separate optimisation) |
 | gen_parameterised | 0.84x | Generator overhead (separate issue) |
-| Richards | 0.93x | Composite of LOAD_ATTR + STORE_ATTR |
+
+## NEW TERMINAL GOAL
+
+See NEW-TERMINAL-GOAL.md — all CinderX tests running, single test runner script, fix cinderx.compiler.opcode import failure.
