@@ -93,7 +93,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 | KNOWN async gen | 1 | test_jit_generator_aarch64 (3 tests) | NO — pre-existing aarch64 codegen gap |
 | PRE-EXISTING codegen | 1 | test_jit_preload (2 tests) | NO — InvalidImmediate bug in gen_asm.cpp |
 | PRE-EXISTING monitoring | 1 | test_jit_support_instrumentation (16 tests) | NO — sys.monitoring not implemented for aarch64 JIT |
-| GC crash (active investigation) | 1 | test_cinderjit | NO — heap corruption in CinderX runtime |
+| GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX GC/JIT UAF (see below) |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
 | VERIFY (need fresh run) | 3 | test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
 
@@ -101,16 +101,26 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 
 ## Discrepancies Between Test Runners
 
-Two test runner scripts exist:
+**RESOLVED** (commit ced396c): Consolidated into single `run_cinderx_tests.sh` at repo root. The arm-optimisation copy has been deleted. Single runner has all 41 suites, hard CinderX JIT gate, crash signal detection, and results CSV.
 
-1. **Root runner** (`run_cinderx_tests.sh`): 17 JIT + 13 runtime + 9 compiler = 39 suites
-2. **Arm-optimisation runner** (`arm-optimisation/run_cinderx_tests.sh`): 17 JIT + 14 runtime + 10 compiler = 41 suites
+---
 
-Differences:
-- `test_asynclazyvalue`: present in arm-opt runner, missing from root runner
-- `test_compiler_sbs_stdlib_0`: present in arm-opt runner, missing from root runner
+## test_cinderjit GC/JIT UAF — Root Cause Analysis (18 Feb 2026)
 
-**Action:** The root runner should be updated to include all 41 suites.
+**Status:** Root cause mechanism confirmed. Fix pending.
+
+**Trigger:** `StaticTestBase._finalize_module()` in `common.py:455` calls `mod_dict.clear()` then `gc.collect()`. This drops all Python-side references to JIT-compiled functions. GC then frees those function objects. But CinderX's JIT holds internal C++ references (inline caches, code_runtime metadata) that are NOT GC-tracked. When a subsequent GC cycle traverses a dictionary that references the freed objects through a different path, it hits freed memory (ob_type=0x6, refcount=0).
+
+**Evidence:**
+- gc.disable() prevents the crash entirely (confirmed by @claude on build-host
+- Removing gc.collect() from _finalize_module prevents the crash
+- Non-deterministic: depends on heap layout and GC timing
+- CallExTests + CinderJitModuleTests triggers it; CinderJitModuleTests alone does not
+- Crash is in dict_traverse → visit_decref → _PyObject_IS_GC (Ci_gc_collect_main)
+
+**Correct fix direction:** JIT must invalidate/clean up internal references when compiled functions are freed, OR internal references must be proper GC-tracked references (incref'd or registered as GC roots). Do NOT suppress the assertion or remove gc.collect() — those are symptoms, not causes.
+
+**Next steps:** Check gcc ASAN availability on build-host (gcc 11.5 supports -fsanitize=address). An ASAN build would identify the exact free/access pair.
 
 ---
 
