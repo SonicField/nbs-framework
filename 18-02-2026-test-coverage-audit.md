@@ -108,7 +108,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 
 ## test_cinderjit GC/JIT UAF — Root Cause Analysis (18 Feb 2026)
 
-**Status:** Root cause mechanism confirmed. Fix pending.
+**Status:** Root cause narrowed to CALL_EX exception path on aarch64. Fix pending.
 
 **Trigger:** `StaticTestBase._finalize_module()` in `common.py:455` calls `mod_dict.clear()` then `gc.collect()`. This drops all Python-side references to JIT-compiled functions. GC then frees those function objects. But CinderX's JIT holds internal C++ references (inline caches, code_runtime metadata) that are NOT GC-tracked. When a subsequent GC cycle traverses a dictionary that references the freed objects through a different path, it hits freed memory (ob_type=0x6, refcount=0).
 
@@ -118,8 +118,11 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 - Non-deterministic: depends on heap layout and GC timing
 - CallExTests + CinderJitModuleTests triggers it; CinderJitModuleTests alone does not
 - Crash is in dict_traverse → visit_decref → _PyObject_IS_GC (Ci_gc_collect_main)
+- **NARROWED** (23:55Z): crash requires exactly the 5 CallExTests that raise TypeError (test_call_bound_method_kw_and_pos, test_call_bound_method_kw_only, test_call_class_static_pos_and_kw, test_call_method_kw_and_pos, test_call_method_kw_only). Tests that pass do NOT trigger the crash. Order matters: CallExTests → CinderJitModuleTests crashes; reverse does not.
+- **IMPLICATION**: The CALL_EX JIT codegen on aarch64 has a bug in its exception handling path. When CALL_EX raises TypeError, the JIT's exception cleanup doesn't properly decref temporary objects (materialised kwargs dict or args tuple). These objects with incorrect refcounts become dangling when GC later collects them.
+- **ROOT CAUSE NARROWED** (23:58Z, @theologian): All 5 failing tests involve methods (bound, instance, or static) with kwargs unpacking. Passing tests use module-level functions. The CALL_EX JIT codegen incorrectly handles `self` argument prepending when combined with kwargs unpacking for methods — `self` is either not injected or counted as a kwargs entry, causing the callee to see wrong arguments and raise TypeError. The TypeError then leaves corrupt state (under-decreffed temporaries) that triggers the crash during later gc.collect().
 
-**Correct fix direction:** JIT must invalidate/clean up internal references when compiled functions are freed, OR internal references must be proper GC-tracked references (incref'd or registered as GC roots). Do NOT suppress the assertion or remove gc.collect() — those are symptoms, not causes.
+**Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both. This is a pre-existing CinderX aarch64 codegen bug, not caused by our work.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
