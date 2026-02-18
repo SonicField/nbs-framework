@@ -9,9 +9,10 @@
 41 CinderX test suites exist across 3 categories (JIT, Runtime, Compiler). Of these:
 
 - **32 suites PASS** (all tests within pass or have only expected skips)
-- **5 suites FAIL** (with known, classified root causes — none caused by our work)
+- **3 suites FAIL** (with known, classified root causes — none caused by our work)
 - **1 suite SKIP** (test_shadowcode — 3.12+ expected)
-- **3 suites require verification** (see discrepancies below)
+- **1 suite CRASH** (test_cinderjit — GC/JIT UAF, type watcher gap hypothesis under test)
+- **4 suites require verification** (see discrepancies below)
 
 Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
 
@@ -66,7 +67,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 
 | # | Suite | Tests | Pass | Fail | Err | Status | Notes |
 |---|-------|-------|------|------|-----|--------|-------|
-| 32 | test_compiler_sbs_stdlib_0 | ? | ? | ? | ? | PASS (assumed) | In arm-opt runner but not root runner |
+| 32 | test_compiler_sbs_stdlib_0 | ? | ? | ? | ? | VERIFY | In consolidated runner; needs fresh run to confirm |
 | 33 | test_compiler_sbs_stdlib_1 | ~200+ | ~200+ | 0 | 0 | PASS | |
 | 34 | test_compiler_sbs_stdlib_2 | ~200+ | ~200+ | 0 | 0 | PASS | |
 | 35 | test_compiler_sbs_stdlib_3 | ~200+ | ~200+ | 0 | 0 | PASS | |
@@ -95,7 +96,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 | PRE-EXISTING monitoring | 1 | test_jit_support_instrumentation (16 tests) | NO — sys.monitoring not implemented for aarch64 JIT |
 | GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX GC/JIT UAF (see below) |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
-| VERIFY (need fresh run) | 3 | test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
+| VERIFY (need fresh run) | 4 | test_jit_attr_cache, test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
 
 ---
 
@@ -120,7 +121,21 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 
 **Correct fix direction:** JIT must invalidate/clean up internal references when compiled functions are freed, OR internal references must be proper GC-tracked references (incref'd or registered as GC roots). Do NOT suppress the assertion or remove gc.collect() — those are symptoms, not causes.
 
-**Next steps:** Check gcc ASAN availability on build-host (gcc 11.5 supports -fsanitize=address). An ASAN build would identify the exact free/access pair.
+**Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
+
+**Strongest hypothesis** (refined 18 Feb 23:44Z): Type watcher gap on Python 3.12+ is a real latent bug but NOT this crash's direct cause. @theologian corrected: this crash involves functions (not types), and `funcDestroyed` correctly handles `PyFunction_EVENT_DESTROY` via the 3.12+ function watcher (cinderx-lib.cpp:836-842). The crash trigger is `_finalize_module()` → `mod_dict.clear()` → destroys all module contents → some JIT data structure holds a dangling pointer → `gc.collect()` traverses a dict containing the freed object.
+
+**Open question (ASAN blocked):** Which JIT data structure holds the dangling pointer?
+- Candidate 1: CodeRuntime's `addReference` system (unlikely — designed for this case, uses strong Ref<>)
+- Candidate 2: TypeDeoptPatcher's `type_deopt_patchers_` map (BorrowedRef keys — but C++ map, not GC-traversed)
+- Candidate 3: Inline cache entries populated but not invalidated by funcDestroyed
+- Key constraint: the dangling pointer must be reachable from something GC-traversable (a Python dict, code object, etc.) since the crash is in `dict_traverse`
+
+**Candidate dangling reference sources** (from @theologian's code analysis):
+- Inline caches (LoadAttrCache, StoreAttrCache — context.h:334-340): store raw PyObject* without GC tracking; invalidation via `notifyTypeModified` or `funcDestroyed` may be missed during test teardown
+- `Context::addReference` (context.h:325): JIT ownership mechanism, but `releaseReferences()` only runs during `jit::finalize()` (module unload), NOT during test teardown
+- code_runtime metadata: may hold references to compiled function objects
+- **TypeWatcher BorrowedRef map** (type_watcher.h): map keys become dangling BorrowedRef<PyTypeObject> when types are deallocated without notification
 
 ---
 
@@ -128,7 +143,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 
 ### Gap 1: test_cinderjit (CRITICAL)
 
-This is the main JIT test file with ~172 tests. It currently crashes with SEGFAULT (GC use-after-free) when CINDERJIT_ENABLE=0 during teardown. @claude is actively debugging this on build-host This suite exercises the broadest range of JIT opcodes and is our most important regression gate.
+This is the main JIT test file with ~172 tests. It currently crashes with SEGFAULT/SIGBUS (GC use-after-free) when GC runs after `_finalize_module()` clears the module dict. Root cause mechanism confirmed (see UAF analysis above). @claude is building CinderX with ASAN on build-host to identify the exact dangling reference. This suite exercises the broadest range of JIT opcodes and is our most important regression gate.
 
 **Impact:** 172 tests not running = significant coverage hole for JIT correctness.
 

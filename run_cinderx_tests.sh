@@ -197,8 +197,15 @@ for suite in "${SUITES[@]}"; do
     STATUS_LINE=$(echo "$OUTPUT" | grep -E '^(OK|FAILED)' | tail -1 || echo "")
 
     if [ -z "$RAN_LINE" ]; then
-        # No "Ran N tests" line — check crash, skip, or import error
-        if [ $TEST_EXIT -gt 128 ]; then
+        # No "Ran N tests" line — check crash, timeout, skip, or import error
+        if [ $TEST_EXIT -eq 124 ]; then
+            # timeout(1) returns 124 when the command times out
+            PARTIAL_DOTS=$(echo "$OUTPUT" | grep -c '\.\.\.' || echo 0)
+            printf "${RED}TIMEOUT${RESET} (120s, ~%d tests ran before timeout)\n" "$PARTIAL_DOTS"
+            FAILED_SUITES+=("$suite")
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            echo "$OUTPUT" > "/tmp/cinderx_timeout_${suite}.log"
+        elif [ $TEST_EXIT -gt 128 ]; then
             # Process killed by signal (SIGSEGV=11, SIGBUS=7, SIGABRT=6)
             SIG=$((TEST_EXIT - 128))
             PARTIAL_DOTS=$(echo "$OUTPUT" | grep -c '\.\.\.' || echo 0)
