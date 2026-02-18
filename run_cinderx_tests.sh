@@ -272,12 +272,17 @@ main() {
     # Always fix opcode first
     fix_opcode
 
-    # Verify JIT is available
-    echo -n "Checking JIT availability... "
-    if cd "$PYTHONLIB_DIR" && CINDERJIT_ENABLE=1 PYTHONPATH=. python3 -c "import cinderjit; print('OK')" 2>/dev/null; then
-        echo -e "${GREEN}JIT available${NC}"
+    # Verify JIT is available — HARD GATE: abort if CinderX not active
+    echo -n "Checking CinderX JIT... "
+    if cd "$PYTHONLIB_DIR" && CINDERJIT_ENABLE=1 PYTHONPATH=. python3 -c "import cinderjit; assert cinderjit.is_enabled(), 'JIT not enabled'; print('OK')" 2>/dev/null; then
+        echo -e "${GREEN}CinderX JIT active${NC}"
     else
-        echo -e "${YELLOW}JIT not available (tests will run without JIT)${NC}"
+        echo -e "${RED}FATAL: CinderX JIT not available or not enabled${NC}"
+        echo "Tests CANNOT run without CinderX JIT. Ensure:"
+        echo "  1. Python is the CinderX-patched build (not stock Python)"
+        echo "  2. CINDERJIT_ENABLE=1 is set"
+        echo "  3. cinderjit module is importable and JIT is enabled"
+        exit 1
     fi
 
     # Clear results file
