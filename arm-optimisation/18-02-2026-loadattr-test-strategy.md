@@ -151,3 +151,49 @@ CINDERJIT_ENABLE=1 python3 /tmp/test_loadattr_perf.py
 - **If polymorphic tests crash:** The slow path fallback has a register/stack corruption bug.
 - **If descriptor tests fail:** The fast path bypasses descriptor protocol checks. The inline code must check for data descriptors before doing the direct load.
 - **If type mutation tests fail:** The cache invalidation mechanism (PyType_Modified → TypeWatcher) is not correctly handled in the new codegen.
+
+---
+
+## V1 vs V2 Richards Measurement (completed by testkeeper, 19:11Z 18 Feb)
+
+**Purpose:** Fill the measurement gap identified by Alex — post-A-lite V1 (inner-class) Richards had not been measured.
+
+### Results
+
+| Variant | Vanilla | JIT median | JIT min | Ratio (median) | Ratio (min) |
+|---------|---------|-----------|---------|----------------|-------------|
+| V1 inner-class | 4.98ms | 13.40ms | 5.49ms | **0.37x** | **0.91x** |
+| V2 module-level | 4.98ms | 5.42ms | 5.41ms | **0.92x** | 0.92x |
+
+### Key Finding: V1 is Bimodal
+
+20-run sorted distribution: `[5.49, 5.50, 5.53, 5.53, 5.71, 5.72, 5.79, 5.79, 13.38, 13.38, 13.40, 13.40, 13.41, 13.42, 13.42, 13.44, 13.45, 13.45, 13.47, 13.51]`
+
+- **Fast cluster** (8/20 runs): ~5.5ms → 0.91x (nearly matching V2)
+- **Slow cluster** (12/20 runs): ~13.4ms → 0.37x
+
+### Root Cause Analysis (corrected 19:20Z)
+
+**Initial hypothesis (WRONG):** Bimodal caused by JIT recompilation of inner-class methods.
+
+**Corrected hypothesis (verified):** Bimodal caused by **inline cache misses**. Evidence:
+1. V2 (same type every call): 20/20 runs at 5.43ms — no bimodal pattern
+2. V1 bimodal persists even when class creation is moved outside the timing window
+3. V1 bimodal persists with GC disabled
+4. The body function (`richards_body`) was force-compiled once but still shows bimodal when called with a fresh type each call
+
+**Mechanism:** Fresh type each call → inline cache entries mismatch (PyTypeObject* pointer changed) → every LOAD_ATTR/STORE_ATTR goes through `LoadAttrCache::invoke` slow path → ~13.4ms. The 'fast' runs likely occur when the new type reuses a recently freed memory address (same pointer = cache hit).
+
+The ~8ms overhead per call (13.4ms - 5.5ms) = cost of 100K attribute accesses (100 iterations × 1000 tasks) going through the invoke slow path instead of cache fast path.
+
+### Implications for Option D
+
+Option D (version-tag guard) will **not** fix the V1 inner-class problem. Fresh types have fresh version tags, so the guard will also miss. V2 improvement (0.92x → 1.0x) is the relevant target for Option D.
+
+The V1 fix requires **layout-based caching** (same slot layout = same fast path regardless of type identity) — iteration 3.
+
+## Iteration 2: Option D Status (version-tag guard)
+
+**Test suite:** 42 tests (33 original + 4 deopt + 5 version-tag). All 42 pass on baseline.
+**Deployed:** `/tmp/test_loadattr_inline_fastpath.py` on build-host (1344 lines).
+**Waiting:** claude respawn to implement Option D, then gate verification.
