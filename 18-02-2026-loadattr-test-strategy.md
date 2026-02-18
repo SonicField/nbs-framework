@@ -308,6 +308,76 @@ Closing this gap requires embedding the type pointer and offset as immediates in
 1. **cinderx.opcode** — setup.py copies `opcodes/3.12/opcode.py` → `cinderx/opcode.py`. cmake build skips this. **Fix applied manually.**
 2. **xxclassloader** — C extension built by setup.py, not cmake. Blocks `test_cinderjit` (172 tests) and `test_jit_coroutines` (unknown test count). **Needs build system fix.**
 
-### Verdict
+### Verdict (RETRACTED — see correction below)
 
-**GREEN — No regressions from Option D.** 345/367 tests pass across 30 suites + 42 standalone tests. All 22 failures are pre-existing (build gaps or unimplemented aarch64 features).
+~~GREEN — No regressions from Option D.~~ **This verdict was incorrect.** The test run used a stale binary that did not include the Option D LIR changes. See correction below.
+
+## CORRECTION: Option D Causes LIR CFG Abort (discovered 21:00Z 18 Feb)
+
+**Root cause of incorrect verdict:** The previous test run (20:35Z) ran against a binary built on Feb 17, before the Option D commit (3c4ff942, Feb 18 12:21). The cmake build was not re-run after the Option D commit. The binary was only rebuilt when the xxclassloader fix at 13:05 triggered a full rebuild. This means the "345/367 pass, zero Option D regressions" result was testing pre-Option-D code.
+
+### Actual Results After Option D Compilation
+
+**Suites that now ABORT (SIGABRT, exit 134) due to Option D:**
+
+| Suite | Previous (stale binary) | After rebuild | Error |
+|-------|------------------------|---------------|-------|
+| test_jit_attr_cache | 24/24 PASS | ABORT | CFG verify fail |
+| test_jit_generators | 35/35 PASS | ABORT | CFG verify fail |
+| test_jit_frame | 16/16 PASS | ABORT | CFG verify fail |
+| test_jit_global_cache | 10/10 PASS | ABORT | CFG verify fail |
+| test_cinderjit | BLOCKED (xxclassloader) | ABORT | CFG verify fail |
+| test_jit_coroutines | BLOCKED (xxclassloader) | ABORT | CFG verify fail |
+
+**Suites that still PASS (don't trigger LOAD_ATTR inline path):**
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| test_jit_generator_aarch64 | 33 (30 pass, 3 known) | PASS |
+| test_jit_async_generators | 5/5 | PASS |
+| test_jit_count_calls | 4/4 | PASS |
+| test_jit_disable | 15/15 | PASS |
+| test_jit_exception | 15/15 | PASS |
+| test_jitlist | 12/12 | PASS |
+| test_jit_perf_map | 1/1 | PASS |
+| test_jit_specialization | 18/18 | PASS |
+| test_jit_type_annotations | 5/5 | PASS |
+
+### Error Details
+
+```
+ERROR: Basic block N does not contain a jump to non-immediate successor M.
+JIT: cinderx/Jit/codegen/gen_asm.cpp:1297 -- Abort
+```
+
+This is the `verifyPostRegAllocInvariants()` check in `cinderx/Jit/lir/verify.cpp`. It checks that every basic block has an explicit branch instruction to each successor that is not the physically next block in memory layout.
+
+**Failing block (from LIR dump of test_cinderjit):**
+
+```
+BB %21 (incref_block) - preds: %20 - succs: %18 %17
+  Move X0 = X23
+  Call Py_IncRef
+  Move X19 = X23
+  [NO BRANCH INSTRUCTION — expected Branch to done_block]
+```
+
+The `incref_block` in the Option D inline fast path should end with `Branch done_block`, but the branch instruction is missing after register allocation. The block has successors %18 (done_block) and %17 (call_block) but contains no branch instructions.
+
+### Analysis
+
+The Option D code in `generator.cpp` correctly emits:
+```cpp
+bbb.appendBlock(incref_block);
+bbb.appendInvokeInstruction(Py_IncRef, slot_value);
+bbb.appendInstr(dst, Instruction::kMove, slot_value);
+bbb.appendBranch(Instruction::kBranch, done_block);  // This branch disappears
+```
+
+The `kBranch` instruction is emitted at LIR generation time but is absent after register allocation. Either:
+1. A post-LIR-gen pass (register allocation, dead code elimination, or post-reg-alloc rewrite) removes or relocates the branch
+2. The multi-block structure created by `bbb.appendBlock()` / `bbb.allocateBlock()` interacts incorrectly with these passes
+
+### Recommendation
+
+Option D must be reverted or the CFG bug fixed before any further test runs. The inline fast path approach is architecturally sound but the LIR block structure needs to be corrected to survive register allocation.

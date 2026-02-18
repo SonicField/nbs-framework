@@ -89,6 +89,7 @@ JIT_SUITES=(
 
 # Non-JIT test suites (runtime, compiler, GC, etc.)
 OTHER_SUITES=(
+    test_asynclazyvalue
     test_coro_extensions
     test_enabling_parallel_gc
     test_frame_evaluator
@@ -106,6 +107,7 @@ OTHER_SUITES=(
 
 # Compiler test suites (heavy, may have additional dependencies)
 COMPILER_SUITES=(
+    test_compiler_sbs_stdlib_0
     test_compiler_sbs_stdlib_1
     test_compiler_sbs_stdlib_2
     test_compiler_sbs_stdlib_3
