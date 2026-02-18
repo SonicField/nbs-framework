@@ -1,82 +1,57 @@
 #!/bin/bash
-# run_cinderx_tests.sh — Unified CinderX JIT test runner for aarch64
+# run_cinderx_tests.sh — Canonical CinderX JIT test runner for aarch64
 #
-# Usage: ./run_cinderx_tests.sh [--jit-only] [--all] [--suite NAME]
+# THE single test runner for CinderX on build-host
+# Runs all 41 CinderX test suites and produces a summary report.
 #
-# Runs all CinderX test suites in test_cinderx/ using:
-#   CINDERJIT_ENABLE=1 PYTHONPATH=. python3 -m unittest test_cinderx.<module> -v
+# Usage:
+#   ./run_cinderx_tests.sh              # Run all tests (default)
+#   ./run_cinderx_tests.sh jit          # Run only JIT tests
+#   ./run_cinderx_tests.sh runtime      # Run only runtime tests
+#   ./run_cinderx_tests.sh compiler     # Run only compiler tests
+#   ./run_cinderx_tests.sh TESTNAME     # Run a specific test module
+#   ./run_cinderx_tests.sh --fix-opcode # Fix cinderx.opcode and exit
 #
-# Prerequisites:
-#   - CinderX built and python3 on PATH (typically via venv)
-#   - cinderx.opcode available (run --fix-opcode if needed)
-#   - Working directory: cinderx/PythonLib/ within the CinderX source tree
+# Environment:
+#   CINDERJIT_ENABLE=1 is set automatically.
+#   PYTHONPATH is set to include PythonLib for the opcode module.
+#   CINDERX_ROOT defaults to ~/local/cinderx_dev/cinderx
 #
-# Author: @testkeeper
-# Date: 18-02-2026
+# Gate: Aborts immediately if CinderX JIT is not importable or not enabled.
+#       Will NOT silently run tests on stock Python.
 
-set -euo pipefail
+set -uo pipefail
 
-# Configuration
-CINDERX_ROOT="${CINDERX_ROOT:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)}"
-PYTHONLIB_DIR=""
+CINDERX_ROOT="${CINDERX_ROOT:-$HOME/local/cinderx_dev/cinderx}"
+PYTHONLIB="$CINDERX_ROOT/cinderx/PythonLib"
+TEST_DIR="$PYTHONLIB/test_cinderx"
 RESULTS_FILE="/tmp/cinderx_test_results_$(date +%Y%m%d_%H%M%S).txt"
 
-# Colour output (if terminal)
-if [ -t 1 ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    NC='\033[0m'
-else
-    RED='' GREEN='' YELLOW='' BLUE='' NC=''
-fi
-
-# Find PythonLib directory
-find_pythonlib() {
-    # Try common locations
-    local candidates=(
-        "$CINDERX_ROOT/cinderx/PythonLib"
-        "$HOME/local/cinderx_dev/cinderx/cinderx/PythonLib"
-        "./cinderx/PythonLib"
-        "."
-    )
-    for dir in "${candidates[@]}"; do
-        if [ -d "$dir/test_cinderx" ]; then
-            PYTHONLIB_DIR="$dir"
-            return 0
-        fi
-    done
-    echo "ERROR: Cannot find test_cinderx/ directory. Set CINDERX_ROOT or run from cinderx/PythonLib/"
-    exit 1
-}
-
-# Fix cinderx.opcode import (cmake build misses this step from setup.py)
+# Ensure opcode.py is in place (cmake build skips this step from setup.py)
 fix_opcode() {
-    local opcode_src="$PYTHONLIB_DIR/opcodes/3.12/opcode.py"
-    local opcode_dst="$PYTHONLIB_DIR/cinderx/opcode.py"
-    if [ ! -f "$opcode_dst" ] && [ -f "$opcode_src" ]; then
-        echo -e "${YELLOW}Fixing cinderx.opcode import: copying opcode.py${NC}"
+    local opcode_src="$PYTHONLIB/opcodes/3.12/opcode.py"
+    local opcode_dst="$PYTHONLIB/cinderx/opcode.py"
+    if [ -f "$opcode_src" ] && [ ! -f "$opcode_dst" ]; then
+        echo "Copying opcode.py (cmake build fixup)..."
         cp "$opcode_src" "$opcode_dst"
-        echo -e "${GREEN}Fixed: $opcode_dst${NC}"
-    elif [ -f "$opcode_dst" ]; then
-        echo -e "${GREEN}cinderx.opcode already available${NC}"
-    else
-        echo -e "${RED}WARNING: Cannot find opcode source at $opcode_src${NC}"
     fi
 }
 
-# JIT test suites (core — these exercise the JIT compiler)
-JIT_SUITES=(
-    test_jit_attr_cache
-    test_jit_generator_aarch64
-    test_jit_generators
+export CINDERJIT_ENABLE=1
+export PYTHONPATH="$PYTHONLIB${PYTHONPATH:+:$PYTHONPATH}"
+
+# Test suite definitions (41 suites total: 17 JIT + 14 runtime + 10 compiler)
+JIT_TESTS=(
+    test_cinderjit
     test_jit_async_generators
+    test_jit_attr_cache
     test_jit_coroutines
     test_jit_count_calls
     test_jit_disable
     test_jit_exception
     test_jit_frame
+    test_jit_generator_aarch64
+    test_jit_generators
     test_jit_global_cache
     test_jitlist
     test_jit_perf_map
@@ -84,11 +59,9 @@ JIT_SUITES=(
     test_jit_specialization
     test_jit_support_instrumentation
     test_jit_type_annotations
-    test_cinderjit
 )
 
-# Non-JIT test suites (runtime, compiler, GC, etc.)
-OTHER_SUITES=(
+RUNTIME_TESTS=(
     test_asynclazyvalue
     test_coro_extensions
     test_enabling_parallel_gc
@@ -105,8 +78,7 @@ OTHER_SUITES=(
     test_type_cache
 )
 
-# Compiler test suites (heavy, may have additional dependencies)
-COMPILER_SUITES=(
+COMPILER_TESTS=(
     test_compiler_sbs_stdlib_0
     test_compiler_sbs_stdlib_1
     test_compiler_sbs_stdlib_2
@@ -119,201 +91,200 @@ COMPILER_SUITES=(
     test_compiler_sbs_stdlib_9
 )
 
-# Run a single test suite, capture results
-run_suite() {
-    local suite="$1"
-    local label="$2"
-    local start_time=$(date +%s)
+# Colour codes (disabled if not a terminal)
+if [ -t 1 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BOLD='' RESET=''
+fi
 
-    echo -e "\n${BLUE}━━━ $label: $suite ━━━${NC}"
-
-    local output
-    local exit_code=0
-    output=$(cd "$PYTHONLIB_DIR" && CINDERJIT_ENABLE=1 PYTHONPATH=. python3 -m unittest "test_cinderx.$suite" -v 2>&1) || exit_code=$?
-
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-
-    # Extract summary line (e.g., "Ran 24 tests in 0.123s")
-    local ran_line=$(echo "$output" | grep -E "^Ran [0-9]+ test" || echo "")
-    local result_line=$(echo "$output" | tail -1)
-
-    # Count results
-    local total=0 passed=0 failed=0 errors=0 skipped=0
-    if [[ "$ran_line" =~ Ran\ ([0-9]+)\ test ]]; then
-        total="${BASH_REMATCH[1]}"
-    fi
-
-    if echo "$result_line" | grep -q "^OK"; then
-        passed=$total
-        if [[ "$result_line" =~ skipped=([0-9]+) ]]; then
-            skipped="${BASH_REMATCH[1]}"
-            passed=$((total - skipped))
-        fi
-        echo -e "${GREEN}PASS${NC} — $ran_line ($result_line) [${duration}s]"
-    elif echo "$result_line" | grep -q "FAILED"; then
-        if [[ "$result_line" =~ failures=([0-9]+) ]]; then
-            failed="${BASH_REMATCH[1]}"
-        fi
-        if [[ "$result_line" =~ errors=([0-9]+) ]]; then
-            errors="${BASH_REMATCH[1]}"
-        fi
-        passed=$((total - failed - errors))
-        echo -e "${RED}FAIL${NC} — $ran_line ($result_line) [${duration}s]"
-        # Show failure details
-        echo "$output" | grep -E "^(FAIL|ERROR):" | head -10
-    else
-        # Import error or other catastrophic failure
-        echo -e "${RED}ERROR${NC} — could not run suite [${duration}s]"
-        echo "$output" | tail -5
-        errors=1
-    fi
-
-    # Record to results file
-    echo "$suite|$label|$total|$passed|$failed|$errors|$skipped|$exit_code|$duration" >> "$RESULTS_FILE"
-
-    # If verbose failures, save full output
-    if [ $failed -gt 0 ] || [ $errors -gt 0 ]; then
-        local fail_log="/tmp/cinderx_fail_${suite}.log"
-        echo "$output" > "$fail_log"
-        echo -e "  ${YELLOW}Full output: $fail_log${NC}"
-    fi
-}
-
-# Print summary table
-print_summary() {
-    echo -e "\n${BLUE}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}                    CinderX Test Summary                      ${NC}"
-    echo -e "${BLUE}══════════════════════════════════════════════════════════════${NC}"
-    echo ""
-    printf "%-35s %6s %6s %6s %6s %6s %5s\n" "Suite" "Total" "Pass" "Fail" "Error" "Skip" "Time"
-    printf "%-35s %6s %6s %6s %6s %6s %5s\n" "---" "---" "---" "---" "---" "---" "---"
-
-    local grand_total=0 grand_pass=0 grand_fail=0 grand_error=0 grand_skip=0
-
-    while IFS='|' read -r suite label total passed failed errors skipped exit_code duration; do
-        local status_colour="$GREEN"
-        if [ "$failed" -gt 0 ] || [ "$errors" -gt 0 ]; then
-            status_colour="$RED"
-        elif [ "$total" -eq 0 ]; then
-            status_colour="$YELLOW"
-        fi
-
-        printf "${status_colour}%-35s %6s %6s %6s %6s %6s %4ss${NC}\n" \
-            "$suite" "$total" "$passed" "$failed" "$errors" "$skipped" "$duration"
-
-        grand_total=$((grand_total + total))
-        grand_pass=$((grand_pass + passed))
-        grand_fail=$((grand_fail + failed))
-        grand_error=$((grand_error + errors))
-        grand_skip=$((grand_skip + skipped))
-    done < "$RESULTS_FILE"
-
-    printf "%-35s %6s %6s %6s %6s %6s\n" "---" "---" "---" "---" "---" "---"
-    printf "%-35s %6s %6s %6s %6s %6s\n" \
-        "TOTAL" "$grand_total" "$grand_pass" "$grand_fail" "$grand_error" "$grand_skip"
-
-    echo ""
-    if [ "$grand_fail" -eq 0 ] && [ "$grand_error" -eq 0 ]; then
-        echo -e "${GREEN}ALL TESTS PASSED${NC} ($grand_pass passed, $grand_skip skipped)"
-    else
-        echo -e "${RED}FAILURES DETECTED${NC} ($grand_fail failures, $grand_error errors out of $grand_total tests)"
-    fi
-    echo ""
-    echo "Results saved to: $RESULTS_FILE"
-    echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-}
-
-# Main
-main() {
-    local mode="jit"  # default to JIT-only
-
-    for arg in "$@"; do
-        case "$arg" in
-            --jit-only) mode="jit" ;;
-            --all) mode="all" ;;
-            --fix-opcode) fix_opcode; exit 0 ;;
-            --suite)
-                # Next arg is suite name — handled below
-                ;;
-            --help|-h)
-                echo "Usage: $0 [--jit-only] [--all] [--fix-opcode] [--suite NAME]"
-                echo ""
-                echo "Options:"
-                echo "  --jit-only     Run JIT test suites only (default)"
-                echo "  --all          Run all test suites (JIT + runtime + compiler)"
-                echo "  --fix-opcode   Fix cinderx.opcode import and exit"
-                echo "  --suite NAME   Run a single named suite"
-                echo ""
-                echo "Environment:"
-                echo "  CINDERX_ROOT   Path to cinderx source root"
-                echo "  CINDERJIT_ENABLE is set automatically"
-                exit 0
-                ;;
-            *)
-                # Check if previous arg was --suite
-                if [ "${prev_arg:-}" = "--suite" ]; then
-                    mode="single"
-                    single_suite="$arg"
-                fi
-                ;;
-        esac
-        prev_arg="$arg"
-    done
-
-    find_pythonlib
-    echo -e "${BLUE}CinderX Test Runner${NC}"
-    echo "PythonLib: $PYTHONLIB_DIR"
-    echo "Python: $(which python3)"
-    echo "Mode: $mode"
-    echo "Results: $RESULTS_FILE"
-    echo ""
-
-    # Always fix opcode first
+# Handle --fix-opcode before anything else
+if [ "${1:-}" = "--fix-opcode" ]; then
     fix_opcode
+    echo "Done."
+    exit 0
+fi
 
-    # Verify JIT is available — HARD GATE: abort if CinderX not active
-    echo -n "Checking CinderX JIT... "
-    if cd "$PYTHONLIB_DIR" && CINDERJIT_ENABLE=1 PYTHONPATH=. python3 -c "import cinderjit; assert cinderjit.is_enabled(), 'JIT not enabled'; print('OK')" 2>/dev/null; then
-        echo -e "${GREEN}CinderX JIT active${NC}"
+# Select test suites
+# Strip leading -- from argument (accept both --all and all)
+ARG="${1:-all}"
+ARG="${ARG#--}"
+
+case "$ARG" in
+    jit)      SUITES=("${JIT_TESTS[@]}") ;;
+    runtime)  SUITES=("${RUNTIME_TESTS[@]}") ;;
+    compiler) SUITES=("${COMPILER_TESTS[@]}") ;;
+    all)      SUITES=("${JIT_TESTS[@]}" "${RUNTIME_TESTS[@]}" "${COMPILER_TESTS[@]}") ;;
+    help|-h)
+        echo "Usage: $0 [all|jit|runtime|compiler|TESTNAME|--fix-opcode]"
+        echo ""
+        echo "  all          Run all 41 test suites (default)"
+        echo "  jit          Run 17 JIT test suites only"
+        echo "  runtime      Run 14 runtime test suites only"
+        echo "  compiler     Run 10 compiler test suites only"
+        echo "  TESTNAME     Run a specific test module (e.g. test_jit_attr_cache)"
+        echo "  --fix-opcode Fix cinderx.opcode import and exit"
+        exit 0
+        ;;
+    *)
+        # Single test module
+        SUITES=("$ARG")
+        ;;
+esac
+
+# Always fix opcode first
+fix_opcode
+
+# Results tracking
+TOTAL_PASS=0
+TOTAL_FAIL=0
+TOTAL_ERROR=0
+TOTAL_SKIP=0
+PASSED_SUITES=()
+FAILED_SUITES=()
+ERROR_SUITES=()
+SKIPPED_SUITES=()
+SUITE_COUNT=0
+
+echo -e "${BOLD}CinderX Test Runner${RESET}"
+echo "Root:     $CINDERX_ROOT"
+echo "Python:   $(python3 --version 2>&1)"
+echo "JIT:      CINDERJIT_ENABLE=$CINDERJIT_ENABLE"
+echo "Suites:   ${#SUITES[@]}"
+echo "Results:  $RESULTS_FILE"
+echo "Started:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo "---"
+
+# HARD GATE: verify CinderX is actually loaded and JIT is active
+# This prevents silently running tests on stock Python without JIT.
+echo -n "Verifying CinderX JIT... "
+CINDERX_CHECK=$(python3 -c "
+import cinderjit
+assert cinderjit.is_enabled(), 'cinderjit imported but JIT not enabled'
+print('OK')
+" 2>&1) || {
+    echo -e "${RED}FATAL: CinderX JIT not available${RESET}"
+    echo "$CINDERX_CHECK"
+    echo ""
+    echo "Tests CANNOT run without CinderX JIT. Ensure:"
+    echo "  1. Python is the CinderX-patched build (not stock Python)"
+    echo "  2. CINDERJIT_ENABLE=1 is set"
+    echo "  3. cinderjit module is importable and JIT is enabled"
+    exit 1
+}
+echo -e "${GREEN}$CINDERX_CHECK${RESET}"
+
+# Clear results file
+> "$RESULTS_FILE"
+
+cd "$PYTHONLIB"
+
+for suite in "${SUITES[@]}"; do
+    SUITE_COUNT=$((SUITE_COUNT + 1))
+    printf "[%d/%d] %-45s " "$SUITE_COUNT" "${#SUITES[@]}" "$suite"
+
+    # Run with timeout (120s per suite) and capture output
+    OUTPUT=$(timeout 120 python3 -m unittest "test_cinderx.$suite" 2>&1) || true
+
+    # Parse results from unittest output
+    RAN_LINE=$(echo "$OUTPUT" | grep -E '^Ran [0-9]+ test' || echo "")
+    # STATUS_LINE is the line after "Ran N tests" — look for OK/FAILED there
+    STATUS_LINE=$(echo "$OUTPUT" | grep -E '^(OK|FAILED)' | tail -1 || echo "")
+
+    if [ -z "$RAN_LINE" ]; then
+        # No "Ran N tests" line — check if it's a module-level skip
+        if echo "$OUTPUT" | grep -qE 'SkipTest:'; then
+            SKIP_REASON=$(echo "$OUTPUT" | grep -oP 'SkipTest: \K.*' | head -1 || echo "")
+            printf "${YELLOW}SKIP${RESET} (%s)\n" "${SKIP_REASON:-module-level skip}"
+            SKIPPED_SUITES+=("$suite")
+            TOTAL_SKIP=$((TOTAL_SKIP + 1))
+        else
+            # Genuine error — suite did not execute
+            ERR_MSG=$(echo "$OUTPUT" | grep -E '(ModuleNotFoundError|ImportError|SyntaxError|AttributeError):' | tail -1 | head -c 60)
+            printf "${RED}ERROR${RESET} (%s)\n" "${ERR_MSG:-did not execute}"
+            ERROR_SUITES+=("$suite")
+            TOTAL_ERROR=$((TOTAL_ERROR + 1))
+            # Save full output for diagnosis
+            echo "$OUTPUT" > "/tmp/cinderx_fail_${suite}.log"
+        fi
     else
-        echo -e "${RED}FATAL: CinderX JIT not available or not enabled${NC}"
-        echo "Tests CANNOT run without CinderX JIT. Ensure:"
-        echo "  1. Python is the CinderX-patched build (not stock Python)"
-        echo "  2. CINDERJIT_ENABLE=1 is set"
-        echo "  3. cinderjit module is importable and JIT is enabled"
-        exit 1
+        TESTS=$(echo "$RAN_LINE" | grep -oP '^Ran \K[0-9]+' || echo 0)
+
+        if [ "$TESTS" -eq 0 ]; then
+            # Ran 0 tests — treat as skip
+            SKIP_REASON=$(echo "$OUTPUT" | grep -oP 'SkipTest: \K.*' | head -1 || echo "")
+            printf "${YELLOW}SKIP${RESET} (%s)\n" "${SKIP_REASON:-all tests skipped}"
+            SKIPPED_SUITES+=("$suite")
+            TOTAL_SKIP=$((TOTAL_SKIP + 1))
+        elif echo "$STATUS_LINE" | grep -q 'FAILED'; then
+            FAILS=$(echo "$STATUS_LINE" | grep -oP 'failures=\K[0-9]+' || echo 0)
+            ERRS=$(echo "$STATUS_LINE" | grep -oP 'errors=\K[0-9]+' || echo 0)
+            PASSED=$((TESTS - FAILS - ERRS))
+            printf "${RED}FAIL${RESET} (%d pass, %d fail, %d error)\n" "$PASSED" "$FAILS" "$ERRS"
+            FAILED_SUITES+=("$suite")
+            TOTAL_PASS=$((TOTAL_PASS + PASSED))
+            TOTAL_FAIL=$((TOTAL_FAIL + FAILS))
+            TOTAL_ERROR=$((TOTAL_ERROR + ERRS))
+            # Save full output for diagnosis
+            echo "$OUTPUT" > "/tmp/cinderx_fail_${suite}.log"
+        elif echo "$STATUS_LINE" | grep -q 'OK'; then
+            SKIPS=$(echo "$STATUS_LINE" | grep -oP 'skipped=\K[0-9]+' || echo 0)
+            printf "${GREEN}OK${RESET}   (%d pass" "$((TESTS - SKIPS))"
+            if [ "$SKIPS" -gt 0 ]; then
+                printf ", %d skip" "$SKIPS"
+                TOTAL_SKIP=$((TOTAL_SKIP + SKIPS))
+            fi
+            printf ")\n"
+            PASSED_SUITES+=("$suite")
+            TOTAL_PASS=$((TOTAL_PASS + TESTS - SKIPS))
+        else
+            # Unknown status — report as unknown but count test
+            printf "${YELLOW}???${RESET}  (%d tests, status unclear)\n" "$TESTS"
+            ERROR_SUITES+=("$suite")
+        fi
     fi
 
-    # Clear results file
-    > "$RESULTS_FILE"
+    # Record per-suite results to CSV
+    echo "$suite|$SUITE_COUNT|${TESTS:-0}|${PASSED:-0}|${FAILS:-0}|${ERRS:-0}|${SKIPS:-0}" >> "$RESULTS_FILE"
+done
 
-    case "$mode" in
-        jit)
-            echo -e "\n${BLUE}Running ${#JIT_SUITES[@]} JIT test suites...${NC}"
-            for suite in "${JIT_SUITES[@]}"; do
-                run_suite "$suite" "JIT"
-            done
-            ;;
-        all)
-            echo -e "\n${BLUE}Running ${#JIT_SUITES[@]} JIT + ${#OTHER_SUITES[@]} runtime + ${#COMPILER_SUITES[@]} compiler suites...${NC}"
-            for suite in "${JIT_SUITES[@]}"; do
-                run_suite "$suite" "JIT"
-            done
-            for suite in "${OTHER_SUITES[@]}"; do
-                run_suite "$suite" "Runtime"
-            done
-            for suite in "${COMPILER_SUITES[@]}"; do
-                run_suite "$suite" "Compiler"
-            done
-            ;;
-        single)
-            run_suite "$single_suite" "Single"
-            ;;
-    esac
+# Summary
+echo ""
+echo "=== SUMMARY ==="
+echo "Finished: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo ""
+printf "  Tests:   %d pass, %d fail, %d error, %d skip\n" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_ERROR" "$TOTAL_SKIP"
+printf "  Suites:  %d pass, %d fail, %d error, %d skip (of %d)\n" \
+    "${#PASSED_SUITES[@]}" "${#FAILED_SUITES[@]}" "${#ERROR_SUITES[@]}" "${#SKIPPED_SUITES[@]}" "$SUITE_COUNT"
+echo ""
 
-    print_summary
-    echo "TEST_RUNNER_DONE"
-}
+if [ ${#FAILED_SUITES[@]} -gt 0 ]; then
+    echo -e "${RED}Failed suites:${RESET}"
+    for s in "${FAILED_SUITES[@]}"; do echo "  - $s (log: /tmp/cinderx_fail_${s}.log)"; done
+    echo ""
+fi
 
-main "$@"
+if [ ${#ERROR_SUITES[@]} -gt 0 ]; then
+    echo -e "${RED}Error suites (did not run):${RESET}"
+    for s in "${ERROR_SUITES[@]}"; do echo "  - $s (log: /tmp/cinderx_fail_${s}.log)"; done
+    echo ""
+fi
+
+if [ ${#SKIPPED_SUITES[@]} -gt 0 ]; then
+    echo -e "${YELLOW}Skipped suites:${RESET}"
+    for s in "${SKIPPED_SUITES[@]}"; do echo "  - $s"; done
+    echo ""
+fi
+
+echo "Results CSV: $RESULTS_FILE"
+
+# Exit code: 0 if all suites executed (failures ok), 1 if any suite errored (didn't execute)
+if [ ${#ERROR_SUITES[@]} -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi
