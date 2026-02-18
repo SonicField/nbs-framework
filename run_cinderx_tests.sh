@@ -188,7 +188,8 @@ for suite in "${SUITES[@]}"; do
     printf "[%d/%d] %-45s " "$SUITE_COUNT" "${#SUITES[@]}" "$suite"
 
     # Run with timeout (120s per suite) and capture output
-    OUTPUT=$(timeout 120 python3 -m unittest "test_cinderx.$suite" 2>&1) || true
+    OUTPUT=$(timeout 120 python3 -m unittest "test_cinderx.$suite" 2>&1)
+    TEST_EXIT=$?
 
     # Parse results from unittest output
     RAN_LINE=$(echo "$OUTPUT" | grep -E '^Ran [0-9]+ test' || echo "")
@@ -196,8 +197,16 @@ for suite in "${SUITES[@]}"; do
     STATUS_LINE=$(echo "$OUTPUT" | grep -E '^(OK|FAILED)' | tail -1 || echo "")
 
     if [ -z "$RAN_LINE" ]; then
-        # No "Ran N tests" line — check if it's a module-level skip
-        if echo "$OUTPUT" | grep -qE 'SkipTest:'; then
+        # No "Ran N tests" line — check crash, skip, or import error
+        if [ $TEST_EXIT -gt 128 ]; then
+            # Process killed by signal (SIGSEGV=11, SIGBUS=7, SIGABRT=6)
+            SIG=$((TEST_EXIT - 128))
+            PARTIAL_DOTS=$(echo "$OUTPUT" | grep -c '\.\.\.' || echo 0)
+            printf "${RED}CRASH${RESET} (signal %d, ~%d tests ran before crash)\n" "$SIG" "$PARTIAL_DOTS"
+            FAILED_SUITES+=("$suite")
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            echo "$OUTPUT" > "/tmp/cinderx_crash_${suite}.log"
+        elif echo "$OUTPUT" | grep -qE 'SkipTest:'; then
             SKIP_REASON=$(echo "$OUTPUT" | grep -oP 'SkipTest: \K.*' | head -1 || echo "")
             printf "${YELLOW}SKIP${RESET} (%s)\n" "${SKIP_REASON:-module-level skip}"
             SKIPPED_SUITES+=("$suite")
