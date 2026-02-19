@@ -8,13 +8,12 @@
 
 41 CinderX test suites exist across 3 categories (JIT, Runtime, Compiler). Of these:
 
-- **32 suites PASS** (all tests within pass or have only expected skips)
+- **35 suites PASS** (all tests within pass or have only expected skips)
 - **4 suites FAIL** (with known, classified root causes — none caused by our work)
 - **1 suite SKIP** (test_shadowcode — 3.12+ expected)
-- **1 suite CRASH** (test_cinderjit — GC/JIT UAF, type watcher gap hypothesis under test)
-- **3 suites require verification** (see discrepancies below)
+- **1 suite CRASH** (test_cinderjit — GC/JIT UAF, force_compile-specific)
 
-Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
+Total: ~2455 tests pass, ~24 fail/error, ~1 skip. All 41 suites verified.
 
 No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VERIFIED** (00:07Z 19 Feb): @theologian proved Option D's fast path only activates for MemberDescrMutator entries (C-level __slots__), not Python method lookups. The 5 CallExTests failures are pre-existing.
 
@@ -30,7 +29,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 | 2 | test_jit_generator_aarch64 | 33 | 30 | 0 | 3 | KNOWN FAIL | 3 async gen CANNOT_SPECIALIZE — pre-existing |
 | 3 | test_jit_generators | 35 | 35 | 0 | 0 | PASS | |
 | 4 | test_jit_async_generators | 5 | 5 | 0 | 0 | PASS | |
-| 5 | test_jit_coroutines | ? | ? | ? | ? | VERIFY | Was BLOCKED by xxclassloader; may now run after rebuild |
+| 5 | test_jit_coroutines | 23 | 23 | 0 | 0 | PASS | Verified on build-host 19 Feb |
 | 6 | test_jit_count_calls | 4 | 4 | 0 | 0 | PASS | |
 | 7 | test_jit_disable | 15 | 15 | 0 | 0 | PASS | |
 | 8 | test_jit_exception | 15 | 15 | 0 | 0 | PASS | |
@@ -42,13 +41,13 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 | 14 | test_jit_specialization | 18 | 18 | 0 | 0 | PASS | |
 | 15 | test_jit_support_instrumentation | 16 | 0 | 8 | 8 | PRE-EXISTING | sys.monitoring tool ID conflicts |
 | 16 | test_jit_type_annotations | 5 | 5 | 0 | 0 | PASS | |
-| 17 | test_cinderjit | ~172 | ? | ? | ? | VERIFY | Was BLOCKED by xxclassloader; now crashes with SEGFAULT (GC bug) |
+| 17 | test_cinderjit | ~172 | ? | ? | ? | CRASH | SEGFAULT: GC UAF from force_compile bug (see analysis below) |
 
 ### Runtime Suites (14 suites)
 
 | # | Suite | Tests | Pass | Fail | Err | Status | Notes |
 |---|-------|-------|------|------|-----|--------|-------|
-| 18 | test_asynclazyvalue | ? | ? | ? | ? | VERIFY | Listed in arm-optimisation runner only |
+| 18 | test_asynclazyvalue | 15 | 15 | 0 | 0 | PASS | Verified on build-host 19 Feb |
 | 19 | test_coro_extensions | 8 | 8 | 0 | 0 | PASS | |
 | 20 | test_enabling_parallel_gc | 3 | 3 | 0 | 0 | PASS | |
 | 21 | test_frame_evaluator | 6 | 6 | 0 | 0 | PASS | |
@@ -67,7 +66,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 | # | Suite | Tests | Pass | Fail | Err | Status | Notes |
 |---|-------|-------|------|------|-----|--------|-------|
-| 32 | test_compiler_sbs_stdlib_0 | ? | ? | ? | ? | VERIFY | In consolidated runner; needs fresh run to confirm |
+| 32 | test_compiler_sbs_stdlib_0 | 192 | 192 | 0 | 0 | PASS | Verified on build-host 19 Feb |
 | 33 | test_compiler_sbs_stdlib_1 | ~200+ | ~200+ | 0 | 0 | PASS | |
 | 34 | test_compiler_sbs_stdlib_2 | ~200+ | ~200+ | 0 | 0 | PASS | |
 | 35 | test_compiler_sbs_stdlib_3 | ~200+ | ~200+ | 0 | 0 | PASS | |
@@ -90,14 +89,13 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 | Category | Count | Suites | Our Fault? |
 |----------|-------|--------|------------|
-| PASS | 32 | See above | N/A |
+| PASS | 35 | See above | N/A |
 | KNOWN async gen | 1 | test_jit_generator_aarch64 (3 tests) | NO — pre-existing aarch64 codegen gap |
 | PRE-EXISTING codegen | 1 | test_jit_preload (2 tests) | NO — InvalidImmediate bug in gen_asm.cpp |
 | PRE-EXISTING monitoring | 1 | test_jit_support_instrumentation (16 tests) | NO — sys.monitoring not implemented for aarch64 JIT |
 | PRE-EXISTING force_compile | 1 | test_jit_attr_cache (6 tests) | NO — force_compile LOAD_ATTR returns caller (verified 19 Feb) |
 | GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX force_compile → GC UAF |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
-| VERIFY (need fresh run) | 3 | test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
 
 ---
 
@@ -158,11 +156,9 @@ This is the main JIT test file with ~172 tests. It currently crashes with SEGFAU
 
 **Impact:** 172 tests not running = significant coverage hole for JIT correctness.
 
-### Gap 2: test_jit_coroutines (UNKNOWN)
+### Gap 2: test_jit_coroutines — RESOLVED
 
-Previously blocked by missing xxclassloader C extension. Status after xxclassloader rebuild is unknown. Needs a fresh run on the current build.
-
-**Impact:** Unknown number of coroutine JIT tests not running.
+Previously blocked by missing xxclassloader C extension. **Verified PASS** on build-host 19 Feb: 23 tests, all pass. No longer a coverage gap.
 
 ### Gap 3: sys.monitoring / instrumentation (16 tests)
 
@@ -189,7 +185,7 @@ All tests run on aarch64 only. There is no CI or cross-platform comparison to de
 ## Recommendations
 
 1. **Immediate:** Get test_cinderjit running (GC fix or workaround). This is the single largest coverage hole.
-2. **Short-term:** Verify test_jit_coroutines on current build. Update root test runner to 41 suites.
+2. **Short-term:** ~~Verify test_jit_coroutines on current build.~~ DONE (23 tests PASS). ~~Verify test_asynclazyvalue.~~ DONE (15 tests PASS). ~~Verify test_compiler_sbs_stdlib_0.~~ DONE (192 tests PASS). All 41 suites now have known status.
 3. **Medium-term:** Establish PyTorch test baseline (see plan below).
 4. **Long-term:** Set up CI for automated test runs on each commit.
 
@@ -198,5 +194,5 @@ All tests run on aarch64 only. There is no CI or cross-platform comparison to de
 ## Falsifiers
 
 - If test_cinderjit passes on x86 but crashes on aarch64: the GC bug is aarch64-specific (memory model or heap layout).
-- If test_jit_coroutines still fails after xxclassloader fix: there is a second blocker in the coroutine test infrastructure.
+- ~~If test_jit_coroutines still fails after xxclassloader fix: there is a second blocker in the coroutine test infrastructure.~~ FALSIFIED: test_jit_coroutines passes (23/23) on build-host 19 Feb.
 - If any currently-passing suite regresses on the next rebuild: our changes introduced a regression (not yet observed).
