@@ -124,9 +124,10 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 **Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
 
-**GATE STATUS: GREEN** (00:07Z 19 Feb, reconfirmed after RED scare): @theologian definitively proved Option D changes cannot cause the 5 CallExTests failures. Option D's fast path only activates for MemberDescrMutator entries (C-level __slots__ attributes via fast_type_/fast_offset_). The 5 failing tests look up Python methods (DescrOrClassVarMutator/DataDescrMutator), so fast_type_ is nullptr and the fast path is never taken. The slow path is identical to the original code.
-
-**Current leading hypothesis** (00:16Z 19 Feb, @theologian): CALL_FUNCTION_EX + LOAD_ATTR with method flag interaction. On Python 3.12, LOAD_ATTR with the method oparg bit set pushes [self, unbound_method] instead of [NULL, bound_method]. If CALL_EX's stack handling doesn't account for the method flag, it pops func=unbound_method and discards self, then calls the unbound method without self → TypeError. This matches: method calls with kwargs fail, function calls pass. Awaiting empirical verification from @claude on build-host
+**GATE STATUS: GREEN** (00:30Z 19 Feb, EMPIRICALLY CONFIRMED): @testkeeper ran auto-compile vs force_compile LOAD_ATTR test on build-host
+- Auto-compiled (200 calls to trigger JIT): self.x → 42 ✓, self.y → 'hello' ✓, self._f → bound method ✓
+- force_compiled: self.x → `<function T2.get_x>` ✗ (returns the CALLING FUNCTION instead of the attribute!)
+- Conclusion: the bug is force_compile-SPECIFIC. Our Option D changes don't touch force_compile. Auto-compiled LOAD_ATTR is correct on aarch64. The 5 CallExTests fail because @failUnlessJITCompiled calls force_compile. This is a pre-existing CinderX aarch64 force_compile codegen bug.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
