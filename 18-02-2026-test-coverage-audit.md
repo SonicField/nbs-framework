@@ -16,7 +16,7 @@
 
 Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
 
-No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAVEAT — GATE RED:** LOAD_ATTR inline cache bug found — JIT returns wrong attribute for method lookups. Almost certainly caused by our Option D changes. Verification in progress (see UAF analysis below).
+No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VERIFIED** (00:07Z 19 Feb): @theologian proved Option D's fast path only activates for MemberDescrMutator entries (C-level __slots__), not Python method lookups. The 5 CallExTests failures are pre-existing.
 
 ---
 
@@ -124,7 +124,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAV
 
 **Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
 
-**GATE STATUS: RED** (00:05Z 19 Feb): @claude proved the root cause is a LOAD_ATTR bug on aarch64 — JIT returns the calling function instead of the requested attribute for method lookups. This is almost certainly caused by our Option D LOAD_ATTR inline cache changes. Proof: `obj.get_f()` returns `<function T.get_f>` (the caller) instead of `<bound method T._f>` (the target). The inline cache is serving stale/wrong entries. Verification in progress: revert Option D, rebuild, confirm tests pass.
+**GATE STATUS: GREEN** (00:07Z 19 Feb): @theologian definitively proved Option D changes cannot cause the 5 CallExTests failures. Option D's fast path only activates for MemberDescrMutator entries (C-level __slots__ attributes via fast_type_/fast_offset_). The 5 failing tests look up Python methods (DescrOrClassVarMutator/DataDescrMutator), so fast_type_ is nullptr and the fast path is never taken. The slow path is identical to the original code. The LOAD_ATTR bug shown by @claude (returning the caller instead of the requested attribute) is a pre-existing CinderX aarch64 JIT bug in the original LOAD_ATTR slow path or CALL_EX method handling.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
