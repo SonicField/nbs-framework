@@ -16,7 +16,7 @@
 
 Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
 
-No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAVEAT:** Gate is YELLOW pending verification that 5 CallExTests failures are not caused by our Option D LOAD_ATTR changes (see UAF analysis below).
+No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAVEAT — GATE RED:** LOAD_ATTR inline cache bug found — JIT returns wrong attribute for method lookups. Almost certainly caused by our Option D changes. Verification in progress (see UAF analysis below).
 
 ---
 
@@ -124,7 +124,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAV
 
 **Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
 
-**GATE STATUS: YELLOW** (00:01Z 19 Feb): @claude found the 5 failing tests involve force_compile + same-class method lookup + CALL_EX kwargs. The method lookup uses LOAD_ATTR, which we modified with Option D. If our Option D LOAD_ATTR inline cache changes cause the wrong callable to be resolved, and CALL_EX then calls it with wrong args → TypeError, our changes ARE the root cause. The test_cinderjit suite was crashing before our work (invisible baseline), so these failures were never verified against a pre-Option D build. Verification required: run the 5 tests with Option D reverted. If they pass without our changes, this is a regression introduced by us.
+**GATE STATUS: RED** (00:05Z 19 Feb): @claude proved the root cause is a LOAD_ATTR bug on aarch64 — JIT returns the calling function instead of the requested attribute for method lookups. This is almost certainly caused by our Option D LOAD_ATTR inline cache changes. Proof: `obj.get_f()` returns `<function T.get_f>` (the caller) instead of `<bound method T._f>` (the target). The inline cache is serving stale/wrong entries. Verification in progress: revert Option D, rebuild, confirm tests pass.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
