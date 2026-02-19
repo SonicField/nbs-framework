@@ -97,6 +97,12 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 | GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX force_compile → GC UAF |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
 
+**Note on failure root causes:** The 4 FAIL suites + 1 CRASH suite involve 3 distinct pre-existing bugs, not one:
+
+1. **force_compile register corruption** (aarch64-specific): force_compile's entry path corrupts register state → LOAD_ATTR returns the calling function. Causes test_jit_attr_cache 6/24 failures and test_cinderjit crash (via CallExTests → refcount corruption → GC UAF). Does NOT affect auto-compiled code.
+2. **aarch64 codegen gaps** (feature gaps, not bugs): async generator CANNOT_SPECIALIZE (test_jit_generator_aarch64, 3 tests), InvalidImmediate for large stack offsets (test_jit_preload, 2 tests).
+3. **Missing feature** (not implemented): sys.monitoring deopt not implemented for aarch64 JIT (test_jit_support_instrumentation, 16 tests).
+
 ---
 
 ## Discrepancies Between Test Runners
