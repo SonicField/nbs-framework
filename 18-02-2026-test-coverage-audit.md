@@ -131,7 +131,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D) **on t
 - test_jit_attr_cache: 24/24 PASS (was 18/24 before fix)
 - test_cinderjit: 171/172 PASS (was SEGFAULT before fix)
 - SSA violation (our regression in 3c4ff942) fully resolved by 8af4dc49
-- PyTorch P0: 4921 tests, zero JIT regressions (pre-fix, but valid — auto-compile paths)
+- ~~PyTorch P0: 4921 tests, zero JIT regressions~~ **RETRACTED** (19 Feb 06:03Z): JIT was never exercised during P0 runs — CINDERJIT_ENABLE=1 alone does not trigger compilation without cinderjit.auto() or force_compile. When cinderjit.auto() IS enabled, PyTorch code SEGFAULTs during auto-compilation. The P0 result only proved "loading the JIT module doesn't break PyTorch", not "JIT-compiled code produces correct results". See Gap 7 below.
 
 **Previous gate assessments (SUPERSEDED):**
 ~~GATE STATUS: GREEN (00:35Z 19 Feb on d2bbb9f5)~~ — Based on incorrect premise that the bug was pre-existing.
@@ -183,9 +183,19 @@ test_jit_preload fails due to an aarch64 immediate range bug (InvalidImmediate: 
 
 All tests run on aarch64 only. There is no CI or cross-platform comparison to detect aarch64-specific regressions vs pre-existing issues. The SEGFAULT in test_cinderjit may not reproduce on x86 (different heap layout).
 
-### Gap 6: No PyTorch integration tests in CI
+### Gap 6: No PyTorch integration tests in CI — ESCALATED
 
-6 manual integration tests pass (linear, NN, backward, SGD, Conv2d, torch.compile) but the full PyTorch test suite (~10,000+ tests) has never been run against CinderX on aarch64. See PyTorch test plan below.
+~~6 manual integration tests pass (linear, NN, backward, SGD, Conv2d, torch.compile) but the full PyTorch test suite (~10,000+ tests) has never been run against CinderX on aarch64.~~ **RETRACTED** (19 Feb 06:03Z): The PyTorch P0 results (4921 tests, "zero JIT regressions") were vacuous — CINDERJIT_ENABLE=1 without cinderjit.auto() does not trigger JIT compilation. The tests ran in interpreter mode both with and without the env var. Additionally, which `python3` binary was used is unverified (may have been system Python 3.9, not CinderX Python 3.12).
+
+**Impact:** No valid evidence that PyTorch code runs correctly under JIT compilation on aarch64.
+
+### Gap 7: PyTorch auto-compile SEGFAULT (NEW — 19 Feb 06:03Z)
+
+When cinderjit.auto() IS enabled to force JIT auto-compilation of PyTorch code, the JIT SEGFAULTs during compilation of hot functions (e.g., nn.Linear forward pass after ~1500 iterations). This is a real crash, not a test infrastructure issue.
+
+**Root cause:** Unknown — under investigation by @claude. Could be a different codegen path than the CinderX tests exercise, or a variant of the CALL_EX / method dispatch bugs already identified.
+
+**Impact:** CinderX JIT cannot currently auto-compile PyTorch library functions on aarch64 without crashing. This is a blocker for any PyTorch + JIT production use.
 
 ---
 
@@ -203,3 +213,5 @@ All tests run on aarch64 only. There is no CI or cross-platform comparison to de
 - If test_cinderjit passes on x86 but crashes on aarch64: the GC bug is aarch64-specific (memory model or heap layout).
 - ~~If test_jit_coroutines still fails after xxclassloader fix: there is a second blocker in the coroutine test infrastructure.~~ FALSIFIED: test_jit_coroutines passes (23/23) on build-host 19 Feb.
 - If any currently-passing suite regresses on the next rebuild: our changes introduced a regression (not yet observed).
+- If PyTorch auto-compile SEGFAULT reproduces on x86: it's a general JIT bug, not aarch64-specific. If it only crashes on aarch64: it's an aarch64 codegen gap in a path PyTorch exercises but CinderX tests do not.
+- If `which python3` on build-host returns the CinderX build AND `cinderjit.is_enabled()` returns True: the P0 tests did load the JIT module (but still didn't compile anything without cinderjit.auto()). If it returns system Python 3.9: the JIT was never even loaded.
