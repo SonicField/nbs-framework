@@ -15,7 +15,7 @@
 
 Total: ~2455 tests pass, ~24 fail/error, ~1 skip. All 41 suites verified.
 
-No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VERIFIED** (00:07Z 19 Feb): @theologian proved Option D's fast path only activates for MemberDescrMutator entries (C-level __slots__), not Python method lookups. The 5 CallExTests failures are pre-existing.
+No failures are attributable to our JIT aarch64 work (A-lite or Option D) **on the fixed commit 8af4dc49**. The original Option D commit (3c4ff942) contained an SSA violation that caused LoadAttr failures — this was OUR bug, now fixed. Rerun pending on the fix commit.
 
 ---
 
@@ -93,15 +93,15 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 | KNOWN async gen | 1 | test_jit_generator_aarch64 (3 tests) | NO — pre-existing aarch64 codegen gap |
 | PRE-EXISTING codegen | 1 | test_jit_preload (2 tests) | NO — InvalidImmediate bug in gen_asm.cpp |
 | PRE-EXISTING monitoring | 1 | test_jit_support_instrumentation (16 tests) | NO — sys.monitoring not implemented for aarch64 JIT |
-| PRE-EXISTING force_compile | 1 | test_jit_attr_cache (6 tests) | NO — force_compile LOAD_ATTR returns caller (verified 19 Feb) |
-| GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX force_compile → GC UAF |
+| PRE-EXISTING force_compile | 1 | test_jit_attr_cache (6 tests) | **YES — Option D SSA violation (FIXED 8af4dc49)** |
+| GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | **YES — Option D SSA violation caused cascading GC UAF (FIXED 8af4dc49)** |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
 
-**Note on failure root causes:** The 4 FAIL suites + 1 CRASH suite involve 3 distinct pre-existing bugs, not one:
+**Note on failure root causes:** The 4 FAIL suites + 1 CRASH suite involve 3 distinct root causes:
 
-1. **force_compile register corruption** (aarch64-specific): force_compile's entry path corrupts register state → LOAD_ATTR returns the calling function. Causes test_jit_attr_cache 6/24 failures and test_cinderjit crash (via CallExTests → refcount corruption → GC UAF). Does NOT affect auto-compiled code.
-2. **aarch64 codegen gaps** (feature gaps, not bugs): async generator CANNOT_SPECIALIZE (test_jit_generator_aarch64, 3 tests), InvalidImmediate for large stack offsets (test_jit_preload, 2 tests).
-3. **Missing feature** (not implemented): sys.monitoring deopt not implemented for aarch64 JIT (test_jit_support_instrumentation, 16 tests).
+1. **Option D SSA violation (OUR BUG — FIXED)**: Option D's inline fast-path (commit 3c4ff942) created two LIR virtual registers for the same HIR output, violating SSA. The register allocator eliminated the dead output, so the call result was never captured — X19 retained the stale function pointer. Fixed by reverting to simple call (commit 8af4dc49). Caused test_jit_attr_cache 6/24 failures and test_cinderjit crash (via CallExTests → refcount corruption → GC UAF). Manifested deterministically with force_compile but was latent in auto-compiled code (register-allocation-dependent — different instruction mix led to correct-by-luck register assignment). Performance impact: slot_read drops from 0.96x to ~0.80x until fast-path redesign.
+2. **aarch64 codegen gaps** (pre-existing feature gaps, not our bugs): async generator CANNOT_SPECIALIZE (test_jit_generator_aarch64, 3 tests), InvalidImmediate for large stack offsets (test_jit_preload, 2 tests).
+3. **Missing feature** (pre-existing, not implemented): sys.monitoring deopt not implemented for aarch64 JIT (test_jit_support_instrumentation, 16 tests).
 
 ---
 
@@ -129,12 +129,16 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 **Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
 
-**GATE STATUS: GREEN** (00:35Z 19 Feb, EMPIRICALLY CONFIRMED with cache invalidation):
-- Auto-compiled self.x → 42 ✓ (200 calls to trigger JIT)
-- Auto-compiled self.x after T.x=99 → 99 ✓ (cache invalidation works)
-- Auto-compiled self.x after T.x=property → descriptor_value ✓ (descriptor swap works)
-- force_compiled self.x → `<function T2.get_x>` ✗ (returns the CALLING FUNCTION!)
-- Conclusion: bug is PURELY force_compile-specific. JIT codegen, inline cache, and cache invalidation are all correct. The force_compile entry path corrupts register state. Option D's memory layout is NOT the cause (auto-compiled invalidation works with Option D active). Pre-existing CinderX aarch64 force_compile bug.
+**GATE STATUS: PENDING** (02:04Z 19 Feb — CRITICAL REVISION):
+- **ROOT CAUSE CORRECTED**: The LoadAttr bug was NOT pre-existing. It was our SSA violation in Option D's inline fast-path (commit 3c4ff942). @claude identified: two LIR virtual registers for the same HIR output dst → register allocator eliminated dead output → X19 retained stale function pointer.
+- **FIXED**: commit 8af4dc49 reverts to pre-Option-D simple call.
+- Auto-compiled code passed earlier tests by luck (register-allocation-dependent — different instruction mix led to correct register assignment).
+- force_compiled code deterministically exposed the bug (different liveness sets → allocator made incorrect assignment).
+- Full CinderX suite rerun on 8af4dc49 in progress (@claude running). Gate reopens when rerun completes.
+- Performance impact: slot_read drops from 0.96x to ~0.80x until fast-path redesign without SSA violation.
+
+**Previous gate assessment (SUPERSEDED):**
+~~GATE STATUS: GREEN (00:35Z 19 Feb)~~ — Based on incorrect premise that the bug was pre-existing. The auto-compile+invalidation test passed by luck, not because the code was correct.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
