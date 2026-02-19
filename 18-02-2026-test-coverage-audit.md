@@ -106,6 +106,8 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D) **on t
 
 **RESOLVED** (commit ced396c): Consolidated into single `run_cinderx_tests.sh` at repo root. The arm-optimisation copy has been deleted. Single runner has all 41 suites, hard CinderX JIT gate, crash signal detection, and results CSV.
 
+**CORRECTION** (19 Feb 06:07Z): `CINDERJIT_ENABLE=1` is NOT a real CinderX env var — it was a no-op. The real env vars are `PYTHONJITAUTO=N`, `PYTHONJITALL=1`, `PYTHONJITLISTFILE=path`. CinderX tests pass because they use `cinderjit.force_compile()` internally. The env var has been removed from `run_cinderx_tests.sh`. For PyTorch tests, `cinderjit.auto()` must be called from Python AFTER `import torch` (not via env var, which crashes during import).
+
 ---
 
 ## test_cinderjit GC/JIT UAF — Root Cause Analysis (18 Feb 2026)

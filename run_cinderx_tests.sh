@@ -13,8 +13,8 @@
 #   ./run_cinderx_tests.sh --fix-opcode # Fix cinderx.opcode and exit
 #
 # Environment:
-#   CINDERJIT_ENABLE=1 is set automatically.
 #   PYTHONPATH is set to include PythonLib for the opcode module.
+#   CinderX tests use force_compile() internally — no JIT env var needed.
 #   CINDERX_ROOT defaults to ~/local/cinderx_dev/cinderx
 #
 # Gate: Aborts immediately if CinderX JIT is not importable or not enabled.
@@ -37,7 +37,10 @@ fix_opcode() {
     fi
 }
 
-export CINDERJIT_ENABLE=1
+# NOTE: CINDERJIT_ENABLE is NOT a real CinderX env var. CinderX tests work
+# because they call cinderjit.force_compile() internally, not because of
+# any env var. The real env vars are PYTHONJITAUTO=N, PYTHONJITALL=1, etc.
+# We do NOT set them here — force_compile handles compilation for CinderX tests.
 export PYTHONPATH="$PYTHONLIB${PYTHONPATH:+:$PYTHONPATH}"
 
 # Test suite definitions (41 suites total: 17 JIT + 14 runtime + 10 compiler)
@@ -153,14 +156,14 @@ SUITE_COUNT=0
 echo -e "${BOLD}CinderX Test Runner${RESET}"
 echo "Root:     $CINDERX_ROOT"
 echo "Python:   $(python3 --version 2>&1)"
-echo "JIT:      CINDERJIT_ENABLE=$CINDERJIT_ENABLE"
 echo "Suites:   ${#SUITES[@]}"
 echo "Results:  $RESULTS_FILE"
 echo "Started:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "---"
 
-# HARD GATE: verify CinderX is actually loaded and JIT is active
-# This prevents silently running tests on stock Python without JIT.
+# HARD GATE: verify CinderX is actually loaded and JIT is active.
+# CinderX tests use force_compile() internally, so the JIT must be available.
+# This prevents silently running tests on stock Python without the cinderjit module.
 echo -n "Verifying CinderX JIT... "
 CINDERX_CHECK=$(python3 -c "
 import cinderjit
@@ -172,8 +175,7 @@ print('OK')
     echo ""
     echo "Tests CANNOT run without CinderX JIT. Ensure:"
     echo "  1. Python is the CinderX-patched build (not stock Python)"
-    echo "  2. CINDERJIT_ENABLE=1 is set"
-    echo "  3. cinderjit module is importable and JIT is enabled"
+    echo "  2. cinderjit module is importable and JIT is enabled"
     exit 1
 }
 echo -e "${GREEN}$CINDERX_CHECK${RESET}"
