@@ -16,7 +16,7 @@
 
 Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
 
-No failures are attributable to our JIT aarch64 work (A-lite or Option D).
+No failures are attributable to our JIT aarch64 work (A-lite or Option D). **CAVEAT:** Gate is YELLOW pending verification that 5 CallExTests failures are not caused by our Option D LOAD_ATTR changes (see UAF analysis below).
 
 ---
 
@@ -122,7 +122,9 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D).
 - **IMPLICATION**: The CALL_EX JIT codegen on aarch64 has a bug in its exception handling path. When CALL_EX raises TypeError, the JIT's exception cleanup doesn't properly decref temporary objects (materialised kwargs dict or args tuple). These objects with incorrect refcounts become dangling when GC later collects them.
 - **ROOT CAUSE NARROWED** (23:58Z, @theologian): All 5 failing tests involve methods (bound, instance, or static) with kwargs unpacking. Passing tests use module-level functions. The CALL_EX JIT codegen incorrectly handles `self` argument prepending when combined with kwargs unpacking for methods — `self` is either not injected or counted as a kwargs entry, causing the callee to see wrong arguments and raise TypeError. The TypeError then leaves corrupt state (under-decreffed temporaries) that triggers the crash during later gc.collect().
 
-**Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both. This is a pre-existing CinderX aarch64 codegen bug, not caused by our work.
+**Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
+
+**GATE STATUS: YELLOW** (00:01Z 19 Feb): @claude found the 5 failing tests involve force_compile + same-class method lookup + CALL_EX kwargs. The method lookup uses LOAD_ATTR, which we modified with Option D. If our Option D LOAD_ATTR inline cache changes cause the wrong callable to be resolved, and CALL_EX then calls it with wrong args → TypeError, our changes ARE the root cause. The test_cinderjit suite was crashing before our work (invisible baseline), so these failures were never verified against a pre-Option D build. Verification required: run the 5 tests with Option D reverted. If they pass without our changes, this is a regression introduced by us.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
