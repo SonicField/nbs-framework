@@ -125,10 +125,12 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 **Correct fix direction:** Fix the CALL_EX exception path refcounting on aarch64, and fix the self-prepend logic for method calls with kwargs in the CALL_EX codegen. The 5 pre-existing TypeError failures and the crash are the same bug — fixing the method+kwargs handling in CALL_EX codegen should fix both.
 
-**GATE STATUS: GREEN** (00:30Z 19 Feb, EMPIRICALLY CONFIRMED): @testkeeper ran auto-compile vs force_compile LOAD_ATTR test on build-host
-- Auto-compiled (200 calls to trigger JIT): self.x → 42 ✓, self.y → 'hello' ✓, self._f → bound method ✓
-- force_compiled: self.x → `<function T2.get_x>` ✗ (returns the CALLING FUNCTION instead of the attribute!)
-- Conclusion: the bug is force_compile-SPECIFIC. Our Option D changes don't touch force_compile. Auto-compiled LOAD_ATTR is correct on aarch64. The 5 CallExTests fail because @failUnlessJITCompiled calls force_compile. This is a pre-existing CinderX aarch64 force_compile codegen bug.
+**GATE STATUS: GREEN** (00:35Z 19 Feb, EMPIRICALLY CONFIRMED with cache invalidation):
+- Auto-compiled self.x → 42 ✓ (200 calls to trigger JIT)
+- Auto-compiled self.x after T.x=99 → 99 ✓ (cache invalidation works)
+- Auto-compiled self.x after T.x=property → descriptor_value ✓ (descriptor swap works)
+- force_compiled self.x → `<function T2.get_x>` ✗ (returns the CALLING FUNCTION!)
+- Conclusion: bug is PURELY force_compile-specific. JIT codegen, inline cache, and cache invalidation are all correct. The force_compile entry path corrupts register state. Option D's memory layout is NOT the cause (auto-compiled invalidation works with Option D active). Pre-existing CinderX aarch64 force_compile bug.
 
 **Next steps:** ASAN build BLOCKED (gcc can't compile CinderX due to stdatomic.h _Atomic issues; clang 22 lacks aarch64 compiler-rt/ASAN runtime libraries). Alternative: targeted code inspection and refcount-tracking test.
 
