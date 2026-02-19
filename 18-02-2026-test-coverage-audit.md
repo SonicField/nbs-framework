@@ -9,10 +9,10 @@
 41 CinderX test suites exist across 3 categories (JIT, Runtime, Compiler). Of these:
 
 - **32 suites PASS** (all tests within pass or have only expected skips)
-- **3 suites FAIL** (with known, classified root causes — none caused by our work)
+- **4 suites FAIL** (with known, classified root causes — none caused by our work)
 - **1 suite SKIP** (test_shadowcode — 3.12+ expected)
 - **1 suite CRASH** (test_cinderjit — GC/JIT UAF, type watcher gap hypothesis under test)
-- **4 suites require verification** (see discrepancies below)
+- **3 suites require verification** (see discrepancies below)
 
 Total: ~2225 tests pass, ~24 fail/error, ~1 skip.
 
@@ -26,7 +26,7 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 
 | # | Suite | Tests | Pass | Fail | Err | Status | Notes |
 |---|-------|-------|------|------|-----|--------|-------|
-| 1 | test_jit_attr_cache | 24 | 24 | 0 | 0 | VERIFY | 24/24 from earlier run; ABORTed after Option D CFG bug — needs re-verify on d2bbb9f5 |
+| 1 | test_jit_attr_cache | 24 | 18 | 3 | 3 | FAIL (force_compile) | Verified on build-host 19 Feb: 3 failures + 3 errors from force_compile LOAD_ATTR bug |
 | 2 | test_jit_generator_aarch64 | 33 | 30 | 0 | 3 | KNOWN FAIL | 3 async gen CANNOT_SPECIALIZE — pre-existing |
 | 3 | test_jit_generators | 35 | 35 | 0 | 0 | PASS | |
 | 4 | test_jit_async_generators | 5 | 5 | 0 | 0 | PASS | |
@@ -94,9 +94,10 @@ No failures are attributable to our JIT aarch64 work (A-lite or Option D). **VER
 | KNOWN async gen | 1 | test_jit_generator_aarch64 (3 tests) | NO — pre-existing aarch64 codegen gap |
 | PRE-EXISTING codegen | 1 | test_jit_preload (2 tests) | NO — InvalidImmediate bug in gen_asm.cpp |
 | PRE-EXISTING monitoring | 1 | test_jit_support_instrumentation (16 tests) | NO — sys.monitoring not implemented for aarch64 JIT |
-| GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX GC/JIT UAF (see below) |
+| PRE-EXISTING force_compile | 1 | test_jit_attr_cache (6 tests) | NO — force_compile LOAD_ATTR returns caller (verified 19 Feb) |
+| GC crash (ROOT CAUSE FOUND) | 1 | test_cinderjit | NO — pre-existing CinderX force_compile → GC UAF |
 | SKIP (expected) | 1 | test_shadowcode | NO — removed in 3.12+ |
-| VERIFY (need fresh run) | 4 | test_jit_attr_cache, test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
+| VERIFY (need fresh run) | 3 | test_jit_coroutines, test_asynclazyvalue, test_compiler_sbs_stdlib_0 | UNKNOWN |
 
 ---
 
