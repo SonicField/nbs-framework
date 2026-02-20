@@ -79,7 +79,7 @@ static void test_high_byte_before_at(void) {
      */
     char msg[] = "\x80@alice rest";
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1,
                 "high byte before @: expected 1 mention, got %d", count);
@@ -98,7 +98,7 @@ static void test_high_byte_after_at(void) {
      */
     char msg[] = "@\x80rest hello";
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0,
                 "high byte after @: expected 0 mentions, got %d", count);
@@ -114,7 +114,7 @@ static void test_high_byte_within_handle(void) {
      */
     char msg[] = "@ab\xFF" "cd rest";
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1,
                 "high byte within handle: expected 1 mention, got %d", count);
@@ -145,7 +145,7 @@ static void test_all_high_bytes_around_at(void) {
     msg[pos] = '\0';
 
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS, NULL);
 
     /* All 128 instances have the same handle "test", so dedup gives 1 */
     TEST_ASSERT(count == 1,
@@ -163,7 +163,7 @@ static void test_all_high_bytes_around_at(void) {
 
 static void test_simple_mention(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("hello @bob", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("hello @bob", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1, "simple: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "bob") == 0,
@@ -175,7 +175,7 @@ static void test_simple_mention(void) {
 static void test_multiple_mentions(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("@alice and @bob",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 2, "multiple: expected 2, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "alice") == 0,
@@ -188,7 +188,7 @@ static void test_multiple_mentions(void) {
 
 static void test_mention_at_start(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("@alice", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("@alice", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1, "at start: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "alice") == 0,
@@ -204,7 +204,7 @@ static void test_mention_at_start(void) {
 static void test_email_exclusion(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("user@example.com",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "email: expected 0, got %d", count);
 
@@ -214,7 +214,7 @@ static void test_email_exclusion(void) {
 static void test_email_with_plus(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("user+tag@example.com",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "email+: expected 0, got %d", count);
 
@@ -224,7 +224,7 @@ static void test_email_with_plus(void) {
 static void test_email_mixed_with_mention(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("mail user@example.com but @bob too",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1, "mixed: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "bob") == 0,
@@ -240,7 +240,7 @@ static void test_email_mixed_with_mention(void) {
 static void test_duplicate_mentions(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("@alice @bob @alice @bob @alice",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 2, "dedup: expected 2, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "alice") == 0,
@@ -265,7 +265,7 @@ static void test_max_mentions_limit(void) {
     }
 
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, 3);
+    int count = bus_extract_mentions(msg, handles, 3, NULL);
 
     TEST_ASSERT(count == 3, "max limit: expected 3, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "user0") == 0,
@@ -280,7 +280,7 @@ static void test_max_mentions_limit(void) {
 
 static void test_empty_message(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "empty: expected 0, got %d", count);
 
@@ -289,7 +289,7 @@ static void test_empty_message(void) {
 
 static void test_at_only(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("@", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("@", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "@ only: expected 0, got %d", count);
 
@@ -298,7 +298,7 @@ static void test_at_only(void) {
 
 static void test_at_space(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("@ hello", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("@ hello", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "@ space: expected 0, got %d", count);
 
@@ -308,7 +308,7 @@ static void test_at_space(void) {
 static void test_no_mentions(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("just a normal message",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "no mentions: expected 0, got %d", count);
 
@@ -318,7 +318,7 @@ static void test_no_mentions(void) {
 static void test_handle_with_underscore_hyphen(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("@foo_bar-baz",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1, "underscore-hyphen: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "foo_bar-baz") == 0,
@@ -342,7 +342,7 @@ static void test_handle_too_long(void) {
     msg[MAX_MENTION_HANDLE_LEN + 1] = '\0';
 
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg, handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0,
                 "too-long handle: expected 0, got %d", count);
@@ -352,7 +352,7 @@ static void test_handle_too_long(void) {
 
 static void test_consecutive_ats(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("@@alice", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("@@alice", handles, MAX_MENTIONS, NULL);
 
     /* First @ has no handle char after (next char is @).
      * Second @ has "alice" after it. Should extract "alice". */
@@ -365,7 +365,7 @@ static void test_consecutive_ats(void) {
 
 static void test_at_end_of_string(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions("hello @", handles, MAX_MENTIONS);
+    int count = bus_extract_mentions("hello @", handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 0, "@ at end: expected 0, got %d", count);
 
@@ -375,7 +375,7 @@ static void test_at_end_of_string(void) {
 static void test_mention_followed_by_punctuation(void) {
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
     int count = bus_extract_mentions("hi @alice!",
-                                      handles, MAX_MENTIONS);
+                                      handles, MAX_MENTIONS, NULL);
 
     TEST_ASSERT(count == 1, "punct: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "alice") == 0,
@@ -405,7 +405,7 @@ static void test_signed_char_boundary(void) {
     /* 0xFF before @, should not be treated as email prefix */
     char msg_ff[] = { (char)0xFF, '@', 'z', 'z', '\0' };
     char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int count = bus_extract_mentions(msg_ff, handles, MAX_MENTIONS);
+    int count = bus_extract_mentions(msg_ff, handles, MAX_MENTIONS, NULL);
     TEST_ASSERT(count == 1,
                 "0xFF before @: expected 1, got %d", count);
     TEST_ASSERT(strcmp(handles[0], "zz") == 0,
@@ -413,11 +413,105 @@ static void test_signed_char_boundary(void) {
 
     /* 0x80 after @, should not be treated as handle char */
     char msg_80[] = { '@', (char)0x80, 'a', '\0' };
-    count = bus_extract_mentions(msg_80, handles, MAX_MENTIONS);
+    count = bus_extract_mentions(msg_80, handles, MAX_MENTIONS, NULL);
     TEST_ASSERT(count == 0,
                 "0x80 after @: expected 0, got %d", count);
 
     TEST_PASS("signed char boundary values (0x80, 0xFF) handled without UB");
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 8: Interrupt pattern (@handle!)                                */
+/* ------------------------------------------------------------------ */
+
+static void test_interrupt_basic(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int interrupt_flags[MAX_MENTIONS];
+    memset(interrupt_flags, 0, sizeof(interrupt_flags));
+    int count = bus_extract_mentions("@alice! stop now",
+                                      handles, MAX_MENTIONS, interrupt_flags);
+
+    TEST_ASSERT(count == 1, "interrupt basic: expected 1, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "alice") == 0,
+                "interrupt basic: expected 'alice', got '%s'", handles[0]);
+    TEST_ASSERT(interrupt_flags[0] == 1,
+                "interrupt basic: expected interrupt flag 1, got %d",
+                interrupt_flags[0]);
+
+    TEST_PASS("@handle! sets interrupt flag");
+}
+
+static void test_interrupt_vs_normal(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int interrupt_flags[MAX_MENTIONS];
+    memset(interrupt_flags, 0, sizeof(interrupt_flags));
+    int count = bus_extract_mentions("@alice and @bob! stop",
+                                      handles, MAX_MENTIONS, interrupt_flags);
+
+    TEST_ASSERT(count == 2, "interrupt vs normal: expected 2, got %d", count);
+    TEST_ASSERT(interrupt_flags[0] == 0,
+                "interrupt vs normal: alice should not be interrupt, got %d",
+                interrupt_flags[0]);
+    TEST_ASSERT(interrupt_flags[1] == 1,
+                "interrupt vs normal: bob should be interrupt, got %d",
+                interrupt_flags[1]);
+
+    TEST_PASS("@handle (normal) vs @handle! (interrupt) distinguished");
+}
+
+static void test_interrupt_at_end(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int interrupt_flags[MAX_MENTIONS];
+    memset(interrupt_flags, 0, sizeof(interrupt_flags));
+    int count = bus_extract_mentions("stop @claude!",
+                                      handles, MAX_MENTIONS, interrupt_flags);
+
+    TEST_ASSERT(count == 1, "interrupt at end: expected 1, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "claude") == 0,
+                "interrupt at end: expected 'claude', got '%s'", handles[0]);
+    TEST_ASSERT(interrupt_flags[0] == 1,
+                "interrupt at end: expected interrupt flag 1, got %d",
+                interrupt_flags[0]);
+
+    TEST_PASS("@handle! at end of message works");
+}
+
+static void test_interrupt_null_flags(void) {
+    /* When interrupt_flags is NULL, should still work (no crash) */
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int count = bus_extract_mentions("@alice! stop", handles, MAX_MENTIONS, NULL);
+
+    TEST_ASSERT(count == 1, "interrupt null flags: expected 1, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "alice") == 0,
+                "interrupt null flags: expected 'alice', got '%s'", handles[0]);
+
+    TEST_PASS("@handle! with NULL interrupt_flags does not crash");
+}
+
+static void test_no_interrupt_without_bang(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int interrupt_flags[MAX_MENTIONS];
+    memset(interrupt_flags, 0, sizeof(interrupt_flags));
+    int count = bus_extract_mentions("@alice hello",
+                                      handles, MAX_MENTIONS, interrupt_flags);
+
+    TEST_ASSERT(count == 1, "no interrupt: expected 1, got %d", count);
+    TEST_ASSERT(interrupt_flags[0] == 0,
+                "no interrupt: expected flag 0, got %d", interrupt_flags[0]);
+
+    TEST_PASS("@handle without ! has interrupt flag 0");
+}
+
+static void test_email_interrupt_excluded(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int interrupt_flags[MAX_MENTIONS];
+    memset(interrupt_flags, 0, sizeof(interrupt_flags));
+    int count = bus_extract_mentions("user@example.com!",
+                                      handles, MAX_MENTIONS, interrupt_flags);
+
+    TEST_ASSERT(count == 0, "email interrupt: expected 0, got %d", count);
+
+    TEST_PASS("user@example.com! excluded (email filter)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -460,6 +554,14 @@ int main(void) {
     test_consecutive_ats();
     test_at_end_of_string();
     test_mention_followed_by_punctuation();
+
+    /* Interrupt pattern (@handle!) */
+    test_interrupt_basic();
+    test_interrupt_vs_normal();
+    test_interrupt_at_end();
+    test_interrupt_null_flags();
+    test_no_interrupt_without_bang();
+    test_email_interrupt_excluded();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

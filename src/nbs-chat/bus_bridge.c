@@ -52,7 +52,8 @@ static int is_email_prefix_char(int c) {
 
 int bus_extract_mentions(const char *message,
                          char out_handles[][MAX_MENTION_HANDLE_LEN],
-                         int max_handles) {
+                         int max_handles,
+                         int *out_interrupt_flags) {
     ASSERT_MSG(message != NULL,
                "bus_extract_mentions: message is NULL");
     ASSERT_MSG(out_handles != NULL,
@@ -111,6 +112,10 @@ int bus_extract_mentions(const char *message,
 
         if (!is_dup) {
             memcpy(out_handles[found], candidate, handle_len + 1);
+            /* Check for interrupt suffix: '!' immediately after handle */
+            if (out_interrupt_flags != NULL) {
+                out_interrupt_flags[found] = (*end == '!') ? 1 : 0;
+            }
             found++;
         }
 
@@ -341,15 +346,24 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
 
     /* Check for @mentions */
     char mentions[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
-    int mention_count = bus_extract_mentions(message, mentions, MAX_MENTIONS);
+    int interrupt_flags[MAX_MENTIONS];
+    int mention_count = bus_extract_mentions(message, mentions, MAX_MENTIONS,
+                                             interrupt_flags);
 
-    /* Publish chat-mention events for each @handle found */
+    /* Publish chat-mention or chat-interrupt events for each @handle found */
     for (int i = 0; i < mention_count; i++) {
         char mention_payload[MAX_PAYLOAD_LEN];
         snprintf(mention_payload, sizeof(mention_payload),
                  "@%s from %s: %s", mentions[i], handle, message);
-        bus_publish(events_dir, "nbs-chat", "chat-mention", "high",
-                    mention_payload);
+        if (interrupt_flags[i]) {
+            /* @handle! — interrupt pattern: critical priority */
+            bus_publish(events_dir, "nbs-chat", "chat-interrupt", "critical",
+                        mention_payload);
+        } else {
+            /* @handle — normal mention: high priority */
+            bus_publish(events_dir, "nbs-chat", "chat-mention", "high",
+                        mention_payload);
+        }
     }
 
     /* Postcondition: always returns 0 — bus bridge never fails */

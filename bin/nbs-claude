@@ -753,6 +753,65 @@ check_bus_events() {
     return 0
 }
 
+# check_interrupt_events — scan bus for chat-interrupt events targeting
+# this agent's handle. Unlike check_bus_events (which just counts),
+# this reads payloads and acks matching events.
+# Returns: 0 = interrupt targeting this handle found, 1 = none.
+check_interrupt_events() {
+    [[ -f "$CONTROL_REGISTRY" ]] || return 1
+
+    local found_interrupt=1
+
+    while IFS= read -r line; do
+        case "$line" in
+            bus:*)
+                local bus_dir="${line#bus:}"
+                local output
+                if is_remote; then
+                    output=$(remote_cmd "nbs-bus check $(printf '%q' "$bus_dir")") || continue
+                elif [[ -d "$bus_dir" ]]; then
+                    output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
+                else
+                    continue
+                fi
+
+                # Filter for chat-interrupt events
+                local interrupt_lines
+                interrupt_lines=$(echo "$output" | grep 'chat-interrupt' 2>/dev/null) || continue
+
+                while IFS= read -r evt_line; do
+                    # Format: [priority] filename (age)
+                    # Extract filename: second field
+                    local evt_file
+                    evt_file=$(echo "$evt_line" | awk '{print $2}')
+                    [[ -n "$evt_file" ]] || continue
+
+                    # Read event payload to check target handle
+                    local payload
+                    if is_remote; then
+                        payload=$(remote_cmd "nbs-bus read $(printf '%q' "$bus_dir") $(printf '%q' "$evt_file")") || continue
+                    else
+                        payload=$(nbs-bus read "$bus_dir" "$evt_file" 2>/dev/null) || continue
+                    fi
+
+                    # Check if @SIDECAR_HANDLE is in the payload
+                    if echo "$payload" | grep -qF "@${SIDECAR_HANDLE}"; then
+                        # Ack the event so it is not re-processed
+                        if is_remote; then
+                            remote_cmd "nbs-bus ack $(printf '%q' "$bus_dir") $(printf '%q' "$evt_file")" 2>/dev/null || true
+                        else
+                            nbs-bus ack "$bus_dir" "$evt_file" 2>/dev/null || true
+                        fi
+                        found_interrupt=0
+                    fi
+                done <<< "$interrupt_lines"
+                ;;
+        esac
+    done < "$CONTROL_REGISTRY"
+
+    return $found_interrupt
+}
+
 # check_chat_unread — peek at chat cursors without advancing them.
 # Reads cursor files directly (no lock, no modification) and compares
 # against total message count. Format: handle=index in <chat>.cursors.
@@ -992,6 +1051,43 @@ poll_sidecar_tmux() {
             respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
             idle_seconds=0
             last_content_hash=""
+            continue
+        fi
+
+        # --- Interrupt check: runs every cycle, not gated by BUS_CHECK_INTERVAL ---
+        # chat-interrupt events are critical-priority signals that the agent must
+        # stop what it is doing immediately. We check every second and send Escape
+        # to cancel the current tool call, then wait for the prompt and inject
+        # /nbs-notify so the agent reads the interrupt message.
+        if check_interrupt_events; then
+            # Send Escape to cancel current operation
+            tmux send-keys -t "$pane_id" Escape || true
+            sleep 1
+
+            # Wait for prompt to reappear (up to 30s)
+            local interrupt_wait=0
+            while [[ $interrupt_wait -lt 30 ]]; do
+                local icontent
+                icontent=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
+                if is_prompt_visible "$icontent"; then
+                    break
+                fi
+                sleep 1
+                interrupt_wait=$((interrupt_wait + 1))
+            done
+
+            # Inject /nbs-notify so the agent reads the interrupt message
+            local icheck
+            icheck=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+            if is_prompt_visible "$icheck"; then
+                tmux send-keys -t "$pane_id" -l "/nbs-notify interrupt from chat" || true
+                sleep 0.3
+                tmux send-keys -t "$pane_id" Enter || true
+            fi
+
+            idle_seconds=0
+            last_content_hash=""
+            sleep 3
             continue
         fi
 
