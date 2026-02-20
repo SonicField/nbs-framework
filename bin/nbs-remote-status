@@ -1,0 +1,160 @@
+#!/bin/bash
+# nbs-remote-status: Quick state check of a remote pty-session
+#
+# Runs git status, git diff --stat, and optionally checks for running
+# builds on a remote pty-session. One command instead of three.
+#
+# Usage:
+#   nbs-remote-status <session> [options]
+#
+# Options:
+#   --cwd=DIR          Working directory on the remote machine
+#   --chat=FILE        Post status to this chat file
+#   --handle=NAME      Chat handle (required with --chat)
+#   --last=N           Lines of scrollback to capture (default: 100)
+#
+# Examples:
+#   nbs-remote-status build-host --cwd=/data/users/alex/cinderx
+#   nbs-remote-status build-host --cwd=/data/users/alex/cinderx \
+#       --chat=.nbs/chat/live.chat --handle=helper
+#
+# Output:
+#   === Remote Status: <session> ===
+#   HEAD: <commit hash and message>
+#   Branch: <branch name>
+#   Working tree: <clean | N files changed>
+#   Modified files: <list>
+#
+# Exit codes:
+#   0 - Success
+#   2 - Session not found
+#   3 - Timeout
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
+
+# Suppress pty-session tool header (we ARE the higher-level tool)
+export NBS_PTY_QUIET=1
+
+SESSION=""
+CWD=""
+CHAT_FILE=""
+CHAT_HANDLE=""
+LAST=100
+
+usage() {
+    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cwd=*)    CWD="${1#--cwd=}"; shift ;;
+        --chat=*)   CHAT_FILE="${1#--chat=}"; shift ;;
+        --handle=*) CHAT_HANDLE="${1#--handle=}"; shift ;;
+        --last=*)   LAST="${1#--last=}"; shift ;;
+        --help|-h)  usage; exit 0 ;;
+        help)       usage; exit 0 ;;
+        -*)         echo "Unknown option: $1" >&2; exit 4 ;;
+        *)
+            if [[ -z "$SESSION" ]]; then
+                SESSION="$1"
+            else
+                echo "Error: unexpected argument: $1" >&2
+                exit 4
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$SESSION" ]]; then
+    echo "Error: requires <session>" >&2
+    echo "Usage: nbs-remote-status <session> [options]" >&2
+    exit 4
+fi
+
+if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
+    echo "Error: --handle is required when --chat is set" >&2
+    exit 4
+fi
+
+# Verify session exists
+if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
+    echo "Error: pty-session '$SESSION' not found" >&2
+    exit 2
+fi
+
+MARKER_START="NBS_STATUS_START_$$"
+MARKER_END="NBS_STATUS_END_$$"
+
+# Build command: git log, status, and diff --stat in one shot
+STATUS_CMD="echo '---HEAD---'; git log --oneline -1; echo '---BRANCH---'; git rev-parse --abbrev-ref HEAD; echo '---STATUS---'; git status --porcelain; echo '---DIFFSTAT---'; git diff --stat"
+
+FULL_CMD="$STATUS_CMD"
+if [[ -n "$CWD" ]]; then
+    FULL_CMD="cd $(printf '%q' "$CWD") && ${STATUS_CMD}"
+fi
+
+"$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"
+
+# Wait for completion
+TIMEOUT=30
+elapsed=0
+POLL=2
+
+while (( elapsed < TIMEOUT )); do
+    sleep "$POLL"
+    elapsed=$((elapsed + POLL))
+
+    output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null) || true
+    if echo "$output" | grep -q "$MARKER_END"; then
+        raw=$(echo "$output" | sed -n "/${MARKER_START}/,/${MARKER_END}/p" \
+            | grep -v "$MARKER_START" \
+            | grep -v "$MARKER_END")
+
+        # Parse sections
+        head_line=$(echo "$raw" | sed -n '/---HEAD---/,/---BRANCH---/p' | grep -v '^---' | head -1)
+        branch=$(echo "$raw" | sed -n '/---BRANCH---/,/---STATUS---/p' | grep -v '^---' | head -1)
+        status_lines=$(echo "$raw" | sed -n '/---STATUS---/,/---DIFFSTAT---/p' | grep -v '^---')
+        diffstat=$(echo "$raw" | sed -n '/---DIFFSTAT---/,$p' | grep -v '^---')
+
+        # Count modified files
+        n_modified=0
+        if [[ -n "$status_lines" ]]; then
+            n_modified=$(echo "$status_lines" | grep -c '.' || true)
+        fi
+
+        # Format output
+        result="=== Remote Status: ${SESSION} ===
+HEAD: ${head_line:-unknown}
+Branch: ${branch:-unknown}
+Working tree: $(if [[ $n_modified -eq 0 ]]; then echo 'clean'; else echo "${n_modified} files changed"; fi)"
+
+        if [[ $n_modified -gt 0 ]]; then
+            result="${result}
+Modified:
+${status_lines}"
+        fi
+
+        if [[ -n "$diffstat" ]]; then
+            result="${result}
+Diff stat:
+${diffstat}"
+        fi
+
+        echo "$result"
+
+        # Post to chat if requested
+        if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
+            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$result" 2>/dev/null || true
+        fi
+
+        exit 0
+    fi
+done
+
+echo "Error: Timed out waiting for status (${TIMEOUT}s)" >&2
+exit 3

@@ -1078,6 +1078,36 @@ poll_sidecar_tmux() {
                 fi
             fi
 
+            # --- Interrupt check: MUST run even when busy (content changing) ---
+            # chat-interrupt events are critical-priority. Previously this was
+            # only in the idle branch (after continue), which meant busy agents
+            # could not be interrupted. Fixed: check in the busy branch too.
+            if check_interrupt_events; then
+                tmux send-keys -t "$pane_id" Escape || true
+                sleep 1
+                local iwb=0
+                while [[ $iwb -lt 30 ]]; do
+                    local ic
+                    ic=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
+                    is_prompt_visible "$ic" && break
+                    sleep 1
+                    iwb=$((iwb + 1))
+                done
+                local ichk
+                ichk=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                if is_prompt_visible "$ichk"; then
+                    local ncmd="/nbs-notify interrupt from chat"
+                    if is_remote; then
+                        remote_send_keys "$pane_id" "$ncmd"
+                    else
+                        tmux send-keys -t "$pane_id" -l "$ncmd" || true
+                    fi
+                    tmux send-keys -t "$pane_id" Enter || true
+                fi
+                idle_seconds=0
+                last_content_hash=""
+            fi
+
             continue
         fi
 
@@ -1322,6 +1352,36 @@ poll_sidecar_pty() {
                     fi
                     last_heartbeat_time=$hb_now
                 fi
+            fi
+
+            # --- Interrupt check: MUST run even when busy (content changing) ---
+            # chat-interrupt events are critical-priority. Previously this was
+            # only in the idle branch (after continue), which meant busy agents
+            # could not be interrupted. Fixed: check in the busy branch too.
+            if check_interrupt_events; then
+                tmux send-keys -t "$pane_id" Escape || true
+                sleep 1
+                local iwb=0
+                while [[ $iwb -lt 30 ]]; do
+                    local ic
+                    ic=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
+                    is_prompt_visible "$ic" && break
+                    sleep 1
+                    iwb=$((iwb + 1))
+                done
+                local ichk
+                ichk=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                if is_prompt_visible "$ichk"; then
+                    local ncmd="/nbs-notify interrupt from chat"
+                    if is_remote; then
+                        remote_send_keys "$pane_id" "$ncmd"
+                    else
+                        tmux send-keys -t "$pane_id" -l "$ncmd" || true
+                    fi
+                    tmux send-keys -t "$pane_id" Enter || true
+                fi
+                idle_seconds=0
+                last_content_hash=""
             fi
 
             continue

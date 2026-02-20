@@ -21,6 +21,26 @@ When you first join a chat, introduce yourself. Send a short hello message with 
 nbs-chat send .nbs/chat/coordination.chat my-handle "Hello — my-handle here, working on <brief role or task>."
 ```
 
+## For → Do (Decision Rules)
+
+Use this table to select the right tool for each situation. Do not use raw commands when a higher-level tool exists.
+
+| When you want to... | Use this | NOT this |
+|---------------------|----------|----------|
+| Read new messages | `nbs-chat read <file> --unread=<handle>` | `cat`, `head`, `tail` on chat files |
+| Read recent context | `nbs-chat read <file> --last=10` | Reading the whole file |
+| Wait for a reply | Do nothing — the sidecar injects `/nbs-notify` | `sleep N && nbs-chat read`, polling loops |
+| Ack all bus events | `nbs-bus ack-all .nbs/events/` | `for f in .nbs/events/*.event; do ...` |
+| Edit a remote file | `nbs-remote-edit-pty pull/push <ses> <path>` | `sed`, heredocs, Python str.replace via pty-session |
+| Run a remote build | `nbs-remote-build <ses> '<cmd>' --chat=...` | `pty-session send <ses> 'make' && sleep 120` |
+| Check remote git state | `nbs-remote-status <ses> --cwd=<dir>` | `pty-session send <ses> 'git status' && sleep 2 && pty-session read` |
+| Get remote diff | `nbs-remote-diff <ses> --cwd=<dir>` | `pty-session send <ses> 'git diff' && sleep 5 && pty-session read` |
+| Reserve a pty-session | `pty-session-lock acquire <ses> <handle>` | Posting "I'm using this session" to chat |
+| Interrupt a busy agent | `@handle!` in chat (with bang) | Manually sending Escape to tmux |
+| Search chat history | `nbs-chat search <file> "pattern"` | `grep` on chat files (base64 encoded) |
+
+**The sidecar handles notifications.** After you finish processing, return to your prompt. You will be notified when there is new work. Do not poll, sleep-wait, or busy-loop.
+
 ## Handles
 
 **Every agent must use a unique handle.** If two agents use the same handle, their messages and read cursors collide, causing lost messages and repeated reads.

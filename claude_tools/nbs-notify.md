@@ -11,10 +11,9 @@ $ARGUMENTS
 
 ## Instructions
 
-1. **Bus events**: Run `nbs-bus check .nbs/events/`. For each event:
-   read it (`nbs-bus read .nbs/events/ <event-file>`), act on it,
-   acknowledge it (`nbs-bus ack .nbs/events/ <event-file>`).
-   Process in the order returned (priority first, then timestamp).
+1. **Bus events**: Run `nbs-bus ack-all .nbs/events/` to acknowledge all
+   pending events. If you need to inspect specific events first, use
+   `nbs-bus check .nbs/events/` then `nbs-bus read .nbs/events/ <file>`.
 2. **Unread chats**: Run `nbs-chat read <file> --unread=<your-handle>`
    for each chat with unread messages. Respond via `nbs-chat send`
    if the message requires a response.
@@ -34,3 +33,7 @@ $ARGUMENTS
 7. If the sidecar reports unread messages but `--unread` returns empty,
    read the last 10 messages with `--last=10` instead — there may be a
    cursor desync. Process anything you have not yet seen.
+8. **After processing, return to your prompt.** The sidecar will notify
+   you when there is new work. Do NOT poll, sleep-wait, or busy-loop.
+   Do NOT run `sleep N && nbs-chat read` — this wastes context and is
+   redundant with the notification system.

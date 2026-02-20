@@ -45,6 +45,9 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
+# Suppress pty-session tool header (we ARE the higher-level tool)
+export NBS_PTY_QUIET=1
+
 # Defaults
 SESSION=""
 BUILD_CMD=""

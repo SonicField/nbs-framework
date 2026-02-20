@@ -20,6 +20,9 @@
  *   4 - Invalid arguments
  */
 
+/* execvpe requires _GNU_SOURCE on Linux */
+#define _GNU_SOURCE
+
 #include "chat_file.h"
 #include "bus_bridge.h"
 
@@ -725,7 +728,11 @@ static char *open_editor(void) {
         }
         clean_env[env_count] = NULL;
 
-        execle(editor, editor, tmppath, (char *)NULL, clean_env);
+        /* Use execvpe to search PATH with sanitised environment.
+         * execle does NOT search PATH, so "vim" without a full path
+         * would fail silently (exit 127), causing "(empty — not sent)". */
+        char *argv[] = {(char *)editor, tmppath, NULL};
+        execvpe(editor, argv, clean_env);
         _exit(127);
     }
 

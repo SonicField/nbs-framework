@@ -42,6 +42,23 @@ PREFIX="pty_"
 CACHE_DIR="${HOME}/.pty-session/cache"
 LOG_DIR="${HOME}/.pty-session/logs"
 
+# Tool reminder header — shown on pty-session read/send output unless
+# suppressed by NBS_PTY_QUIET=1 (set by higher-level tools like
+# nbs-remote-build, nbs-remote-edit-pty, nbs-remote-diff, etc.)
+show_tool_header() {
+    if [[ "${NBS_PTY_QUIET:-0}" == "1" ]]; then
+        return
+    fi
+    echo "┌─ pty-session: consider higher-level tools ──────────────────────┐" >&2
+    echo "│ Edit files:  nbs-remote-edit-pty pull/push/diff <ses> <path>    │" >&2
+    echo "│ Build:       nbs-remote-build <ses> '<cmd>' --chat=... --handle │" >&2
+    echo "│ Git diff:    nbs-remote-diff <ses> --cwd=<dir> --commit=<ref>   │" >&2
+    echo "│ Git status:  nbs-remote-status <ses> --cwd=<dir>                │" >&2
+    echo "│ Lock:        pty-session-lock acquire/release <ses> <handle>     │" >&2
+    echo "│ Suppress:    export NBS_PTY_QUIET=1                             │" >&2
+    echo "└─────────────────────────────────────────────────────────────────┘" >&2
+}
+
 # Output capture has two layers:
 #
 #   Log  (persistent) — tmux pipe-pane streams all output to LOG_DIR/<name>.log
@@ -141,6 +158,8 @@ cmd_send() {
     local no_enter=false
     shift 2>/dev/null || true
 
+    show_tool_header
+
     # Check for --no-enter flag
     if [[ "${1:-}" == "--no-enter" ]]; then
         no_enter=true
@@ -180,6 +199,8 @@ cmd_read() {
     local scrollback=100
     local wait_mode=false
     local timeout=300
+
+    show_tool_header
 
     # Parse options
     shift 2>/dev/null || true

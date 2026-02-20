@@ -1,0 +1,171 @@
+#!/bin/bash
+# nbs-remote-diff: Pull git diff from a remote pty-session
+#
+# Fetches 'git diff' output from a remote machine via pty-session and
+# prints it locally. Optionally posts the diff to a chat channel.
+#
+# Usage:
+#   nbs-remote-diff <session> [options]
+#
+# Options:
+#   --path=PATH        Restrict diff to a specific file or directory
+#   --stat             Show diffstat only (--stat instead of full diff)
+#   --staged           Show staged changes (git diff --cached)
+#   --commit=REF       Diff against a specific commit (e.g. HEAD~1, 0ca33338)
+#   --chat=FILE        Post the diff to this chat file
+#   --handle=NAME      Chat handle (required with --chat)
+#   --cwd=DIR          Working directory on the remote machine
+#   --last=N           Lines of pty-session scrollback to capture (default: 200)
+#
+# Examples:
+#   # Show unstaged changes
+#   nbs-remote-diff build-host --cwd=/data/users/alex/cinderx
+#
+#   # Show diff for a specific file
+#   nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/alex/cinderx
+#
+#   # Show diff against base commit and post to chat
+#   nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/alex/cinderx \
+#       --chat=.nbs/chat/live.chat --handle=claude
+#
+#   # Just the diffstat
+#   nbs-remote-diff build-host --stat --cwd=/data/users/alex/cinderx
+#
+# Exit codes:
+#   0 - Success
+#   2 - Session not found
+#   3 - Timeout
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
+
+# Suppress pty-session tool header (we ARE the higher-level tool)
+export NBS_PTY_QUIET=1
+
+SESSION=""
+DIFF_PATH=""
+STAT_ONLY=false
+STAGED=false
+COMMIT=""
+CHAT_FILE=""
+CHAT_HANDLE=""
+CWD=""
+LAST=200
+
+usage() {
+    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --path=*)   DIFF_PATH="${1#--path=}"; shift ;;
+        --stat)     STAT_ONLY=true; shift ;;
+        --staged)   STAGED=true; shift ;;
+        --commit=*) COMMIT="${1#--commit=}"; shift ;;
+        --chat=*)   CHAT_FILE="${1#--chat=}"; shift ;;
+        --handle=*) CHAT_HANDLE="${1#--handle=}"; shift ;;
+        --cwd=*)    CWD="${1#--cwd=}"; shift ;;
+        --last=*)   LAST="${1#--last=}"; shift ;;
+        --help|-h)  usage; exit 0 ;;
+        -*)         echo "Unknown option: $1" >&2; exit 4 ;;
+        help)       usage; exit 0 ;;
+        *)
+            if [[ -z "$SESSION" ]]; then
+                SESSION="$1"
+            else
+                echo "Error: unexpected argument: $1" >&2
+                exit 4
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$SESSION" ]]; then
+    echo "Error: requires <session>" >&2
+    echo "Usage: nbs-remote-diff <session> [options]" >&2
+    exit 4
+fi
+
+if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
+    echo "Error: --handle is required when --chat is set" >&2
+    exit 4
+fi
+
+# Verify session exists
+if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
+    echo "Error: pty-session '$SESSION' not found" >&2
+    exit 2
+fi
+
+# Build the git diff command
+GIT_CMD="git diff"
+if [[ "$STAGED" == true ]]; then
+    GIT_CMD="$GIT_CMD --cached"
+fi
+if [[ "$STAT_ONLY" == true ]]; then
+    GIT_CMD="$GIT_CMD --stat"
+fi
+if [[ -n "$COMMIT" ]]; then
+    GIT_CMD="$GIT_CMD ${COMMIT}"
+fi
+if [[ -n "$DIFF_PATH" ]]; then
+    GIT_CMD="$GIT_CMD -- ${DIFF_PATH}"
+fi
+
+# Build the full command (with optional cd)
+FULL_CMD="$GIT_CMD"
+if [[ -n "$CWD" ]]; then
+    FULL_CMD="cd $(printf '%q' "$CWD") && ${GIT_CMD}"
+fi
+
+# Use markers to delimit output
+MARKER_START="NBS_DIFF_START_$$"
+MARKER_END="NBS_DIFF_END_$$"
+
+"$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"
+
+# Wait for completion
+TIMEOUT=30
+elapsed=0
+POLL=2
+
+while (( elapsed < TIMEOUT )); do
+    sleep "$POLL"
+    elapsed=$((elapsed + POLL))
+
+    output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null) || true
+    if echo "$output" | grep -q "$MARKER_END"; then
+        # Extract diff content
+        diff_output=$(echo "$output" | sed -n "/${MARKER_START}/,/${MARKER_END}/p" \
+            | grep -v "$MARKER_START" \
+            | grep -v "$MARKER_END")
+
+        # Print to stdout
+        echo "$diff_output"
+
+        # Post to chat if requested
+        if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
+            # Truncate if very long (chat messages have practical limits)
+            local_lines=$(echo "$diff_output" | wc -l)
+            if (( local_lines > 50 )); then
+                chat_msg="git diff (${local_lines} lines, showing first 50):
+$(echo "$diff_output" | head -50)
+... (${local_lines} total lines, truncated)"
+            else
+                chat_msg="git diff:
+${diff_output}"
+            fi
+            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$chat_msg" 2>/dev/null || true
+        fi
+
+        exit 0
+    fi
+done
+
+echo "Error: Timed out waiting for git diff (${TIMEOUT}s)" >&2
+exit 3
