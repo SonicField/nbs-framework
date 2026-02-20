@@ -13,11 +13,12 @@
 #   - Outside tmux: creates a pty-session, attaches to it
 #
 # Usage:
-#   nbs-claude [--root=PATH] [claude-args...]
+#   nbs-claude [--root=PATH] [--model=MODEL] [--continue=SESSION_ID] [claude-args...]
 #
 # Examples:
-#   nbs-claude                    # Start interactive claude
-#   nbs-claude --resume abc123   # Resume session with polling
+#   nbs-claude                          # Start interactive claude
+#   nbs-claude --model=opus             # Start with specific model
+#   nbs-claude --continue=abc123        # Continue previous session
 #   nbs-claude --root=/path/to/project  # Use .nbs/ from another directory
 #
 # Environment:
@@ -30,6 +31,8 @@
 #   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
 #   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
 #   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 15, 0 to disable)
+#   NBS_MODEL               Model to use (e.g. opus, sonnet) — passed to claude --model
+#   NBS_CONTINUE_SESSION    Session ID to continue — passed to claude --resume
 #
 # Exit codes:
 #   0 - Clean exit
@@ -49,6 +52,8 @@ STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
 STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
+NBS_MODEL="${NBS_MODEL:-}"
+NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -105,6 +110,11 @@ cleanup() {
     if [[ -f "$pidfile" ]] && [[ "$(cat "$pidfile" 2>/dev/null)" == "$$" ]]; then
         rm -f "$pidfile"
     fi
+
+    # Remove session metadata (stale after exit — nbs-worker continue
+    # checks PID liveness before trusting metadata)
+    local session_meta="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
+    rm -f "$session_meta" 2>/dev/null || true
 
     # Kill sidecar if running
     if [[ -n "$SIDECAR_PID" ]] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
@@ -608,9 +618,9 @@ check_standup_trigger() {
 
     # Post standup to chat
     if is_remote; then
-        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar 'Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.'" 2>/dev/null || true
+        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar 'Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and choose next steps. All agents: what are you working on? What is blocked?'" 2>/dev/null || true
     else
-        nbs-chat send "$chat_path" sidecar 'Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.' 2>/dev/null || true
+        nbs-chat send "$chat_path" sidecar 'Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and choose next steps. All agents: what are you working on? What is blocked?' 2>/dev/null || true
     fi
 
     # Update shared timestamp (atomic write)
@@ -1279,6 +1289,12 @@ for arg in "$@"; do
         --force)
             FORCE_SPAWN=1
             ;;
+        --model=*)
+            NBS_MODEL="${arg#--model=}"
+            ;;
+        --continue=*)
+            NBS_CONTINUE_SESSION="${arg#--continue=}"
+            ;;
         *)
             CLAUDE_ARGS+=("$arg")
             ;;
@@ -1323,14 +1339,59 @@ if [[ -f "$PIDFILE" ]]; then
 fi
 echo "$$" > "$PIDFILE"
 
+# --- Session ID generation ---
+# Generate a UUID for this session so it can be resumed later.
+# If --continue= was given, use that session ID with claude --resume.
+# Otherwise, generate a fresh UUID and pass via --session-id.
+SESSION_UUID=""
+if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
+    SESSION_UUID="$NBS_CONTINUE_SESSION"
+    CLAUDE_ARGS+=("--resume" "$SESSION_UUID")
+else
+    # Generate UUID with fallback chain
+    SESSION_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "no-uuid-$$-$(date +%s)")
+    CLAUDE_ARGS+=("--session-id" "$SESSION_UUID")
+fi
+
+# --- Model passthrough ---
+if [[ -n "$NBS_MODEL" ]]; then
+    CLAUDE_ARGS+=("--model" "$NBS_MODEL")
+fi
+
+# --- Session metadata ---
+# Write session metadata to .nbs/sessions/<handle>.json so nbs-worker
+# can resume this agent without manual session ID extraction.
+mkdir -p "${NBS_ROOT}/.nbs/sessions"
+SESSION_META="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
+TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-nbs-${SIDECAR_HANDLE}-live}"
+cat > "$SESSION_META" << EOF
+{
+  "session_id": "$SESSION_UUID",
+  "handle": "$SIDECAR_HANDLE",
+  "model": "$NBS_MODEL",
+  "tmux_session": "$TMUX_SESSION_NAME",
+  "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "project_root": "$NBS_ROOT",
+  "pid": $$,
+  "initial_prompt_set": $(if [[ -n "$INITIAL_PROMPT" ]]; then echo "true"; else echo "false"; fi)
+}
+EOF
+
 echo "Starting Claude Code with NBS bus-aware polling..."
 echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
 echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
 echo "  Standup interval: ${STANDUP_INTERVAL}m"
 echo "  Handle: ${SIDECAR_HANDLE}"
+echo "  Session ID: ${SESSION_UUID}"
 echo "  Startup grace: ${STARTUP_GRACE}s"
 echo "  Self-heal threshold: ${NOTIFY_FAIL_THRESHOLD} failures"
 echo "  Root: ${NBS_ROOT}"
+if [[ -n "$NBS_MODEL" ]]; then
+    echo "  Model: ${NBS_MODEL}"
+fi
+if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
+    echo "  Continuing session: ${NBS_CONTINUE_SESSION}"
+fi
 if [[ -n "$INITIAL_PROMPT" ]]; then
     echo "  Initial prompt: custom (NBS_INITIAL_PROMPT)"
 fi

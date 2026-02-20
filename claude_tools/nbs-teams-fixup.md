@@ -147,6 +147,28 @@ If agent did not respond to `/compact`: escalate based on context level (Level 3
 
 **Prerequisites:** Agent has a known session ID, and context was >15% before stalling (otherwise `--resume` will hit the same floor).
 
+**Preferred method — `nbs-worker continue`:**
+
+If the agent was started with `nbs-claude` (which writes session metadata to `.nbs/sessions/<handle>.json`), use:
+
+```bash
+nbs-worker continue <handle>
+```
+
+This reads the session ID and model from the metadata file, kills the old tmux session, and respawns with the correct `--resume`, `--model`, and `--dangerously-skip-permissions` flags. To override the model on continue:
+
+```bash
+nbs-worker continue <handle> --model=opus
+```
+
+To inspect the stored session metadata before continuing:
+
+```bash
+nbs-worker session <handle>
+```
+
+**Manual fallback** (if session metadata is missing — e.g., agent was started before the metadata infrastructure was added):
+
 Find the session ID (prefer cmdline check — tmux scrollback may have rotated on long-running sessions):
 
 ```bash

@@ -97,7 +97,7 @@ For each agent in recovery order, apply the /nbs-teams-fixup escalation ladder:
 ```
 Level 1 (Ping): tmux send-keys Enter, wait 15s
 Level 2 (Compact): Ctrl-C + /compact, wait 60s, check context
-Level 3 (Resume): find session ID, kill, respawn with --resume
+Level 3 (Continue): nbs-worker continue <handle> (or manual --resume if no metadata)
 Level 4 (Hard restart): kill, respawn fresh
 ```
 
@@ -110,7 +110,8 @@ Level 4 (Hard restart): kill, respawn fresh
 **Context-based shortcuts** (from /nbs-teams-fixup zombie classification):
 - Context <10%: skip to Level 4 — agent cannot process commands
 - Context at compaction floor (10-15% after compact, no improvement): skip to Level 4
-- Session started without --resume (no session ID available): skip Level 3
+- Session metadata available (`.nbs/sessions/<handle>.json`): use `nbs-worker continue <handle>` for Level 3
+- Session started without --resume and no session metadata: skip Level 3
 
 ### Step 5: Stale Pidfile Cleanup
 
@@ -165,7 +166,22 @@ This ensures respawned agents do not see a backlog of hundreds of old messages o
 
 ### Step 6: Respawn Dead Agents
 
-For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts:
+For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts.
+
+**If session metadata exists** (agent was started with `nbs-claude` which writes `.nbs/sessions/<handle>.json`), use `nbs-worker continue` to preserve session context:
+
+```bash
+# Continue with existing session ID and model from metadata
+nbs-worker continue <handle>
+
+# Or override the model on continue
+nbs-worker continue <handle> --model=opus
+
+# Inspect metadata before continuing
+nbs-worker session <handle>
+```
+
+**If no session metadata** (fresh respawn, Level 4):
 
 ```bash
 # Wait 5 seconds between spawns to reduce lock contention
@@ -175,6 +191,14 @@ for handle in <handles from triage, recovery order>; do
         "NBS_HANDLE=${handle} bin/nbs-claude --dangerously-skip-permissions"
     sleep 5
 done
+```
+
+To specify a model on fresh spawn:
+
+```bash
+NBS_HANDLE=<handle> NBS_MODEL=<model> \
+    tmux new-session -d -s nbs-<handle>-live -c <project-root> \
+    "NBS_HANDLE=<handle> NBS_MODEL=<model> bin/nbs-claude --model=<model> --dangerously-skip-permissions"
 ```
 
 For agents with custom role prompts, use NBS_INITIAL_PROMPT:

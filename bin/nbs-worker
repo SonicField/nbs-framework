@@ -10,6 +10,8 @@
 #   nbs-worker search <name> <regex> [--context=N]
 #   nbs-worker results <name>
 #   nbs-worker dismiss <name>
+#   nbs-worker continue <handle> [--model=MODEL]
+#   nbs-worker session <handle>
 #   nbs-worker list
 #   nbs-worker help
 #
@@ -113,6 +115,14 @@ Usage:
 
   nbs-worker dismiss <name>
       Kill tmux session, mark task file as dismissed.
+
+  nbs-worker continue <handle> [--model=MODEL]
+      Resume an agent from its session metadata. Kills old tmux
+      session, respawns with the saved session ID via claude --resume.
+      Optionally override the model.
+
+  nbs-worker session <handle>
+      Display session metadata (session ID, model, PID, status).
 
   nbs-worker list
       Show all workers with status summary.
@@ -589,6 +599,10 @@ cmd_dismiss() {
     # Publish bus event
     bus_publish "$name" "worker-dismissed" "normal"
 
+    # Clean session metadata (stale after dismiss)
+    local session_meta="${SESSIONS_DIR}/${name}.json"
+    rm -f "$session_meta" 2>/dev/null || true
+
     echo "Dismissed: $name"
     return 0
 }
@@ -641,6 +655,166 @@ cmd_list() {
     fi
 }
 
+# --- Session metadata commands ---
+
+SESSIONS_DIR="$(pwd)/.nbs/sessions"
+
+cmd_session() {
+    local handle="${1:-}"
+
+    if [[ -z "$handle" ]]; then
+        echo "Error: session requires <handle>" >&2
+        echo "Usage: nbs-worker session <handle>" >&2
+        return 4
+    fi
+
+    local meta_file="${SESSIONS_DIR}/${handle}.json"
+
+    if [[ ! -f "$meta_file" ]]; then
+        echo "No session metadata for handle '$handle'" >&2
+        echo "  Expected: $meta_file" >&2
+        echo "  The agent may not have been started with nbs-claude, or has exited." >&2
+        return 2
+    fi
+
+    echo "Session metadata for '$handle':"
+    echo "  File: $meta_file"
+
+    # Parse JSON fields (minimal, no jq dependency)
+    local session_id model started pid project_root tmux_session
+    session_id=$(grep '"session_id"' "$meta_file" | sed 's/.*: *"//;s/".*//' || echo "unknown")
+    model=$(grep '"model"' "$meta_file" | sed 's/.*: *"//;s/".*//' || echo "")
+    started=$(grep '"started"' "$meta_file" | sed 's/.*: *"//;s/".*//' || echo "unknown")
+    pid=$(grep '"pid"' "$meta_file" | sed 's/.*: *//;s/[^0-9].*//' || echo "0")
+    project_root=$(grep '"project_root"' "$meta_file" | sed 's/.*: *"//;s/".*//' || echo "unknown")
+    tmux_session=$(grep '"tmux_session"' "$meta_file" | sed 's/.*: *"//;s/".*//' || echo "unknown")
+
+    echo "  Session ID: $session_id"
+    echo "  Model: ${model:-<default>}"
+    echo "  Started: $started"
+    echo "  Tmux: $tmux_session"
+    echo "  Project: $project_root"
+    echo "  PID: $pid"
+
+    # Check if PID is alive
+    if [[ "$pid" -gt 0 ]] && kill -0 "$pid" 2>/dev/null; then
+        echo "  Status: ALIVE"
+    else
+        echo "  Status: DEAD (PID $pid not running)"
+    fi
+
+    # Check tmux session
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        echo "  Tmux session: ALIVE"
+    else
+        echo "  Tmux session: NOT FOUND"
+    fi
+
+    return 0
+}
+
+cmd_continue() {
+    local handle="${1:-}"
+    shift || true
+
+    if [[ -z "$handle" ]]; then
+        echo "Error: continue requires <handle>" >&2
+        echo "Usage: nbs-worker continue <handle> [--model=MODEL]" >&2
+        return 4
+    fi
+
+    local meta_file="${SESSIONS_DIR}/${handle}.json"
+    local model_override=""
+
+    # Parse optional args
+    for arg in "$@"; do
+        case "$arg" in
+            --model=*)
+                model_override="${arg#--model=}"
+                ;;
+            *)
+                echo "Error: unknown argument: $arg" >&2
+                return 4
+                ;;
+        esac
+    done
+
+    if [[ ! -f "$meta_file" ]]; then
+        echo "Error: No session metadata for handle '$handle'" >&2
+        echo "  Expected: $meta_file" >&2
+        echo "  Cannot continue without session ID. Use 'nbs-worker spawn' for a fresh start." >&2
+        return 2
+    fi
+
+    # Read session metadata
+    local session_id model project_root tmux_session old_pid
+    session_id=$(grep '"session_id"' "$meta_file" | sed 's/.*: *"//;s/".*//')
+    model=$(grep '"model"' "$meta_file" | sed 's/.*: *"//;s/".*//')
+    project_root=$(grep '"project_root"' "$meta_file" | sed 's/.*: *"//;s/".*//')
+    tmux_session=$(grep '"tmux_session"' "$meta_file" | sed 's/.*: *"//;s/".*//')
+    old_pid=$(grep '"pid"' "$meta_file" | sed 's/.*: *//;s/[^0-9].*//')
+
+    # Validate session ID format (UUID)
+    if [[ ! "$session_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        echo "Error: Invalid session ID in metadata: '$session_id'" >&2
+        echo "  Cannot resume with a non-UUID session ID." >&2
+        return 1
+    fi
+
+    # Apply model override if given
+    if [[ -n "$model_override" ]]; then
+        model="$model_override"
+    fi
+
+    echo "Continuing agent '$handle':"
+    echo "  Session ID: $session_id"
+    echo "  Model: ${model:-<default>}"
+    echo "  Project: $project_root"
+    echo "  Tmux session: $tmux_session"
+
+    # Kill old tmux session if still running
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        echo "  Killing old tmux session..."
+        tmux kill-session -t "$tmux_session" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Clean stale pidfile
+    local pidfile="${project_root}/.nbs/pids/${handle}.pid"
+    if [[ -f "$pidfile" ]]; then
+        local existing_pid
+        existing_pid=$(cat "$pidfile" 2>/dev/null || echo "")
+        if [[ -n "$existing_pid" ]] && ! kill -0 "$existing_pid" 2>/dev/null; then
+            rm -f "$pidfile"
+        fi
+    fi
+
+    # Build nbs-claude command
+    local nbs_claude_cmd="NBS_HANDLE=${handle}"
+    if [[ -n "$model" ]]; then
+        nbs_claude_cmd="${nbs_claude_cmd} NBS_MODEL=${model}"
+    fi
+    nbs_claude_cmd="${nbs_claude_cmd} bin/nbs-claude --continue=${session_id} --dangerously-skip-permissions"
+
+    # Respawn in tmux
+    echo "  Spawning: $nbs_claude_cmd"
+    tmux new-session -d -s "$tmux_session" -c "$project_root" "$nbs_claude_cmd"
+
+    # Wait and verify
+    sleep 3
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        echo "  Continued successfully in tmux session: $tmux_session"
+    else
+        echo "  Warning: tmux session did not start" >&2
+        return 1
+    fi
+
+    # Publish bus event
+    bus_publish "$handle" "worker-continued" "normal" "Continued session $session_id"
+
+    return 0
+}
+
 # --- Main dispatch ---
 
 case "${1:-}" in
@@ -663,6 +837,14 @@ case "${1:-}" in
     dismiss)
         shift
         cmd_dismiss "$@"
+        ;;
+    continue)
+        shift
+        cmd_continue "$@"
+        ;;
+    session)
+        shift
+        cmd_session "$@"
         ;;
     list)
         cmd_list
