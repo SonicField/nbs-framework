@@ -617,10 +617,11 @@ check_standup_trigger() {
     fi
 
     # Post standup to chat
+    local standup_msg='Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and assign next tasks. All agents: what are you working on? What is blocked? If you are idle, find useful work NOW — do not wait for assignment. If you declared session-end without supervisor approval, resume work immediately.'
     if is_remote; then
-        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar 'Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and choose next steps. All agents: what are you working on? What is blocked?'" 2>/dev/null || true
+        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar $(printf '%q' "$standup_msg")" 2>/dev/null || true
     else
-        nbs-chat send "$chat_path" sidecar 'Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and choose next steps. All agents: what are you working on? What is blocked?' 2>/dev/null || true
+        nbs-chat send "$chat_path" sidecar "$standup_msg" 2>/dev/null || true
     fi
 
     # Update shared timestamp (atomic write)

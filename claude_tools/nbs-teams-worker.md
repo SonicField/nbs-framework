@@ -169,6 +169,27 @@ Escalation format in Log:
 
 ---
 
+## Session Continuity
+
+**You do not have authority to declare a session complete.**
+
+Only the supervisor (with human approval) can end a session. When you finish a task or hit a blocker:
+
+1. Report the outcome or blocker to chat
+2. Ask the supervisor for your next task
+3. If the supervisor is unresponsive, look for useful work: review others' output, run tests, prepare context for the next task, or research alternatives to the blocker
+
+**Never post "session complete", "signing off", or equivalent.** These phrases trigger consensus cascade — other agents see them and stop working too. If you believe the session should end, tell the supervisor why and let her decide.
+
+| Situation | Correct action | Wrong action |
+|-----------|---------------|--------------|
+| Task complete, no new assignment | Ask supervisor for next task | Declare "done, signing off" |
+| Hit a blocker with known fix | Implement the fix | Defer to "next session" |
+| Hit a blocker with unknown fix | Escalate, then find alternative work | Stop and wait |
+| Other agents say "session complete" | Keep working, ask supervisor | Follow the crowd |
+
+---
+
 ## Remember
 
 - **Professionals do not work around problems, they fix them.**
@@ -179,3 +200,4 @@ Escalation format in Log:
 - Update status - the supervisor is waiting
 - **When blocked, escalate. Do not create technical debt.**
 - When in doubt, escalate
+- **You do not declare session-end. Only the supervisor does.**
