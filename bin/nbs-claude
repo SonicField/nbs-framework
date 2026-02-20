@@ -165,6 +165,90 @@ detect_permissions_prompt() {
     return 1
 }
 
+# --- Simple proceed prompt detection ---
+# Claude Code may display a simple "Do you want to proceed?" with only
+# "Yes" and "No" options (no "don't ask again"). This appears for bash
+# command confirmations and other simple approvals. Unlike the full
+# permissions prompt, this variant only has 2 options.
+# The sidecar auto-selects option 1 ("Yes") to prevent stalls.
+# IMPORTANT: This must be checked AFTER detect_permissions_prompt, since
+# that function is more specific (requires "don't ask again") and selects
+# option 2 instead.
+
+detect_proceed_prompt() {
+    local content="$1"
+    echo "$content" | grep -qF 'Do you want to proceed?' && \
+    ! echo "$content" | grep -qF "don't ask again" && return 0
+    return 1
+}
+
+# --- Blocking dialogue dispatch ---
+# Checks pane content against all known blocking dialogues. If a dialogue is
+# detected, sets DIALOGUE_OPTION (the menu option to select) and
+# DIALOGUE_SETTLE (seconds to sleep after responding, for the UI to settle).
+#
+# Dialogue table (checked in priority order):
+#   Dialogue           │ Option │ Settle │ Rationale
+#   ───────────────────┼────────┼────────┼──────────────────────────────────
+#   Plan mode          │ 2      │ 5      │ "Yes, bypass permissions"
+#   AskUserQuestion    │ 1      │ 5      │ Default/recommended choice
+#   Permissions prompt │ 2      │ 2      │ "Don't ask again" — permanent
+#   Proceed prompt     │ 1      │ 2      │ Simple "Yes"
+#
+# Returns 0 if dialogue detected, 1 otherwise.
+
+DIALOGUE_OPTION=""
+DIALOGUE_SETTLE=0
+
+check_blocking_dialogue() {
+    local content="$1"
+    if detect_plan_mode "$content"; then
+        DIALOGUE_OPTION='2'
+        DIALOGUE_SETTLE=5
+        return 0
+    fi
+    if detect_ask_modal "$content"; then
+        DIALOGUE_OPTION='1'
+        DIALOGUE_SETTLE=5
+        return 0
+    fi
+    if detect_permissions_prompt "$content"; then
+        DIALOGUE_OPTION='2'
+        DIALOGUE_SETTLE=2
+        return 0
+    fi
+    if detect_proceed_prompt "$content"; then
+        DIALOGUE_OPTION='1'
+        DIALOGUE_SETTLE=2
+        return 0
+    fi
+    return 1
+}
+
+# --- Transport-specific dialogue response ---
+# These send the selected option via the appropriate transport (tmux or pty).
+
+respond_dialogue_tmux() {
+    local pane_id="$1"
+    local option="$2"
+    local settle="$3"
+    tmux send-keys -t "$pane_id" "$option" || true
+    sleep 0.5
+    tmux send-keys -t "$pane_id" Enter || true
+    sleep "$settle"
+}
+
+respond_dialogue_pty() {
+    local pty="$1"
+    local session="$2"
+    local option="$3"
+    local settle="$4"
+    "$pty" send "$session" --no-enter "$option" || true
+    sleep 0.5
+    "$pty" send "$session" '' || true
+    sleep "$settle"
+}
+
 # --- Context stress detection ---
 # Claude Code displays specific messages when context is stressed:
 #   - "Compacting conversation" during auto-compact
@@ -847,7 +931,7 @@ poll_sidecar_tmux() {
         sleep 2
         local init_content
         init_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-        if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
+        if echo "$init_content" | tail -3 | grep -qF '❯'; then
             tmux send-keys -t "$pane_id" -l "$init_prompt" || true
             sleep 0.3
             tmux send-keys -t "$pane_id" Enter || true
@@ -883,72 +967,21 @@ poll_sidecar_tmux() {
             bus_check_counter=0
             last_content_hash="$current_hash"
 
-            # Check for plan mode immediately on content change
-            # Plan mode blocks the worker — resolve it without waiting for idle
-            if detect_plan_mode "$content"; then
+            # Handle blocking dialogues immediately on content change
+            if check_blocking_dialogue "$content"; then
                 sleep 1
-                tmux send-keys -t "$pane_id" '2' || true
-                sleep 0.5
-                tmux send-keys -t "$pane_id" Enter || true
+                respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
                 idle_seconds=0
                 last_content_hash=""
-                sleep 5
-            fi
-
-            # Check for AskUserQuestion modal — auto-select option 1
-            if detect_ask_modal "$content"; then
-                sleep 1
-                tmux send-keys -t "$pane_id" '1' || true
-                sleep 0.5
-                tmux send-keys -t "$pane_id" Enter || true
-                idle_seconds=0
-                last_content_hash=""
-                sleep 5
-            fi
-
-            # Check for permissions prompt — auto-select option 2 (don't ask again)
-            if detect_permissions_prompt "$content"; then
-                sleep 1
-                tmux send-keys -t "$pane_id" '2' || true
-                sleep 0.5
-                tmux send-keys -t "$pane_id" Enter || true
-                idle_seconds=0
-                last_content_hash=""
-                sleep 2
             fi
             continue
         fi
 
-        # Also check for plan mode when content is stable (already idle)
-        if detect_plan_mode "$content"; then
-            tmux send-keys -t "$pane_id" '2' || true
-            sleep 0.5
-            tmux send-keys -t "$pane_id" Enter || true
+        # Handle blocking dialogues when content is stable (already idle)
+        if check_blocking_dialogue "$content"; then
+            respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
             idle_seconds=0
             last_content_hash=""
-            sleep 5
-            continue
-        fi
-
-        # Check for AskUserQuestion modal when content is stable
-        if detect_ask_modal "$content"; then
-            tmux send-keys -t "$pane_id" '1' || true
-            sleep 0.5
-            tmux send-keys -t "$pane_id" Enter || true
-            idle_seconds=0
-            last_content_hash=""
-            sleep 5
-            continue
-        fi
-
-        # Check for permissions prompt when content is stable
-        if detect_permissions_prompt "$content"; then
-            tmux send-keys -t "$pane_id" '2' || true
-            sleep 0.5
-            tmux send-keys -t "$pane_id" Enter || true
-            idle_seconds=0
-            last_content_hash=""
-            sleep 2
             continue
         fi
 
@@ -992,26 +1025,57 @@ poll_sidecar_tmux() {
                         continue
                     fi
 
+                    # TOCTOU fix: re-capture pane immediately before injection.
+                    # The $content variable may be up to BUS_CHECK_INTERVAL seconds
+                    # stale. Claude Code may have started processing between the
+                    # initial capture and now. Only inject if prompt is still visible.
+                    local fresh_content
+                    fresh_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                    if ! is_prompt_visible "$fresh_content"; then
+                        # Prompt disappeared — Claude Code started processing.
+                        # Abort injection, reset counters, try again next cycle.
+                        idle_seconds=0
+                        last_content_hash=""
+                        sleep 2
+                        continue
+                    fi
+
                     tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.3
                     tmux send-keys -t "$pane_id" Enter || true
 
-                    # Verify injection was consumed: prompt should disappear
-                    sleep 2
-                    local verify_content
-                    verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                    if is_prompt_visible "$verify_content"; then
-                        # Check if this was a skill failure
-                        if detect_skill_failure "$verify_content"; then
-                            NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
-                        else
-                            # Prompt still visible but not a skill failure — retry once
+                    # Verify injection was consumed — retry with backoff if stalled.
+                    # Even with the fresh re-capture above, there is still a small
+                    # TOCTOU window between the check and send-keys. If Claude Code
+                    # starts processing in that window, the text lands in the
+                    # readline buffer without being submitted.
+                    # Retry up to 3 times with increasing delays.
+                    local injection_consumed=0
+                    for retry_attempt in 1 2 3; do
+                        sleep $((retry_attempt * 2))
+                        local verify_content
+                        verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                        if echo "$verify_content" | grep -qF '/nbs-notify'; then
+                            # Text still in buffer — send Enter to retry submission
                             tmux send-keys -t "$pane_id" Enter || true
-                            sleep 1
+                        else
+                            # Text consumed — injection succeeded
+                            injection_consumed=1
+                            break
                         fi
-                    else
+                    done
+                    if [[ $injection_consumed -eq 1 ]]; then
                         # Injection consumed successfully — reset failure counter
                         NOTIFY_FAIL_COUNT=0
+                    else
+                        # Still not consumed after 3 retries — check for skill failure
+                        local final_content
+                        final_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                        if is_prompt_visible "$final_content"; then
+                            if detect_skill_failure "$final_content"; then
+                                NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+                            fi
+                        fi
                     fi
 
                     idle_seconds=0
@@ -1050,7 +1114,7 @@ poll_sidecar_pty() {
         sleep 2
         local init_content
         init_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-        if echo "$init_content" | tail -3 | grep -qE '❯|>\s*$'; then
+        if echo "$init_content" | tail -3 | grep -qF '❯'; then
             "$pty" send "$session" "$init_prompt" || true
             sleep 0.5
             "$pty" send "$session" '' || true
@@ -1083,71 +1147,21 @@ poll_sidecar_pty() {
             bus_check_counter=0
             last_content_hash="$current_hash"
 
-            # Check for plan mode immediately on content change
-            if detect_plan_mode "$content"; then
+            # Handle blocking dialogues immediately on content change
+            if check_blocking_dialogue "$content"; then
                 sleep 1
-                "$pty" send "$session" --no-enter '2' || true
-                sleep 0.5
-                "$pty" send "$session" '' || true
+                respond_dialogue_pty "$pty" "$session" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
                 idle_seconds=0
                 last_content_hash=""
-                sleep 5
-            fi
-
-            # Check for AskUserQuestion modal — auto-select option 1
-            if detect_ask_modal "$content"; then
-                sleep 1
-                "$pty" send "$session" --no-enter '1' || true
-                sleep 0.5
-                "$pty" send "$session" '' || true
-                idle_seconds=0
-                last_content_hash=""
-                sleep 5
-            fi
-
-            # Check for permissions prompt — auto-select option 2 (don't ask again)
-            if detect_permissions_prompt "$content"; then
-                sleep 1
-                "$pty" send "$session" --no-enter '2' || true
-                sleep 0.5
-                "$pty" send "$session" '' || true
-                idle_seconds=0
-                last_content_hash=""
-                sleep 2
             fi
             continue
         fi
 
-        # Check for plan mode when content is stable
-        if detect_plan_mode "$content"; then
-            "$pty" send "$session" --no-enter '2' || true
-            sleep 0.5
-            "$pty" send "$session" '' || true
+        # Handle blocking dialogues when content is stable (already idle)
+        if check_blocking_dialogue "$content"; then
+            respond_dialogue_pty "$pty" "$session" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
             idle_seconds=0
             last_content_hash=""
-            sleep 5
-            continue
-        fi
-
-        # Check for AskUserQuestion modal when content is stable
-        if detect_ask_modal "$content"; then
-            "$pty" send "$session" --no-enter '1' || true
-            sleep 0.5
-            "$pty" send "$session" '' || true
-            idle_seconds=0
-            last_content_hash=""
-            sleep 5
-            continue
-        fi
-
-        # Check for permissions prompt when content is stable
-        if detect_permissions_prompt "$content"; then
-            "$pty" send "$session" --no-enter '2' || true
-            sleep 0.5
-            "$pty" send "$session" '' || true
-            idle_seconds=0
-            last_content_hash=""
-            sleep 2
             continue
         fi
 
@@ -1189,26 +1203,52 @@ poll_sidecar_pty() {
                         continue
                     fi
 
+                    # TOCTOU fix: re-capture pane immediately before injection.
+                    # The $content variable may be up to BUS_CHECK_INTERVAL seconds
+                    # stale. Only inject if prompt is still visible.
+                    local fresh_content
+                    fresh_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                    if ! is_prompt_visible "$fresh_content"; then
+                        # Prompt disappeared — Claude Code started processing.
+                        # Abort injection, reset counters, try again next cycle.
+                        idle_seconds=0
+                        last_content_hash=""
+                        sleep 2
+                        continue
+                    fi
+
                     "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}" || true
                     sleep 0.5
                     "$pty" send "$session" '' || true
 
-                    # Verify injection was consumed: prompt should disappear
-                    sleep 2
-                    local verify_content
-                    verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                    if is_prompt_visible "$verify_content"; then
-                        # Check if this was a skill failure
-                        if detect_skill_failure "$verify_content"; then
-                            NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
-                        else
-                            # Prompt still visible but not a skill failure — retry once
+                    # Verify injection was consumed — retry with backoff if stalled.
+                    # Retry up to 3 times with increasing delays.
+                    local injection_consumed=0
+                    for retry_attempt in 1 2 3; do
+                        sleep $((retry_attempt * 2))
+                        local verify_content
+                        verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                        if echo "$verify_content" | grep -qF '/nbs-notify'; then
+                            # Text still in buffer — send Enter to retry submission
                             "$pty" send "$session" '' || true
-                            sleep 1
+                        else
+                            # Text consumed — injection succeeded
+                            injection_consumed=1
+                            break
                         fi
-                    else
+                    done
+                    if [[ $injection_consumed -eq 1 ]]; then
                         # Injection consumed successfully — reset failure counter
                         NOTIFY_FAIL_COUNT=0
+                    else
+                        # Still not consumed after 3 retries — check for skill failure
+                        local final_content
+                        final_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                        if is_prompt_visible "$final_content"; then
+                            if detect_skill_failure "$final_content"; then
+                                NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
+                            fi
+                        fi
                     fi
 
                     idle_seconds=0

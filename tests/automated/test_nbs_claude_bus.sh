@@ -296,6 +296,8 @@ mkdir -p .nbs/chat .nbs/events
 _EXTRACT_TMP=$(mktemp)
 # Extract configuration
 sed -n '/^# --- Configuration ---/,/^# --- Cleanup ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
+# Extract prompt/modal detection functions (plan mode, permissions, proceed, ask, context stress)
+sed -n '/^# --- Plan mode detection ---/,/^# --- Dynamic resource registration ---/p' "$NBS_CLAUDE" | head -n -1 >> "$_EXTRACT_TMP"
 # Extract resource registration + bus checking + prompt detection
 sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 >> "$_EXTRACT_TMP"
 source "$_EXTRACT_TMP"
@@ -928,14 +930,14 @@ fi
 echo "11. Injection verification logic..."
 
 # Test: tmux sidecar verifies injection was consumed
-if grep -A50 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
+if grep -A70 'Track 1.*Bus-aware' "$NBS_CLAUDE" | grep -q 'verify_content'; then
     pass "tmux sidecar captures pane after injection for verification"
 else
     fail "tmux sidecar missing post-injection verification"
 fi
 
 # Test: verification checks is_prompt_visible on post-injection content
-if grep -A20 'Verify injection' "$NBS_CLAUDE" | grep -q 'is_prompt_visible.*verify_content'; then
+if grep -A40 'Verify injection' "$NBS_CLAUDE" | grep -q 'is_prompt_visible.*final_content'; then
     pass "Verification checks is_prompt_visible on captured content"
 else
     fail "Verification does not check is_prompt_visible"
@@ -968,6 +970,131 @@ if grep -A3 'is_prompt_visible()' "$NBS_CLAUDE" | grep -q '>\\\s\*\$'; then
     fail "is_prompt_visible still has '>\\s*$' pattern (should be removed)"
 else
     pass "is_prompt_visible no longer matches bare > pattern"
+fi
+
+# Test: fresh re-capture before injection (TOCTOU mitigation)
+# Both sidecars must re-capture pane content immediately before injection
+# to avoid using stale $content that may be up to BUS_CHECK_INTERVAL seconds old.
+FRESH_RECAPTURE_COUNT=$(grep -c 'TOCTOU fix: re-capture pane' "$NBS_CLAUDE")
+if [[ "$FRESH_RECAPTURE_COUNT" -ge 2 ]]; then
+    pass "Fresh re-capture before injection in both sidecar modes ($FRESH_RECAPTURE_COUNT occurrences)"
+else
+    fail "Fresh re-capture before injection not in both modes (found $FRESH_RECAPTURE_COUNT, expected >= 2)"
+fi
+
+# Test: fresh re-capture aborts injection if prompt disappeared
+if grep -A10 'TOCTOU fix: re-capture pane' "$NBS_CLAUDE" | grep -q 'Abort injection'; then
+    pass "Fresh re-capture aborts injection when prompt disappears"
+else
+    fail "Fresh re-capture does not abort when prompt disappears"
+fi
+
+# Test: init-wait loops use grep -qF (fixed string), not the old broad regex
+# The old pattern was: grep -qE '❯|>\s*$' which matched HTML tags and shell output
+if grep -F '>\s*$' "$NBS_CLAUDE" | grep -v '^#' | grep -v 'REJECT' | grep -q 'grep'; then
+    fail "Init-wait loops still use broad '>\\s*\$' regex pattern"
+else
+    pass "Init-wait loops do not use broad regex pattern"
+fi
+
+# Test: init-wait loops use grep -qF for prompt detection
+INIT_WAIT_FIXED_COUNT=$(grep -c "grep -qF '❯'" "$NBS_CLAUDE")
+if [[ "$INIT_WAIT_FIXED_COUNT" -ge 3 ]]; then
+    # Expected: is_prompt_visible (1) + tmux init-wait (1) + pty init-wait (1) = 3
+    pass "All prompt checks use grep -qF fixed string match ($INIT_WAIT_FIXED_COUNT occurrences)"
+else
+    fail "Not all prompt checks use grep -qF (found $INIT_WAIT_FIXED_COUNT, expected >= 3)"
+fi
+
+# Test: pty-session sidecar has 3-retry backoff loop (not single retry)
+if grep -A30 'poll_sidecar_pty' "$NBS_CLAUDE" | grep -q 'retry_attempt in 1 2 3'; then
+    # This may not match because retry_attempt is deeper in the function.
+    # Instead, count retry loops in the pty sidecar section.
+    true
+fi
+PTY_RETRY_COUNT=$(sed -n '/poll_sidecar_pty/,/^}/p' "$NBS_CLAUDE" | grep -c 'retry_attempt')
+if [[ "$PTY_RETRY_COUNT" -ge 1 ]]; then
+    pass "pty-session sidecar has retry loop with retry_attempt variable"
+else
+    fail "pty-session sidecar missing retry loop (retry_attempt not found)"
+fi
+
+# Test: detect_proceed_prompt function exists
+if grep -q 'detect_proceed_prompt()' "$NBS_CLAUDE"; then
+    pass "detect_proceed_prompt function exists"
+else
+    fail "detect_proceed_prompt function missing"
+fi
+
+# Test: detect_proceed_prompt checks for "Do you want to proceed?" without "don't ask again"
+if grep -A5 'detect_proceed_prompt()' "$NBS_CLAUDE" | grep -qF 'Do you want to proceed?' && \
+   grep -A5 'detect_proceed_prompt()' "$NBS_CLAUDE" | grep -q "! .*don't ask again"; then
+    pass "detect_proceed_prompt correctly distinguishes from permissions prompt"
+else
+    fail "detect_proceed_prompt does not distinguish from permissions prompt"
+fi
+
+# Test: blocking dialogue dispatch used in both sidecar modes
+DISPATCH_COUNT=$(grep -c 'check_blocking_dialogue' "$NBS_CLAUDE")
+# Expected: function def (1) + tmux on-change (1) + tmux stable (1) + pty on-change (1) + pty stable (1) = 5
+if [[ "$DISPATCH_COUNT" -ge 5 ]]; then
+    pass "check_blocking_dialogue wired into both sidecar modes ($DISPATCH_COUNT occurrences)"
+else
+    fail "check_blocking_dialogue not in both modes (found $DISPATCH_COUNT, expected >= 5)"
+fi
+
+# Test: detect_proceed_prompt is called from check_blocking_dialogue dispatch
+if grep -A20 'check_blocking_dialogue()' "$NBS_CLAUDE" | grep -q 'detect_proceed_prompt'; then
+    pass "detect_proceed_prompt dispatched via check_blocking_dialogue"
+else
+    fail "detect_proceed_prompt not dispatched via check_blocking_dialogue"
+fi
+
+# Test: proceed prompt selects option 1 (Yes) in dispatch table
+if grep -A20 'detect_proceed_prompt' "$NBS_CLAUDE" | grep -q "DIALOGUE_OPTION='1'"; then
+    pass "Proceed prompt auto-selects option 1 (Yes)"
+else
+    fail "Proceed prompt does not auto-select option 1"
+fi
+
+# Test: respond_dialogue helpers exist for both transport modes
+if grep -q 'respond_dialogue_tmux()' "$NBS_CLAUDE" && grep -q 'respond_dialogue_pty()' "$NBS_CLAUDE"; then
+    pass "Transport-specific dialogue response helpers exist (tmux + pty)"
+else
+    fail "Missing respond_dialogue helper for one or both transport modes"
+fi
+
+# Test: dialogue dispatch table documents all dialogue types
+if grep -A30 'check_blocking_dialogue()' "$NBS_CLAUDE" | grep -q 'detect_plan_mode' && \
+   grep -A30 'check_blocking_dialogue()' "$NBS_CLAUDE" | grep -q 'detect_ask_modal' && \
+   grep -A30 'check_blocking_dialogue()' "$NBS_CLAUDE" | grep -q 'detect_permissions_prompt' && \
+   grep -A30 'check_blocking_dialogue()' "$NBS_CLAUDE" | grep -q 'detect_proceed_prompt'; then
+    pass "Dialogue dispatch table covers all 4 dialogue types"
+else
+    fail "Dialogue dispatch table missing one or more dialogue types"
+fi
+
+# Functional test: detect_proceed_prompt correctly matches simple proceed prompt
+SIMPLE_PROCEED=$'Do you want to proceed?\n❯ 1. Yes\n  2. No'
+if detect_proceed_prompt "$SIMPLE_PROCEED"; then
+    pass "detect_proceed_prompt matches simple Yes/No proceed prompt"
+else
+    fail "detect_proceed_prompt does not match simple Yes/No proceed prompt"
+fi
+
+# Functional test: detect_proceed_prompt rejects permissions prompt
+PERM_PROMPT=$'Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don'\''t ask again for Bash\n  3. No'
+if detect_proceed_prompt "$PERM_PROMPT"; then
+    fail "detect_proceed_prompt incorrectly matches permissions prompt"
+else
+    pass "detect_proceed_prompt correctly rejects permissions prompt (has don't ask again)"
+fi
+
+# Functional test: detect_permissions_prompt still works on permissions prompt
+if detect_permissions_prompt "$PERM_PROMPT"; then
+    pass "detect_permissions_prompt still matches permissions prompt"
+else
+    fail "detect_permissions_prompt no longer matches permissions prompt"
 fi
 
 # =========================================================================

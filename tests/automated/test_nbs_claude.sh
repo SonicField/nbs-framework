@@ -185,26 +185,25 @@ else
 fi
 
 # Verify plan mode sends '2' keystroke (not /nbs-poll)
-if grep -A2 'detect_plan_mode' "$NBS_CLAUDE" | grep -q "'2'"; then
+if grep -A5 'detect_plan_mode' "$NBS_CLAUDE" | grep -q "'2'"; then
     pass "Plan mode sends '2' keystroke"
 else
     fail "Plan mode does not send '2' keystroke"
 fi
 
-# Verify plan mode check is separate from idle-timeout prompt detection
-# Plan mode should fire on content change (not just after idle timeout)
-if grep -B2 'detect_plan_mode' "$NBS_CLAUDE" | grep -q 'content change'; then
-    pass "Plan mode detection fires on content change"
+# Verify blocking dialogue check fires on content change (not just after idle timeout)
+if grep -B2 'check_blocking_dialogue' "$NBS_CLAUDE" | grep -q 'content change'; then
+    pass "Dialogue dispatch fires on content change"
 else
-    fail "Plan mode detection not tied to content change"
+    fail "Dialogue dispatch not tied to content change"
 fi
 
-# Verify plan mode detection exists in both sidecar functions
-TMUX_PLAN=$(grep -c 'detect_plan_mode' "$NBS_CLAUDE" | head -1)
-if [[ "$TMUX_PLAN" -ge 4 ]]; then
-    pass "Plan mode detection in both sidecar modes (tmux + pty)"
+# Verify dialogue dispatch exists in both sidecar functions
+DISPATCH_REFS=$(grep -c 'check_blocking_dialogue' "$NBS_CLAUDE" | head -1)
+if [[ "$DISPATCH_REFS" -ge 5 ]]; then
+    pass "Dialogue dispatch in both sidecar modes ($DISPATCH_REFS references)"
 else
-    fail "Plan mode detection not in both sidecar modes (found $TMUX_PLAN references, expected >= 4)"
+    fail "Dialogue dispatch not in both sidecar modes (found $DISPATCH_REFS references, expected >= 5)"
 fi
 
 # 8. Functional test: detect_plan_mode pattern matching
