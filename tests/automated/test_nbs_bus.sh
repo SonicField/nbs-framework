@@ -42,6 +42,7 @@
 #   38. Check output includes event age
 #   39. Status warns about stale events (ack-timeout)
 #   40. Status stale count is correct
+#   41. Dot path traversal rejected by read and ack
 
 set -euo pipefail
 
@@ -1244,6 +1245,49 @@ if echo "$STATUS" | grep -q "2 stale"; then
     check "Reports correct stale count" "pass"
 else
     check "Reports correct stale count (got: $STATUS)" "fail"
+fi
+
+echo ""
+
+# --- Test 41: Dot path traversal rejected by read and ack ---
+echo "41. Dot path traversal rejected..."
+EVENTS="$TEST_DIR/events41"
+mkdir -p "$EVENTS/processed"
+$NBS_BUS publish "$EVENTS" tester dot-test normal "payload" > /dev/null
+
+# bus_read should reject "." as an event filename
+set +e
+$NBS_BUS read "$EVENTS" "." > /dev/null 2>&1
+READ_DOT=$?
+set -e
+if [[ "$READ_DOT" -ne 0 ]]; then
+    check "Read rejects dot filename" "pass"
+else
+    check "Read rejects dot filename (got exit 0, expected non-zero)" "fail"
+fi
+
+# bus_ack should reject "." as an event filename
+set +e
+$NBS_BUS ack "$EVENTS" "." > /dev/null 2>&1
+ACK_DOT=$?
+set -e
+if [[ "$ACK_DOT" -ne 0 ]]; then
+    check "Ack rejects dot filename" "pass"
+else
+    check "Ack rejects dot filename (got exit 0, expected non-zero)" "fail"
+fi
+
+# Existing ".." rejection still works
+set +e
+$NBS_BUS read "$EVENTS" ".." > /dev/null 2>&1
+READ_DOTDOT=$?
+$NBS_BUS ack "$EVENTS" ".." > /dev/null 2>&1
+ACK_DOTDOT=$?
+set -e
+if [[ "$READ_DOTDOT" -ne 0 && "$ACK_DOTDOT" -ne 0 ]]; then
+    check "Dotdot still rejected (regression check)" "pass"
+else
+    check "Dotdot still rejected (read=$READ_DOTDOT, ack=$ACK_DOTDOT)" "fail"
 fi
 
 echo ""
