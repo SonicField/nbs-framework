@@ -688,13 +688,9 @@ static char *open_editor(void) {
     }
 
     if (pid == 0) {
-        /* Child: run editor with /dev/tty
-         *
-         * SECURITY NOTE: The child inherits the full parent environment.
-         * This may leak sensitive environment variables to the editor
-         * process.  A full fix would use execle() with a sanitised
-         * environment (PATH, HOME, TERM, LANG only), but that is a
-         * larger refactor -- flagged for future work. */
+        /* Child: run editor with /dev/tty and sanitised environment.
+         * Only PATH, HOME, TERM, and LANG are passed to the editor
+         * to prevent leaking sensitive environment variables. */
         int tty = open("/dev/tty", O_RDONLY);
         if (tty < 0) {
             fprintf(stderr, "error: cannot open /dev/tty for editor: %s\n",
@@ -708,7 +704,28 @@ static char *open_editor(void) {
             _exit(1);
         }
         close(tty);
-        execlp(editor, editor, tmppath, (char *)NULL);
+
+        /* Build sanitised environment — only safe variables */
+        const char *safe_vars[] = {"PATH", "HOME", "TERM", "LANG", NULL};
+        char *clean_env[5];  /* 4 vars + NULL terminator */
+        int env_count = 0;
+        for (int i = 0; safe_vars[i] != NULL; i++) {
+            const char *val = getenv(safe_vars[i]);
+            if (val) {
+                /* Format: NAME=VALUE */
+                size_t name_len = strlen(safe_vars[i]);
+                size_t val_len = strlen(val);
+                char *entry = malloc(name_len + 1 + val_len + 1);
+                if (entry) {
+                    snprintf(entry, name_len + 1 + val_len + 1,
+                             "%s=%s", safe_vars[i], val);
+                    clean_env[env_count++] = entry;
+                }
+            }
+        }
+        clean_env[env_count] = NULL;
+
+        execle(editor, editor, tmppath, (char *)NULL, clean_env);
         _exit(127);
     }
 
