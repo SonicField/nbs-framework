@@ -109,6 +109,7 @@ static int cmd_create(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat create <file>\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 3, "cmd_create: argc %d after validation", argc);
 
     const char *path = argv[2];
 
@@ -141,6 +142,7 @@ static int cmd_send(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat send <file> <handle> <message>\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 5, "cmd_send: argc %d after validation", argc);
 
     const char *path = argv[2];
     const char *handle = argv[3];
@@ -179,6 +181,7 @@ static int cmd_read(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat read <file> [--last=N] [--since=<handle>] [--unread=<handle>]\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 3, "cmd_read: argc %d after validation", argc);
 
     const char *path = argv[2];
 
@@ -321,6 +324,7 @@ static int cmd_poll(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat poll <file> <handle> [--timeout=N]\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 4, "cmd_poll: argc %d after validation", argc);
 
     const char *path = argv[2];
     const char *handle = argv[3];
@@ -410,6 +414,7 @@ static int cmd_participants(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat participants <file>\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 3, "cmd_participants: argc %d after validation", argc);
 
     const char *path = argv[2];
 
@@ -473,6 +478,7 @@ static int cmd_search(int argc, char **argv) {
         fprintf(stderr, "Usage: nbs-chat search <file> <pattern> [--handle=<name>]\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 4, "cmd_search: argc %d after validation", argc);
 
     const char *path = argv[2];
     const char *pattern = argv[3];
@@ -558,6 +564,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Run 'nbs-chat help' for usage\n");
         return 4;
     }
+    ASSERT_MSG(argc >= 2, "main: argc %d after validation", argc);
 
     const char *cmd = argv[1];
 
