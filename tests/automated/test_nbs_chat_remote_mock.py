@@ -5,7 +5,7 @@ Test harness: run nbs-chat-remote tests against MockSSHServer.
 Starts an in-process SSH server (from nbs-ssh) with key-based auth and
 real command execution, then runs the bash test suite against it. This
 allows full integration testing on machines where ssh localhost is blocked
-(e.g. by BpfJailer or corporate security policies).
+(e.g. by security policies or firewall rules).
 
 Prerequisites:
   - nbs-ssh installed: pip install -e ~/local/nbs-ssh

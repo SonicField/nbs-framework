@@ -6,7 +6,7 @@
 
 ## 1. Problem Statement
 
-NBS agents currently run on a single machine. The `.nbs` directory, chat files, bus events, and worker state are all local filesystem artefacts. Cross-machine operation exists only as an ad hoc SSH proxy (`nbs-chat-remote`), which arm-remote uses daily from build-host to build-host
+NBS agents currently run on a single machine. The `.nbs` directory, chat files, bus events, and worker state are all local filesystem artefacts. Cross-machine operation exists only as an ad hoc SSH proxy (`nbs-chat-remote`), which arm-remote uses daily from a remote build server to the coordination host.
 
 arm-remote reported five concrete pain points:
 1. **Poll latency** — no sidecar on the remote machine, messages seen only when manually polled
@@ -34,7 +34,7 @@ Option D was chosen because:
   4. Causal consistency of the decision log (single source of truth)
 - It requires **zero new architecture** — only extending the existing `nbs-chat-remote` pattern to cover bus and sidecar operations
 - It matches **arm-remote's lived experience** — the SSH proxy already works for chat, just needs extending
-- The single failure mode (coordination host down) is **acceptable** — if build-host is down, Alex isn't watching either. Remote agents can continue local work and resync on reconnect.
+- The single failure mode (coordination host down) is **acceptable** — if the coordination host is down, the operator isn't watching either. Remote agents can continue local work and resync on reconnect.
 
 **Key design principle (theologian, endorsed by all):** Don't design for hypothetical failures. Build Phase 1, observe real failures, harden based on evidence. This aligns with CLAUDE.md's falsification discipline.
 
@@ -45,16 +45,16 @@ Option D was chosen because:
 | 1 | `nbs-bus-remote` | SSH proxy for bus operations (check/read/ack/publish). Same pattern as `nbs-chat-remote`. |
 | 2 | Sidecar remote mode | If `NBS_CHAT_HOST` is set, sidecar uses `nbs-chat-remote`/`nbs-bus-remote` for all operations. |
 | 3 | SSH failure backoff | Sidecar detects SSH failure (non-zero exit) and backs off exponentially (1s, 2s, 4s, 8s, cap 30s). Resets on success. |
-| 4 | Handle namespacing | Format: `handle:hostname` (short hostname, not FQDN). Agent uses bare handle internally (e.g. `claude`); sidecar translates to `claude:build-host for all chat/bus operations. |
+| 4 | Handle namespacing | Format: `handle:hostname` (short hostname, not FQDN). Agent uses bare handle internally (e.g. `claude`); sidecar translates to `claude:build-server-2` for all chat/bus operations. |
 | 5 | Startup REGISTER | Agents post `REGISTER handle:hostname` to chat on startup. Chat log serves as human-readable handle registry. |
 | 6 | SSH ControlMaster config | Documented recommendation: `ControlMaster auto`, `ControlPersist=300`, `ServerAliveInterval=60`, `ServerAliveCountMax=3` via `NBS_CHAT_OPTS`. |
 | 7 | Documentation | `docs/cross-machine.md` — coordination-host model, setup guide, cursor migration, failure modes. |
 | 8 | Terminal mention regex | Update `terminal.c` mention detection to recognise `@handle:hostname` format. |
 | 9 | Lifecycle runbook | `docs/cross-machine-runbook.md` — SSH setup, startup ordering, crash recovery, health checks, context exhaustion prevention. |
 
-**Separator decision:** Colon. `@claude:build-host is unambiguous for mention parsing. New regex: `@[a-zA-Z0-9_-]+:[a-zA-Z0-9_.-]+` (superset of existing `@[a-zA-Z0-9_-]+` — non-namespaced handles still match the old pattern for backward compatibility). SSH convention (`host:path`) makes it intuitive.
+**Separator decision:** Colon. `@claude:build-server-2` is unambiguous for mention parsing. New regex: `@[a-zA-Z0-9_-]+:[a-zA-Z0-9_.-]+` (superset of existing `@[a-zA-Z0-9_-]+` — non-namespaced handles still match the old pattern for backward compatibility). SSH convention (`host:path`) makes it intuitive.
 
-**Cursor migration:** One-time copy when adopting namespaced handles. E.g. `cp .nbs/chat/live.chat.cursors/claude .nbs/chat/live.chat.cursors/claude:build-host Document, don't automate.
+**Cursor migration:** One-time copy when adopting namespaced handles. E.g. `cp .nbs/chat/live.chat.cursors/claude .nbs/chat/live.chat.cursors/claude:build-server-2`. Document, don't automate.
 
 **Startup without SSH (arm-remote):** If `NBS_CHAT_HOST` is set but SSH is unavailable at startup, the sidecar should fall back to local-only operation and retry SSH periodically (using the same exponential backoff as item 3). The sidecar must not fail to start just because the coordination host is unreachable — it should degrade gracefully and connect when available.
 
@@ -84,7 +84,7 @@ Option D was chosen because:
 |-------|-----------|
 | Hub-and-spoke preserves message ordering | Two remote agents write concurrently. If messages appear out of flock order on the coordination host, ordering is broken. |
 | SSH relay is reliable enough | Run 6 remote agents with ControlMaster for 4 hours. If the shared connection dies from idle timeout, all remote agents go dark simultaneously (correlated failure). |
-| Handle namespacing prevents collisions | Launch `claude:build-host and `claude:build-host simultaneously. If they collide, namespacing failed. |
+| Handle namespacing prevents collisions | Launch `claude:build-server-2` and `claude:build-server-1` simultaneously. If they collide, namespacing failed. |
 | SSH backoff prevents context burn | Simulate SSH failure. If sidecar retries without backoff and exhausts context, the backoff logic failed. |
 | Option D is sufficient | Find a use case where a remote agent MUST write to the coordination host's filesystem without SSH. If it exists, we need federation. |
 
@@ -110,22 +110,22 @@ Option D was chosen because:
 ## 8. Architecture Diagram
 
 ```
-  build-host (remote)              build-host (coordination host)
+  build-server-1 (remote)         build-server-2 (coordination host)
   ┌─────────────────┐             ┌──────────────────────────┐
-  │ claude:build-host             │ .nbs/                    │
-  │ arm-remote:build-host SSH ───▶│   chat/live.chat  (flock)│
+  │ claude:build-server-1│        │ .nbs/                    │
+  │ arm-remote:build-server-1│── SSH ──▶│   chat/live.chat  (flock)│
   │                 │             │   events/         (flock)│
   │ local sidecar   │             │   workers/               │
   │ (nbs-chat-remote│             │   pids/                  │
   │  nbs-bus-remote)│             │                          │
-  └─────────────────┘             │ claude:build-host         │
-                                  │ theologian:build-host     │
-                                  │ gatekeeper:build-host     │
+  └─────────────────┘             │ claude:build-server-2    │
+                                  │ theologian:build-server-2│
+                                  │ gatekeeper:build-server-2│
                                   │ (local sidecar, nbs-chat)│
                                   └──────────────────────────┘
 ```
 
-All writes serialised by flock on build-host Remote agents see eventual consistency (SSH round-trip latency). Local agents see immediate consistency.
+All writes serialised by flock on the coordination host. Remote agents see eventual consistency (SSH round-trip latency). Local agents see immediate consistency.
 
 ## 9. SSH Setup Procedure
 
@@ -133,7 +133,7 @@ SSH access between machines cannot be assumed. Corporate proxies, key management
 
 ### 9.1 Prerequisites
 
-- Both machines must be reachable by hostname (e.g. `build-host `build-host
+- Both machines must be reachable by hostname (e.g. `build-server-1`, `build-server-2`)
 - The operator (Alex or an AI agent) must have a valid Kerberos ticket or SSH key pair
 - If SSH is blocked by corporate policy, the `pty-session` tool provides an alternative (see 9.3)
 
@@ -141,15 +141,15 @@ SSH access between machines cannot be assumed. Corporate proxies, key management
 
 ```bash
 # 1. Test connectivity from remote to coordination host
-ssh build-host echo "SSH works"
+ssh coordination-host echo "SSH works"
 
 # 2. If key-based auth is not configured:
 ssh-keygen -t ed25519 -f ~/.ssh/id_nbs -N ""
-ssh-copy-id -i ~/.ssh/id_nbs build-host
+ssh-copy-id -i ~/.ssh/id_nbs coordination-host
 
 # 3. Configure ControlMaster for persistent connections
 cat >> ~/.ssh/config << 'EOF'
-Host build-host
+Host coordination-host
     ControlMaster auto
     ControlPath ~/.ssh/nbs-%r@%h:%p
     ControlPersist 300
@@ -158,12 +158,12 @@ Host build-host
 EOF
 
 # 4. Verify ControlMaster works
-ssh build-host echo "ControlMaster active"
+ssh coordination-host echo "ControlMaster active"
 # Second connection should be instant (reuses master)
-ssh build-host echo "Reused connection"
+ssh coordination-host echo "Reused connection"
 
 # 5. Test nbs-chat-remote
-NBS_CHAT_HOST=build-host nbs-chat-remote read .nbs/chat/live.chat --last=1
+NBS_CHAT_HOST=coordination-host nbs-chat-remote read .nbs/chat/live.chat --last=1
 ```
 
 ### 9.3 Fallback: pty-session

@@ -74,7 +74,7 @@ Review every changed file against these five criteria:
 #### 3. No Leaked Sensitive Information
 
 - No API keys, tokens, passwords, or credentials in any committed file
-- No internal URLs that should not be public (check for `example.com`, corporate proxy addresses, internal hostnames)
+- No internal URLs that should not be public (check for corporate intranet domains, proxy addresses, internal hostnames)
 - No commercially relevant information (proprietary algorithms, trade secrets, customer data)
 - No personal information (email addresses, phone numbers) beyond what is expected
 - No hardcoded paths specific to one developer's machine (e.g. `/home/username/...` in committed code, as opposed to configuration)
@@ -129,7 +129,7 @@ nbs-bus publish .nbs/events/ gatekeeper push-blocked high \
 ## What Good Reviews Look Like
 
 **Good — specific, actionable:**
-> **Sensitive info:** FAIL — `src/config.c:47` contains hardcoded proxy URL `http://proxy:8080`. This is an internal corporate proxy and should be read from environment or configuration, not committed.
+> **Sensitive info:** FAIL — `src/config.c:47` contains hardcoded proxy URL `http://proxy.internal:8080`. This is an internal corporate proxy and should be read from environment or configuration, not committed.
 
 **Bad — vague:**
 > **Sensitive info:** Looks okay I think.

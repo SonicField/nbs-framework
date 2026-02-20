@@ -240,7 +240,7 @@ NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions \
 
 **Verification:** Remote agent should appear in `nbs-chat participants` on the coordination host within 60 seconds.
 
-**Handle namespacing:** For cross-machine deployments, consider using `handle:hostname` format (e.g. `claude:build-host to prevent collisions across machines.
+**Handle namespacing:** For cross-machine deployments, consider using `handle:hostname` format (e.g. `claude:build-server-1`) to prevent collisions across machines.
 
 ## Known Failure Patterns
 
