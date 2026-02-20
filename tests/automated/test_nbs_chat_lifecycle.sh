@@ -14,6 +14,8 @@
 #   10. Lock contention (concurrent sends)
 #   11. Base64 round-trip with special characters
 #   12. Empty channel read (clean exit 0)
+#   13. Corrupt base64 line skipped gracefully (item 2 falsifier)
+#   14. Cursor clamp when file shrinks (cursor desync fix)
 
 set -euo pipefail
 
@@ -447,6 +449,71 @@ MULTI1=$("$NBS_CHAT" read "$MULTI_CHAT" --unread=reader1)
 check "--unread tracks correctly across senders" "$( echo "$MULTI1" | wc -l | awk '{print ($1 == 2) ? "pass" : "fail"}' )"
 check "--unread first new message is correct" "$( echo "$MULTI1" | head -1 | grep -qF "third" && echo pass || echo fail )"
 check "--unread second new message is correct" "$( echo "$MULTI1" | tail -1 | grep -qF "fourth" && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 13: Corrupt base64 line is skipped (item 2 falsifier) ---
+echo "13. Corrupt base64 skipped gracefully..."
+CORRUPT_CHAT="$TEST_DIR/corrupt.chat"
+"$NBS_CHAT" create "$CORRUPT_CHAT"
+"$NBS_CHAT" send "$CORRUPT_CHAT" alice "Good message one" >/dev/null
+"$NBS_CHAT" send "$CORRUPT_CHAT" bob "Good message two" >/dev/null
+"$NBS_CHAT" send "$CORRUPT_CHAT" alice "Good message three" >/dev/null
+
+# Verify 3 messages before corruption
+PRE_COUNT=$("$NBS_CHAT" read "$CORRUPT_CHAT" | wc -l)
+check "Pre-corruption: 3 messages" "$( [[ "$PRE_COUNT" -eq 3 ]] && echo pass || echo fail )"
+
+# Corrupt the middle base64 line by replacing it with invalid base64
+# The chat file has a header (5 lines + ---) then base64 lines
+# Replace the second base64 line with garbage
+sed -i '8s/.*/!!!!CORRUPT_NOT_BASE64!!!!/' "$CORRUPT_CHAT"
+
+# Update file-length header to match new file size (required for integrity check)
+NEW_SIZE=$(wc -c < "$CORRUPT_CHAT")
+sed -i "s/^file-length: .*/file-length: $NEW_SIZE/" "$CORRUPT_CHAT"
+
+# Read should show only the 2 valid messages (corrupt line skipped)
+set +e
+CORRUPT_OUTPUT=$("$NBS_CHAT" read "$CORRUPT_CHAT" 2>/dev/null)
+CORRUPT_EXIT=$?
+set -e
+POST_COUNT=$(echo "$CORRUPT_OUTPUT" | grep -c "." || true)
+check "Post-corruption: 2 messages decoded (corrupt skipped)" "$( [[ "$POST_COUNT" -eq 2 ]] && echo pass || echo fail )"
+check "Post-corruption: read exits 0 (partial success)" "$( [[ "$CORRUPT_EXIT" -eq 0 ]] && echo pass || echo fail )"
+check "Post-corruption: message 1 survived" "$( echo "$CORRUPT_OUTPUT" | grep -qF "Good message one" && echo pass || echo fail )"
+check "Post-corruption: message 3 survived" "$( echo "$CORRUPT_OUTPUT" | grep -qF "Good message three" && echo pass || echo fail )"
+
+# After skipped_count fix: stderr should warn about skipped messages
+CORRUPT_STDERR=$("$NBS_CHAT" read "$CORRUPT_CHAT" 2>&1 >/dev/null || true)
+check "Post-corruption: stderr warns about skipped messages" "$( echo "$CORRUPT_STDERR" | grep -qi "skipped\|warning" && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 14: Cursor clamp when file shrinks (cursor desync fix) ---
+echo "14. Cursor clamp when file shrinks..."
+CLAMP_CHAT="$TEST_DIR/clamp.chat"
+"$NBS_CHAT" create "$CLAMP_CHAT"
+"$NBS_CHAT" send "$CLAMP_CHAT" alice "msg1" >/dev/null
+"$NBS_CHAT" send "$CLAMP_CHAT" alice "msg2" >/dev/null
+"$NBS_CHAT" send "$CLAMP_CHAT" alice "msg3" >/dev/null
+
+# Advance alice's cursor to the end by reading with --unread
+"$NBS_CHAT" read "$CLAMP_CHAT" --unread=alice >/dev/null 2>&1 || true
+
+# Now recreate the file with fewer messages (simulates file shrink)
+rm -f "$CLAMP_CHAT"
+"$NBS_CHAT" create "$CLAMP_CHAT"
+"$NBS_CHAT" send "$CLAMP_CHAT" bob "only_message" >/dev/null
+
+# alice's cursor is at 2 (last index of 3 messages), but file now has 1 message
+# Current bug: assert fires (start=3 > end=1)
+# Expected after fix: clamp cursor, show no unread (or show all)
+set +e
+CLAMP_OUTPUT=$("$NBS_CHAT" read "$CLAMP_CHAT" --unread=alice 2>/dev/null)
+CLAMP_EXIT=$?
+set -e
+check "Cursor clamp: no crash on shrunk file" "$( [[ "$CLAMP_EXIT" -eq 0 ]] && echo pass || echo fail )"
 
 echo ""
 

@@ -255,6 +255,13 @@ static int cmd_read(int argc, char **argv) {
         int cursor = chat_cursor_read(path, unread_handle);
         /* cursor is last-read index; show messages after it */
         start = cursor + 1;  /* -1 + 1 = 0 if no cursor exists (show all) */
+        /* Clamp: if file shrunk since cursor was written, start may exceed
+         * message_count.  Treat as 'no unread messages' rather than crash. */
+        if (start > end) {
+            fprintf(stderr, "warning: read cursor for '%s' (%d) exceeds message count (%d), clamping\n",
+                    unread_handle, cursor, state.message_count);
+            start = end;
+        }
     } else if (since_handle) {
         /* Apply --since filter */
         /* Find last message from since_handle, show messages after it */
