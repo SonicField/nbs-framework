@@ -479,16 +479,16 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
 
     int write_err = 0;
     if (fprintf(fp, "source: %s\n", source) < 0) write_err = 1;
-    if (fprintf(fp, "type: %s\n", type) < 0) write_err = 1;
-    if (fprintf(fp, "priority: %s\n", bus_priority_to_str(priority)) < 0) write_err = 1;
-    if (fprintf(fp, "timestamp: %s\n", iso_time) < 0) write_err = 1;
-    if (fprintf(fp, "dedup-key: %s:%s\n", source, type) < 0) write_err = 1;
+    if (!write_err && fprintf(fp, "type: %s\n", type) < 0) write_err = 1;
+    if (!write_err && fprintf(fp, "priority: %s\n", bus_priority_to_str(priority)) < 0) write_err = 1;
+    if (!write_err && fprintf(fp, "timestamp: %s\n", iso_time) < 0) write_err = 1;
+    if (!write_err && fprintf(fp, "dedup-key: %s:%s\n", source, type) < 0) write_err = 1;
 
-    if (payload && payload[0] != '\0') {
+    if (!write_err && payload && payload[0] != '\0') {
         if (fprintf(fp, "payload: |\n") < 0) write_err = 1;
         /* Write payload with 2-space indent per YAML block scalar convention */
         const char *p = payload;
-        while (*p) {
+        while (!write_err && *p) {
             if (fprintf(fp, "  ") < 0) { write_err = 1; break; }
             const char *nl = strchr(p, '\n');
             if (nl) {
