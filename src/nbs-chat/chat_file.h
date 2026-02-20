@@ -94,6 +94,7 @@ typedef struct {
     int participant_count;
     chat_message_t *messages;
     int message_count;
+    int skipped_count;  /* Messages skipped due to decode/alloc failure */
 } chat_state_t;
 
 /*

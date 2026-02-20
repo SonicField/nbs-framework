@@ -234,6 +234,7 @@ int chat_read(const char *path, chat_state_t *state) {
         return -1;
     }
     state->message_count = 0;
+    state->skipped_count = 0;
 
     while (fgets(line, sizeof(line), f)) {
         /* Strip trailing newline */
@@ -278,12 +279,14 @@ int chat_read(const char *path, chat_state_t *state) {
             unsigned char *decoded = malloc(decoded_max + 1);
             if (!decoded) {
                 fprintf(stderr, "warning: chat_read: malloc failed for message %d, skipping\n", state->message_count);
+                state->skipped_count++;
                 continue;
             }
 
             int decoded_len = base64_decode(line, len, decoded, decoded_max);
             if (decoded_len < 0) {
                 free(decoded);
+                state->skipped_count++;
                 continue;
             }
             decoded[decoded_len] = '\0';
@@ -324,6 +327,7 @@ int chat_read(const char *path, chat_state_t *state) {
                     if (!msg->content) {
                         fprintf(stderr, "warning: chat_read: strdup failed for message %d\n", state->message_count);
                         free(decoded);
+                        state->skipped_count++;
                         continue;
                     }
                     msg->content_len = decoded_len - (colon + 2 - (char *)decoded);
@@ -677,6 +681,7 @@ void chat_state_free(chat_state_t *state) {
         state->messages = NULL;
     }
     state->message_count = 0;
+    state->skipped_count = 0;
 }
 
 /* --- Read cursor tracking --- */

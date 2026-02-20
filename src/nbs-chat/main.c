@@ -238,6 +238,11 @@ static int cmd_read(int argc, char **argv) {
         return 1;
     }
 
+    if (state.skipped_count > 0) {
+        fprintf(stderr, "warning: %d message(s) skipped (decode failure)\n",
+                state.skipped_count);
+    }
+
     int start = 0;
     int end = state.message_count;
 
