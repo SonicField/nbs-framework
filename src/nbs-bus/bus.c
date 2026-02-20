@@ -583,7 +583,8 @@ int bus_read(const char *events_dir, const char *event_file)
     ASSERT_MSG(event_file != NULL, "bus_read: event_file is NULL");
 
     /* SECURITY: reject path traversal — event_file must be a bare filename */
-    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL || strcmp(event_file, "..") == 0) {
+    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
+        strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
         fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
                 event_file);
         return -1;
@@ -618,7 +619,8 @@ int bus_ack(const char *events_dir, const char *event_file)
     ASSERT_MSG(event_file != NULL, "bus_ack: event_file is NULL");
 
     /* SECURITY: reject path traversal — event_file must be a bare filename */
-    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL || strcmp(event_file, "..") == 0) {
+    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
+        strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
         fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
                 event_file);
         return -1;
