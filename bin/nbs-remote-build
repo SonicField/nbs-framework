@@ -1,0 +1,182 @@
+#!/bin/bash
+# nbs-remote-build: Run a build command on a remote pty-session while staying
+# chat-aware. Polls for build completion and checks chat between polls.
+#
+# Solves the "build-time chat blindness" problem: agents using pty-session
+# to build on remote machines block on 'sleep 120' and can't read chat
+# messages until the build finishes.
+#
+# Usage:
+#   nbs-remote-build <session> <build-command> [options]
+#
+# Options:
+#   --prompt=PATTERN   Shell prompt pattern to detect build completion
+#                      (default: '\\$[[:space:]]*$' — matches $ at end of line)
+#   --timeout=N        Build timeout in seconds (default: 300)
+#   --poll=N           Poll interval in seconds (default: 5)
+#   --chat=FILE        Chat file to check between polls (optional)
+#   --handle=NAME      Chat handle for --unread (required if --chat is set)
+#   --quiet            Don't print progress dots
+#
+# Examples:
+#   # Basic: run build, wait for completion
+#   nbs-remote-build build-host 'cmake --build build -j8'
+#
+#   # Chat-aware: check chat while building
+#   nbs-remote-build build-host 'cmake --build build -j8' \
+#       --chat=.nbs/chat/live.chat --handle=claude
+#
+#   # Custom prompt pattern (venv prompt)
+#   nbs-remote-build build-host 'make -j8' --prompt='(venv)'
+#
+# Output:
+#   Prints any unread chat messages as they arrive during the build.
+#   When the build completes, prints the build output (last 50 lines).
+#
+# Exit codes:
+#   0 - Build completed (prompt detected)
+#   1 - General error
+#   2 - Session not found
+#   3 - Build timed out
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
+
+# Defaults
+SESSION=""
+BUILD_CMD=""
+PROMPT_PATTERN='\$ *>?\s*$|\)\s*\$'
+TIMEOUT=300
+POLL_INTERVAL=5
+CHAT_FILE=""
+CHAT_HANDLE=""
+QUIET=false
+
+usage() {
+    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --prompt=*)
+            PROMPT_PATTERN="${1#--prompt=}"
+            shift
+            ;;
+        --timeout=*)
+            TIMEOUT="${1#--timeout=}"
+            shift
+            ;;
+        --poll=*)
+            POLL_INTERVAL="${1#--poll=}"
+            shift
+            ;;
+        --chat=*)
+            CHAT_FILE="${1#--chat=}"
+            shift
+            ;;
+        --handle=*)
+            CHAT_HANDLE="${1#--handle=}"
+            shift
+            ;;
+        --quiet)
+            QUIET=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 4
+            ;;
+        *)
+            if [[ -z "$SESSION" ]]; then
+                SESSION="$1"
+            elif [[ -z "$BUILD_CMD" ]]; then
+                BUILD_CMD="$1"
+            else
+                echo "Error: unexpected argument: $1" >&2
+                exit 4
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$SESSION" ]] || [[ -z "$BUILD_CMD" ]]; then
+    echo "Error: requires <session> and <build-command>" >&2
+    echo "Usage: nbs-remote-build <session> <build-command> [options]" >&2
+    exit 4
+fi
+
+if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
+    echo "Error: --handle is required when --chat is set" >&2
+    exit 4
+fi
+
+# Verify session exists (try reading from it)
+if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
+    echo "Error: pty-session '$SESSION' not found" >&2
+    exit 2
+fi
+
+# Send the build command
+"$PTY_SESSION" send "$SESSION" "$BUILD_CMD"
+
+if [[ "$QUIET" != true ]]; then
+    echo "Build started on $SESSION: $BUILD_CMD" >&2
+    echo "Polling every ${POLL_INTERVAL}s (timeout: ${TIMEOUT}s)" >&2
+fi
+
+# Poll for completion, checking chat between polls
+elapsed=0
+chat_messages_shown=0
+
+while (( elapsed < TIMEOUT )); do
+    sleep "$POLL_INTERVAL"
+    elapsed=$((elapsed + POLL_INTERVAL))
+
+    # Check if build is done (prompt visible in last few lines)
+    last_lines=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || true
+    if echo "$last_lines" | grep -qE "$PROMPT_PATTERN"; then
+        if [[ "$QUIET" != true ]]; then
+            echo "" >&2
+            echo "Build completed in ${elapsed}s" >&2
+        fi
+
+        # Print build output
+        "$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null
+        exit 0
+    fi
+
+    # Check chat if configured
+    if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
+        unread=$("$NBS_CHAT" read "$CHAT_FILE" --unread="$CHAT_HANDLE" 2>/dev/null) || true
+        if [[ -n "$unread" ]]; then
+            echo "--- CHAT (during build) ---" >&2
+            echo "$unread" >&2
+            echo "--- END CHAT ---" >&2
+            chat_messages_shown=$((chat_messages_shown + 1))
+        fi
+    fi
+
+    # Progress indicator
+    if [[ "$QUIET" != true ]]; then
+        printf "." >&2
+    fi
+done
+
+# Timeout
+if [[ "$QUIET" != true ]]; then
+    echo "" >&2
+    echo "Build timed out after ${TIMEOUT}s" >&2
+fi
+
+# Print whatever output we have
+"$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null
+exit 3

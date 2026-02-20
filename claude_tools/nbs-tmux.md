@@ -215,6 +215,43 @@ nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/pyjit.cpp
 
 ---
 
+## Chat-Aware Builds (nbs-remote-build)
+
+When building on a remote machine via pty-session, use `nbs-remote-build` to stay responsive to chat messages during builds. Instead of blocking on `sleep 120`, it polls for build completion and checks chat between polls.
+
+### Usage
+
+```bash
+# Basic: run build, wait for prompt to reappear
+nbs-remote-build build-host 'cmake --build build -j8'
+
+# Chat-aware: check chat while building
+nbs-remote-build build-host 'cmake --build build -j8' \
+    --chat=.nbs/chat/live.chat --handle=claude
+
+# Custom prompt pattern (e.g. venv prompt)
+nbs-remote-build build-host 'make -j8' --prompt='(venv)'
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--prompt=PATTERN` | `\$ *>?` | Regex to detect shell prompt (build done) |
+| `--timeout=N` | 300 | Build timeout in seconds |
+| `--poll=N` | 5 | Poll interval in seconds |
+| `--chat=FILE` | — | Chat file to check between polls |
+| `--handle=NAME` | — | Chat handle for unread messages |
+| `--quiet` | — | Suppress progress dots |
+
+### When to Use
+
+- Building CinderX or other large C++ projects on build-host
+- Any pty-session command where you'd otherwise use `sleep N`
+- When you need to stay responsive to team chat during long operations
+
+---
+
 ## Location
 
 The `pty-session` script is at: `{{NBS_ROOT}}/bin/pty-session`
