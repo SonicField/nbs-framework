@@ -19,6 +19,7 @@
 #   --no-enter     With 'send': don't append Enter after text
 #   --timeout=N    With 'wait' or 'read --wait': timeout in seconds
 #   --scrollback=N With 'read': lines of scrollback to capture (default 100)
+#   --last=N       Alias for --scrollback=N
 #   --wait         With 'read': block until session exits, then read cache
 #
 # Examples:
@@ -184,8 +185,8 @@ cmd_read() {
     shift 2>/dev/null || true
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --scrollback=*)
-                scrollback="${1#--scrollback=}"
+            --scrollback=*|--last=*)
+                scrollback="${1#*=}"
                 shift
                 ;;
             --wait)
