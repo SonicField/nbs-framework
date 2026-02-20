@@ -42,6 +42,7 @@ pty-session help                      # Show usage
 - `--no-enter` with `send`: Don't append Enter after text
 - `--timeout=N` with `wait`: Timeout in seconds (default 60)
 - `--scrollback=N` with `read`: Lines of history to capture (default 100)
+- `--last=N` with `read`: Alias for `--scrollback=N`
 
 ### Exit Codes
 
@@ -165,6 +166,52 @@ This means output is never lost, regardless of how the session ends.
 - Any situation where you need to send input and read output across multiple tool calls
 
 **For managing Claude worker instances**, use `nbs-worker` instead (see `/nbs-tmux-worker`).
+
+---
+
+## Remote File Editing (nbs-remote-edit)
+
+When editing files on remote machines (e.g. build-host use `nbs-remote-edit` instead of sed/heredoc commands through pty-session. This downloads the file locally, lets you use the normal Edit tool, then pushes it back.
+
+### Commands
+
+```bash
+nbs-remote-edit pull <host> <remote-path>   # Download file for local editing
+nbs-remote-edit push <host> <remote-path>   # Upload edited file back
+nbs-remote-edit diff <host> <remote-path>   # Show diff between local and remote
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NBS_REMOTE_EDIT_DIR` | `.nbs/remote-edit` | Local staging directory |
+| `NBS_REMOTE_EDIT_KEY` | — | SSH identity file |
+| `NBS_REMOTE_EDIT_PORT` | 22 | SSH port |
+
+### Workflow
+
+```bash
+# 1. Download the file
+nbs-remote-edit pull build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+# Returns: .nbs/remote-edit/build-host
+
+# 2. Edit locally using the normal Edit tool (no sed needed!)
+
+# 3. Check what changed
+nbs-remote-edit diff build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+
+# 4. Push back
+nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+```
+
+### When to Use
+
+- Editing C/C++ source files on remote build machines
+- Any multi-line file edit that would be error-prone via sed/heredoc
+- When you need to see the full file context before editing
+
+**For single commands on remote machines**, use `pty-session` instead — it's simpler for command execution.
 
 ---
 
