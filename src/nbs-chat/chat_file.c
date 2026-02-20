@@ -561,16 +561,29 @@ int chat_send(const char *path, const char *handle, const char *message) {
         return -1;
     }
 
-    fprintf(f, "=== nbs-chat ===\n");
-    fprintf(f, "last-writer: %s\n", state.last_writer);
-    fprintf(f, "last-write: %s\n", state.last_write);
-    fprintf(f, "file-length: %" PRId64 "\n", file_len);
-    fprintf(f, "participants: %s\n", parts_str);
-    fprintf(f, "---\n");
+    int write_err = 0;
+    if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
+    if (fprintf(f, "last-writer: %s\n", state.last_writer) < 0) write_err = 1;
+    if (fprintf(f, "last-write: %s\n", state.last_write) < 0) write_err = 1;
+    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
+    if (fprintf(f, "---\n") < 0) write_err = 1;
     for (int i = 0; i < encoded_line_count; i++) {
-        fprintf(f, "%s\n", encoded_lines[i]);
+        if (fprintf(f, "%s\n", encoded_lines[i]) < 0) write_err = 1;
     }
-    fprintf(f, "%s\n", encoded);
+    if (fprintf(f, "%s\n", encoded) < 0) write_err = 1;
+    if (write_err) {
+        fprintf(stderr, "error: chat_send: write failed for %s: %s\n",
+                path, strerror(errno));
+        fclose(f);
+        free(content_no_fl);
+        for (int i = 0; i < encoded_line_count; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        free(encoded);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
     if (fclose(f) != 0) {
         fprintf(stderr, "warning: chat_send: fclose failed: %s\n", strerror(errno));
         free(content_no_fl);
