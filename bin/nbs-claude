@@ -31,6 +31,7 @@
 #   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
 #   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
 #   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 15, 0 to disable)
+#   NBS_ACTIVE_HEARTBEAT    Seconds between "still active" heartbeats to chat (default: 300, 0 to disable)
 #   NBS_MODEL               Model to use (e.g. opus, sonnet) — passed to claude --model
 #   NBS_CONTINUE_SESSION    Session ID to continue — passed to claude --resume
 #
@@ -54,6 +55,7 @@ NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
 STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
 NBS_MODEL="${NBS_MODEL:-}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
+ACTIVE_HEARTBEAT="${NBS_ACTIVE_HEARTBEAT:-300}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -62,7 +64,7 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 }
 
 # Validate numeric config variables
-for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL; do
+for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL ACTIVE_HEARTBEAT; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
@@ -984,6 +986,7 @@ poll_sidecar_tmux() {
     local idle_seconds=0
     local bus_check_counter=0
     local last_content_hash=""
+    local last_heartbeat_time=0
 
     # Seed registry with existing resources
     seed_registry
@@ -1044,6 +1047,37 @@ poll_sidecar_tmux() {
                 idle_seconds=0
                 last_content_hash=""
             fi
+
+            # Active heartbeat: periodically post "still working" to chat
+            # so the team knows this agent has not stopped. Only posts when
+            # ACTIVE_HEARTBEAT > 0 and enough time has elapsed.
+            if [[ "$ACTIVE_HEARTBEAT" -gt 0 ]]; then
+                local hb_now
+                hb_now=$(date +%s)
+                if [[ $last_heartbeat_time -eq 0 ]]; then
+                    last_heartbeat_time=$hb_now
+                elif (( hb_now - last_heartbeat_time >= ACTIVE_HEARTBEAT )); then
+                    # Find first registered chat and post heartbeat
+                    if [[ -f "$CONTROL_REGISTRY" ]]; then
+                        local hb_chat=""
+                        while IFS= read -r hb_line; do
+                            case "$hb_line" in
+                                chat:*) hb_chat="${hb_line#chat:}"; break ;;
+                            esac
+                        done < "$CONTROL_REGISTRY"
+                        if [[ -n "$hb_chat" ]]; then
+                            local hb_elapsed=$(( hb_now - last_heartbeat_time ))
+                            if is_remote; then
+                                remote_cmd "nbs-chat send $(printf '%q' "$hb_chat") sidecar $(printf '%q' "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle.")" 2>/dev/null || true
+                            else
+                                nbs-chat send "$hb_chat" sidecar "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle." 2>/dev/null || true
+                            fi
+                        fi
+                    fi
+                    last_heartbeat_time=$hb_now
+                fi
+            fi
+
             continue
         fi
 
@@ -1204,6 +1238,7 @@ poll_sidecar_pty() {
     local idle_seconds=0
     local bus_check_counter=0
     local last_content_hash=""
+    local last_heartbeat_time=0
 
     # Seed registry with existing resources
     seed_registry
@@ -1261,6 +1296,34 @@ poll_sidecar_pty() {
                 idle_seconds=0
                 last_content_hash=""
             fi
+
+            # Active heartbeat (same logic as tmux mode)
+            if [[ "$ACTIVE_HEARTBEAT" -gt 0 ]]; then
+                local hb_now
+                hb_now=$(date +%s)
+                if [[ $last_heartbeat_time -eq 0 ]]; then
+                    last_heartbeat_time=$hb_now
+                elif (( hb_now - last_heartbeat_time >= ACTIVE_HEARTBEAT )); then
+                    if [[ -f "$CONTROL_REGISTRY" ]]; then
+                        local hb_chat=""
+                        while IFS= read -r hb_line; do
+                            case "$hb_line" in
+                                chat:*) hb_chat="${hb_line#chat:}"; break ;;
+                            esac
+                        done < "$CONTROL_REGISTRY"
+                        if [[ -n "$hb_chat" ]]; then
+                            local hb_elapsed=$(( hb_now - last_heartbeat_time ))
+                            if is_remote; then
+                                remote_cmd "nbs-chat send $(printf '%q' "$hb_chat") sidecar $(printf '%q' "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle.")" 2>/dev/null || true
+                            else
+                                nbs-chat send "$hb_chat" sidecar "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle." 2>/dev/null || true
+                            fi
+                        fi
+                    fi
+                    last_heartbeat_time=$hb_now
+                fi
+            fi
+
             continue
         fi
 
@@ -1482,6 +1545,7 @@ echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Session ID: ${SESSION_UUID}"
 echo "  Startup grace: ${STARTUP_GRACE}s"
 echo "  Self-heal threshold: ${NOTIFY_FAIL_THRESHOLD} failures"
+echo "  Active heartbeat: ${ACTIVE_HEARTBEAT}s"
 echo "  Root: ${NBS_ROOT}"
 if [[ -n "$NBS_MODEL" ]]; then
     echo "  Model: ${NBS_MODEL}"
