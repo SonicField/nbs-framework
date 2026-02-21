@@ -26,3 +26,13 @@ src/nbs-bus/*.o
 
 # NBS teams working directory (project-specific, not framework)
 .nbs/
+
+# Lock files (created by chat sessions)
+*.lock
+
+# Stray edit scripts (session-specific, belong in plans/)
+edit_*.py
+
+# Prevent plan/progress docs in repo root (use plans/ directory)
+# Pattern: dd-mm-yyyy-*.md
+[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]-*.md
