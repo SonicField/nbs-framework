@@ -781,7 +781,6 @@ PYEOF
 
 cat > "$BENCHMARKS_DIR/context_manager.py" << 'PYEOF'
 import time
-import contextlib
 
 class NoGrad:
     _enabled = True
@@ -818,14 +817,21 @@ class ProfileScope:
         ProfileScope._depth -= 1
         return False
 
-@contextlib.contextmanager
-def training_mode(model_dict, mode=True):
-    prev = model_dict.get('training', True)
-    model_dict['training'] = mode
-    try:
-        yield model_dict
-    finally:
-        model_dict['training'] = prev
+# NOTE: @contextlib.contextmanager falls back to interpreter under CinderX JIT
+# (PUSH_EXC_INFO opcode in _GeneratorContextManager.__exit__ triggers graceful
+# fallback, not JIT compilation). Use class-based context manager so this
+# benchmark can be JIT-compiled and measure actual inliner effect.
+class TrainingMode:
+    def __init__(self, model_dict, mode=True):
+        self._model = model_dict
+        self._mode = mode
+    def __enter__(self):
+        self._prev = self._model.get('training', True)
+        self._model['training'] = self._mode
+        return self._model
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._model['training'] = self._prev
+        return False
 
 def benchmark_context_manager(iterations=5000):
     model = {'training': True, 'weight': 1.0, 'bias': 0.0}
@@ -840,7 +846,7 @@ def benchmark_context_manager(iterations=5000):
             with NoGrad():
                 with Autocast('bfloat16'):
                     total = (total % 1000) + 0.001
-        with training_mode(model, mode=False) as m:
+        with TrainingMode(model, mode=False) as m:
             total += m['weight'] * 0.5
         for j in range(5):
             with ProfileScope(f'layer_{j}'):
@@ -1336,6 +1342,25 @@ make_condition_script() {
     cat "$src" >> "$dst"
 }
 
+# ── Known JIT bugs (skip these for JIT conditions) ───────────────────────
+# nqueens: LICM GuardType hoisting crash on aarch64 (segfault in nested loops
+# with closure/nonlocal). Separate from the tier1Vectorcall varargs bug.
+# See benchmark_results/21-02-2026-varargs-codegen-bug-report.md §Related Bugs.
+
+KNOWN_JIT_BUGS=(
+    nqueens
+)
+
+is_known_jit_bug() {
+    local name="$1"
+    for bug in "${KNOWN_JIT_BUGS[@]}"; do
+        if [ "$name" = "$bug" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ── Benchmark list ─────────────────────────────────────────────────────────
 
 ALL_BENCHMARKS=(
@@ -1383,6 +1408,12 @@ run_bench() {
         return
     fi
 
+    # Skip known JIT bugs for JIT conditions (still run baseline)
+    if [ "$condition" != "baseline" ] && is_known_jit_bug "$name"; then
+        echo "SKIP"
+        return
+    fi
+
     local output
     case "$condition" in
         inliner_on)
@@ -1423,7 +1454,7 @@ declare -A INLINER_OFF_TIMES
 declare -A BASELINE_TIMES
 
 echo "=== Running ABBA benchmarks ==="
-echo "Conditions: A=inliner ON, B=inliner OFF"
+echo "Conditions: A=inliner ON, B=inliner OFF, S=skip (known JIT bug), X=error"
 echo "Pattern: ABBA × $ABBA_REPS reps = $((ABBA_REPS * 4)) samples per benchmark"
 echo ""
 
@@ -1440,6 +1471,8 @@ for name in "${ALL_BENCHMARKS[@]}"; do
         if [ "$t" != "SKIP" ] && [ "$t" != "ERROR" ] && [ -n "$t" ]; then
             INLINER_ON_TIMES[$name]="${INLINER_ON_TIMES[$name]} $t"
             printf "A"
+        elif [ "$t" = "SKIP" ]; then
+            printf "S"
         else
             printf "X"
         fi
@@ -1449,6 +1482,8 @@ for name in "${ALL_BENCHMARKS[@]}"; do
         if [ "$t" != "SKIP" ] && [ "$t" != "ERROR" ] && [ -n "$t" ]; then
             INLINER_OFF_TIMES[$name]="${INLINER_OFF_TIMES[$name]} $t"
             printf "B"
+        elif [ "$t" = "SKIP" ]; then
+            printf "S"
         else
             printf "X"
         fi
@@ -1458,6 +1493,8 @@ for name in "${ALL_BENCHMARKS[@]}"; do
         if [ "$t" != "SKIP" ] && [ "$t" != "ERROR" ] && [ -n "$t" ]; then
             INLINER_OFF_TIMES[$name]="${INLINER_OFF_TIMES[$name]} $t"
             printf "B"
+        elif [ "$t" = "SKIP" ]; then
+            printf "S"
         else
             printf "X"
         fi
@@ -1467,6 +1504,8 @@ for name in "${ALL_BENCHMARKS[@]}"; do
         if [ "$t" != "SKIP" ] && [ "$t" != "ERROR" ] && [ -n "$t" ]; then
             INLINER_ON_TIMES[$name]="${INLINER_ON_TIMES[$name]} $t"
             printf "A"
+        elif [ "$t" = "SKIP" ]; then
+            printf "S"
         else
             printf "X"
         fi
@@ -1526,6 +1565,13 @@ median() {
         "────────────" "────────"
 
     for name in "${ALL_BENCHMARKS[@]}"; do
+        # Known JIT bugs show as SKIP rather than N/A
+        if is_known_jit_bug "$name"; then
+            printf "%-25s %12s %12s %8s   %12s %8s\n" \
+                "$name" "SKIP" "SKIP" "SKIP" "${BASELINE_TIMES[$name]:-N/A}" "SKIP"
+            continue
+        fi
+
         on_med=$(median "${INLINER_ON_TIMES[$name]}")
         off_med=$(median "${INLINER_OFF_TIMES[$name]}")
         base_val="${BASELINE_TIMES[$name]:-N/A}"
@@ -1565,9 +1611,18 @@ else:
     done
 
     echo ""
-    echo "Legend: ** = >5% faster, !! = >5% slower"
+    echo "Legend: ** = >5% faster, !! = >5% slower, SKIP = known JIT bug"
     echo "A/B > 1.0 means speculative inlining helps"
     echo "C/A > 1.0 means CinderX JIT is faster than vanilla Python"
+    # Known JIT bugs
+    if [ ${#KNOWN_JIT_BUGS[@]} -gt 0 ]; then
+        echo ""
+        echo "=== Known JIT bugs (skipped for A/B comparison) ==="
+        for bug in "${KNOWN_JIT_BUGS[@]}"; do
+            echo "  $bug"
+        done
+    fi
+
     echo ""
 
     # Raw data

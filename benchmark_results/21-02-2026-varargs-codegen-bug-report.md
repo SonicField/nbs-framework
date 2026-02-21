@@ -3,7 +3,7 @@
 **Date:** 21-02-2026
 **Severity:** Critical (blocks 5/20 benchmarks)
 **Component:** CinderX JIT, aarch64 backend, vectorcall dispatch
-**Classification:** Pre-existing base CinderX aarch64 JIT bug (NOT introduced by speculative inlining)
+**Classification:** ~~Pre-existing base CinderX aarch64 JIT bug~~ **RECLASSIFIED: OUR REGRESSION** (introduced by tier1Vectorcall in commit 725004da)
 
 ## Summary
 
@@ -66,14 +66,48 @@ Blocks 5 of 20 benchmarks in the CinderX speculative inlining benchmark suite:
 
 These are the PyTorch-relevant benchmarks most likely to benefit from speculative inlining.
 
-## Probable Root Cause
+## Root Cause (CONFIRMED — 17:35Z)
 
-The JIT vectorcall dispatch for varargs functions (in `postalloc.cpp rewriteVectorCallFunctions` or the aarch64 `translateCall` path) returns the callable object instead of invoking it. The x86 path works correctly for the same code patterns.
+**tier1Vectorcall breaks the JITRT_GET_REENTRY invariant.**
 
-Likely locations:
-- `postalloc.cpp:rewriteVectorCallFunctions` — kVectorCall argument layout for CO_VARARGS
-- `autogen.cpp:translateCall` — aarch64 BLR emission for varargs vectorcall
-- `gen_asm.cpp` — aarch64 calling convention for packed args tuple
+The speculative inlining commit (725004da) introduces `tier1Vectorcall`, a C wrapper function set as `func->vectorcall` during `finalizeFunc` (context.cpp:437). For non-varargs functions, this works because the JIT prologue checks argcount directly without calling `JITRT_CallWithKeywordArgs`. For varargs functions (CO_VARARGS/CO_VARKEYWORDS), the JIT prologue ALWAYS calls `JITRT_CallWithKeywordArgs`, which computes re-entry via `JITRT_GET_REENTRY(func->vectorcall) = func->vectorcall - 12`. Since `func->vectorcall` points to `tier1Vectorcall` (a C function) instead of the JIT vectorcall entry label, `tier1Vectorcall - 12` points to garbage code. The re-entry call jumps to garbage, which returns X0 (the function pointer) as the result.
+
+**Confirmed independently by claude and generalist on build-host
+
+## Fix
+
+**Status: FIXED (Option D implemented and verified)**
+
+**Option C (immediate fix, applied first):** In `finalizeFunc` (context.cpp:437), skip `tier1Vectorcall` for `CO_VARARGS`/`CO_VARKEYWORDS` functions and use `compiled.vectorcallEntry()` directly. This restores the `JITRT_GET_REENTRY` invariant but disables tiering for varargs functions.
+
+**Option D (long-term fix, IMPLEMENTED):** In `JITRT_CallWithKeywordArgs` (jit_rt.cpp:240), look up the JIT vectorcall entry via `jit::getContext()->lookupFunc(func)->vectorcallEntry()` instead of using `func->vectorcall`. This makes re-entry correct regardless of whether `func->vectorcall` points to `tier1Vectorcall` or JIT code. `tier1Vectorcall` remains installed for ALL tier 1 functions (including varargs), preserving the tiering mechanism.
+
+### Option D implementation (2 files, +14 lines)
+
+**jit_rt.cpp** (line 240):
+```cpp
+// Option D: Look up the JIT vectorcall entry from CompiledFunction
+// instead of using func->vectorcall, which may point to tier1Vectorcall
+vectorcallfunc jit_entry = func->vectorcall;
+jit::CompiledFunction* compiled = jit::getContext()->lookupFunc(func);
+if (compiled != nullptr) {
+  jit_entry = compiled->vectorcallEntry();
+}
+return JITRT_GET_REENTRY(jit_entry)(
+    (PyObject*)func, arg_space.get(), new_nargsf, nullptr);
+```
+
+**context.cpp** (line 436): No code change — `tier1Vectorcall` is always used for tier 1. Added explanatory comment.
+
+### Verification
+
+All 6 varargs tests PASS, nqueens PASS, all 5 previously-failing module benchmarks PASS.
+
+## Probable Root Cause (SUPERSEDED)
+
+~~The JIT vectorcall dispatch for varargs functions (in `postalloc.cpp rewriteVectorCallFunctions` or the aarch64 `translateCall` path) returns the callable object instead of invoking it.~~
+
+**Actual root cause:** tier1Vectorcall wrapper violates the JITRT_GET_REENTRY invariant. See above.
 
 ## Workaround
 
