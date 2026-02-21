@@ -1,0 +1,198 @@
+=== CinderX Full Benchmark Suite ===
+Date: 2026-02-21T11:52:17Z
+Host: build-host
+
+Commit: 725004da
+CinderX + cinderjit OK
+CinderX Python: /data/users/alexturner/cinderx_dev/venv/bin/python (Python 3
+.12.12+meta)
+disable_hir_inliner OK
+System Python OK
+WARNING: System Python -I can import cinderx — not a clean baseline
+
+=== JIT Falsification Check ===
+
+Phase 1: Verify JIT compiles functions and inliner state is correct
+Phase 2: Compare inliner ON vs OFF timings for method_calls
+Phase 3: HIR dump proof that speculative inlining is engaged
+
+--- Phase 1: Inliner ON ---
+CHECK: cinderjit.is_jit_compiled(call_speak) = True
+CHECK: cinderjit.is_jit_compiled(run_method_calls) = True
+CHECK: cinderjit.is_hir_inliner_enabled() = True
+CHECK: 3 functions JIT-compiled
+INLINER_ON_MS: 26.707
+CHECKS: 3/3 passed
+JIT_STATUS: PASS All JIT checks passed
+
+--- Phase 1b: Inliner OFF ---
+CHECK: cinderjit.is_hir_inliner_enabled() = False
+INLINER_OFF_MS: 34.053
+
+--- Phase 3: HIR dump proof ---
+JIT: /data/users/alexturner/cinderx_dev/cinderx/cinderx/Jit/compiled_functio
+n.cpp:49 -- Assertion failed: data_.irfunc != nullptr
+Can only call CompiledFunction::printHIR() from a debug build
+
+--- Phase 2: Timing comparison ---
+Inliner ON: 26.7ms, Inliner OFF: 34.1ms, ratio: 0.7843
+OK: Inliner ON is 21.6% faster than OFF — inliner effect confirmed.
+
+=== JIT Falsification Complete ===
+
+=== Running ABBA benchmarks ===
+Conditions: A=inliner ON, B=inliner OFF
+Pattern: ABBA × 2 reps = 8 samples per benchmark
+
+method_calls              ABBAABBA
+function_calls            ABBAABBA
+nested_calls              ABBAABBA
+fibonacci                 ABBAABBA
+richards                  ABBAABBA
+nbody                     ABBAABBA
+nqueens                   XXXXXXXX
+float_arith               ABBAABBA
+dict_ops                  ABBAABBA
+generator_simple          ABBAABBA
+list_comp                 ABBAABBA
+exception_handling        ABBAABBA
+chaos_game                ABBAABBA
+coroutine_chain           ABBAABBA
+context_manager           XXXXXXXX
+decorator_chain           XXXXXXXX
+deep_class                XXXXXXXX
+dunder_protocol           ABBAABBA
+kwargs_dispatch           XXXXXXXX
+nn_module_forward         XXXXXXXX
+
+
+=== CinderX Benchmark Results ===
+Date: 2026-02-21T11:53:13Z
+Host: build-host
+Commit: 725004da (725004daafe9f35da3f47c813e47eb37ccb2f7ce)
+ABBA reps: 2 (2×4 = 8 samples per condition)
+
+Conditions:
+  A (Inliner ON):  Python 3.12.12+meta + CinderX JIT + speculative inlining
+  B (Inliner OFF): Python 3.12.12+meta + CinderX JIT, inliner disabled
+  C (Baseline):    Python 3.12.12+meta -I (no CinderX)
+
+PRIMARY comparison: A vs B (isolates speculative inlining effect)
+REFERENCE: C vs A (overall CinderX JIT overhead vs vanilla interpreter)
+
+Benchmark                  Inl.ON (ms)  Inl.OFF(ms)      A/B   Baseline(ms)
+     C/A
+───────────────────────── ──────────── ──────────── ────────   ────────────
+────────
+method_calls                    35.210       42.604 1.21x **            N/A
+     N/A
+function_calls                  29.953       28.367 0.95x !!            N/A
+     N/A
+nested_calls                    51.070       55.866 1.09x **            N/A
+     N/A
+fibonacci                      830.686      878.448 1.06x **            N/A
+     N/A
+richards                      1420.172     1412.673    0.99x            N/A
+     N/A
+nbody                          229.584      233.902    1.02x            N/A
+     N/A
+nqueens                            N/A          N/A      N/A            N/A
+     N/A
+float_arith                    301.813      301.421    1.00x            N/A
+     N/A
+dict_ops                       619.466      618.143    1.00x            N/A
+     N/A
+generator_simple               416.631      416.499    1.00x            N/A
+     N/A
+list_comp                      330.522      333.291    1.01x            N/A
+     N/A
+exception_handling             509.523      510.293    1.00x            N/A
+     N/A
+chaos_game                     901.674      898.575    1.00x            N/A
+     N/A
+coroutine_chain                 68.331       68.014    1.00x            N/A
+     N/A
+context_manager                    N/A          N/A      N/A            N/A
+     N/A
+decorator_chain                    N/A          N/A      N/A            N/A
+     N/A
+deep_class                         N/A          N/A      N/A            N/A
+     N/A
+dunder_protocol                  8.516        8.616    1.01x            N/A
+     N/A
+kwargs_dispatch                    N/A          N/A      N/A            N/A
+     N/A
+nn_module_forward                  N/A          N/A      N/A            N/A
+     N/A
+
+Legend: ** = >5% faster, !! = >5% slower
+A/B > 1.0 means speculative inlining helps
+C/A > 1.0 means CinderX JIT is faster than vanilla Python
+
+=== Raw timing data (ms) ===
+method_calls INLINER_ON:  35.237 35.210 36.063 35.122
+method_calls INLINER_OFF:  46.043 42.175 42.604 42.761
+method_calls BASELINE: N/A
+function_calls INLINER_ON:  36.017 31.328 29.187 29.953
+function_calls INLINER_OFF:  28.367 29.259 28.338 29.266
+function_calls BASELINE: N/A
+nested_calls INLINER_ON:  54.098 51.070 52.017 50.534
+nested_calls INLINER_OFF:  55.866 56.792 55.609 56.709
+nested_calls BASELINE: N/A
+fibonacci INLINER_ON:  820.079 848.864 830.686 850.409
+fibonacci INLINER_OFF:  886.873 878.448 880.550 878.419
+fibonacci BASELINE: N/A
+richards INLINER_ON:  1422.941 1413.996 1420.172 1420.979
+richards INLINER_OFF:  1412.673 1433.682 1412.525 1420.951
+richards BASELINE: N/A
+nbody INLINER_ON:  232.307 229.584 229.632 227.541
+nbody INLINER_OFF:  229.985 234.916 233.902 234.400
+nbody BASELINE: N/A
+nqueens INLINER_ON: N/A
+nqueens INLINER_OFF: N/A
+nqueens BASELINE: N/A
+float_arith INLINER_ON:  305.055 301.813 303.455 301.057
+float_arith INLINER_OFF:  302.434 301.421 301.229 301.549
+float_arith BASELINE: N/A
+dict_ops INLINER_ON:  615.991 619.466 621.647 650.455
+dict_ops INLINER_OFF:  619.572 616.121 618.143 621.335
+dict_ops BASELINE: N/A
+generator_simple INLINER_ON:  416.511 418.720 416.631 419.285
+generator_simple INLINER_OFF:  416.499 414.022 417.020 416.748
+generator_simple BASELINE: N/A
+list_comp INLINER_ON:  331.248 330.522 329.744 331.845
+list_comp INLINER_OFF:  335.343 329.461 336.969 333.291
+list_comp BASELINE: N/A
+exception_handling INLINER_ON:  509.523 508.676 510.547 511.909
+exception_handling INLINER_OFF:  510.293 510.938 510.197 512.752
+exception_handling BASELINE: N/A
+chaos_game INLINER_ON:  975.228 921.391 901.674 898.236
+chaos_game INLINER_OFF:  898.575 898.236 903.002 898.744
+chaos_game BASELINE: N/A
+coroutine_chain INLINER_ON:  68.246 68.346 68.974 68.331
+coroutine_chain INLINER_OFF:  68.349 68.234 67.940 68.014
+coroutine_chain BASELINE: N/A
+context_manager INLINER_ON: N/A
+context_manager INLINER_OFF: N/A
+context_manager BASELINE: N/A
+decorator_chain INLINER_ON: N/A
+decorator_chain INLINER_OFF: N/A
+decorator_chain BASELINE: N/A
+deep_class INLINER_ON: N/A
+deep_class INLINER_OFF: N/A
+deep_class BASELINE: N/A
+dunder_protocol INLINER_ON:  8.611 8.568 8.511 8.516
+dunder_protocol INLINER_OFF:  8.670 8.583 8.630 8.616
+dunder_protocol BASELINE: N/A
+kwargs_dispatch INLINER_ON: N/A
+kwargs_dispatch INLINER_OFF: N/A
+kwargs_dispatch BASELINE: N/A
+nn_module_forward INLINER_ON: N/A
+nn_module_forward INLINER_OFF: N/A
+nn_module_forward BASELINE: N/A
+
+=== No JIT stderr output captured ===
+
+Results saved to: /data/users/alexturner/cinderx_dev/benchmark_results_20260
+221_035217.txt
+=== Benchmark complete ===
