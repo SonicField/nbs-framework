@@ -5,7 +5,7 @@ allowed-tools: Bash
 
 # Remote Development Workflow
 
-This skill provides the workflow and tools for editing files, running builds, and debugging on remote machines (e.g. build-host from an AI agent pod. It consolidates lessons from 1000+ messages of real team experience into actionable patterns.
+This skill provides the workflow and tools for editing files, running builds, and debugging on remote machines (e.g. devserver) from an AI agent pod. It consolidates lessons from 1000+ messages of real team experience into actionable patterns.
 
 ---
 
@@ -130,7 +130,7 @@ If nbs-remote-edit-pty is unavailable, use Python `str.replace()` instead of sed
 # Write a Python edit script
 pty-session send build-host "python3 -c \"
 import pathlib
-p = pathlib.Path('/data/users/alex/cinderx/Jit/inliner.cpp')
+p = pathlib.Path('/data/users/dev/project/Jit/inliner.cpp')
 src = p.read_text()
 old = '''exact old text here'''
 new = '''exact new text here'''
@@ -172,18 +172,18 @@ The standard cycle for modifying code on a remote machine.
 
 ```bash
 # Pull all files you need to edit
-nbs-remote-edit pull build-host /data/users/alex/cinderx/Jit/pyjit.cpp
-nbs-remote-edit pull build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/inliner.cpp
 
 # Edit locally with the Edit tool (safe, reversible, syntax-aware)
 
 # Diff to verify
-nbs-remote-edit diff build-host /data/users/alex/cinderx/Jit/pyjit.cpp
-nbs-remote-edit diff build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/inliner.cpp
 
 # Push back
-nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/pyjit.cpp
-nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/inliner.cpp
 
 # Build with chat awareness
 nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
@@ -193,14 +193,14 @@ nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claud
 
 ```bash
 # Read the file
-pty-session send build-host 'cat /data/users/alex/cinderx/Jit/pyjit.cpp'
+pty-session send build-host 'cat /data/users/dev/project/Jit/pyjit.cpp'
 sleep 3
 pty-session read build-host --last=500
 
 # Edit via Python str.replace (see above)
 
 # Verify the edit
-pty-session send build-host 'cat /data/users/alex/cinderx/Jit/pyjit.cpp | head -220 | tail -20'
+pty-session send build-host 'cat /data/users/dev/project/Jit/pyjit.cpp | head -220 | tail -20'
 
 # Build with chat awareness
 nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
@@ -211,7 +211,7 @@ nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claud
 Always verify the working tree is clean before starting edits. Stale changes from previous sessions cause cascading build failures.
 
 ```bash
-pty-session send build-host 'cd /data/users/alex/cinderx && git status && git diff --stat'
+pty-session send build-host 'cd /data/users/dev/project && git status && git diff --stat'
 sleep 2
 pty-session read build-host --last=30
 ```
@@ -233,9 +233,9 @@ pty-session send build-host 'git checkout 0ca33338'
 pty-session send build-host 'make -j8'
 
 # Agent 2 creates their own session
-pty-session create build-host 'ssh build-host
+pty-session create build-host 'ssh devserver.example.com'
 pty-session wait build-host '\$' --timeout=30
-pty-session send build-host 'cd /data/users/alex/cinderx && source venv/bin/activate'
+pty-session send build-host 'cd /data/users/dev/project && source venv/bin/activate'
 ```
 
 **Announce session ownership in chat:**
@@ -347,7 +347,7 @@ Use `--last=N` to get the most recent N lines: `pty-session read build-host --la
 
 Revert to a known-good state immediately:
 ```bash
-pty-session send build-host 'cd /data/users/alex/cinderx && git checkout -- Jit/inliner.cpp'
+pty-session send build-host 'cd /data/users/dev/project && git checkout -- Jit/inliner.cpp'
 ```
 
 Then re-apply edits using Python str.replace (not sed).
@@ -360,16 +360,16 @@ Drop-in replacement for `nbs-remote-edit` that transfers files through `pty-sess
 
 ```bash
 # 1. Download the file (via pty-session, not SSH)
-nbs-remote-edit-pty pull build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit-pty pull build-host /data/users/dev/project/Jit/inliner.cpp
 # Returns: .nbs/remote-edit/build-host
 
 # 2. Edit locally using the Edit tool — same as nbs-remote-edit
 
 # 3. Verify your changes
-nbs-remote-edit-pty diff build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit-pty diff build-host /data/users/dev/project/Jit/inliner.cpp
 
 # 4. Push back (with automatic md5 verification)
-nbs-remote-edit-pty push build-host /data/users/alex/cinderx/Jit/inliner.cpp
+nbs-remote-edit-pty push build-host /data/users/dev/project/Jit/inliner.cpp
 ```
 
 **Key differences from nbs-remote-edit:**
@@ -394,17 +394,17 @@ Fetches `git diff` output from a remote pty-session. Optionally posts the diff t
 
 ```bash
 # Show unstaged changes
-nbs-remote-diff build-host --cwd=/data/users/alex/cinderx
+nbs-remote-diff build-host --cwd=/data/users/dev/project
 
 # Show diff for a specific file
-nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/alex/cinderx
+nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/dev/project
 
 # Show diff against base commit and post to chat
-nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/alex/cinderx \
+nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/dev/project \
     --chat=.nbs/chat/live.chat --handle=claude
 
 # Just the diffstat
-nbs-remote-diff build-host --stat --cwd=/data/users/alex/cinderx
+nbs-remote-diff build-host --stat --cwd=/data/users/dev/project
 ```
 
 **Options:** `--path=PATH`, `--stat`, `--staged`, `--commit=REF`, `--chat=FILE`, `--handle=NAME`, `--cwd=DIR`.
@@ -419,10 +419,10 @@ One-command state check: HEAD commit, branch, modified files, and diffstat.
 
 ```bash
 # Quick state check
-nbs-remote-status build-host --cwd=/data/users/alex/cinderx
+nbs-remote-status build-host --cwd=/data/users/dev/project
 
 # Post state to chat
-nbs-remote-status build-host --cwd=/data/users/alex/cinderx \
+nbs-remote-status build-host --cwd=/data/users/dev/project \
     --chat=.nbs/chat/live.chat --handle=helper
 ```
 

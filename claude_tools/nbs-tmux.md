@@ -171,7 +171,7 @@ This means output is never lost, regardless of how the session ends.
 
 ## Remote File Editing (nbs-remote-edit)
 
-When editing files on remote machines (e.g. build-host use `nbs-remote-edit` instead of sed/heredoc commands through pty-session. This downloads the file locally, lets you use the normal Edit tool, then pushes it back.
+When editing files on remote machines (e.g. devserver), use `nbs-remote-edit` instead of sed/heredoc commands through pty-session. This downloads the file locally, lets you use the normal Edit tool, then pushes it back.
 
 ### Commands
 
@@ -193,16 +193,16 @@ nbs-remote-edit diff <host> <remote-path>   # Show diff between local and remote
 
 ```bash
 # 1. Download the file
-nbs-remote-edit pull build-host /data/users/alex/cinderx/Jit/pyjit.cpp
-# Returns: .nbs/remote-edit/build-host
+nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+# Returns: .nbs/remote-edit/devserver.example.com/data/users/dev/project/Jit/pyjit.cpp
 
 # 2. Edit locally using the normal Edit tool (no sed needed!)
 
 # 3. Check what changed
-nbs-remote-edit diff build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
 
 # 4. Push back
-nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
 ```
 
 ### When to Use
@@ -246,7 +246,7 @@ nbs-remote-build build-host 'make -j8' --prompt='(venv)'
 
 ### When to Use
 
-- Building CinderX or other large C++ projects on build-host
+- Building CinderX or other large C++ projects on devserver
 - Any pty-session command where you'd otherwise use `sleep N`
 - When you need to stay responsive to team chat during long operations
 

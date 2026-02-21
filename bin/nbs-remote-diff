@@ -19,17 +19,17 @@
 #
 # Examples:
 #   # Show unstaged changes
-#   nbs-remote-diff build-host --cwd=/data/users/alex/cinderx
+#   nbs-remote-diff build-host --cwd=/data/users/dev/project
 #
 #   # Show diff for a specific file
-#   nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/alex/cinderx
+#   nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/dev/project
 #
 #   # Show diff against base commit and post to chat
-#   nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/alex/cinderx \
+#   nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/dev/project \
 #       --chat=.nbs/chat/live.chat --handle=claude
 #
 #   # Just the diffstat
-#   nbs-remote-diff build-host --stat --cwd=/data/users/alex/cinderx
+#   nbs-remote-diff build-host --stat --cwd=/data/users/dev/project
 #
 # Exit codes:
 #   0 - Success

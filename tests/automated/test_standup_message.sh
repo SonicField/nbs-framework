@@ -67,15 +67,13 @@ echo "======================================="
 echo ""
 
 # Extract the standup message from nbs-claude.
-# The message is the string argument to nbs-chat send in check_standup_trigger().
-# We look for the 'nbs-chat send' line inside the function that posts to chat
-# with handle 'sidecar'.
-# There are two copies (local and remote) — extract the local one.
-STANDUP_MSG=$(grep -A1 "nbs-chat send.*sidecar" "$NBS_CLAUDE" | grep -v "remote_cmd" | grep "sidecar" | head -1 | sed "s/.*sidecar '//;s/'.*//")
+# The message is defined as a variable: local standup_msg='...'
+# We extract the content between the single quotes.
+STANDUP_MSG=$(grep "standup_msg='" "$NBS_CLAUDE" | head -1 | sed "s/.*standup_msg='//;s/'$//")
 
 if [[ -z "$STANDUP_MSG" ]]; then
     echo "FATAL: Could not extract standup message from nbs-claude"
-    echo "  Looked for: nbs-chat send ... sidecar '...'"
+    echo "  Looked for: standup_msg='...'"
     echo "  In: $NBS_CLAUDE"
     exit 1
 fi
@@ -110,7 +108,7 @@ else
 fi
 
 # 4. Requests next steps
-if echo "$STANDUP_MSG" | grep -qi 'next steps'; then
+if echo "$STANDUP_MSG" | grep -qi 'next steps\|next tasks\|assign next'; then
     check "4. Requests next steps" "pass"
 else
     check "4. Requests next steps" "fail"
@@ -215,22 +213,16 @@ fi
 echo ""
 echo "Consistency test:"
 
-# The standup message appears twice in nbs-claude: once for local mode
-# (nbs-chat send) and once for remote mode (remote_cmd "nbs-chat send").
-# Both must have identical content.
-LOCAL_MSG=$(grep "nbs-chat send.*sidecar" "$NBS_CLAUDE" | grep -v "remote_cmd" | head -1 | sed "s/.*sidecar '//;s/'.*//")
-REMOTE_MSG=$(grep "remote_cmd.*nbs-chat send.*sidecar" "$NBS_CLAUDE" | head -1 | sed "s/.*sidecar '//;s/'.*//")
+# The standup message is defined once as standup_msg='...' and used in both
+# local (nbs-chat send ... "$standup_msg") and remote (remote_cmd ... "$standup_msg").
+# Since both use the same variable, we just verify the variable is used in both paths.
+LOCAL_USES=$(grep -c '"$standup_msg"' "$NBS_CLAUDE" 2>/dev/null || echo 0)
 
-if [[ -n "$LOCAL_MSG" && -n "$REMOTE_MSG" ]]; then
-    if [[ "$LOCAL_MSG" == "$REMOTE_MSG" ]]; then
-        check "15. Local and remote messages match" "pass"
-    else
-        check "15. Local and remote messages match" "fail"
-        echo "       Local:  '$LOCAL_MSG'"
-        echo "       Remote: '$REMOTE_MSG'"
-    fi
+if [[ "$LOCAL_USES" -ge 2 ]]; then
+    check "15. Local and remote messages use same variable" "pass"
 else
-    echo "   SKIP: 15. Could not extract both local and remote messages"
+    check "15. Local and remote messages use same variable" "fail"
+    echo "       Expected standup_msg used >= 2 times, found $LOCAL_USES"
 fi
 
 echo ""

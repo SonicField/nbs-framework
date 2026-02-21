@@ -20,10 +20,10 @@
 #   NBS_REMOTE_EDIT_PORT  SSH port (default: 22)
 #
 # Examples:
-#   nbs-remote-edit pull build-host /data/users/alex/cinderx/Jit/pyjit.cpp
-#   # Now edit .nbs/remote-edit/build-host
+#   nbs-remote-edit pull devserver.example.com /data/users/dev/project/src/main.cpp
+#   # Now edit .nbs/remote-edit/devserver.example.com/data/users/dev/project/src/main.cpp
 #   # using the normal Edit tool
-#   nbs-remote-edit push build-host /data/users/alex/cinderx/Jit/pyjit.cpp
+#   nbs-remote-edit push devserver.example.com /data/users/dev/project/src/main.cpp
 #
 # Exit codes:
 #   0 - Success
