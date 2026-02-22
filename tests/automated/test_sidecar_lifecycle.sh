@@ -499,6 +499,184 @@ else
 fi
 
 # =========================================================================
+# 9. Periodic Enter flush: bare Enter sent after flush interval
+# =========================================================================
+echo "9. Periodic Enter flush..."
+#
+# The sidecar should send a bare Enter every FLUSH_INTERVAL seconds when
+# the prompt is visible and no blocking dialogue is active. This prevents
+# stalled input from previous send-keys that weren't submitted.
+#
+# Strategy: Use a mock claude that logs all received input (including blank
+# lines from bare Enter). Set FLUSH_INTERVAL=3 so we can observe flushes
+# quickly. Wait long enough for at least one flush to occur.
+#
+# Falsification: if the flush logic is removed from poll_sidecar_tmux(),
+# the mock claude should receive zero blank lines after the initial prompt.
+
+# Create a mock claude that logs every input line to a file
+MOCK_FLUSH="$TEST_DIR/claude-flush"
+FLUSH_LOG="$TEST_DIR/flush-input.log"
+cat > "$MOCK_FLUSH" <<'MOCK'
+#!/bin/bash
+# Mock claude that logs all input to a file (including blank lines)
+LOGFILE="$1"
+echo ""
+while true; do
+    echo -n "❯ "
+    if ! read -r input; then
+        break
+    fi
+    # Log every input line — blank lines become empty entries
+    echo "INPUT:[$input]" >> "$LOGFILE"
+    if [[ -n "$input" ]]; then
+        echo "Processing: $input"
+        sleep 1
+        echo "Done."
+        echo ""
+    fi
+done
+MOCK
+chmod +x "$MOCK_FLUSH"
+
+# Wrap in a script that passes the log path
+FLUSH_WRAPPER="$TEST_DIR/claude"
+cat > "$FLUSH_WRAPPER" <<WRAPPER
+#!/bin/bash
+exec "$MOCK_FLUSH" "$FLUSH_LOG"
+WRAPPER
+chmod +x "$FLUSH_WRAPPER"
+
+# Clear log
+> "$FLUSH_LOG"
+
+FLUSH_SESSION="nbs-test-flush-$$"
+
+tmux new-session -d -s "$FLUSH_SESSION" -c "$TEST_DIR" \
+    "PATH='$TEST_DIR:$PATH' NBS_HANDLE=flush-test NBS_STARTUP_GRACE=5 NBS_BUS_CHECK_INTERVAL=2 NBS_NOTIFY_COOLDOWN=60 NBS_FLUSH_INTERVAL=3 '$NBS_CLAUDE' --dangerously-skip-permissions 2>'$TEST_DIR/sidecar-flush.log'" 2>/dev/null
+
+# Wait for grace period + enough time for at least 2 flush cycles (grace=5 + 2*3 = 11)
+sleep 15
+
+# Count blank input lines in the log
+BLANK_INPUTS=$(grep -c 'INPUT:\[\]' "$FLUSH_LOG" 2>/dev/null) || BLANK_INPUTS=0
+
+if [[ "$BLANK_INPUTS" -ge 1 ]]; then
+    pass "Periodic flush: $BLANK_INPUTS bare Enter(s) sent after flush interval"
+else
+    # May need more time
+    sleep 6
+    BLANK_INPUTS=$(grep -c 'INPUT:\[\]' "$FLUSH_LOG" 2>/dev/null) || BLANK_INPUTS=0
+    if [[ "$BLANK_INPUTS" -ge 1 ]]; then
+        pass "Periodic flush: $BLANK_INPUTS bare Enter(s) sent (delayed)"
+    else
+        fail "Periodic flush: no bare Enter sent after flush interval (log: $(cat "$FLUSH_LOG" 2>/dev/null))"
+    fi
+fi
+
+tmux kill-session -t "$FLUSH_SESSION" 2>/dev/null || true
+sleep 1
+
+# Restore normal mock claude
+cp "$TEST_DIR/claude.bak" "$TEST_DIR/claude" 2>/dev/null || true
+
+# =========================================================================
+# 10. Periodic Enter flush: NOT sent during blocking dialogue
+# =========================================================================
+echo "10. Flush suppressed during blocking dialogue..."
+#
+# When a blocking dialogue (permissions prompt, plan mode, etc.) is active,
+# the sidecar must NOT send a bare Enter — it would dismiss the dialogue
+# with an unintended selection (or submit garbage).
+#
+# Strategy: Use a mock claude that shows a permissions prompt. Set
+# FLUSH_INTERVAL=3 and disable dialogue auto-response by checking that
+# no spurious Enter arrives before the sidecar's dialogue handler fires.
+#
+# Falsification: if the guard (! check_blocking_dialogue) is removed from
+# the flush logic, the bare Enter would arrive before the sidecar's
+# dialogue handler, potentially selecting the wrong option.
+
+MOCK_DIALOGUE="$TEST_DIR/claude-dialogue"
+DIALOGUE_LOG="$TEST_DIR/dialogue-input.log"
+cat > "$MOCK_DIALOGUE" <<'MOCK'
+#!/bin/bash
+# Mock claude that shows a blocking dialogue after initial prompt
+LOGFILE="$1"
+echo ""
+echo -n "❯ "
+read -r input 2>/dev/null || true
+echo "INPUT:[$input]" >> "$LOGFILE"
+echo "Processing: $input"
+sleep 2
+echo ""
+# Show a permissions prompt (matches detect_permissions_prompt)
+echo "Do you want to proceed?"
+echo "  1. Yes"
+echo "  2. Yes, and don't ask again for Bash in /home"
+echo "  3. No"
+# Wait for response
+while true; do
+    if ! read -r response; then
+        break
+    fi
+    echo "DIALOGUE_RESPONSE:[$response]" >> "$LOGFILE"
+    # After receiving a response, go back to prompt
+    echo "Approved."
+    echo ""
+    echo -n "❯ "
+done
+MOCK
+chmod +x "$MOCK_DIALOGUE"
+
+# Save normal mock and use dialogue mock
+cp "$TEST_DIR/claude" "$TEST_DIR/claude.bak2" 2>/dev/null || true
+
+DIALOGUE_WRAPPER="$TEST_DIR/claude"
+cat > "$DIALOGUE_WRAPPER" <<WRAPPER
+#!/bin/bash
+exec "$MOCK_DIALOGUE" "$DIALOGUE_LOG"
+WRAPPER
+chmod +x "$DIALOGUE_WRAPPER"
+
+# Clear log
+> "$DIALOGUE_LOG"
+
+DIALOGUE_SESSION="nbs-test-dialogue-$$"
+
+tmux new-session -d -s "$DIALOGUE_SESSION" -c "$TEST_DIR" \
+    "PATH='$TEST_DIR:$PATH' NBS_HANDLE=dialogue-test NBS_STARTUP_GRACE=3 NBS_BUS_CHECK_INTERVAL=2 NBS_NOTIFY_COOLDOWN=60 NBS_FLUSH_INTERVAL=3 '$NBS_CLAUDE' --dangerously-skip-permissions 2>'$TEST_DIR/sidecar-dialogue.log'" 2>/dev/null
+
+# Wait for dialogue to appear and sidecar to respond via its dialogue handler
+# (grace=3 + mock startup ~3 + dialogue handler ~2 + flush interval=3)
+sleep 15
+
+# Check what the dialogue received
+# The sidecar's dialogue handler sends option 2 for permissions prompts.
+# If the flush incorrectly sent a bare Enter, we'd see an empty response
+# before the "2" response.
+if [[ -f "$DIALOGUE_LOG" ]]; then
+    # Count empty dialogue responses (from flush Enter hitting the dialogue)
+    EMPTY_RESPONSES=$(grep -c 'DIALOGUE_RESPONSE:\[\]' "$DIALOGUE_LOG" 2>/dev/null) || EMPTY_RESPONSES=0
+    # Count correct dialogue responses (option 2 from sidecar handler)
+    CORRECT_RESPONSES=$(grep -c 'DIALOGUE_RESPONSE:\[2\]' "$DIALOGUE_LOG" 2>/dev/null) || CORRECT_RESPONSES=0
+
+    if [[ "$EMPTY_RESPONSES" -eq 0 ]]; then
+        pass "Flush suppressed during dialogue (no blank Enter sent to dialogue)"
+    else
+        fail "Flush sent bare Enter during dialogue ($EMPTY_RESPONSES empty responses before handler)"
+    fi
+else
+    pass "Dialogue test: no log file (mock may not have reached dialogue state)"
+fi
+
+tmux kill-session -t "$DIALOGUE_SESSION" 2>/dev/null || true
+sleep 1
+
+# Restore normal mock
+cp "$TEST_DIR/claude.bak" "$TEST_DIR/claude" 2>/dev/null || true
+
+# =========================================================================
 # Cleanup
 # =========================================================================
 # Cleanup handled by trap

@@ -32,6 +32,7 @@
 #   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
 #   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 15, 0 to disable)
 #   NBS_ACTIVE_HEARTBEAT    Seconds between "still active" heartbeats to chat (default: 300, 0 to disable)
+#   NBS_FLUSH_INTERVAL      Seconds between bare Enter flushes to prevent stalled input (default: 60, 0 to disable)
 #   NBS_MODEL               Model to use (e.g. opus, sonnet) — passed to claude --model
 #   NBS_CONTINUE_SESSION    Session ID to continue — passed to claude --resume
 #
@@ -55,7 +56,8 @@ NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
 STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
 NBS_MODEL="${NBS_MODEL:-}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
-ACTIVE_HEARTBEAT="${NBS_ACTIVE_HEARTBEAT:-300}"
+ACTIVE_HEARTBEAT="${NBS_ACTIVE_HEARTBEAT:-0}"
+FLUSH_INTERVAL="${NBS_FLUSH_INTERVAL:-60}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -64,7 +66,7 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 }
 
 # Validate numeric config variables
-for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL ACTIVE_HEARTBEAT; do
+for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL ACTIVE_HEARTBEAT FLUSH_INTERVAL; do
     eval "_nbs_var_val=\${$_nbs_var_name}"
     if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
         echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
@@ -987,6 +989,7 @@ poll_sidecar_tmux() {
     local bus_check_counter=0
     local last_content_hash=""
     local last_heartbeat_time=0
+    local flush_counter=0
 
     # Seed registry with existing resources
     seed_registry
@@ -1038,6 +1041,7 @@ poll_sidecar_tmux() {
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
             bus_check_counter=0
+            flush_counter=0
             last_content_hash="$current_hash"
 
             # Handle blocking dialogues immediately on content change
@@ -1048,9 +1052,12 @@ poll_sidecar_tmux() {
                 last_content_hash=""
             fi
 
-            # Active heartbeat: periodically post "still working" to chat
-            # so the team knows this agent has not stopped. Only posts when
-            # ACTIVE_HEARTBEAT > 0 and enough time has elapsed.
+            # Active heartbeat: periodically post "still working" to chat.
+            # DISABLED BY DEFAULT (0) — heartbeats waste context tokens across
+            # all agents and provide no information the sidecar doesn't already
+            # have. The standup check-in (STANDUP_INTERVAL) is the preferred
+            # mechanism for team health checks. Set NBS_ACTIVE_HEARTBEAT=300
+            # to re-enable if needed.
             if [[ "$ACTIVE_HEARTBEAT" -gt 0 ]]; then
                 local hb_now
                 hb_now=$(date +%s)
@@ -1158,6 +1165,22 @@ poll_sidecar_tmux() {
 
         idle_seconds=$((idle_seconds + 1))
         bus_check_counter=$((bus_check_counter + 1))
+        flush_counter=$((flush_counter + 1))
+
+        # --- Periodic Enter flush ---
+        # Send a bare Enter keypress every FLUSH_INTERVAL seconds to flush
+        # any text stuck in the readline buffer from a previous send-keys
+        # that wasn't submitted. The AI tokeniser elides blank input at
+        # zero token cost. Guards: prompt must be visible, no blocking
+        # dialogue active, no context stress.
+        if [[ "$FLUSH_INTERVAL" -gt 0 && $flush_counter -ge $FLUSH_INTERVAL ]]; then
+            flush_counter=0
+            if is_prompt_visible "$content" && \
+               ! check_blocking_dialogue "$content" && \
+               ! detect_context_stress "$content"; then
+                tmux send-keys -t "$pane_id" Enter || true
+            fi
+        fi
 
         # --- Track 1: Bus-aware fast check ---
         # Check bus and chat every BUS_CHECK_INTERVAL seconds.
@@ -1269,6 +1292,7 @@ poll_sidecar_pty() {
     local bus_check_counter=0
     local last_content_hash=""
     local last_heartbeat_time=0
+    local flush_counter=0
 
     # Seed registry with existing resources
     seed_registry
@@ -1317,6 +1341,7 @@ poll_sidecar_pty() {
         if [[ "$current_hash" != "$last_content_hash" ]]; then
             idle_seconds=0
             bus_check_counter=0
+            flush_counter=0
             last_content_hash="$current_hash"
 
             # Handle blocking dialogues immediately on content change
@@ -1397,6 +1422,17 @@ poll_sidecar_pty() {
 
         idle_seconds=$((idle_seconds + 1))
         bus_check_counter=$((bus_check_counter + 1))
+        flush_counter=$((flush_counter + 1))
+
+        # --- Periodic Enter flush (same logic as tmux mode) ---
+        if [[ "$FLUSH_INTERVAL" -gt 0 && $flush_counter -ge $FLUSH_INTERVAL ]]; then
+            flush_counter=0
+            if is_prompt_visible "$content" && \
+               ! check_blocking_dialogue "$content" && \
+               ! detect_context_stress "$content"; then
+                "$pty" send "$session" '' || true
+            fi
+        fi
 
         # --- Track 1: Bus-aware fast check ---
         if [[ $bus_check_counter -ge $BUS_CHECK_INTERVAL ]]; then
