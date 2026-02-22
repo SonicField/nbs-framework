@@ -9,7 +9,7 @@ TARGET = nbs-pty-session
 
 ASSERT_CHECK = assert_check
 
-.PHONY: all clean install
+.PHONY: all clean install test
 
 all: $(TARGET) $(ASSERT_CHECK)
 
@@ -25,6 +25,9 @@ $(ASSERT_CHECK): assert_check.c
 install: all
 	mkdir -p $(BIN_DIR)
 	cp $(TARGET) $(BIN_DIR)/pty-session
+
+test: all install
+	./$(ASSERT_CHECK)
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(ASSERT_CHECK)
