@@ -295,7 +295,9 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
 
         /* Skip directories (e.g. processed/) */
         char fullpath[BUS_MAX_FULLPATH];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+        int n_fullpath = snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+        ASSERT_MSG(n_fullpath >= 0 && (size_t)n_fullpath < sizeof(fullpath),
+                   "bus_list_events: path truncated for %s/%s", events_dir, name);
         struct stat st;
         if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
             continue;
@@ -337,7 +339,9 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
 
     /* Try to open config.yaml */
     char config_path[BUS_MAX_FULLPATH];
-    snprintf(config_path, sizeof(config_path), "%s/config.yaml", events_dir);
+    int n_config = snprintf(config_path, sizeof(config_path), "%s/config.yaml", events_dir);
+    ASSERT_MSG(n_config >= 0 && (size_t)n_config < sizeof(config_path),
+               "bus_init: path truncated for %s/config.yaml", events_dir);
 
     FILE *fp = fopen(config_path, "r");
     if (!fp) return 0; /* missing config is fine — use defaults */
@@ -448,7 +452,9 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
 
     /* Ensure processed/ subdirectory exists */
     char processed_dir[BUS_MAX_FULLPATH];
-    snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    int n_proc1 = snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    ASSERT_MSG(n_proc1 >= 0 && (size_t)n_proc1 < sizeof(processed_dir),
+               "bus_publish: path truncated for %s/processed", events_dir);
     if (stat(processed_dir, &st) != 0) {
         if (mkdir(processed_dir, 0755) != 0 && errno != EEXIST) {
             fprintf(stderr, "Error: cannot create processed directory: %s\n",
@@ -470,9 +476,13 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
     /* Build temp and final paths */
     char tmp_path[BUS_MAX_FULLPATH];
     char final_path[BUS_MAX_FULLPATH];
-    snprintf(tmp_path, sizeof(tmp_path), "%s/.tmp-%lld-%d.event",
+    int n_tmp = snprintf(tmp_path, sizeof(tmp_path), "%s/.tmp-%lld-%d.event",
              events_dir, ts_us, (int)getpid());
-    snprintf(final_path, sizeof(final_path), "%s/%s", events_dir, filename);
+    ASSERT_MSG(n_tmp >= 0 && (size_t)n_tmp < sizeof(tmp_path),
+               "bus_publish: path truncated for tmp file");
+    int n_final = snprintf(final_path, sizeof(final_path), "%s/%s", events_dir, filename);
+    ASSERT_MSG(n_final >= 0 && (size_t)n_final < sizeof(final_path),
+               "bus_publish: path truncated for %s/%s", events_dir, filename);
 
     /* Format timestamp */
     char iso_time[32];
@@ -599,7 +609,9 @@ int bus_read(const char *events_dir, const char *event_file)
     }
 
     char filepath[BUS_MAX_FULLPATH];
-    snprintf(filepath, sizeof(filepath), "%s/%s", events_dir, event_file);
+    int n_filepath = snprintf(filepath, sizeof(filepath), "%s/%s", events_dir, event_file);
+    ASSERT_MSG(n_filepath >= 0 && (size_t)n_filepath < sizeof(filepath),
+               "bus_get_event: path truncated for %s/%s", events_dir, event_file);
 
     FILE *fp = fopen(filepath, "r");
     if (!fp) {
@@ -636,13 +648,19 @@ int bus_ack(const char *events_dir, const char *event_file)
 
     char src_path[BUS_MAX_FULLPATH];
     char dst_path[BUS_MAX_FULLPATH];
-    snprintf(src_path, sizeof(src_path), "%s/%s", events_dir, event_file);
-    snprintf(dst_path, sizeof(dst_path), "%s/processed/%s",
+    int n_src = snprintf(src_path, sizeof(src_path), "%s/%s", events_dir, event_file);
+    ASSERT_MSG(n_src >= 0 && (size_t)n_src < sizeof(src_path),
+               "bus_ack: path truncated for %s/%s", events_dir, event_file);
+    int n_dst = snprintf(dst_path, sizeof(dst_path), "%s/processed/%s",
              events_dir, event_file);
+    ASSERT_MSG(n_dst >= 0 && (size_t)n_dst < sizeof(dst_path),
+               "bus_ack: path truncated for %s/processed/%s", events_dir, event_file);
 
     /* Ensure processed/ exists */
     char processed_dir[BUS_MAX_FULLPATH];
-    snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    int n_proc2 = snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    ASSERT_MSG(n_proc2 >= 0 && (size_t)n_proc2 < sizeof(processed_dir),
+               "bus_ack: path truncated for %s/processed", events_dir);
     struct stat st;
     if (stat(processed_dir, &st) != 0) {
         if (mkdir(processed_dir, 0755) != 0 && errno != EEXIST) {
@@ -704,7 +722,9 @@ int bus_prune(const char *events_dir, long long max_bytes)
     ASSERT_MSG(max_bytes > 0, "bus_prune: max_bytes <= 0: %lld", max_bytes);
 
     char processed_dir[BUS_MAX_FULLPATH];
-    snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    int n_proc3 = snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    ASSERT_MSG(n_proc3 >= 0 && (size_t)n_proc3 < sizeof(processed_dir),
+               "bus_prune: path truncated for %s/processed", events_dir);
 
     struct stat dir_st;
     if (stat(processed_dir, &dir_st) != 0) {
@@ -733,7 +753,9 @@ int bus_prune(const char *events_dir, long long max_bytes)
             continue;
 
         char fullpath[BUS_MAX_FULLPATH];
-        snprintf(fullpath, sizeof(fullpath), "%s/processed/%s", events_dir, name);
+        int n_fullpath2 = snprintf(fullpath, sizeof(fullpath), "%s/processed/%s", events_dir, name);
+        ASSERT_MSG(n_fullpath2 >= 0 && (size_t)n_fullpath2 < sizeof(fullpath),
+                   "bus_prune: path truncated for %s/processed/%s", events_dir, name);
 
         struct stat st;
         if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
@@ -767,8 +789,10 @@ int bus_prune(const char *events_dir, long long max_bytes)
     int pruned = 0;
     for (int i = 0; i < count && total_size > max_bytes; i++) {
         char del_path[BUS_MAX_FULLPATH];
-        snprintf(del_path, sizeof(del_path), "%s/processed/%s",
+        int n_del = snprintf(del_path, sizeof(del_path), "%s/processed/%s",
                  events_dir, entries[i].filename);
+        ASSERT_MSG(n_del >= 0 && (size_t)n_del < sizeof(del_path),
+                   "bus_prune: path truncated for %s/processed/%s", events_dir, entries[i].filename);
         if (unlink(del_path) == 0) {
             total_size -= entries[i].size;
             pruned++;
@@ -818,7 +842,9 @@ int bus_status(const char *events_dir)
 
     /* Count processed events and total size */
     char processed_dir[BUS_MAX_FULLPATH];
-    snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    int n_proc4 = snprintf(processed_dir, sizeof(processed_dir), "%s/processed", events_dir);
+    ASSERT_MSG(n_proc4 >= 0 && (size_t)n_proc4 < sizeof(processed_dir),
+               "bus_status: path truncated for %s/processed", events_dir);
     int processed_count = 0;
     long long processed_size = 0;
 
@@ -832,7 +858,9 @@ int bus_status(const char *events_dir)
                 continue;
 
             char fullpath[BUS_MAX_FULLPATH];
-            snprintf(fullpath, sizeof(fullpath), "%s/processed/%s", events_dir, name);
+            int n_fullpath3 = snprintf(fullpath, sizeof(fullpath), "%s/processed/%s", events_dir, name);
+            ASSERT_MSG(n_fullpath3 >= 0 && (size_t)n_fullpath3 < sizeof(fullpath),
+                       "bus_status: path truncated for %s/processed/%s", events_dir, name);
             struct stat fst;
             if (stat(fullpath, &fst) == 0 && S_ISREG(fst.st_mode)) {
                 processed_count++;
@@ -926,7 +954,9 @@ int bus_publish_dedup(const char *events_dir, const char *source,
 
         /* Read dedup-key from file content */
         char fullpath[BUS_MAX_FULLPATH];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+        int n_fullpath4 = snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+        ASSERT_MSG(n_fullpath4 >= 0 && (size_t)n_fullpath4 < sizeof(fullpath),
+                   "bus_is_duplicate: path truncated for %s/%s", events_dir, name);
 
         /* Skip directories (e.g. processed/) */
         struct stat st;
