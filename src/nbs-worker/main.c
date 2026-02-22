@@ -73,9 +73,10 @@ int main(int argc, char *argv[])
         /* Parse optional --context=N */
         for (int i = 4; i < argc; i++) {
             if (strncmp(argv[i], "--context=", 10) == 0) {
-                context = atoi(argv[i] + 10);
-                if (context < 0)
-                    context = 0;
+                char *endptr;
+                long parsed = strtol(argv[i] + 10, &endptr, 10);
+                if (*endptr == '\0' && parsed >= 0 && parsed <= 10000)
+                    context = (int)parsed;
             } else {
                 fprintf(stderr,
                         "Warning: unknown argument ignored: %s\n", argv[i]);
