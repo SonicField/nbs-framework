@@ -104,5 +104,9 @@ int transport_tmux_init(transport_t *tp, const char *pane_id) {
     tp->is_alive = tmux_is_alive;
     tp->ctx = ctx;
 
+    /* Postcondition: all vtable entries set */
+    ASSERT_MSG(tp->capture != NULL && tp->send_text != NULL &&
+               tp->send_key != NULL && tp->is_alive != NULL && tp->ctx != NULL,
+               "transport_tmux_init: postcondition violated - NULL vtable entry");
     return 0;
 }

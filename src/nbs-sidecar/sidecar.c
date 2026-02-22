@@ -37,12 +37,20 @@
 
 static void build_registry_path(const sidecar_config_t *cfg,
                                  char *out, size_t out_size) {
+    ASSERT_MSG(cfg != NULL, "build_registry_path: cfg is NULL");
+    ASSERT_MSG(out != NULL, "build_registry_path: out is NULL");
+    ASSERT_MSG(out_size > 0, "build_registry_path: out_size is 0");
+
     snprintf(out, out_size, "%s/.nbs/control-registry-%s",
              cfg->nbs_root, cfg->handle);
 }
 
 static void build_inbox_path(const sidecar_config_t *cfg,
                               char *out, size_t out_size) {
+    ASSERT_MSG(cfg != NULL, "build_inbox_path: cfg is NULL");
+    ASSERT_MSG(out != NULL, "build_inbox_path: out is NULL");
+    ASSERT_MSG(out_size > 0, "build_inbox_path: out_size is 0");
+
     snprintf(out, out_size, "%s/.nbs/control-inbox-%s",
              cfg->nbs_root, cfg->handle);
 }
@@ -56,6 +64,11 @@ static void build_inbox_path(const sidecar_config_t *cfg,
 static void build_recovery_prompt(const sidecar_config_t *cfg,
                                    const char *registry_path,
                                    char *out, size_t out_size) {
+    ASSERT_MSG(cfg != NULL, "build_recovery_prompt: cfg is NULL");
+    ASSERT_MSG(registry_path != NULL, "build_recovery_prompt: registry_path is NULL");
+    ASSERT_MSG(out != NULL, "build_recovery_prompt: out is NULL");
+    ASSERT_MSG(out_size > 0, "build_recovery_prompt: out_size is 0");
+
     char chat_path[SIDECAR_MAX_PATH];
     int has_chat = (registry_find_first(registry_path, "chat",
                                          chat_path, sizeof(chat_path)) == 0);
@@ -145,6 +158,10 @@ done:
 
 static void respond_dialogue(transport_t *tp,
                               const dialogue_response_t *resp) {
+    ASSERT_MSG(tp != NULL, "respond_dialogue: tp is NULL");
+    ASSERT_MSG(resp != NULL, "respond_dialogue: resp is NULL");
+    ASSERT_MSG(resp->option > 0 && resp->option <= 9, "respond_dialogue: option must be in range [1, 9]");
+
     char option_str[4];
     snprintf(option_str, sizeof(option_str), "%d", resp->option);
     tp->send_text(tp, option_str);
@@ -167,6 +184,10 @@ static void respond_dialogue(transport_t *tp,
 static int should_inject_notify(const sidecar_config_t *cfg,
                                  sidecar_state_t *state,
                                  const char *registry_path) {
+    ASSERT_MSG(cfg != NULL, "should_inject_notify: cfg is NULL");
+    ASSERT_MSG(state != NULL, "should_inject_notify: state is NULL");
+    ASSERT_MSG(registry_path != NULL, "should_inject_notify: registry_path is NULL");
+
     state->notify_message[0] = '\0';
 
     /* Startup grace */
@@ -278,6 +299,9 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         snprintf(state->notify_message, sizeof(state->notify_message),
                  "%s", parts);
     }
+
+    ASSERT_MSG(state->notify_message[0] != '\0',
+               "should_inject_notify: returning inject but message is empty");
 
     state->last_notify_time = now;
     return 0;

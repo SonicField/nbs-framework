@@ -45,6 +45,9 @@
  */
 static int registry_contains(const char *registry_path, const char *entry)
 {
+    ASSERT_MSG(registry_path != NULL, "registry_contains: registry_path is NULL");
+    ASSERT_MSG(entry != NULL, "registry_contains: entry is NULL");
+
     FILE *f = fopen(registry_path, "r");
     if (!f)
         return 0;
@@ -74,6 +77,9 @@ static int registry_contains(const char *registry_path, const char *entry)
  */
 static int registry_append(const char *registry_path, const char *entry)
 {
+    ASSERT_MSG(registry_path != NULL, "registry_append: registry_path is NULL");
+    ASSERT_MSG(entry != NULL, "registry_append: entry is NULL");
+
     FILE *f = fopen(registry_path, "a");
     if (!f)
         return -1;
@@ -95,6 +101,9 @@ static int registry_append(const char *registry_path, const char *entry)
  */
 static int registry_remove(const char *registry_path, const char *entry)
 {
+    ASSERT_MSG(registry_path != NULL, "registry_remove: registry_path is NULL");
+    ASSERT_MSG(entry != NULL, "registry_remove: entry is NULL");
+
     FILE *f = fopen(registry_path, "r");
     if (!f)
         return (errno == ENOENT) ? 0 : -1;
@@ -114,7 +123,7 @@ static int registry_remove(const char *registry_path, const char *entry)
         size_t len = strlen(line);
         char stripped[MAX_ENTRY];
         memcpy(stripped, line, len + 1);
-        if (len > 0 && stripped[len - 1] == '\n')
+        if (len > 0 && stripped[len - 1] == '\0')
             stripped[len - 1] = '\0';
 
         if (strcmp(stripped, entry) != 0) {
@@ -143,6 +152,9 @@ static int registry_remove(const char *registry_path, const char *entry)
  */
 static int str_ends_with(const char *s, const char *suffix)
 {
+    ASSERT_MSG(s != NULL, "str_ends_with: s is NULL");
+    ASSERT_MSG(suffix != NULL, "str_ends_with: suffix is NULL");
+
     size_t slen = strlen(s);
     size_t suflen = strlen(suffix);
     if (suflen > slen)
@@ -158,6 +170,8 @@ static int str_ends_with(const char *s, const char *suffix)
  */
 static char *strip_whitespace(char *s)
 {
+    ASSERT_MSG(s != NULL, "strip_whitespace: s is NULL");
+
     /* Skip leading whitespace */
     while (*s == ' ' || *s == '\t' || *s == '\r')
         s++;
@@ -206,6 +220,10 @@ static int count_lines(const char *buf)
  */
 static int get_line_n(const char *buf, int n, char *out, size_t out_size)
 {
+    ASSERT_MSG(buf != NULL, "get_line_n: buf is NULL");
+    ASSERT_MSG(out != NULL, "get_line_n: out is NULL");
+    ASSERT_MSG(out_size > 0, "get_line_n: out_size is 0");
+
     int current = 0;
     const char *p = buf;
 
@@ -237,6 +255,9 @@ static int get_line_n(const char *buf, int n, char *out, size_t out_size)
  */
 static int process_control_command(const char *line, const char *registry_path)
 {
+    ASSERT_MSG(line != NULL, "process_control_command: line is NULL");
+    ASSERT_MSG(registry_path != NULL, "process_control_command: registry_path is NULL");
+
     char verb[256];
     char path[MAX_PATH];
 

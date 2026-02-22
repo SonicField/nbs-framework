@@ -44,6 +44,9 @@ dialogue_type_t detect_blocking_dialogue(const char *content,
  * Patterns: "Compacting conversation", "Conversation too long",
  *           "Prompt is too long", "Error compacting conversation"
  *
+ * Preconditions:
+ *   - content != NULL
+ *
  * Returns 1 if any stress indicator found, 0 otherwise.
  */
 int detect_context_stress(const char *content);
@@ -53,6 +56,9 @@ int detect_context_stress(const char *content);
  *
  * Checks the last 3 lines of content for the UTF-8 prompt character.
  *
+ * Preconditions:
+ *   - content != NULL
+ *
  * Returns 1 if visible, 0 otherwise.
  */
 int detect_prompt_visible(const char *content);
@@ -61,6 +67,9 @@ int detect_prompt_visible(const char *content);
  * detect_skill_failure — Check if Claude rejected an injection.
  *
  * Looks for "Unknown skill" in content.
+ *
+ * Preconditions:
+ *   - content != NULL
  *
  * Returns 1 if found, 0 otherwise.
  */

@@ -69,7 +69,8 @@ int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
         redirect_stderr_to_devnull();
 
         execvp(argv[0], (char *const *)argv);
-        /* exec failed */
+        /* execvp only returns on failure — errno must be set */
+        fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
@@ -90,6 +91,8 @@ int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
         total += (size_t)n;
     }
     out_buf[total] = '\0';
+    /* Postcondition: buffer is NUL-terminated and within bounds */
+    ASSERT_MSG(total < out_size, "exec_capture: total %zu >= out_size %zu", total, out_size);
     close(pipefd[0]);
 
     /* Reap child — retry on EINTR */
@@ -137,7 +140,8 @@ int exec_fire_and_forget(const char *const argv[])
         }
 
         execvp(argv[0], (char *const *)argv);
-        /* exec failed */
+        /* execvp only returns on failure — errno must be set */
+        fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
