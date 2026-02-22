@@ -1,3 +1,7 @@
 *.o
 nbs-chat
 nbs-chat-terminal
+nbs-chat-web
+nbs-chat-remote
+assert_check
+web_assets.h

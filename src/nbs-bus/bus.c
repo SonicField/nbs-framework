@@ -71,9 +71,16 @@ static void format_iso8601(char *buf, size_t len)
     ASSERT_MSG(len >= 24, "format_iso8601: buf too small: %zu", len);
 
     time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        snprintf(buf, len, "1970-01-01T00:00:00Z");
+        return;
+    }
     struct tm tm;
     gmtime_r(&now, &tm);
-    strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    size_t rc = strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    if (rc == 0) {
+        snprintf(buf, len, "1970-01-01T00:00:00Z");
+    }
 }
 
 /* Check if a string contains whitespace */
@@ -142,6 +149,7 @@ static int parse_event_filename_timestamp(const char *filename, long long *ts_us
     if (errno != 0 || *endp != '\0')
         return -1;
 
+    ASSERT_MSG(*ts_us > 0, "parse_event_filename_timestamp: parsed non-positive timestamp: %lld", *ts_us);
     return 0;
 }
 
