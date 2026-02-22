@@ -107,16 +107,20 @@ Progressive replacement of CPython call protocol paths with C type slot implemen
 
 ## Testing
 
-The framework includes automated tests using a novel AI-evaluates-AI approach, plus unit tests for C binaries.
+The framework includes automated tests using a novel AI-evaluates-AI approach, plus unit and integration tests for all C binaries.
+
+```bash
+make test-unit     # 70+ unit tests across bus, chat, sidecar
+make test          # Integration tests (lifecycle, interrupt, auto-archive, + component tests)
+make test-all      # Everything
+```
 
 - [Testing Strategy](docs/testing-strategy.md) - Philosophy, adversarial testing, test isolation
 - [Interactive Testing](docs/interactive-testing.md) - Using pty-session for multi-turn tests
 - [pty-session Reference](docs/pty-session.md) - Interactive terminal session manager (REPLs, debuggers)
 - [nbs-worker Reference](docs/nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 
-C binary tests: `tests/automated/test_nbs_chat.sh`, `tests/automated/test_nbs_chat_remote.sh`
-
-See [tests/README.md](tests/README.md) for running tests.
+See [tests/README.md](tests/README.md) for details.
 
 ## Planning
 
@@ -126,30 +130,70 @@ Project plans and progress logs live in `planning/`:
 
 ## Installation
 
+### Prerequisites
+
+- GCC (C11 support) or Clang
+- GNU Make
+- tmux (runtime dependency for session management)
+
+### Quick Start
+
 ```bash
 git clone https://github.com/SonicField/nbs-framework.git
 cd nbs-framework
-```
-
-### Building the C binaries
-
-The framework includes C binaries for `nbs-chat`, `nbs-chat-terminal`, and `nbs-chat-remote`. Build them before installing:
-
-```bash
-cd src/nbs-chat && make && cd ../..
-```
-
-The compiled binaries are placed in `bin/`.
-
-### Installing
-
-```bash
+make && make install
 ./bin/install.sh
 ```
 
-This creates `~/.nbs/` with processed commands and symlinks in `~/.claude/commands/`.
+That's it. Three commands: clone, build, install.
+
+### What Gets Built
+
+`make` builds all five C components from `src/`:
+
+| Component | Binary | Purpose |
+|-----------|--------|---------|
+| nbs-bus | `bin/nbs-bus` | File-based event queue for agent coordination |
+| nbs-chat | `bin/nbs-chat`, `bin/nbs-chat-terminal`, `bin/nbs-chat-remote`, `bin/nbs-chat-web` | Chat file protocol (create, send, read, poll, search) |
+| nbs-sidecar | `bin/nbs-sidecar` | Background monitor for Claude Code sessions (20 behaviours) |
+| nbs-pty-session | `bin/pty-session` | Terminal session manager (create, send, read, wait, kill) |
+| nbs-worker | `bin/nbs-worker` | Worker lifecycle management (spawn, status, search, dismiss) |
+
+All binaries are compiled with `-Wall -Wextra -Wshadow -Werror -std=c11`. Assertions are always-on (not gated by NDEBUG).
+
+`make install` copies binaries to `bin/`.
+
+`./bin/install.sh` creates `~/.nbs/` with processed commands and symlinks in `~/.claude/commands/`.
 
 For custom install location: `./bin/install.sh --prefix=/path/to/location`
+
+### Running Tests
+
+```bash
+make test          # Integration tests for all components
+make test-unit     # Unit tests only (bus + chat + sidecar)
+make test-all      # Unit tests + integration tests
+```
+
+### Build Modes
+
+```bash
+make debug         # Debug build (-O0 -g, for gdb)
+make               # Release build (-O2, assertions ON)
+```
+
+ASan builds are available per-component: `make -C src/nbs-sidecar asan`
+
+### Remaining Bash Scripts
+
+The `bin/` directory also contains bash scripts for user-facing tools that are not performance-critical:
+
+- `nbs-claude` — Thin wrapper (~300 lines) that launches Claude Code + nbs-sidecar
+- `nbs-remote-*` — SSH proxy tools for remote operations
+- `pty-session-lock` — Advisory locking for pty sessions
+- `nbs-chat-init` — Project initialisation
+
+These are orchestration scripts, not hot-path code. The sidecar, chat, bus, pty-session, and worker — all called per-tick or per-agent-action — are C binaries.
 
 ## Author
 

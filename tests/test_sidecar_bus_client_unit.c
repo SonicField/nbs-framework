@@ -1,0 +1,462 @@
+/*
+ * test_sidecar_bus_client_unit.c -- Unit tests for bus_client.c
+ *
+ * Tests the bus_client API by creating temporary event directories,
+ * publishing events via the nbs-bus binary, and verifying that
+ * bus_client_check, bus_client_read, bus_client_ack, bus_client_publish,
+ * and bus_client_check_typed behave correctly.
+ *
+ * Requires: nbs-bus binary in PATH.
+ *
+ * Build (from project root):
+ *   export PATH="$(pwd)/bin:$PATH"
+ *   gcc -Wall -Wextra -Wshadow -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+ *       -I src/nbs-common -I src/nbs-sidecar \
+ *       -o tests/test_sidecar_bus_client_unit \
+ *       tests/test_sidecar_bus_client_unit.c \
+ *       src/nbs-sidecar/bus_client.o src/nbs-sidecar/exec_util.o
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
+
+#include "bus_client.h"
+#include "exec_util.h"
+
+/* ------------------------------------------------------------------ */
+/* Test harness                                                        */
+/* ------------------------------------------------------------------ */
+
+static int tests = 0, fails = 0;
+#define CHECK(label, cond) do { \
+    tests++; \
+    if (!(cond)) { \
+        fails++; \
+        printf("   FAIL: %s\n", label); \
+    } else { \
+        printf("   PASS: %s\n", label); \
+    } \
+} while(0)
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * make_bus_dir -- Create a temporary bus directory with processed/ subdir.
+ * Returns a malloc'd string; caller must free after rmdir_recursive.
+ */
+static char *make_bus_dir(void)
+{
+    char tmpl[] = "/tmp/nbs-bus-test-XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    if (dir == NULL) {
+        perror("mkdtemp");
+        exit(1);
+    }
+    char *result = strdup(dir);
+    char proc[512];
+    snprintf(proc, sizeof(proc), "%s/processed", result);
+    if (mkdir(proc, 0755) != 0) {
+        perror("mkdir processed");
+        exit(1);
+    }
+    return result;
+}
+
+/*
+ * rmdir_recursive -- Remove a directory and all its contents.
+ * Only handles one level of subdirectories (sufficient for bus dirs).
+ */
+static void rmdir_recursive(const char *path)
+{
+    DIR *d = opendir(path);
+    if (d == NULL) return;
+    struct dirent *ent;
+    char child[1024];
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        struct stat st;
+        if (stat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            rmdir_recursive(child);
+        } else {
+            unlink(child);
+        }
+    }
+    closedir(d);
+    rmdir(path);
+}
+
+/*
+ * publish_via_cli -- Publish an event using nbs-bus binary directly.
+ * This is the "known good" path for setting up test fixtures.
+ */
+static int publish_via_cli(const char *bus_dir, const char *source,
+                           const char *type, const char *priority,
+                           const char *payload)
+{
+    const char *argv[] = {
+        "nbs-bus", "publish", bus_dir, source, type, priority, payload, NULL
+    };
+    char buf[4096];
+    return exec_capture(argv, buf, sizeof(buf));
+}
+
+/*
+ * check_via_cli -- Run nbs-bus check and capture output.
+ * Returns exit code; buf contains output.
+ */
+static int check_via_cli(const char *bus_dir, char *buf, size_t buf_size)
+{
+    const char *argv[] = {"nbs-bus", "check", bus_dir, NULL};
+    return exec_capture(argv, buf, buf_size);
+}
+
+/*
+ * extract_filename -- Extract event filename from the first line of
+ * nbs-bus check output. Format: [priority] filename (age)
+ * Returns 0 on success, -1 on failure.
+ */
+static int extract_filename(const char *check_output, char *fname, size_t fname_size)
+{
+    /* Skip "[priority] " */
+    const char *p = strchr(check_output, ']');
+    if (p == NULL) return -1;
+    p++; /* skip ] */
+    while (*p == ' ') p++;
+
+    const char *end = strchr(p, ' ');
+    if (end == NULL) end = p + strlen(p);
+
+    size_t len = (size_t)(end - p);
+    if (len == 0 || len >= fname_size) return -1;
+
+    memcpy(fname, p, len);
+    fname[len] = '\0';
+    return 0;
+}
+
+/*
+ * verify_nbs_bus -- Check that nbs-bus is reachable via exec.
+ * Uses a publish+check round-trip since 'help' writes to stderr
+ * which exec_capture discards.
+ * Returns 0 if working, -1 if not.
+ */
+static int verify_nbs_bus(void)
+{
+    char *dir = make_bus_dir();
+    int rc = publish_via_cli(dir, "probe", "probe", "normal", "probe");
+    rmdir_recursive(dir);
+    free(dir);
+    return (rc == 0) ? 0 : -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 1: bus_client_check with empty bus dir                         */
+/* ------------------------------------------------------------------ */
+
+static void test_check_empty(void)
+{
+    printf("\n-- test_check_empty --\n");
+    char *dir = make_bus_dir();
+
+    int event_count = -1;
+    char max_priority[64] = {0};
+    char summary[256] = {0};
+    int rc = bus_client_check(dir, &event_count, max_priority, sizeof(max_priority),
+                              summary, sizeof(summary));
+
+    CHECK("empty dir: returns 1 (no events)", rc == 1);
+    CHECK("empty dir: event_count is 0", event_count == 0);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 2: bus_client_check with one event                             */
+/* ------------------------------------------------------------------ */
+
+static void test_check_one_event(void)
+{
+    printf("\n-- test_check_one_event --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "test-src", "test-type", "normal", "hello world");
+
+    int event_count = -1;
+    char max_priority[64] = {0};
+    char summary[256] = {0};
+    int rc = bus_client_check(dir, &event_count, max_priority, sizeof(max_priority),
+                              summary, sizeof(summary));
+
+    CHECK("one event: returns 0 (events found)", rc == 0);
+    CHECK("one event: event_count is 1", event_count == 1);
+    CHECK("one event: max_priority is 'normal'",
+          strcmp(max_priority, "normal") == 0);
+    CHECK("one event: summary is non-empty", summary[0] != '\0');
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 3: bus_client_check priority extraction                        */
+/* ------------------------------------------------------------------ */
+
+static void test_check_priority(void)
+{
+    printf("\n-- test_check_priority --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "test-src", "test-type", "critical", "urgent payload");
+
+    int event_count = -1;
+    char max_priority[64] = {0};
+    char summary[256] = {0};
+    int rc = bus_client_check(dir, &event_count, max_priority, sizeof(max_priority),
+                              summary, sizeof(summary));
+
+    CHECK("critical priority: returns 0", rc == 0);
+    CHECK("critical priority: max_priority is 'critical'",
+          strcmp(max_priority, "critical") == 0);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 4: bus_client_read existing event                              */
+/* ------------------------------------------------------------------ */
+
+static void test_read_existing(void)
+{
+    printf("\n-- test_read_existing --\n");
+    char *dir = make_bus_dir();
+
+    const char *expected_payload = "payload for read test";
+    publish_via_cli(dir, "test-src", "test-type", "normal", expected_payload);
+
+    /* Get the filename from nbs-bus check */
+    char check_out[4096];
+    check_via_cli(dir, check_out, sizeof(check_out));
+
+    char fname[256];
+    int frc = extract_filename(check_out, fname, sizeof(fname));
+    CHECK("read: extracted filename from check output", frc == 0);
+
+    if (frc == 0) {
+        char payload[4096];
+        int rc = bus_client_read(dir, fname, payload, sizeof(payload));
+        CHECK("read: returns 0", rc == 0);
+        CHECK("read: payload contains published text",
+              strstr(payload, expected_payload) != NULL);
+    }
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 5: bus_client_ack removes event                                */
+/* ------------------------------------------------------------------ */
+
+static void test_ack_removes_event(void)
+{
+    printf("\n-- test_ack_removes_event --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "test-src", "test-type", "normal", "ack me");
+
+    /* Get filename */
+    char check_out[4096];
+    check_via_cli(dir, check_out, sizeof(check_out));
+
+    char fname[256];
+    int frc = extract_filename(check_out, fname, sizeof(fname));
+    CHECK("ack: extracted filename", frc == 0);
+
+    if (frc == 0) {
+        int rc = bus_client_ack(dir, fname);
+        CHECK("ack: returns 0", rc == 0);
+
+        /* Verify event is gone */
+        int event_count = -1;
+        char max_priority[64];
+        char summary[256];
+        int rc2 = bus_client_check(dir, &event_count, max_priority,
+                                   sizeof(max_priority), summary, sizeof(summary));
+        CHECK("ack: check returns 1 (empty after ack)", rc2 == 1);
+        CHECK("ack: event_count is 0 after ack", event_count == 0);
+    }
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 6: bus_client_publish round-trip                               */
+/* ------------------------------------------------------------------ */
+
+static void test_publish_roundtrip(void)
+{
+    printf("\n-- test_publish_roundtrip --\n");
+    char *dir = make_bus_dir();
+
+    int rc = bus_client_publish(dir, "c-client", "test-msg", "normal",
+                                "published from C");
+    CHECK("publish: returns 0", rc == 0);
+
+    /* Verify event exists via nbs-bus check (CLI) */
+    char check_out[4096];
+    int crc = check_via_cli(dir, check_out, sizeof(check_out));
+    CHECK("publish: nbs-bus check succeeds", crc == 0);
+    CHECK("publish: check output is non-empty", check_out[0] != '\0');
+    CHECK("publish: check output contains event type",
+          strstr(check_out, "test-msg") != NULL);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 7: bus_client_check_typed matching type and handle             */
+/* ------------------------------------------------------------------ */
+
+static void test_check_typed_match(void)
+{
+    printf("\n-- test_check_typed_match --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "user1", "chat-mention", "normal",
+                    "hey @testhandle check this out");
+
+    char payload_out[4096] = {0};
+    int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
+                                    payload_out, sizeof(payload_out));
+
+    CHECK("typed match: returns 0 (match found)", rc == 0);
+    CHECK("typed match: payload_out contains published payload",
+          strstr(payload_out, "@testhandle") != NULL);
+    CHECK("typed match: payload_out contains full text",
+          strstr(payload_out, "check this out") != NULL);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 8: bus_client_check_typed matching type, wrong handle          */
+/* ------------------------------------------------------------------ */
+
+static void test_check_typed_wrong_handle(void)
+{
+    printf("\n-- test_check_typed_wrong_handle --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "user1", "chat-mention", "normal",
+                    "hey @other look here");
+
+    char payload_out[4096] = {0};
+    int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
+                                    payload_out, sizeof(payload_out));
+
+    CHECK("wrong handle: returns 1 (no match)", rc == 1);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 9: bus_client_check_typed wrong type                           */
+/* ------------------------------------------------------------------ */
+
+static void test_check_typed_wrong_type(void)
+{
+    printf("\n-- test_check_typed_wrong_type --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "user1", "chat-message", "normal",
+                    "hello @testhandle");
+
+    char payload_out[4096] = {0};
+    int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
+                                    payload_out, sizeof(payload_out));
+
+    CHECK("wrong type: returns 1 (no match)", rc == 1);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 10: bus_client_check_typed acks matched events                 */
+/* ------------------------------------------------------------------ */
+
+static void test_check_typed_acks_match(void)
+{
+    printf("\n-- test_check_typed_acks_match --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "user1", "chat-interrupt", "critical",
+                    "stop @agent right now");
+
+    char payload_out[4096] = {0};
+    int rc = bus_client_check_typed(dir, "chat-interrupt", "agent",
+                                    payload_out, sizeof(payload_out));
+    CHECK("typed ack: returns 0 (match found)", rc == 0);
+    CHECK("typed ack: payload contains @agent",
+          strstr(payload_out, "@agent") != NULL);
+
+    /* Now check again -- event should have been acked */
+    int event_count = -1;
+    char max_priority[64];
+    char summary[256];
+    int rc2 = bus_client_check(dir, &event_count, max_priority,
+                               sizeof(max_priority), summary, sizeof(summary));
+    CHECK("typed ack: check returns 1 (empty after ack)", rc2 == 1);
+    CHECK("typed ack: event_count is 0 after ack", event_count == 0);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Main                                                                */
+/* ------------------------------------------------------------------ */
+
+int main(void)
+{
+    printf("=== bus_client unit tests ===\n");
+
+    /* Verify nbs-bus is reachable via exec */
+    if (verify_nbs_bus() != 0) {
+        fprintf(stderr, "FATAL: nbs-bus not found in PATH or not working.\n");
+        fprintf(stderr, "Ensure bin/ is in PATH before running tests.\n");
+        return 1;
+    }
+    printf("nbs-bus found and working.\n");
+
+    test_check_empty();
+    test_check_one_event();
+    test_check_priority();
+    test_read_existing();
+    test_ack_removes_event();
+    test_publish_roundtrip();
+    test_check_typed_match();
+    test_check_typed_wrong_handle();
+    test_check_typed_wrong_type();
+    test_check_typed_acks_match();
+
+    printf("\n=== Results: %d passed, %d failed ===\n",
+           tests - fails, fails);
+
+    return fails > 0 ? 1 : 0;
+}
