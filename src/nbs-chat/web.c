@@ -46,7 +46,7 @@
 /* --- Configuration --- */
 
 #define DEFAULT_PORT       8080
-#define DEFAULT_BIND       "127.0.0.1"
+#define DEFAULT_BIND       "::1"
 #define MAX_SSE_CLIENTS    16
 #define POLL_TIMEOUT_MS    1500     /* Match terminal.c */
 #define HEARTBEAT_INTERVAL 15      /* Seconds between SSE heartbeats */
@@ -904,32 +904,60 @@ int main(int argc, char **argv) {
     /* Ignore SIGPIPE (broken SSE connections) */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Create server socket */
-    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    /* Create server socket — try IPv6 dual-stack first, fall back to IPv4 */
+    int listen_fd = -1;
+    int is_ipv6 = 0;
+
+    /* Try IPv6 */
+    struct sockaddr_in6 addr6;
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons((uint16_t)port);
+
+    if (inet_pton(AF_INET6, bind_addr, &addr6.sin6_addr) == 1) {
+        listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
+        if (listen_fd >= 0) {
+            int opt = 1;
+            setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+            /* IPV6_V6ONLY=1: only accept IPv6 connections (match bind address) */
+            setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt));
+
+            if (bind(listen_fd, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
+                close(listen_fd);
+                listen_fd = -1;
+            } else {
+                is_ipv6 = 1;
+            }
+        }
+    }
+
+    /* Fall back to IPv4 */
     if (listen_fd < 0) {
-        fprintf(stderr, "socket: %s\n", strerror(errno));
-        return 1;
-    }
+        struct sockaddr_in addr4;
+        memset(&addr4, 0, sizeof(addr4));
+        addr4.sin_family = AF_INET;
+        addr4.sin_port = htons((uint16_t)port);
 
-    int opt = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        if (inet_pton(AF_INET, bind_addr, &addr4.sin_addr) != 1) {
+            fprintf(stderr, "Invalid bind address: %s\n", bind_addr);
+            return 4;
+        }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
+        listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd < 0) {
+            fprintf(stderr, "socket: %s\n", strerror(errno));
+            return 1;
+        }
 
-    if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
-        fprintf(stderr, "Invalid bind address: %s\n", bind_addr);
-        close(listen_fd);
-        return 4;
-    }
+        int opt = 1;
+        setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "bind(%s:%d): %s\n", bind_addr, port,
-                strerror(errno));
-        close(listen_fd);
-        return 1;
+        if (bind(listen_fd, (struct sockaddr *)&addr4, sizeof(addr4)) < 0) {
+            fprintf(stderr, "bind(%s:%d): %s\n", bind_addr, port,
+                    strerror(errno));
+            close(listen_fd);
+            return 1;
+        }
     }
 
     if (listen(listen_fd, LISTEN_BACKLOG) < 0) {
@@ -939,12 +967,26 @@ int main(int argc, char **argv) {
     }
 
     /* Get actual port (for port=0 case) */
-    socklen_t addrlen = sizeof(addr);
-    getsockname(listen_fd, (struct sockaddr *)&addr, &addrlen);
-    int actual_port = ntohs(addr.sin_port);
+    int actual_port;
+    if (is_ipv6) {
+        socklen_t addrlen = sizeof(addr6);
+        getsockname(listen_fd, (struct sockaddr *)&addr6, &addrlen);
+        actual_port = ntohs(addr6.sin6_port);
+    } else {
+        struct sockaddr_in addr4;
+        socklen_t addrlen = sizeof(addr4);
+        getsockname(listen_fd, (struct sockaddr *)&addr4, &addrlen);
+        actual_port = ntohs(addr4.sin_port);
+    }
 
-    fprintf(stdout, "nbs-chat-web serving %s on http://%s:%d/\n",
-            g_chat_path, bind_addr, actual_port);
+    /* Print URL with appropriate address format */
+    if (is_ipv6) {
+        fprintf(stdout, "nbs-chat-web serving %s on http://[%s]:%d/\n",
+                g_chat_path, bind_addr, actual_port);
+    } else {
+        fprintf(stdout, "nbs-chat-web serving %s on http://%s:%d/\n",
+                g_chat_path, bind_addr, actual_port);
+    }
     fflush(stdout);
 
     server_loop(listen_fd);
