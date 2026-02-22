@@ -71,6 +71,9 @@ static int env_int(const char *name, int default_val) {
  * Copies at most buf_size-1 chars. No-op if env var is unset or empty.
  */
 static void env_str(const char *name, char *buf, size_t buf_size) {
+    ASSERT_MSG(name != NULL, "env_str: name is NULL");
+    ASSERT_MSG(buf != NULL, "env_str: buf is NULL");
+    ASSERT_MSG(buf_size > 0, "env_str: buf_size is 0");
     const char *val = getenv(name);
     if (val && val[0] != '\0') {
         snprintf(buf, buf_size, "%s", val);
@@ -107,6 +110,14 @@ int main(int argc, char **argv) {
     cfg.standup_interval = env_int("NBS_STANDUP_INTERVAL", 15);
     cfg.active_heartbeat = env_int("NBS_ACTIVE_HEARTBEAT", 0);
     cfg.flush_interval = env_int("NBS_FLUSH_INTERVAL", 60);
+
+    /* After all env_int calls, before config validation */
+    ASSERT_MSG(cfg.bus_check_interval > 0 && cfg.bus_check_interval < cfg.notify_cooldown,
+               "bus_check_interval (%d) must be in (0, notify_cooldown=%d)",
+               cfg.bus_check_interval, cfg.notify_cooldown);
+    ASSERT_MSG(cfg.startup_grace >= cfg.bus_check_interval,
+               "startup_grace (%d) must be >= bus_check_interval (%d)",
+               cfg.startup_grace, cfg.bus_check_interval);
 
     cfg.is_remote = (cfg.remote_host[0] != '\0') ? 1 : 0;
     cfg.transport_mode = TRANSPORT_TMUX; /* default */

@@ -144,6 +144,10 @@ int transport_pty_init(transport_t *tp, const char *pty_path,
     tp->is_alive = pty_is_alive;
     tp->ctx = ctx;
 
+    /* Postcondition: all vtable entries set */
+    ASSERT_MSG(tp->capture != NULL && tp->send_text != NULL &&
+               tp->send_key != NULL && tp->is_alive != NULL && tp->ctx != NULL,
+               "transport_pty_init: postcondition violated - NULL vtable entry");
     return 0;
 }
 

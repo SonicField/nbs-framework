@@ -29,6 +29,7 @@ int bus_client_check(const char *bus_dir, int *event_count,
                      char *summary, size_t sum_size)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_check: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_check: bus_dir is empty");
     ASSERT_MSG(event_count != NULL, "bus_client_check: event_count is NULL");
     ASSERT_MSG(max_priority != NULL, "bus_client_check: max_priority is NULL");
     ASSERT_MSG(mp_size > 0, "bus_client_check: mp_size is 0");
@@ -86,7 +87,9 @@ int bus_client_read(const char *bus_dir, const char *event_file,
                     char *payload, size_t payload_size)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_read: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_read: bus_dir is empty");
     ASSERT_MSG(event_file != NULL, "bus_client_read: event_file is NULL");
+    ASSERT_MSG(event_file[0] != '\0', "bus_client_read: event_file is empty");
     ASSERT_MSG(payload != NULL, "bus_client_read: payload is NULL");
     ASSERT_MSG(payload_size > 0, "bus_client_read: payload_size is 0");
 
@@ -102,7 +105,9 @@ int bus_client_read(const char *bus_dir, const char *event_file,
 int bus_client_ack(const char *bus_dir, const char *event_file)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_ack: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_ack: bus_dir is empty");
     ASSERT_MSG(event_file != NULL, "bus_client_ack: event_file is NULL");
+    ASSERT_MSG(event_file[0] != '\0', "bus_client_ack: event_file is empty");
 
     const char *argv[] = {"nbs-bus", "ack", bus_dir, event_file, NULL};
 
@@ -118,9 +123,13 @@ int bus_client_publish(const char *bus_dir, const char *source,
                        const char *payload)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_publish: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_publish: bus_dir is empty");
     ASSERT_MSG(source != NULL, "bus_client_publish: source is NULL");
+    ASSERT_MSG(source[0] != '\0', "bus_client_publish: source is empty");
     ASSERT_MSG(type != NULL, "bus_client_publish: type is NULL");
+    ASSERT_MSG(type[0] != '\0', "bus_client_publish: type is empty");
     ASSERT_MSG(priority != NULL, "bus_client_publish: priority is NULL");
+    ASSERT_MSG(priority[0] != '\0', "bus_client_publish: priority is empty");
     ASSERT_MSG(payload != NULL, "bus_client_publish: payload is NULL");
 
     const char *argv[] = {"nbs-bus", "publish", bus_dir,
@@ -138,8 +147,11 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                             char *payload_out, size_t payload_size)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_check_typed: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_check_typed: bus_dir is empty");
     ASSERT_MSG(event_type != NULL, "bus_client_check_typed: event_type is NULL");
+    ASSERT_MSG(event_type[0] != '\0', "bus_client_check_typed: event_type is empty");
     ASSERT_MSG(target_handle != NULL, "bus_client_check_typed: target_handle is NULL");
+    ASSERT_MSG(target_handle[0] != '\0', "bus_client_check_typed: target_handle is empty");
     ASSERT_MSG(payload_out != NULL, "bus_client_check_typed: payload_out is NULL");
     ASSERT_MSG(payload_size > 0, "bus_client_check_typed: payload_size is 0");
 

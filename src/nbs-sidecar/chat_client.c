@@ -73,7 +73,9 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
     ASSERT_MSG(handle != NULL, "chat_client_read_cursor: handle is NULL");
 
     char cursor_path[MAX_LINE];
-    snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+    int n = snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(cursor_path),
+               "chat_client: cursor path truncated");
 
     FILE *f = fopen(cursor_path, "r");
     if (!f)
@@ -159,7 +161,9 @@ static int check_unread_cb(const char *path, void *user_data)
         /* Extract basename for summary.
          * basename() may modify its argument, so work on a copy. */
         char path_copy[MAX_LINE];
-        snprintf(path_copy, sizeof(path_copy), "%s", path);
+        int n = snprintf(path_copy, sizeof(path_copy), "%s", path);
+        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(path_copy),
+                   "chat_client: path copy truncated");
         const char *name = basename(path_copy);
 
         /* Append to summary: "N unread in file1, file2" */
@@ -167,6 +171,8 @@ static int check_unread_cb(const char *path, void *user_data)
             int written = snprintf(ctx->summary + ctx->sum_used,
                                    ctx->sum_size - ctx->sum_used,
                                    ", %s", name);
+            ASSERT_MSG(written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used,
+                       "chat_client: summary truncated");
             if (written > 0)
                 ctx->sum_used += (size_t)written;
         } else if (ctx->sum_used == 0) {
@@ -174,6 +180,8 @@ static int check_unread_cb(const char *path, void *user_data)
             int written = snprintf(ctx->summary + ctx->sum_used,
                                    ctx->sum_size - ctx->sum_used,
                                    "%s", name);
+            ASSERT_MSG(written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used,
+                       "chat_client: summary truncated");
             if (written > 0)
                 ctx->sum_used += (size_t)written;
         }
@@ -221,9 +229,13 @@ int chat_client_check_unread(const char *registry_path, const char *handle,
         /* summary currently holds "file1, file2" — prepend count.
          * Copy current content aside, then rebuild. */
         char chat_names[MAX_LINE];
-        snprintf(chat_names, sizeof(chat_names), "%s", summary);
-        snprintf(summary, sum_size, "%d unread in %s",
-                 ctx.unread_count, chat_names);
+        int n = snprintf(chat_names, sizeof(chat_names), "%s", summary);
+        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(chat_names),
+                   "chat_client: chat names truncated");
+        n = snprintf(summary, sum_size, "%d unread in %s",
+                     ctx.unread_count, chat_names);
+        ASSERT_MSG(n >= 0 && (size_t)n < sum_size,
+                   "chat_client: final summary truncated");
     }
 
     if (!ctx.has_chat)
