@@ -1025,6 +1025,66 @@ poll_sidecar_tmux() {
         # Check control inbox for new registration commands
         check_control_inbox
 
+        # --- Out-of-band interrupt check ---
+        # chat-interrupt events (@handle!) are critical-priority and must be
+        # processed immediately, regardless of whether the agent is busy or
+        # idle. This runs unconditionally at the top of every loop iteration
+        # (every ~1s) before any content hashing or idle detection.
+        #
+        # Interrupt mode: persistently retry Escape + wait-for-prompt in a
+        # loop until the agent responds or 60s elapses. On timeout, post
+        # AGENT NOT RESPONDING to chat so the human knows.
+        if check_interrupt_events; then
+            local interrupt_deadline=$(($(date +%s) + 60))
+            local interrupt_succeeded=0
+
+            while [[ $(date +%s) -lt $interrupt_deadline ]]; do
+                # Send Escape to cancel current operation
+                tmux send-keys -t "$pane_id" Escape || true
+                sleep 1
+
+                # Check if prompt appeared
+                local icontent_top
+                icontent_top=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
+                if is_prompt_visible "$icontent_top"; then
+                    # Inject /nbs-notify interrupt
+                    tmux send-keys -t "$pane_id" -l "/nbs-notify interrupt from chat" || true
+                    sleep 0.3
+                    tmux send-keys -t "$pane_id" Enter || true
+                    interrupt_succeeded=1
+                    break
+                fi
+
+                # Wait before retrying
+                sleep 2
+            done
+
+            if [[ $interrupt_succeeded -eq 0 ]]; then
+                # Timeout — agent did not respond to interrupt within 60s
+                # Post warning to first registered chat
+                if [[ -f "$CONTROL_REGISTRY" ]]; then
+                    local warn_chat=""
+                    while IFS= read -r wl; do
+                        case "$wl" in
+                            chat:*) warn_chat="${wl#chat:}"; break ;;
+                        esac
+                    done < "$CONTROL_REGISTRY"
+                    if [[ -n "$warn_chat" ]]; then
+                        if is_remote; then
+                            remote_cmd "nbs-chat send $(printf '%q' "$warn_chat") sidecar $(printf '%q' "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared.")" 2>/dev/null || true
+                        else
+                            nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared." 2>/dev/null || true
+                        fi
+                    fi
+                fi
+            fi
+
+            idle_seconds=0
+            last_content_hash=""
+            sleep 3
+            continue
+        fi
+
         # Check pane still exists
         if ! tmux list-panes -t "$pane_id" &>/dev/null; then
             break
@@ -1085,36 +1145,6 @@ poll_sidecar_tmux() {
                 fi
             fi
 
-            # --- Interrupt check: MUST run even when busy (content changing) ---
-            # chat-interrupt events are critical-priority. Previously this was
-            # only in the idle branch (after continue), which meant busy agents
-            # could not be interrupted. Fixed: check in the busy branch too.
-            if check_interrupt_events; then
-                tmux send-keys -t "$pane_id" Escape || true
-                sleep 1
-                local iwb=0
-                while [[ $iwb -lt 30 ]]; do
-                    local ic
-                    ic=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
-                    is_prompt_visible "$ic" && break
-                    sleep 1
-                    iwb=$((iwb + 1))
-                done
-                local ichk
-                ichk=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                if is_prompt_visible "$ichk"; then
-                    local ncmd="/nbs-notify interrupt from chat"
-                    if is_remote; then
-                        remote_send_keys "$pane_id" "$ncmd"
-                    else
-                        tmux send-keys -t "$pane_id" -l "$ncmd" || true
-                    fi
-                    tmux send-keys -t "$pane_id" Enter || true
-                fi
-                idle_seconds=0
-                last_content_hash=""
-            fi
-
             continue
         fi
 
@@ -1123,43 +1153,6 @@ poll_sidecar_tmux() {
             respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
             idle_seconds=0
             last_content_hash=""
-            continue
-        fi
-
-        # --- Interrupt check: runs every cycle, not gated by BUS_CHECK_INTERVAL ---
-        # chat-interrupt events are critical-priority signals that the agent must
-        # stop what it is doing immediately. We check every second and send Escape
-        # to cancel the current tool call, then wait for the prompt and inject
-        # /nbs-notify so the agent reads the interrupt message.
-        if check_interrupt_events; then
-            # Send Escape to cancel current operation
-            tmux send-keys -t "$pane_id" Escape || true
-            sleep 1
-
-            # Wait for prompt to reappear (up to 30s)
-            local interrupt_wait=0
-            while [[ $interrupt_wait -lt 30 ]]; do
-                local icontent
-                icontent=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
-                if is_prompt_visible "$icontent"; then
-                    break
-                fi
-                sleep 1
-                interrupt_wait=$((interrupt_wait + 1))
-            done
-
-            # Inject /nbs-notify so the agent reads the interrupt message
-            local icheck
-            icheck=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-            if is_prompt_visible "$icheck"; then
-                tmux send-keys -t "$pane_id" -l "/nbs-notify interrupt from chat" || true
-                sleep 0.3
-                tmux send-keys -t "$pane_id" Enter || true
-            fi
-
-            idle_seconds=0
-            last_content_hash=""
-            sleep 3
             continue
         fi
 
@@ -1328,6 +1321,54 @@ poll_sidecar_pty() {
         # Check control inbox for new registration commands
         check_control_inbox
 
+        # --- Out-of-band interrupt check (same logic as tmux mode) ---
+        # Persistent retry with 60s timeout + AGENT NOT RESPONDING warning.
+        if check_interrupt_events; then
+            local interrupt_deadline=$(($(date +%s) + 60))
+            local interrupt_succeeded=0
+
+            while [[ $(date +%s) -lt $interrupt_deadline ]]; do
+                # Send Escape to cancel current operation
+                "$pty" send "$session" --no-enter $'\x1b' || true
+                sleep 1
+
+                # Check if prompt appeared
+                local icontent_pty
+                icontent_pty=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
+                if is_prompt_visible "$icontent_pty"; then
+                    # Inject /nbs-notify interrupt
+                    "$pty" send "$session" "/nbs-notify interrupt from chat" || true
+                    sleep 0.3
+                    "$pty" send "$session" '' || true
+                    interrupt_succeeded=1
+                    break
+                fi
+
+                # Wait before retrying
+                sleep 2
+            done
+
+            if [[ $interrupt_succeeded -eq 0 ]]; then
+                # Timeout — agent did not respond to interrupt within 60s
+                if [[ -f "$CONTROL_REGISTRY" ]]; then
+                    local warn_chat=""
+                    while IFS= read -r wl; do
+                        case "$wl" in
+                            chat:*) warn_chat="${wl#chat:}"; break ;;
+                        esac
+                    done < "$CONTROL_REGISTRY"
+                    if [[ -n "$warn_chat" ]]; then
+                        nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared." 2>/dev/null || true
+                    fi
+                fi
+            fi
+
+            idle_seconds=0
+            last_content_hash=""
+            sleep 3
+            continue
+        fi
+
         if ! "$pty" list 2>/dev/null | grep -qxF "$session"; then
             break
         fi
@@ -1377,36 +1418,6 @@ poll_sidecar_pty() {
                     fi
                     last_heartbeat_time=$hb_now
                 fi
-            fi
-
-            # --- Interrupt check: MUST run even when busy (content changing) ---
-            # chat-interrupt events are critical-priority. Previously this was
-            # only in the idle branch (after continue), which meant busy agents
-            # could not be interrupted. Fixed: check in the busy branch too.
-            if check_interrupt_events; then
-                tmux send-keys -t "$pane_id" Escape || true
-                sleep 1
-                local iwb=0
-                while [[ $iwb -lt 30 ]]; do
-                    local ic
-                    ic=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || break
-                    is_prompt_visible "$ic" && break
-                    sleep 1
-                    iwb=$((iwb + 1))
-                done
-                local ichk
-                ichk=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                if is_prompt_visible "$ichk"; then
-                    local ncmd="/nbs-notify interrupt from chat"
-                    if is_remote; then
-                        remote_send_keys "$pane_id" "$ncmd"
-                    else
-                        tmux send-keys -t "$pane_id" -l "$ncmd" || true
-                    fi
-                    tmux send-keys -t "$pane_id" Enter || true
-                fi
-                idle_seconds=0
-                last_content_hash=""
             fi
 
             continue
