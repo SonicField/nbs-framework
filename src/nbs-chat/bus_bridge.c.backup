@@ -325,12 +325,10 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
                           const char *message) {
     ASSERT_MSG(chat_path != NULL,
                "bus_bridge_after_send: chat_path is NULL");
-    ASSERT_MSG(handle != NULL && handle[0] != '\0',
-               "bus_bridge_after_send: handle is NULL or empty");
+    ASSERT_MSG(handle != NULL,
+               "bus_bridge_after_send: handle is NULL");
     ASSERT_MSG(message != NULL,
                "bus_bridge_after_send: message is NULL");
-    ASSERT_MSG(message[0] != '\0',
-               "bus_bridge_after_send: message is empty");
 
     /* Find the events directory */
     char events_dir[MAX_PATH_LEN];
@@ -376,12 +374,10 @@ int bus_bridge_human_input(const char *chat_path, const char *handle,
                             const char *message) {
     ASSERT_MSG(chat_path != NULL,
                "bus_bridge_human_input: chat_path is NULL");
-    ASSERT_MSG(handle != NULL && handle[0] != '\0',
-               "bus_bridge_human_input: handle is NULL or empty");
+    ASSERT_MSG(handle != NULL,
+               "bus_bridge_human_input: handle is NULL");
     ASSERT_MSG(message != NULL,
                "bus_bridge_human_input: message is NULL");
-    ASSERT_MSG(message[0] != '\0',
-               "bus_bridge_human_input: message is empty");
 
     /* Find the events directory */
     char events_dir[MAX_PATH_LEN];

@@ -154,6 +154,7 @@ static int update_participants(participant_t *parts, int count,
     if (count >= max_parts) return count;
     strncpy(parts[count].handle, handle, MAX_HANDLE_LEN - 1);
     parts[count].handle[MAX_HANDLE_LEN - 1] = '\0';
+    /* Note: handle is truncated to MAX_HANDLE_LEN-1 if too long */
     parts[count].count = 1;
     return count + 1;
 }
@@ -244,7 +245,9 @@ static int chat_auto_archive(const char *path, char **all_lines,
 
     /* --- Write archive file --- */
     char archive_tmp[MAX_PATH_LEN + 8];
-    snprintf(archive_tmp, sizeof(archive_tmp), "%s.tmp", archive_path);
+    int n_archive_tmp = snprintf(archive_tmp, sizeof(archive_tmp), "%s.tmp", archive_path);
+    ASSERT_MSG(n_archive_tmp >= 0 && (size_t)n_archive_tmp < sizeof(archive_tmp),
+               "chat_auto_archive: archive_tmp truncated for %s", archive_path);
 
     /* Build archive header — recount participants from archived messages */
     char archive_ts[64];
@@ -268,6 +271,8 @@ static int chat_auto_archive(const char *path, char **all_lines,
     for (int i = 0; i < archive_count; i++) {
         archive_content_size += strlen(all_lines[i]) + 1;
     }
+    ASSERT_MSG(archive_content_size < SIZE_MAX / 2,
+               "chat_auto_archive: archive content size overflow: %zu", archive_content_size);
     char *archive_content = malloc(archive_content_size + 1);
     if (!archive_content) return -1;
 
@@ -346,6 +351,8 @@ static int chat_auto_archive(const char *path, char **all_lines,
     for (int i = archive_count; i < total_count; i++) {
         main_content_size += strlen(all_lines[i]) + 1;
     }
+    ASSERT_MSG(main_content_size < SIZE_MAX / 2,
+               "chat_auto_archive: main content size overflow: %zu", main_content_size);
     char *main_content = malloc(main_content_size + 1);
     if (!main_content) return -1;
 
@@ -364,7 +371,9 @@ static int chat_auto_archive(const char *path, char **all_lines,
     free(main_content);
 
     char main_tmp[MAX_PATH_LEN + 8];
-    snprintf(main_tmp, sizeof(main_tmp), "%s.tmp", path);
+    int n_main_tmp = snprintf(main_tmp, sizeof(main_tmp), "%s.tmp", path);
+    ASSERT_MSG(n_main_tmp >= 0 && (size_t)n_main_tmp < sizeof(main_tmp),
+               "chat_auto_archive: main_tmp truncated for %s", path);
 
     int mfd = open(main_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (mfd < 0) {
@@ -432,7 +441,9 @@ static int chat_auto_archive(const char *path, char **all_lines,
 
         /* Write adjusted cursors atomically */
         char cursor_tmp[MAX_PATH_LEN + 8];
-        snprintf(cursor_tmp, sizeof(cursor_tmp), "%s.tmp", cpath);
+        int n_cursor_tmp = snprintf(cursor_tmp, sizeof(cursor_tmp), "%s.tmp", cpath);
+        ASSERT_MSG(n_cursor_tmp >= 0 && (size_t)n_cursor_tmp < sizeof(cursor_tmp),
+                   "chat_auto_archive: cursor_tmp truncated for %s", cpath);
         int cfd = open(cursor_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (cfd >= 0) {
             FILE *cwf = fdopen(cfd, "w");
@@ -681,6 +692,9 @@ int chat_read(const char *path, chat_state_t *state) {
 int chat_send(const char *path, const char *handle, const char *message) {
     ASSERT_MSG(path != NULL, "chat_send: path is NULL");
     ASSERT_MSG(handle != NULL, "chat_send: handle is NULL");
+    ASSERT_MSG(handle[0] != '\0', "chat_send: handle is empty");
+    ASSERT_MSG(strlen(handle) < MAX_HANDLE_LEN,
+           "chat_send: handle too long: %zu >= %d", strlen(handle), MAX_HANDLE_LEN);
     ASSERT_MSG(message != NULL, "chat_send: message is NULL");
 
     int lock_fd = chat_lock_acquire(path);
@@ -790,6 +804,8 @@ int chat_send(const char *path, const char *handle, const char *message) {
         }
 
         if (ll > 0) {
+            ASSERT_MSG(encoded_line_count < MAX_MESSAGES,
+                       "chat_send: encoded_line_count %d exceeds MAX_MESSAGES", encoded_line_count);
             char **tmp = realloc(encoded_lines,
                                      sizeof(char *) * (encoded_line_count + 1));
             if (!tmp) {
@@ -827,6 +843,8 @@ int chat_send(const char *path, const char *handle, const char *message) {
         content_size += strlen(encoded_lines[i]) + 1; /* +1 for \n */
     }
     content_size += strlen(encoded) + 1; /* new message + \n */
+    ASSERT_MSG(content_size < SIZE_MAX / 2,
+               "chat_send: content size overflow: %zu", content_size);
 
     char *content_no_fl = malloc(content_size + 1);
     if (!content_no_fl) {
@@ -1078,6 +1096,7 @@ int chat_cursor_read(const char *chat_path, const char *handle) {
     ASSERT_MSG(chat_path != NULL, "chat_cursor_read: chat_path is NULL");
     ASSERT_MSG(handle != NULL, "chat_cursor_read: handle is NULL");
 
+    ASSERT_MSG(handle[0] != '\0', "chat_cursor_read: handle is empty");
     char cpath[MAX_PATH_LEN];
     cursor_path(chat_path, cpath, sizeof(cpath));
 
@@ -1118,6 +1137,7 @@ int chat_cursor_read(const char *chat_path, const char *handle) {
 int chat_cursor_write(const char *chat_path, const char *handle, int index) {
     ASSERT_MSG(chat_path != NULL, "chat_cursor_write: chat_path is NULL");
     ASSERT_MSG(handle != NULL, "chat_cursor_write: handle is NULL");
+    ASSERT_MSG(handle[0] != '\0', "chat_cursor_write: handle is empty");
     ASSERT_MSG(index >= 0, "chat_cursor_write: index is negative: %d", index);
 
     char cpath[MAX_PATH_LEN];
@@ -1173,7 +1193,9 @@ int chat_cursor_write(const char *chat_path, const char *handle, int index) {
 
     /* Write back atomically */
     char tmp_path[MAX_PATH_LEN + 8];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", cpath);
+    int n_tmp_path = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", cpath);
+    ASSERT_MSG(n_tmp_path >= 0 && (size_t)n_tmp_path < sizeof(tmp_path),
+               "chat_cursor_write: tmp_path truncated for %s", cpath);
 
     int tmp_fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (tmp_fd < 0) {
