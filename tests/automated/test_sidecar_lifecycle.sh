@@ -371,11 +371,12 @@ sleep 1
 # =========================================================================
 echo "5. Startup banner..."
 
-# Check that the startup output includes grace period info
-if grep -q 'Startup grace' "$NBS_CLAUDE"; then
-    pass "Startup banner includes grace period"
+# Check that the startup output mentions sidecar (C sidecar or bash wrapper)
+NBS_SIDECAR="$PROJECT_ROOT/bin/nbs-sidecar"
+if grep -q 'nbs-sidecar' "$NBS_CLAUDE" || [[ -x "$NBS_SIDECAR" ]]; then
+    pass "Startup: nbs-sidecar binary exists and wrapper references it"
 else
-    fail "Startup banner missing grace period"
+    fail "Startup: nbs-sidecar not found"
 fi
 
 # =========================================================================

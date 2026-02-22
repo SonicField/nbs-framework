@@ -18,6 +18,10 @@ NBS_CHAT="${NBS_CHAT_BIN:-$PROJECT_ROOT/bin/nbs-chat}"
 NBS_BUS="${NBS_BUS_BIN:-$PROJECT_ROOT/bin/nbs-bus}"
 BUS_BRIDGE_C="$PROJECT_ROOT/src/nbs-chat/bus_bridge.c"
 BUS_BRIDGE_H="$PROJECT_ROOT/src/nbs-chat/bus_bridge.h"
+# C sidecar source files (behaviours moved from bash to C)
+SIDECAR_C="$PROJECT_ROOT/src/nbs-sidecar/sidecar.c"
+SIDECAR_BUS="$PROJECT_ROOT/src/nbs-sidecar/bus_client.c"
+SIDECAR_DETECT="$PROJECT_ROOT/src/nbs-sidecar/detect.c"
 
 # Add bin/ to PATH so bus_bridge.c can find nbs-bus via execlp
 export PATH="$PROJECT_ROOT/bin:$PATH"
@@ -42,7 +46,7 @@ check() {
 }
 
 # --- Preconditions ---
-for f in "$NBS_CLAUDE" "$BUS_BRIDGE_C" "$BUS_BRIDGE_H"; do
+for f in "$NBS_CLAUDE" "$BUS_BRIDGE_C" "$BUS_BRIDGE_H" "$SIDECAR_C" "$SIDECAR_BUS"; do
     if [[ ! -f "$f" ]]; then
         echo "FATAL: required file not found: $f"
         exit 1
@@ -83,33 +87,50 @@ check "5. bus_bridge.h declares out_interrupt_flags parameter" "$R"
 R=$(grep -qF 'chat-interrupt' "$BUS_BRIDGE_H" && echo pass || echo fail)
 check "6. bus_bridge.h documents chat-interrupt event type" "$R"
 
-# 7. nbs-claude contains check_interrupt_events function
-R=$(grep -qF 'check_interrupt_events' "$NBS_CLAUDE" && echo pass || echo fail)
-check "7. nbs-claude contains check_interrupt_events function" "$R"
+# 7. sidecar contains interrupt event handling (C or bash)
+R=$(grep -qF 'chat-interrupt' "$SIDECAR_C" && echo pass || echo fail)
+check "7. sidecar handles chat-interrupt events" "$R"
 
-# 8. nbs-claude sends Escape on interrupt
-R=$(grep -q 'send-keys.*Escape' "$NBS_CLAUDE" && echo pass || echo fail)
-check "8. nbs-claude sends Escape on interrupt" "$R"
+# 8. sidecar sends Escape on interrupt
+R=$(grep -q 'Escape' "$SIDECAR_C" && echo pass || echo fail)
+check "8. sidecar sends Escape on interrupt" "$R"
 
-# 9. nbs-claude waits for prompt after escape (interrupt_wait loop)
-R=$(grep -qF 'interrupt_wait' "$NBS_CLAUDE" && echo pass || echo fail)
-check "9. nbs-claude waits for prompt after sending Escape" "$R"
+# 9. sidecar interrupt uses 60-second wall-clock duration
+R=$(grep -qF '>= 60' "$SIDECAR_C" && echo pass || echo fail)
+check "9. sidecar interrupt uses 60-second wall-clock duration" "$R"
 
-# 10. nbs-claude injects /nbs-notify after interrupt
-R=$(grep -q 'nbs-notify.*interrupt' "$NBS_CLAUDE" && echo pass || echo fail)
-check "10. nbs-claude injects /nbs-notify after interrupt" "$R"
+# 10. sidecar injects /nbs-notify after interrupt
+R=$(grep -q 'nbs-notify.*interrupt' "$SIDECAR_C" && echo pass || echo fail)
+check "10. sidecar injects /nbs-notify after interrupt" "$R"
 
-# 11. nbs-claude acks interrupt events (prevents re-processing)
-R=$(grep -q 'nbs-bus ack' "$NBS_CLAUDE" && echo pass || echo fail)
-check "11. nbs-claude acks interrupt events" "$R"
+# 11. sidecar acks interrupt events (via bus_client)
+R=$(grep -q 'bus_client_ack\|nbs-bus.*ack' "$SIDECAR_BUS" && echo pass || echo fail)
+check "11. sidecar acks interrupt events" "$R"
 
 # 12. Interrupt check is not gated by BUS_CHECK_INTERVAL
-# (check_interrupt_events call is outside the bus_check_counter block)
-# Verify: grep for 'check_interrupt_events' NOT inside a
-# 'bus_check_counter' conditional. The function call should appear
-# before the bus_check_counter increment.
-R=$(awk '/check_interrupt_events/{found=1} /bus_check_counter.*BUS_CHECK_INTERVAL/{if(!found) fail=1} END{print (found && !fail) ? "pass" : "fail"}' "$NBS_CLAUDE")
+# In the C sidecar, check_interrupt is called every tick before the bus_check_counter check
+R=$(awk '/chat-interrupt/{found=1} /bus_check_counter.*bus_check_interval/{if(!found) fail=1} END{print (found && !fail) ? "pass" : "fail"}' "$SIDECAR_C")
 check "12. Interrupt check runs every cycle (not BUS_CHECK_INTERVAL gated)" "$R"
+
+# 12a. sidecar contains mention event handling
+R=$(grep -qF 'chat-mention' "$SIDECAR_C" && echo pass || echo fail)
+check "12a. sidecar handles chat-mention events" "$R"
+
+# 12b. sidecar bypasses cooldown for mentions (mention_detected)
+R=$(grep -q 'mention_detected' "$SIDECAR_C" && echo pass || echo fail)
+check "12b. sidecar bypasses cooldown for mentions" "$R"
+
+# 12c. sidecar interrupt failure message uses URGENT @team format
+R=$(grep -qF 'URGENT: @team' "$SIDECAR_C" && echo pass || echo fail)
+check "12c. sidecar interrupt failure posts URGENT @team message" "$R"
+
+# 12d. sidecar enriches notify message with mention payload
+R=$(grep -qF 'MENTION: ' "$SIDECAR_C" && echo pass || echo fail)
+check "12d. sidecar enriches notify message with mention payload" "$R"
+
+# 12e. Mention check runs every cycle (like interrupt check)
+R=$(awk '/chat-mention/{found=1} /bus_check_counter.*bus_check_interval/{if(!found) fail=1} END{print (found && !fail) ? "pass" : "fail"}' "$SIDECAR_C")
+check "12e. Mention check runs every cycle (not BUS_CHECK_INTERVAL gated)" "$R"
 
 echo ""
 

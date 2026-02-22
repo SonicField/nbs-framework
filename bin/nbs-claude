@@ -1,12 +1,16 @@
 #!/bin/bash
-# nbs-claude: Launch Claude Code with bus-aware event-driven notification
+# nbs-claude: Launch Claude Code with the nbs-sidecar monitor.
 #
-# Runs claude with a background sidecar that:
-#   1. Checks the event bus every few seconds for pending events
-#   2. Checks chat cursors for unread messages
-#   3. Injects /nbs-notify only when there is something to process
-#   4. CSMA/CD standup check-ins for periodic coordination
-#   5. Auto-selects plan mode prompts for unattended workers
+# Thin wrapper that:
+#   1. Parses arguments and environment variables
+#   2. Handles collision guard (pidfile)
+#   3. Generates session ID and metadata
+#   4. Launches claude (foreground) + nbs-sidecar (background)
+#   5. Cleans up on exit
+#
+# All monitoring behaviours (bus checking, chat notifications, dialogue
+# handling, standup triggers, etc.) are implemented in the C binary
+# nbs-sidecar. This script only handles orchestration.
 #
 # Works in two modes:
 #   - Inside tmux: runs claude in the current pane, sidecar monitors it
@@ -15,26 +19,15 @@
 # Usage:
 #   nbs-claude [--root=PATH] [--model=MODEL] [--continue=SESSION_ID] [claude-args...]
 #
-# Examples:
-#   nbs-claude                          # Start interactive claude
-#   nbs-claude --model=opus             # Start with specific model
-#   nbs-claude --continue=abc123        # Continue previous session
-#   nbs-claude --root=/path/to/project  # Use .nbs/ from another directory
-#
 # Environment:
-#   NBS_POLL_DISABLE        Set to 1 to disable all polling (just wraps claude)
-#   NBS_BUS_CHECK_INTERVAL  Bus/chat check interval in seconds (default: 3)
-#   NBS_NOTIFY_COOLDOWN     Min seconds between /nbs-notify injections (default: 15)
-#   NBS_HANDLE              Agent handle for cursor peeking (default: claude)
+#   NBS_POLL_DISABLE        Set to 1 to disable sidecar (just wraps claude)
+#   NBS_HANDLE              Agent handle (default: claude)
 #   NBS_ROOT                Project root containing .nbs/ (default: current directory)
-#   NBS_STARTUP_GRACE       Seconds after init before allowing notifications (default: 30)
-#   NBS_INITIAL_PROMPT      Custom initial prompt (default: handle + /nbs-teams-chat)
-#   NBS_NOTIFY_FAIL_THRESHOLD  Failed /nbs-notify injections before self-heal (default: 5)
-#   NBS_STANDUP_INTERVAL    Minutes between standup check-ins posted to chat (default: 15, 0 to disable)
-#   NBS_ACTIVE_HEARTBEAT    Seconds between "still active" heartbeats to chat (default: 300, 0 to disable)
-#   NBS_FLUSH_INTERVAL      Seconds between bare Enter flushes to prevent stalled input (default: 60, 0 to disable)
-#   NBS_MODEL               Model to use (e.g. opus, sonnet) — passed to claude --model
-#   NBS_CONTINUE_SESSION    Session ID to continue — passed to claude --resume
+#   NBS_MODEL               Model to use (e.g. opus, sonnet)
+#   NBS_CONTINUE_SESSION    Session ID to continue
+#   NBS_INITIAL_PROMPT      Custom initial prompt
+#   NBS_FORCE_SPAWN         Set to 1 to override handle collision
+#   (All other NBS_* variables are passed through to nbs-sidecar)
 #
 # Exit codes:
 #   0 - Clean exit
@@ -46,18 +39,14 @@ set -euo pipefail
 # --- Configuration ---
 
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
-BUS_CHECK_INTERVAL="${NBS_BUS_CHECK_INTERVAL:-3}"
-NOTIFY_COOLDOWN="${NBS_NOTIFY_COOLDOWN:-15}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
-STARTUP_GRACE="${NBS_STARTUP_GRACE:-30}"
-INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
-NOTIFY_FAIL_THRESHOLD="${NBS_NOTIFY_FAIL_THRESHOLD:-5}"
-STANDUP_INTERVAL="${NBS_STANDUP_INTERVAL:-15}"
 NBS_MODEL="${NBS_MODEL:-}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
-ACTIVE_HEARTBEAT="${NBS_ACTIVE_HEARTBEAT:-0}"
-FLUSH_INTERVAL="${NBS_FLUSH_INTERVAL:-60}"
+INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
+FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
+NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
+NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
 
 # Resolve NBS_ROOT to absolute path
 NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
@@ -65,46 +54,37 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
     exit 1
 }
 
-# Validate numeric config variables
-for _nbs_var_name in POLL_DISABLE BUS_CHECK_INTERVAL NOTIFY_COOLDOWN STARTUP_GRACE NOTIFY_FAIL_THRESHOLD STANDUP_INTERVAL ACTIVE_HEARTBEAT FLUSH_INTERVAL; do
-    eval "_nbs_var_val=\${$_nbs_var_name}"
-    if [[ ! "$_nbs_var_val" =~ ^[0-9]+$ ]]; then
-        echo "Error: $_nbs_var_name must be a non-negative integer, got '$_nbs_var_val'" >&2
-        exit 4
-    fi
-done
-unset _nbs_var_name _nbs_var_val
-
-# Validate SIDECAR_HANDLE: must be safe for tmux send-keys and file paths
+# Validate handle
 if [[ ! "$SIDECAR_HANDLE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: NBS_HANDLE must match ^[a-zA-Z0-9_-]+\$, got '$SIDECAR_HANDLE'" >&2
     exit 4
 fi
-NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
-NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
-
-# Log file for stderr redirection (instead of /dev/null)
-NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PTY_SESSION="${SCRIPT_DIR}/pty-session"
+NBS_SIDECAR="${SCRIPT_DIR}/nbs-sidecar"
 
 if [[ ! -x "$PTY_SESSION" ]]; then
     PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 fi
-
 if [[ ! -x "$PTY_SESSION" ]]; then
     echo "Error: pty-session not found" >&2
     exit 1
 fi
+if [[ ! -x "$NBS_SIDECAR" ]]; then
+    echo "Error: nbs-sidecar not found at $NBS_SIDECAR" >&2
+    exit 1
+fi
+
+# Log file
+NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # --- Cleanup ---
 
 SIDECAR_PID=""
 SESSION_NAME=""
 MODE=""
-FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
 
 cleanup() {
     local EXIT_CODE=$?
@@ -115,8 +95,7 @@ cleanup() {
         rm -f "$pidfile"
     fi
 
-    # Remove session metadata (stale after exit — nbs-worker continue
-    # checks PID liveness before trusting metadata)
+    # Remove session metadata
     local session_meta="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
     rm -f "$session_meta" 2>/dev/null || true
 
@@ -135,1416 +114,9 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-# --- Plan mode detection ---
-# Claude Code's plan mode displays an interactive menu that blocks execution.
-# The sidecar detects this prompt and auto-selects option 2 ("Yes, and bypass
-# permissions") so unattended workers are not blocked indefinitely.
-
-detect_plan_mode() {
-    local content="$1"
-    echo "$content" | grep -qF 'Would you like to proceed?'
-}
-
-# --- AskUserQuestion modal detection ---
-# The AskUserQuestion tool presents a blocking modal with numbered options.
-# In multi-agent setups no human is watching, so the agent stalls indefinitely.
-# The sidecar detects this modal and auto-selects option 1 (the default/recommended
-# choice) to unblock the agent. The agent should not use AskUserQuestion at all
-# (skill prompts prohibit it), but this is a safety net for when it slips through.
-
-detect_ask_modal() {
-    local content="$1"
-    # AskUserQuestion shows "? N. <label>" options followed by "Type something."
-    # The combination of numbered options and "Type something" is distinctive.
-    echo "$content" | grep -qF 'Type something.' && \
-    echo "$content" | grep -qE '^\s*[?>]?\s*[1-4]\.' && return 0
-    return 1
-}
-
-# --- Permissions prompt detection ---
-# Claude Code displays a blocking permissions prompt when a tool (bash, read,
-# etc.) is invoked without prior approval. The prompt shows:
-#   "Do you want to proceed?"
-#   1. Yes
-#   2. Yes, and don't ask again for <type> in <dir>
-#   3. No
-# In multi-agent setups no human is watching, so the agent stalls indefinitely.
-# The sidecar detects this prompt and auto-selects option 2 ("Yes, and don't
-# ask again") to permanently approve and prevent recurring stalls.
-
-detect_permissions_prompt() {
-    local content="$1"
-    echo "$content" | grep -qF 'Do you want to proceed?' && \
-    echo "$content" | grep -qF "don't ask again" && return 0
-    return 1
-}
-
-# --- Simple proceed prompt detection ---
-# Claude Code may display a simple "Do you want to proceed?" with only
-# "Yes" and "No" options (no "don't ask again"). This appears for bash
-# command confirmations and other simple approvals. Unlike the full
-# permissions prompt, this variant only has 2 options.
-# The sidecar auto-selects option 1 ("Yes") to prevent stalls.
-# IMPORTANT: This must be checked AFTER detect_permissions_prompt, since
-# that function is more specific (requires "don't ask again") and selects
-# option 2 instead.
-
-detect_proceed_prompt() {
-    local content="$1"
-    echo "$content" | grep -qF 'Do you want to proceed?' && \
-    ! echo "$content" | grep -qF "don't ask again" && return 0
-    return 1
-}
-
-# --- Blocking dialogue dispatch ---
-# Checks pane content against all known blocking dialogues. If a dialogue is
-# detected, sets DIALOGUE_OPTION (the menu option to select) and
-# DIALOGUE_SETTLE (seconds to sleep after responding, for the UI to settle).
-#
-# Dialogue table (checked in priority order):
-#   Dialogue           │ Option │ Settle │ Rationale
-#   ───────────────────┼────────┼────────┼──────────────────────────────────
-#   Plan mode          │ 2      │ 5      │ "Yes, bypass permissions"
-#   AskUserQuestion    │ 1      │ 5      │ Default/recommended choice
-#   Permissions prompt │ 2      │ 2      │ "Don't ask again" — permanent
-#   Proceed prompt     │ 1      │ 2      │ Simple "Yes"
-#
-# Returns 0 if dialogue detected, 1 otherwise.
-
-DIALOGUE_OPTION=""
-DIALOGUE_SETTLE=0
-
-check_blocking_dialogue() {
-    local content="$1"
-    if detect_plan_mode "$content"; then
-        DIALOGUE_OPTION='2'
-        DIALOGUE_SETTLE=5
-        return 0
-    fi
-    if detect_ask_modal "$content"; then
-        DIALOGUE_OPTION='1'
-        DIALOGUE_SETTLE=5
-        return 0
-    fi
-    if detect_permissions_prompt "$content"; then
-        DIALOGUE_OPTION='2'
-        DIALOGUE_SETTLE=2
-        return 0
-    fi
-    if detect_proceed_prompt "$content"; then
-        DIALOGUE_OPTION='1'
-        DIALOGUE_SETTLE=2
-        return 0
-    fi
-    return 1
-}
-
-# --- Transport-specific dialogue response ---
-# These send the selected option via the appropriate transport (tmux or pty).
-
-respond_dialogue_tmux() {
-    local pane_id="$1"
-    local option="$2"
-    local settle="$3"
-    tmux send-keys -t "$pane_id" "$option" || true
-    sleep 0.5
-    tmux send-keys -t "$pane_id" Enter || true
-    sleep "$settle"
-}
-
-respond_dialogue_pty() {
-    local pty="$1"
-    local session="$2"
-    local option="$3"
-    local settle="$4"
-    "$pty" send "$session" --no-enter "$option" || true
-    sleep 0.5
-    "$pty" send "$session" '' || true
-    sleep "$settle"
-}
-
-# --- Context stress detection ---
-# Claude Code displays specific messages when context is stressed:
-#   - "Compacting conversation" during auto-compact
-#   - "Conversation too long" when compact fails (cannot compact further)
-#   - "Prompt is too long" when the API rejects input
-#   - "Error compacting conversation" on compact error
-# When any of these are visible, the sidecar must NOT inject commands
-# as they will fail and waste remaining context, creating an infinite loop.
-
-detect_context_stress() {
-    local content="$1"
-    echo "$content" | grep -qF 'Compacting conversation' && return 0
-    echo "$content" | grep -qF 'Conversation too long' && return 0
-    echo "$content" | grep -qF 'Prompt is too long' && return 0
-    echo "$content" | grep -qF 'Error compacting conversation' && return 0
-    return 1
-}
-
-# detect_skill_failure — check if Claude rejected the last injection as an unknown skill.
-# Returns: 0 = skill failure detected, 1 = no failure.
-detect_skill_failure() {
-    local content="$1"
-    echo "$content" | grep -qF 'Unknown skill' && return 0
-    return 1
-}
-
-# build_recovery_prompt — construct a raw text prompt that re-bootstraps the agent
-# without depending on registered skills. Uses absolute paths to skill files.
-# This is the self-healing fallback when /nbs-notify is rejected repeatedly.
-build_recovery_prompt() {
-    local notify_skill="${NBS_ROOT}/claude_tools/nbs-notify.md"
-    local chat_skill="${NBS_ROOT}/claude_tools/nbs-teams-chat.md"
-    local poll_skill="${NBS_ROOT}/claude_tools/nbs-poll.md"
-
-    # Find available chat files for the active announcement
-    local chat_files=""
-    if [[ -f "$CONTROL_REGISTRY" ]]; then
-        while IFS= read -r line; do
-            case "$line" in
-                chat:*) chat_files="${chat_files} ${line#chat:}" ;;
-            esac
-        done < "$CONTROL_REGISTRY"
-    fi
-
-    # Build the prompt with absolute paths
-    local prompt="Your skills were lost after compaction. Please read these files to restore them: "
-    prompt+="$(realpath "$notify_skill" 2>/dev/null || echo "$notify_skill")"
-    prompt+=", $(realpath "$chat_skill" 2>/dev/null || echo "$chat_skill")"
-    prompt+=", $(realpath "$poll_skill" 2>/dev/null || echo "$poll_skill")"
-    prompt+=". Your handle is '${SIDECAR_HANDLE}'. "
-
-    if [[ -n "$chat_files" ]]; then
-        local first_chat
-        first_chat=$(echo "$chat_files" | awk '{print $1}')
-        prompt+="Then send a message to ${first_chat} using: nbs-chat send ${first_chat} ${SIDECAR_HANDLE} 'active — skills restored after compaction recovery'."
-    fi
-
-    echo "$prompt"
-}
-
-# --- Dynamic resource registration ---
-# The AI declares what resources it needs by writing to .nbs/control-inbox-<handle>.
-# The sidecar reads new lines (forward-only, never truncates) and maintains
-# a resource registry at .nbs/control-registry-<handle>.
-#
-# Convention: / = human-to-AI, \ = AI-to-wrapper
-# The AI outputs \nbs-register-chat etc. which writes to the control inbox.
-# See feature-requests/dynamic-registration.md for full design.
-
-CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
-CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
-CONTROL_INBOX_LINE=0
-
-# --- Remote execution helper ---
-# When NBS_REMOTE_HOST is set, commands that access .nbs/ files run over SSH.
-# When empty, commands run locally (normal mode).
-
-remote_cmd() {
-    if [[ -n "$NBS_REMOTE_HOST" ]]; then
-        local ssh_cmd=(ssh -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=5)
-        if [[ -n "$NBS_REMOTE_SSH_OPTS" ]]; then
-            local ssh_opts
-            IFS=' ' read -ra ssh_opts <<< "$NBS_REMOTE_SSH_OPTS"
-            ssh_cmd+=("${ssh_opts[@]}")
-        fi
-        ssh_cmd+=("$NBS_REMOTE_HOST" "$@")
-        "${ssh_cmd[@]}" 2>>"${NBS_LOG_FILE}"
-    else
-        "$@" 2>>"${NBS_LOG_FILE}"
-    fi
-}
-
-# is_remote — returns 0 if running in remote mode
-is_remote() {
-    [[ -n "$NBS_REMOTE_HOST" ]]
-}
-
-# seed_registry — populate registry from existing .nbs/ resources on startup.
-# Idempotent: skips resources already registered.
-seed_registry() {
-    # Create registry file if it does not exist (always local)
-    mkdir -p "$(dirname "$CONTROL_REGISTRY")"
-    touch "$CONTROL_REGISTRY"
-
-    if is_remote; then
-        # Remote mode: discover resources via SSH
-        local remote_chats
-        remote_chats=$(remote_cmd "ls $(printf '%q' "${NBS_ROOT}")/.nbs/chat/*.chat 2>/dev/null") || true
-        while IFS= read -r chat; do
-            [[ -z "$chat" ]] && continue
-            if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "chat:${chat}" >> "$CONTROL_REGISTRY"
-            fi
-        done <<< "$remote_chats"
-
-        # Register bus directory if it exists on remote
-        if remote_cmd "test -d $(printf '%q' "${NBS_ROOT}")/.nbs/events" 2>/dev/null; then
-            if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
-            fi
-        fi
-    else
-        # Local mode: direct file access
-        for chat in "${NBS_ROOT}"/.nbs/chat/*.chat; do
-            [[ -f "$chat" ]] || continue
-            if ! grep -qF "chat:${chat}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "chat:${chat}" >> "$CONTROL_REGISTRY"
-            fi
-        done
-
-        if [[ -d "${NBS_ROOT}/.nbs/events" ]]; then
-            if ! grep -qF "bus:${NBS_ROOT}/.nbs/events" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "bus:${NBS_ROOT}/.nbs/events" >> "$CONTROL_REGISTRY"
-            fi
-        fi
-    fi
-}
-
-# process_control_command — handle a single control command line.
-# Precondition: line is non-empty and has been stripped of whitespace.
-# Postcondition: registry is updated if command is valid; invalid lines are ignored.
-process_control_command() {
-    local line="$1"
-    local verb path
-
-    verb=$(echo "$line" | awk '{print $1}')
-    path=$(echo "$line" | awk '{print $2}')
-
-    # Require both verb and path
-    [[ -z "$verb" || -z "$path" ]] && return 0
-
-    case "$verb" in
-        register-chat)
-            if ! grep -qF "chat:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "chat:${path}" >> "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Registered chat: $path" >&2
-            fi
-            ;;
-        unregister-chat)
-            if grep -qF "chat:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                { grep -vF "chat:${path}" "$CONTROL_REGISTRY" || true; } > "${CONTROL_REGISTRY}.tmp"
-                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Unregistered chat: $path" >&2
-            fi
-            ;;
-        register-bus)
-            if ! grep -qF "bus:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                echo "bus:${path}" >> "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Registered bus: $path" >&2
-            fi
-            ;;
-        unregister-bus)
-            if grep -qF "bus:${path}" "$CONTROL_REGISTRY" 2>/dev/null; then
-                { grep -vF "bus:${path}" "$CONTROL_REGISTRY" || true; } > "${CONTROL_REGISTRY}.tmp"
-                mv "${CONTROL_REGISTRY}.tmp" "$CONTROL_REGISTRY"
-                echo "[nbs-claude] Unregistered bus: $path" >&2
-            fi
-            ;;
-        *)
-            # Unknown command — log to stderr for debugging
-            echo "[nbs-claude] Unknown control command: $verb" >&2
-            ;;
-    esac
-}
-
-# check_control_inbox — process new lines from the control inbox.
-# Forward-only: tracks line offset, never re-processes old lines, never truncates.
-# Called every sidecar iteration (1 second).
-check_control_inbox() {
-    [[ -f "$CONTROL_INBOX" ]] || return 0
-
-    # Read file atomically into variable to avoid TOCTOU race
-    # between wc -l and tail.
-    # Note: $(<file 2>/dev/null) is broken in bash <5.2 — the redirect
-    # interferes with the internal read mechanism, producing empty output.
-    # Use $(cat ...) instead.
-    local inbox_content
-    inbox_content=$(cat "$CONTROL_INBOX" 2>/dev/null) || return 0
-    [[ -n "$inbox_content" ]] || return 0
-
-    local total_lines
-    total_lines=$(printf '%s\n' "$inbox_content" | wc -l)
-    total_lines=$((total_lines + 0))  # ensure numeric
-
-    if [[ $total_lines -gt $CONTROL_INBOX_LINE ]]; then
-        local new_lines
-        new_lines=$(printf '%s\n' "$inbox_content" | tail -n +"$((CONTROL_INBOX_LINE + 1))")
-
-        while IFS= read -r line; do
-            # Strip leading/trailing whitespace
-            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            [[ -z "$line" ]] && continue
-            # Skip comment lines
-            [[ "$line" == \#* ]] && continue
-            process_control_command "$line"
-        done <<< "$new_lines"
-
-        CONTROL_INBOX_LINE=$total_lines
-    fi
-}
-
-# --- Bus-aware event checking ---
-# The sidecar checks the bus and chat cursors directly, injecting /nbs-notify
-# only when there is something to process. This replaces blind /nbs-poll
-# injection which wastes context on empty checks.
-
-# Globals set by check functions
-BUS_EVENT_COUNT=0
-BUS_MAX_PRIORITY="none"
-BUS_EVENT_SUMMARY=""
-CHAT_UNREAD_COUNT=0
-CHAT_UNREAD_SUMMARY=""
-NOTIFY_MESSAGE=""
-LAST_NOTIFY_TIME=0
-SIDECAR_START_TIME=0
-NOTIFY_FAIL_COUNT=0
-PYTHIA_LAST_TRIGGER_COUNT=0
-LAST_STANDUP_TIME=0
-
-# check_pythia_trigger — deterministic Pythia checkpoint trigger.
-# Counts decision-logged events in the processed directory.
-# When the count crosses a multiple of pythia-interval, publishes
-# a pythia-checkpoint bus event. This replaces the unreliable
-# Scribe-based trigger with a mechanical count.
-# Returns: 0 = checkpoint published, 1 = no action.
-check_pythia_trigger() {
-    [[ -f "$CONTROL_REGISTRY" ]] || return 1
-
-    local bus_dir=""
-    while IFS= read -r line; do
-        case "$line" in
-            bus:*) bus_dir="${line#bus:}"; break ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    [[ -n "$bus_dir" && -d "$bus_dir/processed" ]] || return 1
-
-    # Read pythia-interval from config (default: 20)
-    local interval=20
-    local config_file="${bus_dir}/config.yaml"
-    if [[ -f "$config_file" ]]; then
-        local cfg_val
-        cfg_val=$(grep "^pythia-interval:" "$config_file" 2>/dev/null | awk '{print $2}') || true
-        if [[ -n "$cfg_val" && "$cfg_val" =~ ^[0-9]+$ && "$cfg_val" -gt 0 ]]; then
-            interval=$cfg_val
-        fi
-    fi
-
-    # Count decision-logged events in processed directory
-    local decision_count
-    decision_count=$(ls "$bus_dir/processed/" 2>/dev/null | grep -c "decision-logged" || true)
-    decision_count=$((decision_count + 0))
-
-    # Check if we've crossed a new threshold
-    local current_bucket=$((decision_count / interval))
-    local last_bucket=$((PYTHIA_LAST_TRIGGER_COUNT / interval))
-
-    if [[ $current_bucket -gt $last_bucket && $decision_count -gt 0 ]]; then
-        PYTHIA_LAST_TRIGGER_COUNT=$decision_count
-        # Publish pythia-checkpoint event
-        if is_remote; then
-            remote_cmd "nbs-bus publish $(printf '%q' "$bus_dir") sidecar pythia-checkpoint high \
-                'Decision count: ${decision_count}. Sidecar-triggered Pythia assessment.'" 2>/dev/null || true
-        else
-            nbs-bus publish "$bus_dir" sidecar pythia-checkpoint high \
-                "Decision count: ${decision_count}. Sidecar-triggered Pythia assessment." 2>/dev/null || true
-        fi
-        return 0
-    else
-        # Sync counter without triggering (for first run / catch-up)
-        if [[ $PYTHIA_LAST_TRIGGER_COUNT -eq 0 && $decision_count -gt 0 ]]; then
-            PYTHIA_LAST_TRIGGER_COUNT=$decision_count
-        fi
-        return 1
-    fi
-}
-
-# check_standup_trigger — deterministic team check-in via chat.
-# Posts a standup message to the first registered chat after N minutes
-# of wall-clock time since the last standup. Uses CSMA/CD collision
-# detection: before posting, checks if a standup was already posted
-# recently. Random jitter (±2 min) reduces collision probability.
-# Returns: 0 = standup posted, 1 = no action.
-check_standup_trigger() {
-    # Disabled if interval is 0
-    [[ "$STANDUP_INTERVAL" -gt 0 ]] || return 1
-
-    [[ -f "$CONTROL_REGISTRY" ]] || return 1
-
-    local now
-    now=$(date +%s)
-    local interval_seconds=$((STANDUP_INTERVAL * 60))
-
-    # Skip if not enough time has passed since OUR last attempt
-    if [[ $LAST_STANDUP_TIME -gt 0 ]] && (( now - LAST_STANDUP_TIME < interval_seconds )); then
-        return 1
-    fi
-
-    # First run: initialise timer without posting
-    if [[ $LAST_STANDUP_TIME -eq 0 ]]; then
-        LAST_STANDUP_TIME=$now
-        return 1
-    fi
-
-    # Find first registered chat
-    local chat_path=""
-    while IFS= read -r line; do
-        case "$line" in
-            chat:*) chat_path="${line#chat:}"; break ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    [[ -n "$chat_path" ]] || return 1
-
-    # CSMA/CD: temporal carrier sense using shared timestamp file.
-    # All sidecars on this machine share a timestamp file that records
-    # when the last check-in was posted. This is time-based, not
-    # message-count-based — a check-in posted 20 minutes ago does not
-    # suppress a new one, regardless of how many messages are in the chat.
-    local ts_file="${chat_path}.standup-ts"
-    local last_global_standup=0
-
-    if [[ -f "$ts_file" ]]; then
-        last_global_standup=$(cat "$ts_file" 2>/dev/null || echo 0)
-        # Validate it's a number
-        [[ "$last_global_standup" =~ ^[0-9]+$ ]] || last_global_standup=0
-    fi
-
-    if (( last_global_standup > 0 )) && (( now - last_global_standup < interval_seconds )); then
-        # Medium is busy — another sidecar posted recently.
-        # Random backoff: add random(0, interval/2) seconds to our timer.
-        # Use /dev/urandom for true randomness (not PID-based pseudo-random).
-        local backoff=$(( $(od -An -tu4 -N4 /dev/urandom | tr -d ' ') % (interval_seconds / 2 + 1) ))
-        LAST_STANDUP_TIME=$(( now - interval_seconds + backoff ))
-        return 1
-    fi
-
-    # Post standup to chat
-    local standup_msg='Check-in: @scribe post a summary of decisions and open items since the last check-in. @supervisor once scribe has posted, review and assign next tasks. All agents: what are you working on? What is blocked? If you are idle, find useful work NOW — do not wait for assignment. If you declared session-end without supervisor approval, resume work immediately.'
-    if is_remote; then
-        remote_cmd "nbs-chat send $(printf '%q' "$chat_path") sidecar $(printf '%q' "$standup_msg")" 2>/dev/null || true
-    else
-        nbs-chat send "$chat_path" sidecar "$standup_msg" 2>/dev/null || true
-    fi
-
-    # Update shared timestamp (atomic write)
-    echo "$now" > "${ts_file}.tmp" && mv "${ts_file}.tmp" "$ts_file" 2>/dev/null || true
-
-    LAST_STANDUP_TIME=$now
-    return 0
-}
-
-# are_chat_unread_sidecar_only — check if ALL unread chat messages are from 'sidecar'.
-# Reads chat files and cursor positions directly (no nbs-chat CLI, no cursor advancement).
-# Decodes base64 messages and checks the handle prefix.
-# Handles both legacy ("handle: content") and timestamped ("handle|epoch: content") formats.
-# Returns: 0 = all unread are sidecar-only (safe to suppress), 1 = otherwise.
-are_chat_unread_sidecar_only() {
-    [[ -f "$CONTROL_REGISTRY" ]] || return 1
-
-    local has_unread=0
-
-    while IFS= read -r line; do
-        case "$line" in
-            chat:*)
-                local chat_path="${line#chat:}"
-
-                if is_remote; then
-                    # Remote mode not supported for this check — allow injection
-                    return 1
-                fi
-
-                [[ -f "$chat_path" ]] || continue
-
-                # Count total messages (non-empty lines after ---)
-                local total
-                total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null) || true
-                total=$((${total:-0} + 0))
-
-                # Read cursor position (read-only, no modification)
-                local cursor=0
-                if [[ -f "${chat_path}.cursors" ]]; then
-                    cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null) || true
-                    cursor=$((${cursor:-0} + 0))
-                fi
-
-                # No unread in this chat — skip
-                if (( total <= cursor + 1 )); then
-                    continue
-                fi
-
-                has_unread=1
-
-                # Extract unread messages: lines after --- separator, skip to cursor position
-                # cursor=N means messages 0..N have been read, so skip N+1 lines
-                local skip=$((cursor + 1))
-                local unread_lines
-                unread_lines=$(awk -v skip="$skip" '
-                    /^---$/ { found=1; next }
-                    found && NF {
-                        count++
-                        if (count > skip) print
-                    }
-                ' "$chat_path" 2>/dev/null)
-
-                # Check each unread message: decode base64 and extract handle
-                # Format: "handle: content" (legacy) or "handle|epoch: content" (timestamped)
-                while IFS= read -r encoded_line; do
-                    [[ -z "$encoded_line" ]] && continue
-                    local decoded
-                    decoded=$(echo "$encoded_line" | base64 -d 2>/dev/null) || return 1
-                    # Extract handle (everything before first ': ')
-                    local msg_handle="${decoded%%: *}"
-                    # Strip timestamp suffix if present (handle|epoch → handle)
-                    msg_handle="${msg_handle%%|*}"
-                    if [[ "$msg_handle" != "sidecar" ]]; then
-                        return 1  # Non-sidecar message found — allow injection
-                    fi
-                done <<< "$unread_lines"
-                ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    # If we found unread messages and all were from sidecar, suppress
-    if [[ $has_unread -eq 1 ]]; then
-        return 0
-    fi
-
-    # No unread messages — nothing to suppress
-    return 1
-}
-
-# check_bus_events — peek at the event bus without consuming anything.
-# Reads the control registry for bus: entries, runs nbs-bus check on each.
-# Sets BUS_EVENT_COUNT, BUS_MAX_PRIORITY, BUS_EVENT_SUMMARY.
-# Returns: 0 = events found, 1 = empty, 2 = no bus registered.
-check_bus_events() {
-    BUS_EVENT_COUNT=0
-    BUS_MAX_PRIORITY="none"
-    BUS_EVENT_SUMMARY=""
-
-    [[ -f "$CONTROL_REGISTRY" ]] || return 2
-
-    local has_bus=0
-    local output
-
-    while IFS= read -r line; do
-        case "$line" in
-            bus:*)
-                local bus_dir="${line#bus:}"
-                if is_remote; then
-                    has_bus=1
-                    output=$(remote_cmd "nbs-bus check $(printf '%q' "$bus_dir")") || continue
-                elif [[ -d "$bus_dir" ]]; then
-                    has_bus=1
-                    output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
-                else
-                    continue
-                fi
-                    if [[ -n "$output" ]]; then
-                        BUS_EVENT_COUNT=$(echo "$output" | wc -l)
-                        BUS_EVENT_COUNT=$((BUS_EVENT_COUNT + 0))
-                        # Extract highest priority (first line, first bracket group)
-                        BUS_MAX_PRIORITY=$(echo "$output" | head -1 | sed 's/^\[\([a-z]*\)\].*/\1/')
-                        BUS_EVENT_SUMMARY="${BUS_EVENT_COUNT} event(s) in ${bus_dir}"
-                    fi
-                ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    [[ $has_bus -eq 0 ]] && return 2
-    [[ $BUS_EVENT_COUNT -eq 0 ]] && return 1
-    return 0
-}
-
-# check_interrupt_events — scan bus for chat-interrupt events targeting
-# this agent's handle. Unlike check_bus_events (which just counts),
-# this reads payloads and acks matching events.
-# Returns: 0 = interrupt targeting this handle found, 1 = none.
-check_interrupt_events() {
-    [[ -f "$CONTROL_REGISTRY" ]] || return 1
-
-    local found_interrupt=1
-
-    while IFS= read -r line; do
-        case "$line" in
-            bus:*)
-                local bus_dir="${line#bus:}"
-                local output
-                if is_remote; then
-                    output=$(remote_cmd "nbs-bus check $(printf '%q' "$bus_dir")") || continue
-                elif [[ -d "$bus_dir" ]]; then
-                    output=$(nbs-bus check "$bus_dir" 2>/dev/null) || continue
-                else
-                    continue
-                fi
-
-                # Filter for chat-interrupt events
-                local interrupt_lines
-                interrupt_lines=$(echo "$output" | grep 'chat-interrupt' 2>/dev/null) || continue
-
-                while IFS= read -r evt_line; do
-                    # Format: [priority] filename (age)
-                    # Extract filename: second field
-                    local evt_file
-                    evt_file=$(echo "$evt_line" | awk '{print $2}')
-                    [[ -n "$evt_file" ]] || continue
-
-                    # Read event payload to check target handle
-                    local payload
-                    if is_remote; then
-                        payload=$(remote_cmd "nbs-bus read $(printf '%q' "$bus_dir") $(printf '%q' "$evt_file")") || continue
-                    else
-                        payload=$(nbs-bus read "$bus_dir" "$evt_file" 2>/dev/null) || continue
-                    fi
-
-                    # Check if @SIDECAR_HANDLE is in the payload
-                    if echo "$payload" | grep -qF "@${SIDECAR_HANDLE}"; then
-                        # Ack the event so it is not re-processed
-                        if is_remote; then
-                            remote_cmd "nbs-bus ack $(printf '%q' "$bus_dir") $(printf '%q' "$evt_file")" 2>/dev/null || true
-                        else
-                            nbs-bus ack "$bus_dir" "$evt_file" 2>/dev/null || true
-                        fi
-                        found_interrupt=0
-                    fi
-                done <<< "$interrupt_lines"
-                ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    return $found_interrupt
-}
-
-# check_chat_unread — peek at chat cursors without advancing them.
-# Reads cursor files directly (no lock, no modification) and compares
-# against total message count. Format: handle=index in <chat>.cursors.
-# See src/nbs-chat/chat_file.c for cursor file format.
-# Sets CHAT_UNREAD_COUNT, CHAT_UNREAD_SUMMARY.
-# Returns: 0 = unread found, 1 = caught up, 2 = no chats registered.
-check_chat_unread() {
-    CHAT_UNREAD_COUNT=0
-    CHAT_UNREAD_SUMMARY=""
-
-    [[ -f "$CONTROL_REGISTRY" ]] || return 2
-
-    local has_chat=0
-    local unread_chats=""
-
-    while IFS= read -r line; do
-        case "$line" in
-            chat:*)
-                local chat_path="${line#chat:}"
-
-                if is_remote; then
-                    # Remote mode: check file existence and read via SSH
-                    remote_cmd "test -f $(printf '%q' "$chat_path")" || continue
-                    has_chat=1
-
-                    local total
-                    total=$(remote_cmd "awk '/^---\$/{found=1; next} found && NF{count++} END{print count+0}' $(printf '%q' "$chat_path")")
-                    total=$((${total:-0} + 0))
-
-                    local cursor=0
-                    local cursor_val
-                    cursor_val=$(remote_cmd "awk -F= -v h='$SIDECAR_HANDLE' '\$1==h{print \$2}' $(printf '%q' "${chat_path}.cursors") 2>/dev/null") || true
-                    cursor=$((${cursor_val:-0} + 0))
-                else
-                    # Local mode: direct file access
-                    [[ -f "$chat_path" ]] || continue
-                    has_chat=1
-
-                    local total
-                    total=$(awk '/^---$/{found=1; next} found && NF{count++} END{print count+0}' "$chat_path" 2>/dev/null) || true
-                    total=$((${total:-0} + 0))
-
-                    local cursor=0
-                    if [[ -f "${chat_path}.cursors" ]]; then
-                        cursor=$(awk -F= -v h="$SIDECAR_HANDLE" '$1==h{print $2}' "${chat_path}.cursors" 2>/dev/null) || true
-                        cursor=$((${cursor:-0} + 0))
-                    fi
-                fi
-
-                # Unread if total messages > cursor position + 1
-                # (cursor is 0-indexed: cursor=0 means message 0 has been read)
-                if (( total > cursor + 1 )); then
-                    local chat_name
-                    chat_name=$(basename "$chat_path")
-                    local n_unread=$((total - cursor - 1))
-                    CHAT_UNREAD_COUNT=$((CHAT_UNREAD_COUNT + n_unread))
-                    if [[ -n "$unread_chats" ]]; then
-                        unread_chats="${unread_chats}, ${chat_name}"
-                    else
-                        unread_chats="$chat_name"
-                    fi
-                fi
-                ;;
-        esac
-    done < "$CONTROL_REGISTRY"
-
-    if [[ $CHAT_UNREAD_COUNT -gt 0 ]]; then
-        CHAT_UNREAD_SUMMARY="${CHAT_UNREAD_COUNT} unread in ${unread_chats}"
-    fi
-
-    [[ $has_chat -eq 0 ]] && return 2
-    [[ $CHAT_UNREAD_COUNT -eq 0 ]] && return 1
-    return 0
-}
-
-# should_inject_notify — decide whether to inject /nbs-notify.
-# Combines bus and chat checks, applies cooldown logic.
-# Critical priority bypasses cooldown.
-# Sets NOTIFY_MESSAGE with summary text (capped at 200 chars).
-# Returns: 0 = should inject, 1 = should not.
-should_inject_notify() {
-    NOTIFY_MESSAGE=""
-
-    # Startup grace period: do not inject notifications until the agent has
-    # had time to process any manually-sent role prompts. This prevents the
-    # sidecar from racing ahead of the user's initial prompt.
-    local now
-    now=$(date +%s)
-    if [[ $SIDECAR_START_TIME -gt 0 ]]; then
-        local grace_elapsed=$((now - SIDECAR_START_TIME))
-        if [[ $grace_elapsed -lt $STARTUP_GRACE ]]; then
-            return 1
-        fi
-    fi
-
-    local bus_rc=0
-    check_bus_events || bus_rc=$?
-
-    # Deterministic Pythia trigger — fire independently of notify decision
-    check_pythia_trigger || true
-
-    # Deterministic standup — post check-in to chat after silence
-    check_standup_trigger || true
-
-    local chat_rc=0
-    check_chat_unread || chat_rc=$?
-
-    # Nothing pending
-    if [[ $bus_rc -ne 0 && $chat_rc -ne 0 ]]; then
-        return 1
-    fi
-
-    # Idle standup suppression: if only chat is pending (no bus events)
-    # and ALL unread messages are from 'sidecar', suppress the injection.
-    # This prevents idle agents from being woken by standup check-ins
-    # that produce non-compactable "standing by" responses (context rot).
-    if [[ $bus_rc -ne 0 && $chat_rc -eq 0 ]]; then
-        if are_chat_unread_sidecar_only; then
-            return 1
-        fi
-    fi
-
-    # Apply cooldown (critical bypasses)
-    now=$(date +%s)
-    local elapsed=$((now - LAST_NOTIFY_TIME))
-
-    if [[ "$BUS_MAX_PRIORITY" != "critical" && $elapsed -lt $NOTIFY_COOLDOWN ]]; then
-        return 1
-    fi
-
-    # Build summary message
-    local parts=""
-    if [[ -n "$BUS_EVENT_SUMMARY" ]]; then
-        parts="$BUS_EVENT_SUMMARY"
-    fi
-    if [[ -n "$CHAT_UNREAD_SUMMARY" ]]; then
-        if [[ -n "$parts" ]]; then
-            parts="${parts}. ${CHAT_UNREAD_SUMMARY}"
-        else
-            parts="$CHAT_UNREAD_SUMMARY"
-        fi
-    fi
-
-    # Cap at 200 chars for tmux safety
-    if [[ ${#parts} -gt 200 ]]; then
-        parts="${parts:0:197}..."
-    fi
-
-    NOTIFY_MESSAGE="$parts"
-    LAST_NOTIFY_TIME=$now
-    return 0
-}
-
-# --- Prompt detection ---
-
-is_prompt_visible() {
-    local content="$1"
-    echo "$content" | tail -3 | grep -qF '❯'
-}
-
-# --- Idle detection sidecar (tmux mode) ---
-# Monitors the current tmux pane. Checks bus/chat every BUS_CHECK_INTERVAL
-# seconds and injects /nbs-notify when events or messages are pending.
-# CSMA/CD standups handle periodic coordination; no blind polling.
-
-poll_sidecar_tmux() {
-    local pane_id="$1"
-
-    local idle_seconds=0
-    local bus_check_counter=0
-    local last_content_hash=""
-    local last_heartbeat_time=0
-    local flush_counter=0
-
-    # Seed registry with existing resources
-    seed_registry
-
-    # Inject initial prompt — either custom (NBS_INITIAL_PROMPT) or default (handle + skill)
-    # Wait for Claude's prompt to appear, then send the initial prompt
-    local init_prompt
-    if [[ -n "$INITIAL_PROMPT" ]]; then
-        init_prompt="$INITIAL_PROMPT"
-    else
-        init_prompt="Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
-    fi
-    local init_wait=0
-    while [[ $init_wait -lt 60 ]]; do
-        sleep 2
-        local init_content
-        init_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-        if echo "$init_content" | tail -3 | grep -qF '❯'; then
-            tmux send-keys -t "$pane_id" -l "$init_prompt" || true
-            sleep 0.3
-            tmux send-keys -t "$pane_id" Enter || true
-            sleep 5
-            SIDECAR_START_TIME=$(date +%s)
-            last_content_hash=""
-            break
-        fi
-        init_wait=$((init_wait + 2))
-    done
-
-    while true; do
-        sleep 1
-
-        # Check control inbox for new registration commands
-        check_control_inbox
-
-        # --- Out-of-band interrupt check ---
-        # chat-interrupt events (@handle!) are critical-priority and must be
-        # processed immediately, regardless of whether the agent is busy or
-        # idle. This runs unconditionally at the top of every loop iteration
-        # (every ~1s) before any content hashing or idle detection.
-        #
-        # Interrupt mode: retry Escape + wait-for-prompt up to 4 times.
-        # On failure after 4 retries, post AGENT NOT RESPONDING to chat
-        # so the team can decide whether to escalate (e.g. level 4 restart).
-        if check_interrupt_events; then
-            local interrupt_retries=0
-            local interrupt_succeeded=0
-
-            while [[ $interrupt_retries -lt 4 ]]; do
-                interrupt_retries=$((interrupt_retries + 1))
-
-                # Send Escape to cancel current operation
-                tmux send-keys -t "$pane_id" Escape || true
-                sleep 1
-
-                # Check if prompt appeared
-                local icontent_top
-                icontent_top=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                if is_prompt_visible "$icontent_top"; then
-                    # Inject /nbs-notify interrupt
-                    tmux send-keys -t "$pane_id" -l "/nbs-notify interrupt from chat" || true
-                    sleep 0.3
-                    tmux send-keys -t "$pane_id" Enter || true
-                    interrupt_succeeded=1
-                    break
-                fi
-
-                # Wait before retrying
-                sleep 2
-            done
-
-            if [[ $interrupt_succeeded -eq 0 ]]; then
-                # 4 retries exhausted — agent did not respond
-                # Post warning to first registered chat
-                if [[ -f "$CONTROL_REGISTRY" ]]; then
-                    local warn_chat=""
-                    while IFS= read -r wl; do
-                        case "$wl" in
-                            chat:*) warn_chat="${wl#chat:}"; break ;;
-                        esac
-                    done < "$CONTROL_REGISTRY"
-                    if [[ -n "$warn_chat" ]]; then
-                        if is_remote; then
-                            remote_cmd "nbs-chat send $(printf '%q' "$warn_chat") sidecar $(printf '%q' "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation.")" 2>/dev/null || true
-                        else
-                            nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation." 2>/dev/null || true
-                        fi
-                    fi
-                fi
-            fi
-
-            idle_seconds=0
-            last_content_hash=""
-            sleep 3
-            continue
-        fi
-
-        # Check pane still exists
-        if ! tmux list-panes -t "$pane_id" &>/dev/null; then
-            break
-        fi
-
-        # Capture current pane content
-        local content
-        content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || continue
-
-        # Hash the content to detect changes
-        local current_hash
-        current_hash=$(echo "$content" | sha256sum | cut -d' ' -f1)
-
-        if [[ "$current_hash" != "$last_content_hash" ]]; then
-            idle_seconds=0
-            bus_check_counter=0
-            flush_counter=0
-            last_content_hash="$current_hash"
-
-            # Handle blocking dialogues immediately on content change
-            if check_blocking_dialogue "$content"; then
-                sleep 1
-                respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
-                idle_seconds=0
-                last_content_hash=""
-            fi
-
-            # Active heartbeat: periodically post "still working" to chat.
-            # DISABLED BY DEFAULT (0) — heartbeats waste context tokens across
-            # all agents and provide no information the sidecar doesn't already
-            # have. The standup check-in (STANDUP_INTERVAL) is the preferred
-            # mechanism for team health checks. Set NBS_ACTIVE_HEARTBEAT=300
-            # to re-enable if needed.
-            if [[ "$ACTIVE_HEARTBEAT" -gt 0 ]]; then
-                local hb_now
-                hb_now=$(date +%s)
-                if [[ $last_heartbeat_time -eq 0 ]]; then
-                    last_heartbeat_time=$hb_now
-                elif (( hb_now - last_heartbeat_time >= ACTIVE_HEARTBEAT )); then
-                    # Find first registered chat and post heartbeat
-                    if [[ -f "$CONTROL_REGISTRY" ]]; then
-                        local hb_chat=""
-                        while IFS= read -r hb_line; do
-                            case "$hb_line" in
-                                chat:*) hb_chat="${hb_line#chat:}"; break ;;
-                            esac
-                        done < "$CONTROL_REGISTRY"
-                        if [[ -n "$hb_chat" ]]; then
-                            local hb_elapsed=$(( hb_now - last_heartbeat_time ))
-                            if is_remote; then
-                                remote_cmd "nbs-chat send $(printf '%q' "$hb_chat") sidecar $(printf '%q' "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle.")" 2>/dev/null || true
-                            else
-                                nbs-chat send "$hb_chat" sidecar "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle." 2>/dev/null || true
-                            fi
-                        fi
-                    fi
-                    last_heartbeat_time=$hb_now
-                fi
-            fi
-
-            continue
-        fi
-
-        # Handle blocking dialogues when content is stable (already idle)
-        if check_blocking_dialogue "$content"; then
-            respond_dialogue_tmux "$pane_id" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
-            idle_seconds=0
-            last_content_hash=""
-            continue
-        fi
-
-        idle_seconds=$((idle_seconds + 1))
-        bus_check_counter=$((bus_check_counter + 1))
-        flush_counter=$((flush_counter + 1))
-
-        # --- Periodic Enter flush ---
-        # Send a bare Enter keypress every FLUSH_INTERVAL seconds to flush
-        # any text stuck in the readline buffer from a previous send-keys
-        # that wasn't submitted. The AI tokeniser elides blank input at
-        # zero token cost. Guards: prompt must be visible, no blocking
-        # dialogue active, no context stress.
-        if [[ "$FLUSH_INTERVAL" -gt 0 && $flush_counter -ge $FLUSH_INTERVAL ]]; then
-            flush_counter=0
-            if is_prompt_visible "$content" && \
-               ! check_blocking_dialogue "$content" && \
-               ! detect_context_stress "$content"; then
-                tmux send-keys -t "$pane_id" Enter || true
-            fi
-        fi
-
-        # --- Track 1: Bus-aware fast check ---
-        # Check bus and chat every BUS_CHECK_INTERVAL seconds.
-        # Only inject /nbs-notify if something is actually pending.
-        if [[ $bus_check_counter -ge $BUS_CHECK_INTERVAL ]]; then
-            bus_check_counter=0
-
-            if is_prompt_visible "$content"; then
-                # Skip injection if Claude is context-stressed (compacting, too long, etc.)
-                if detect_context_stress "$content"; then
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 30
-                    continue
-                fi
-                if should_inject_notify; then
-                    # Check if we've exceeded the failure threshold — switch to recovery mode
-                    if [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]]; then
-                        local recovery_prompt
-                        recovery_prompt=$(build_recovery_prompt)
-                        tmux send-keys -t "$pane_id" -l "$recovery_prompt" || true
-                        sleep 0.3
-                        tmux send-keys -t "$pane_id" Enter || true
-
-                        # Wait for recovery to be processed
-                        sleep 5
-                        local recovery_content
-                        recovery_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                        if ! detect_skill_failure "$recovery_content"; then
-                            NOTIFY_FAIL_COUNT=0
-                        fi
-
-                        idle_seconds=0
-                        last_content_hash=""
-                        sleep 15
-                        continue
-                    fi
-
-                    # TOCTOU fix: re-capture pane immediately before injection.
-                    # The $content variable may be up to BUS_CHECK_INTERVAL seconds
-                    # stale. Claude Code may have started processing between the
-                    # initial capture and now. Only inject if prompt is still visible.
-                    local fresh_content
-                    fresh_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                    if ! is_prompt_visible "$fresh_content"; then
-                        # Prompt disappeared — Claude Code started processing.
-                        # Abort injection, reset counters, try again next cycle.
-                        idle_seconds=0
-                        last_content_hash=""
-                        sleep 2
-                        continue
-                    fi
-
-                    tmux send-keys -t "$pane_id" -l "/nbs-notify ${NOTIFY_MESSAGE}" || true
-                    sleep 0.3
-                    tmux send-keys -t "$pane_id" Enter || true
-
-                    # Verify injection was consumed — retry with backoff if stalled.
-                    # Even with the fresh re-capture above, there is still a small
-                    # TOCTOU window between the check and send-keys. If Claude Code
-                    # starts processing in that window, the text lands in the
-                    # readline buffer without being submitted.
-                    # Retry up to 3 times with increasing delays.
-                    local injection_consumed=0
-                    for retry_attempt in 1 2 3; do
-                        sleep $((retry_attempt * 2))
-                        local verify_content
-                        verify_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                        if echo "$verify_content" | grep -qF '/nbs-notify'; then
-                            # Text still in buffer — send Enter to retry submission
-                            tmux send-keys -t "$pane_id" Enter || true
-                        else
-                            # Text consumed — injection succeeded
-                            injection_consumed=1
-                            break
-                        fi
-                    done
-                    if [[ $injection_consumed -eq 1 ]]; then
-                        # Injection consumed successfully — reset failure counter
-                        NOTIFY_FAIL_COUNT=0
-                    else
-                        # Still not consumed after 3 retries — check for skill failure
-                        local final_content
-                        final_content=$(tmux capture-pane -t "$pane_id" -p -S -5 2>/dev/null) || true
-                        if is_prompt_visible "$final_content"; then
-                            if detect_skill_failure "$final_content"; then
-                                NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
-                            fi
-                        fi
-                    fi
-
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 8
-                    continue
-                fi
-            fi
-        fi
-    done
-}
-
-# --- Idle detection sidecar (pty-session mode) ---
-
-poll_sidecar_pty() {
-    local pty="$1"
-    local session="$2"
-
-    local idle_seconds=0
-    local bus_check_counter=0
-    local last_content_hash=""
-    local last_heartbeat_time=0
-    local flush_counter=0
-
-    # Seed registry with existing resources
-    seed_registry
-
-    # Inject initial prompt — either custom (NBS_INITIAL_PROMPT) or default (handle + skill)
-    # Wait for Claude's prompt to appear, then send the initial prompt
-    local init_prompt
-    if [[ -n "$INITIAL_PROMPT" ]]; then
-        init_prompt="$INITIAL_PROMPT"
-    else
-        init_prompt="Your NBS handle is '${SIDECAR_HANDLE}'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands."
-    fi
-    local init_wait=0
-    while [[ $init_wait -lt 60 ]]; do
-        sleep 2
-        local init_content
-        init_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-        if echo "$init_content" | tail -3 | grep -qF '❯'; then
-            "$pty" send "$session" "$init_prompt" || true
-            sleep 0.5
-            "$pty" send "$session" '' || true
-            sleep 5
-            SIDECAR_START_TIME=$(date +%s)
-            last_content_hash=""
-            break
-        fi
-        init_wait=$((init_wait + 2))
-    done
-
-    while true; do
-        sleep 1
-
-        # Check control inbox for new registration commands
-        check_control_inbox
-
-        # --- Out-of-band interrupt check (same logic as tmux mode) ---
-        # 4 retries + AGENT NOT RESPONDING warning on failure.
-        if check_interrupt_events; then
-            local interrupt_retries=0
-            local interrupt_succeeded=0
-
-            while [[ $interrupt_retries -lt 4 ]]; do
-                interrupt_retries=$((interrupt_retries + 1))
-
-                # Send Escape to cancel current operation
-                "$pty" send "$session" --no-enter $'\x1b' || true
-                sleep 1
-
-                # Check if prompt appeared
-                local icontent_pty
-                icontent_pty=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                if is_prompt_visible "$icontent_pty"; then
-                    # Inject /nbs-notify interrupt
-                    "$pty" send "$session" "/nbs-notify interrupt from chat" || true
-                    sleep 0.3
-                    "$pty" send "$session" '' || true
-                    interrupt_succeeded=1
-                    break
-                fi
-
-                # Wait before retrying
-                sleep 2
-            done
-
-            if [[ $interrupt_succeeded -eq 0 ]]; then
-                # 4 retries exhausted — agent did not respond
-                if [[ -f "$CONTROL_REGISTRY" ]]; then
-                    local warn_chat=""
-                    while IFS= read -r wl; do
-                        case "$wl" in
-                            chat:*) warn_chat="${wl#chat:}"; break ;;
-                        esac
-                    done < "$CONTROL_REGISTRY"
-                    if [[ -n "$warn_chat" ]]; then
-                        nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation." 2>/dev/null || true
-                    fi
-                fi
-            fi
-
-            idle_seconds=0
-            last_content_hash=""
-            sleep 3
-            continue
-        fi
-
-        if ! "$pty" list 2>/dev/null | grep -qxF "$session"; then
-            break
-        fi
-
-        local content
-        content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || continue
-
-        local current_hash
-        current_hash=$(echo "$content" | sha256sum | cut -d' ' -f1)
-
-        if [[ "$current_hash" != "$last_content_hash" ]]; then
-            idle_seconds=0
-            bus_check_counter=0
-            flush_counter=0
-            last_content_hash="$current_hash"
-
-            # Handle blocking dialogues immediately on content change
-            if check_blocking_dialogue "$content"; then
-                sleep 1
-                respond_dialogue_pty "$pty" "$session" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
-                idle_seconds=0
-                last_content_hash=""
-            fi
-
-            # Active heartbeat (same logic as tmux mode)
-            if [[ "$ACTIVE_HEARTBEAT" -gt 0 ]]; then
-                local hb_now
-                hb_now=$(date +%s)
-                if [[ $last_heartbeat_time -eq 0 ]]; then
-                    last_heartbeat_time=$hb_now
-                elif (( hb_now - last_heartbeat_time >= ACTIVE_HEARTBEAT )); then
-                    if [[ -f "$CONTROL_REGISTRY" ]]; then
-                        local hb_chat=""
-                        while IFS= read -r hb_line; do
-                            case "$hb_line" in
-                                chat:*) hb_chat="${hb_line#chat:}"; break ;;
-                            esac
-                        done < "$CONTROL_REGISTRY"
-                        if [[ -n "$hb_chat" ]]; then
-                            local hb_elapsed=$(( hb_now - last_heartbeat_time ))
-                            if is_remote; then
-                                remote_cmd "nbs-chat send $(printf '%q' "$hb_chat") sidecar $(printf '%q' "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle.")" 2>/dev/null || true
-                            else
-                                nbs-chat send "$hb_chat" sidecar "Heartbeat: ${SIDECAR_HANDLE} is actively processing (${hb_elapsed}s since last heartbeat). Pane content is changing — not idle." 2>/dev/null || true
-                            fi
-                        fi
-                    fi
-                    last_heartbeat_time=$hb_now
-                fi
-            fi
-
-            continue
-        fi
-
-        # Handle blocking dialogues when content is stable (already idle)
-        if check_blocking_dialogue "$content"; then
-            respond_dialogue_pty "$pty" "$session" "$DIALOGUE_OPTION" "$DIALOGUE_SETTLE"
-            idle_seconds=0
-            last_content_hash=""
-            continue
-        fi
-
-        idle_seconds=$((idle_seconds + 1))
-        bus_check_counter=$((bus_check_counter + 1))
-        flush_counter=$((flush_counter + 1))
-
-        # --- Periodic Enter flush (same logic as tmux mode) ---
-        if [[ "$FLUSH_INTERVAL" -gt 0 && $flush_counter -ge $FLUSH_INTERVAL ]]; then
-            flush_counter=0
-            if is_prompt_visible "$content" && \
-               ! check_blocking_dialogue "$content" && \
-               ! detect_context_stress "$content"; then
-                "$pty" send "$session" '' || true
-            fi
-        fi
-
-        # --- Track 1: Bus-aware fast check ---
-        if [[ $bus_check_counter -ge $BUS_CHECK_INTERVAL ]]; then
-            bus_check_counter=0
-
-            if is_prompt_visible "$content"; then
-                # Skip injection if Claude is context-stressed (compacting, too long, etc.)
-                if detect_context_stress "$content"; then
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 30
-                    continue
-                fi
-                if should_inject_notify; then
-                    # Check if we've exceeded the failure threshold — switch to recovery mode
-                    if [[ $NOTIFY_FAIL_COUNT -ge $NOTIFY_FAIL_THRESHOLD ]]; then
-                        local recovery_prompt
-                        recovery_prompt=$(build_recovery_prompt)
-                        "$pty" send "$session" "$recovery_prompt" || true
-                        sleep 0.5
-                        "$pty" send "$session" '' || true
-
-                        # Wait for recovery to be processed
-                        sleep 5
-                        local recovery_content
-                        recovery_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                        if ! detect_skill_failure "$recovery_content"; then
-                            NOTIFY_FAIL_COUNT=0
-                        fi
-
-                        idle_seconds=0
-                        last_content_hash=""
-                        sleep 15
-                        continue
-                    fi
-
-                    # TOCTOU fix: re-capture pane immediately before injection.
-                    # The $content variable may be up to BUS_CHECK_INTERVAL seconds
-                    # stale. Only inject if prompt is still visible.
-                    local fresh_content
-                    fresh_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                    if ! is_prompt_visible "$fresh_content"; then
-                        # Prompt disappeared — Claude Code started processing.
-                        # Abort injection, reset counters, try again next cycle.
-                        idle_seconds=0
-                        last_content_hash=""
-                        sleep 2
-                        continue
-                    fi
-
-                    "$pty" send "$session" "/nbs-notify ${NOTIFY_MESSAGE}" || true
-                    sleep 0.5
-                    "$pty" send "$session" '' || true
-
-                    # Verify injection was consumed — retry with backoff if stalled.
-                    # Retry up to 3 times with increasing delays.
-                    local injection_consumed=0
-                    for retry_attempt in 1 2 3; do
-                        sleep $((retry_attempt * 2))
-                        local verify_content
-                        verify_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                        if echo "$verify_content" | grep -qF '/nbs-notify'; then
-                            # Text still in buffer — send Enter to retry submission
-                            "$pty" send "$session" '' || true
-                        else
-                            # Text consumed — injection succeeded
-                            injection_consumed=1
-                            break
-                        fi
-                    done
-                    if [[ $injection_consumed -eq 1 ]]; then
-                        # Injection consumed successfully — reset failure counter
-                        NOTIFY_FAIL_COUNT=0
-                    else
-                        # Still not consumed after 3 retries — check for skill failure
-                        local final_content
-                        final_content=$("$pty" read "$session" --scrollback=5 2>/dev/null) || true
-                        if is_prompt_visible "$final_content"; then
-                            if detect_skill_failure "$final_content"; then
-                                NOTIFY_FAIL_COUNT=$((NOTIFY_FAIL_COUNT + 1))
-                            fi
-                        fi
-                    fi
-
-                    idle_seconds=0
-                    last_content_hash=""
-                    sleep 8
-                    continue
-                fi
-            fi
-        fi
-    done
-}
-
 # --- Main ---
 
-# Build claude command with args (intercept --root= for sidecar)
+# Build claude command with args (intercept --root= etc. for sidecar)
 CLAUDE_ARGS=("claude")
 for arg in "$@"; do
     case "$arg" in
@@ -1577,22 +149,14 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
     echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT}" >&2
     exit 1
 }
-
-# Assert NBS_ROOT exists as a directory
 if [[ ! -d "$NBS_ROOT" ]]; then
     echo "Error: NBS_ROOT is not a directory: $NBS_ROOT" >&2
     exit 1
 fi
 
-# Re-set control paths after potential --root= override
-CONTROL_INBOX="${NBS_ROOT}/.nbs/control-inbox-${SIDECAR_HANDLE}"
-CONTROL_REGISTRY="${NBS_ROOT}/.nbs/control-registry-${SIDECAR_HANDLE}"
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # --- Handle collision guard ---
-# Prevent two agents from running with the same handle. Uses pidfiles
-# at .nbs/pids/<handle>.pid. If a pidfile exists and the PID is alive,
-# refuse to spawn unless --force is given.
 mkdir -p "${NBS_ROOT}/.nbs/pids"
 PIDFILE="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
 if [[ -f "$PIDFILE" ]]; then
@@ -1602,7 +166,6 @@ if [[ -f "$PIDFILE" ]]; then
             echo "Warning: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID) — --force specified, proceeding" >&2
         else
             echo "Error: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID)" >&2
-            echo "  Another nbs-claude instance is running with this handle." >&2
             echo "  Use --force to override, or choose a different NBS_HANDLE." >&2
             exit 1
         fi
@@ -1611,15 +174,11 @@ fi
 echo "$$" > "$PIDFILE"
 
 # --- Session ID generation ---
-# Generate a UUID for this session so it can be resumed later.
-# If --continue= was given, use that session ID with claude --resume.
-# Otherwise, generate a fresh UUID and pass via --session-id.
 SESSION_UUID=""
 if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
     SESSION_UUID="$NBS_CONTINUE_SESSION"
     CLAUDE_ARGS+=("--resume" "$SESSION_UUID")
 else
-    # Generate UUID with fallback chain
     SESSION_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "no-uuid-$$-$(date +%s)")
     CLAUDE_ARGS+=("--session-id" "$SESSION_UUID")
 fi
@@ -1630,8 +189,6 @@ if [[ -n "$NBS_MODEL" ]]; then
 fi
 
 # --- Session metadata ---
-# Write session metadata to .nbs/sessions/<handle>.json so nbs-worker
-# can resume this agent without manual session ID extraction.
 mkdir -p "${NBS_ROOT}/.nbs/sessions"
 SESSION_META="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
 TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-nbs-${SIDECAR_HANDLE}-live}"
@@ -1648,15 +205,9 @@ cat > "$SESSION_META" << EOF
 }
 EOF
 
-echo "Starting Claude Code with NBS bus-aware polling..."
-echo "  Bus check interval: ${BUS_CHECK_INTERVAL}s"
-echo "  Notify cooldown: ${NOTIFY_COOLDOWN}s"
-echo "  Standup interval: ${STANDUP_INTERVAL}m"
+echo "Starting Claude Code with nbs-sidecar..."
 echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Session ID: ${SESSION_UUID}"
-echo "  Startup grace: ${STARTUP_GRACE}s"
-echo "  Self-heal threshold: ${NOTIFY_FAIL_THRESHOLD} failures"
-echo "  Active heartbeat: ${ACTIVE_HEARTBEAT}s"
 echo "  Root: ${NBS_ROOT}"
 if [[ -n "$NBS_MODEL" ]]; then
     echo "  Model: ${NBS_MODEL}"
@@ -1664,33 +215,39 @@ fi
 if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
     echo "  Continuing session: ${NBS_CONTINUE_SESSION}"
 fi
-if [[ -n "$INITIAL_PROMPT" ]]; then
-    echo "  Initial prompt: custom (NBS_INITIAL_PROMPT)"
-fi
-if [[ -n "$NBS_REMOTE_HOST" ]]; then
-    echo "  Remote: ${NBS_REMOTE_HOST}"
-fi
 if [[ "$POLL_DISABLE" == "1" ]]; then
-    echo "  Polling: DISABLED"
+    echo "  Sidecar: DISABLED"
+fi
+
+# --- Build sidecar args ---
+SIDECAR_ARGS=(
+    "$NBS_SIDECAR"
+    "--handle=$SIDECAR_HANDLE"
+    "--root=$NBS_ROOT"
+    "--log=$NBS_LOG_FILE"
+)
+
+if [[ -n "$INITIAL_PROMPT" ]]; then
+    SIDECAR_ARGS+=("--initial-prompt=$INITIAL_PROMPT")
 fi
 
 if [[ -n "${TMUX:-}" ]]; then
     # --- Already inside tmux ---
     MODE="tmux"
 
-    # Get current pane ID before launching claude
     PANE_ID=$(tmux display-message -p '#{pane_id}')
     echo "  Mode: tmux (pane $PANE_ID)"
     echo ""
 
-    # Start sidecar monitoring this pane
+    SIDECAR_ARGS+=("--transport=tmux" "--pane-id=$PANE_ID")
+
+    # Start C sidecar monitoring this pane
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        poll_sidecar_tmux "$PANE_ID" &
+        "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
     fi
 
-    # Run claude in foreground — replaces this process's foreground
-    # but the sidecar is already running in background
+    # Run claude in foreground
     "${CLAUDE_ARGS[@]}"
 
     # Claude exited — cleanup runs via trap
@@ -1702,12 +259,7 @@ else
     echo "  Mode: pty-session ($SESSION_NAME)"
     echo ""
 
-    # Build command string for pty-session (skip --root= which is sidecar-only)
-    # EVAL CONTRACT: CLAUDE_CMD is a single string passed to pty-session, which
-    # evaluates it via the shell. Each argument is individually shell-quoted via
-    # printf '%q' to prevent injection. The only inputs are our own argv elements
-    # after filtering out --root=, --remote-host=, --remote-ssh-opts= prefixes.
-    # No environment variables or external data are interpolated unquoted.
+    # Build command string for pty-session
     CLAUDE_CMD="claude"
     if [[ $# -gt 0 ]]; then
         CLAUDE_CMD_ARGS=""
@@ -1723,24 +275,20 @@ else
     fi
 
     # Create pty-session running claude
-    # NOTE: eval is required here because CLAUDE_CMD is a single string
-    # containing shell-quoted arguments built by printf '%q' above.
-    # This is safe because the string is constructed entirely from our own
-    # argv processing — no external input reaches it unquoted.
     if ! "$PTY_SESSION" create "$SESSION_NAME" "$CLAUDE_CMD"; then
         echo "Error: Failed to create pty-session" >&2
         exit 1
     fi
 
-    # Start sidecar if polling enabled
+    SIDECAR_ARGS+=("--transport=pty" "--pty-path=$PTY_SESSION" "--session=$SESSION_NAME")
+
+    # Start C sidecar
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        poll_sidecar_pty "$PTY_SESSION" "$SESSION_NAME" &
+        "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
     fi
 
     # Attach to the session
-    # NOTE: pty-session creates tmux sessions with a "pty_" prefix convention.
-    # Verify the session exists before attaching.
     TMUX_SESSION="pty_${SESSION_NAME}"
     if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
         echo "Error: tmux session '$TMUX_SESSION' does not exist after pty-session create" >&2
