@@ -33,18 +33,8 @@
 #include <stdlib.h>
 #include <time.h>
 
-/*
- * ASSERT_MSG — Assert with context-aware message.
- *
- * Always fires (not gated by NDEBUG) — asserts are executable specifications.
- */
-#define ASSERT_MSG(cond, fmt, ...) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "ASSERT FAILED %s:%d: " fmt "\n", \
-                __FILE__, __LINE__, ##__VA_ARGS__); \
-        abort(); \
-    } \
-} while(0)
+/* ASSERT_MSG — shared across NBS components */
+#include "../nbs-common/nbs_assert.h"
 
 /* Limits */
 #define BUS_MAX_PATH       4096
