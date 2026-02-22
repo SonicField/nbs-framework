@@ -11,6 +11,10 @@ set -uo pipefail
 
 # --- Setup ---
 
+# Bypass corporate proxy for localhost connections
+export no_proxy="localhost,127.0.0.1,::1,[::1]"
+export NO_PROXY="$no_proxy"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NBS_CHAT="$REPO_DIR/bin/nbs-chat"
@@ -88,25 +92,30 @@ echo "--- Test 2: Server starts and serves HTML ---"
 WEB_PID=$!
 sleep 1
 
-# Extract port
-PORT=$(grep -oP 'http://127\.0\.0\.1:\K[0-9]+' "$TMPDIR/web.out")
+# Extract port and base URL (handles both IPv4 and IPv6 output)
+PORT=$(grep -oP ':\K[0-9]+(?=/)' "$TMPDIR/web.out")
 if [ -z "$PORT" ]; then
     echo "  FAIL: Could not extract port from server output"
     cat "$TMPDIR/web.out"
     exit 1
 fi
+# Determine base URL from server output (IPv6 uses [::1], IPv4 uses 127.0.0.1)
+BASE_URL=$(grep -oP 'http://\K[^\s]+(?=/)' "$TMPDIR/web.out")
+BASE_URL="http://${BASE_URL}/"
+# For curl: strip trailing slash, we add paths below
+BASE_URL="${BASE_URL%/}"
 echo "  Server started on port $PORT (PID $WEB_PID)"
 
 # Test HTML response
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/")
 check "GET / returns 200" test "$HTTP_CODE" = "200"
 
 # Check content-type
-CT=$(curl -s -D - -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null | grep -i "content-type:" | tr -d '\r')
+CT=$(curl -s -D - -o /dev/null "$BASE_URL/" 2>/dev/null | grep -i "content-type:" | tr -d '\r')
 check_output "Content-Type is text/html" "text/html" "$CT"
 
 # Check HTML contains expected elements
-HTML=$(curl -s "http://127.0.0.1:$PORT/")
+HTML=$(curl -s "$BASE_URL/")
 check_output "HTML contains <html>" "<html" "$HTML"
 check_output "HTML contains nbs-chat title" "nbs-chat" "$HTML"
 check_output "HTML contains EventSource" "EventSource" "$HTML"
@@ -115,18 +124,18 @@ check_output "HTML contains EventSource" "EventSource" "$HTML"
 
 echo ""
 echo "--- Test 3: Unknown path returns 404 ---"
-HTTP_404=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/bogus")
+HTTP_404=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/bogus")
 check "GET /bogus returns 404" test "$HTTP_404" = "404"
 
 # --- Test 4: JSON API ---
 
 echo ""
 echo "--- Test 4: JSON API endpoint ---"
-JSON_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/messages")
+JSON_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/messages")
 check "GET /api/messages returns 200" test "$JSON_CODE" = "200"
 
 # Validate JSON with jq
-JSON=$(curl -s "http://127.0.0.1:$PORT/api/messages")
+JSON=$(curl -s "$BASE_URL/api/messages")
 TOTAL=$(echo "$JSON" | jq '.total_count' 2>/dev/null)
 check "JSON is valid (jq can parse)" test "$TOTAL" = "3"
 
@@ -147,12 +156,12 @@ echo ""
 echo "--- Test 5: JSON API filters ---"
 
 # since=0 should return messages 1 and 2
-SINCE_JSON=$(curl -s "http://127.0.0.1:$PORT/api/messages?since=0")
+SINCE_JSON=$(curl -s "$BASE_URL/api/messages?since=0")
 SINCE_COUNT=$(echo "$SINCE_JSON" | jq '.messages | length' 2>/dev/null)
 check "since=0 returns 2 messages" test "$SINCE_COUNT" = "2"
 
 # last=1 should return only the last message
-LAST_JSON=$(curl -s "http://127.0.0.1:$PORT/api/messages?last=1")
+LAST_JSON=$(curl -s "$BASE_URL/api/messages?last=1")
 LAST_COUNT=$(echo "$LAST_JSON" | jq '.messages | length' 2>/dev/null)
 check "last=1 returns 1 message" test "$LAST_COUNT" = "1"
 
@@ -175,7 +184,7 @@ echo ""
 echo "--- Test 7: SSE live updates ---"
 
 # Connect SSE and capture initial messages
-timeout 5 curl -s -N "http://127.0.0.1:$PORT/events" > "$TMPDIR/sse.out" 2>&1 &
+timeout 5 curl -s -N "$BASE_URL/events" > "$TMPDIR/sse.out" 2>&1 &
 SSE_PID=$!
 sleep 2
 
@@ -203,7 +212,7 @@ echo ""
 echo "--- Test 8: SSE reconnection ---"
 
 # Connect with Last-Event-ID=2 (skip first 3 messages)
-timeout 5 curl -s -N -H "Last-Event-ID: 2" "http://127.0.0.1:$PORT/events" > "$TMPDIR/sse2.out" 2>&1 &
+timeout 5 curl -s -N -H "Last-Event-ID: 2" "$BASE_URL/events" > "$TMPDIR/sse2.out" 2>&1 &
 SSE_PID=$!
 sleep 2
 
@@ -217,7 +226,7 @@ killbg $SSE_PID
 
 echo ""
 echo "--- Test 9: Method handling ---"
-POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/")
+POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/")
 check "POST returns 405" test "$POST_CODE" = "405"
 
 # --- Cleanup ---
