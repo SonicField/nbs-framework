@@ -115,8 +115,8 @@ int main(int argc, char **argv) {
     ASSERT_MSG(cfg.bus_check_interval > 0 && cfg.bus_check_interval < cfg.notify_cooldown,
                "bus_check_interval (%d) must be in (0, notify_cooldown=%d)",
                cfg.bus_check_interval, cfg.notify_cooldown);
-    ASSERT_MSG(cfg.startup_grace >= cfg.bus_check_interval,
-               "startup_grace (%d) must be >= bus_check_interval (%d)",
+    ASSERT_MSG(cfg.startup_grace == 0 || cfg.startup_grace >= cfg.bus_check_interval,
+               "startup_grace (%d) must be 0 (disabled) or >= bus_check_interval (%d)",
                cfg.startup_grace, cfg.bus_check_interval);
 
     cfg.is_remote = (cfg.remote_host[0] != '\0') ? 1 : 0;
