@@ -367,7 +367,12 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             tp->send_text(tp, cfg->initial_prompt);
             usleep(300000);
             tp->send_key(tp, "Enter");
-            sleep(5);
+            /* Wait for initial prompt to be consumed.
+             * Cap at startup_grace — with grace=0 we want fast start. */
+            int init_settle = (cfg->startup_grace < 5)
+                              ? (cfg->startup_grace > 0 ? cfg->startup_grace : 1)
+                              : 5;
+            sleep(init_settle);
             state.sidecar_start_time = time(NULL);
             free(content);
             break;
