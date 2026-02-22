@@ -44,7 +44,8 @@ static void redirect_stderr_to_devnull(void)
 {
     int fd = open("/dev/null", O_WRONLY);
     if (fd >= 0) {
-        dup2(fd, STDERR_FILENO);
+        if (dup2(fd, STDERR_FILENO) < 0)
+            _exit(126);
         close(fd);
     } else {
         close(STDERR_FILENO);
@@ -78,7 +79,8 @@ static int exec_capture(const char *const argv[], char *out_buf, size_t out_size
     if (pid == 0) {
         /* Child */
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+            _exit(126);
         close(pipefd[1]);
         redirect_stderr_to_devnull();
         execvp(argv[0], (char *const *)argv);
@@ -133,8 +135,10 @@ static int exec_fire_and_forget(const char *const argv[])
     if (pid == 0) {
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
-            dup2(fd, STDOUT_FILENO);
-            dup2(fd, STDERR_FILENO);
+            if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+                close(fd);
+                _exit(126);
+            }
             close(fd);
         } else {
             close(STDOUT_FILENO);
@@ -176,7 +180,8 @@ static int exec_spawn_detached(const char *const argv[])
         redirect_stderr_to_devnull();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
-            dup2(fd, STDOUT_FILENO);
+            if (dup2(fd, STDOUT_FILENO) < 0)
+                _exit(126);
             close(fd);
         }
         execvp(argv[0], (char *const *)argv);
@@ -264,6 +269,7 @@ static void get_timestamp(char *buf, size_t bufsz)
 
 int validate_slug(const char *slug)
 {
+    ASSERT_MSG(slug != NULL, "validate_slug: slug is NULL");
     if (slug == NULL || slug[0] == '\0')
         return 0;
     for (const char *p = slug; *p; p++) {
@@ -275,6 +281,7 @@ int validate_slug(const char *slug)
 
 int validate_worker_name(const char *name)
 {
+    ASSERT_MSG(name != NULL, "validate_worker_name: name is NULL");
     if (name == NULL || name[0] == '\0')
         return 0;
 
@@ -304,6 +311,7 @@ int validate_worker_name(const char *name)
 
 int validate_uuid(const char *s)
 {
+    ASSERT_MSG(s != NULL, "validate_uuid: s is NULL");
     /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars) */
     if (s == NULL || strlen(s) != 36)
         return 0;
@@ -358,6 +366,8 @@ static char *read_file(const char *path, size_t *out_len)
     size_t nread = fread(buf, 1, (size_t)sz, f);
     buf[nread] = '\0';
     fclose(f);
+
+    ASSERT_MSG(buf[nread] == '\0', "read_file: buffer not NUL-terminated");
 
     if (out_len)
         *out_len = nread;
@@ -483,6 +493,9 @@ static void bus_publish(const char *cwd, const char *source,
 
 static void get_state_field(const char *task_file_path, char *buf, size_t bufsz)
 {
+    ASSERT_MSG(task_file_path != NULL, "get_state_field: path is NULL");
+    ASSERT_MSG(buf != NULL, "get_state_field: buf is NULL");
+    ASSERT_MSG(bufsz > 0, "get_state_field: bufsz is 0");
     FILE *f = fopen(task_file_path, "r");
     if (!f) {
         snprintf(buf, bufsz, "not found");
@@ -1199,9 +1212,11 @@ int cmd_search(const char *name, const char *pattern,
         close(pipefd_in[1]);
         close(pipefd_out[0]);
 
-        dup2(pipefd_in[0], STDIN_FILENO);
+        if (dup2(pipefd_in[0], STDIN_FILENO) < 0)
+            _exit(126);
         close(pipefd_in[0]);
-        dup2(pipefd_out[1], STDOUT_FILENO);
+        if (dup2(pipefd_out[1], STDOUT_FILENO) < 0)
+            _exit(126);
         close(pipefd_out[1]);
         redirect_stderr_to_devnull();
 
