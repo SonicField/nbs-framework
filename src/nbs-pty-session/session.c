@@ -230,6 +230,7 @@ static int build_session_name(char *buf, size_t bufsize, const char *name)
 {
     ASSERT_MSG(buf != NULL, "build_session_name: buf is NULL");
     ASSERT_MSG(name != NULL, "build_session_name: name is NULL");
+    ASSERT_MSG(bufsize > 0, "build_session_name: bufsize is 0");
 
     int n = snprintf(buf, bufsize, "%s%s", PTY_PREFIX, name);
     if (n < 0 || (size_t)n >= bufsize) {
@@ -286,9 +287,12 @@ static int capture_pane(const char *session_name, int scrollback,
     ASSERT_MSG(session_name != NULL, "capture_pane: session_name is NULL");
     ASSERT_MSG(buf != NULL, "capture_pane: buf is NULL");
     ASSERT_MSG(bufsize > 0, "capture_pane: bufsize is 0");
+    ASSERT_MSG(scrollback > 0, "capture_pane: scrollback must be positive, got %d", scrollback);
 
     char scroll_arg[32];
-    snprintf(scroll_arg, sizeof(scroll_arg), "-%d", scrollback);
+    int n = snprintf(scroll_arg, sizeof(scroll_arg), "-%d", scrollback);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(scroll_arg), "scroll_arg truncated");
+
 
     const char *argv[] = {
         "tmux", "capture-pane", "-t", session_name,
@@ -311,6 +315,7 @@ static int cache_session(const char *name, const char *session_name)
 {
     ASSERT_MSG(name != NULL, "cache_session: name is NULL");
     ASSERT_MSG(session_name != NULL, "cache_session: session_name is NULL");
+    int n;
 
     char cache_dir[MAX_PATH_LEN];
     if (resolve_home_path(cache_dir, sizeof(cache_dir), ".pty-session/cache") < 0) {
@@ -335,26 +340,35 @@ static int cache_session(const char *name, const char *session_name)
 
     /* Write output file */
     char output_path[MAX_FILE_PATH];
-    snprintf(output_path, sizeof(output_path), "%s/%s.output", cache_dir, name);
+    n = snprintf(output_path, sizeof(output_path), "%s/%s.output", cache_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(output_path), "output_path truncated");
 
     FILE *f = fopen(output_path, "w");
     if (!f) {
         free(buf);
         return -1;
     }
-    fputs(buf, f);
+    if (fputs(buf, f) == EOF) {
+        fclose(f);
+        free(buf);
+        return -1;
+    }
     fclose(f);
     free(buf);
 
     /* Write timestamp file */
     char ts_path[MAX_FILE_PATH];
-    snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
+    n = snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(ts_path), "ts_path truncated");
 
     f = fopen(ts_path, "w");
     if (!f) {
         return -1;
     }
-    fprintf(f, "%ld\n", (long)time(NULL));
+    if (fprintf(f, "%ld\n", (long)time(NULL)) < 0) {
+        fclose(f);
+        return -1;
+    }
     fclose(f);
 
     return 0;
@@ -369,6 +383,7 @@ static int cache_session(const char *name, const char *session_name)
 static int read_cache(const char *name)
 {
     ASSERT_MSG(name != NULL, "read_cache: name is NULL");
+    int n;
 
     char cache_dir[MAX_PATH_LEN];
     if (resolve_home_path(cache_dir, sizeof(cache_dir), ".pty-session/cache") < 0) {
@@ -376,7 +391,8 @@ static int read_cache(const char *name)
     }
 
     char output_path[MAX_FILE_PATH];
-    snprintf(output_path, sizeof(output_path), "%s/%s.output", cache_dir, name);
+    n = snprintf(output_path, sizeof(output_path), "%s/%s.output", cache_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(output_path), "output_path truncated");
 
     FILE *f = fopen(output_path, "r");
     if (!f) {
@@ -385,13 +401,17 @@ static int read_cache(const char *name)
 
     char line[4096];
     while (fgets(line, sizeof(line), f)) {
-        fputs(line, stdout);
+        if (fputs(line, stdout) == EOF) {
+            fclose(f);
+            return -1;
+        }
     }
     fclose(f);
 
     /* Delete cache files after reading */
     char ts_path[MAX_FILE_PATH];
-    snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
+    n = snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(ts_path), "ts_path truncated");
     unlink(output_path);
     unlink(ts_path);
 
@@ -407,6 +427,7 @@ static int read_cache(const char *name)
 static int read_log(const char *name)
 {
     ASSERT_MSG(name != NULL, "read_log: name is NULL");
+    int n;
 
     char log_dir[MAX_PATH_LEN];
     if (resolve_home_path(log_dir, sizeof(log_dir), ".pty-session/logs") < 0) {
@@ -414,7 +435,8 @@ static int read_log(const char *name)
     }
 
     char full_path[MAX_FILE_PATH];
-    snprintf(full_path, sizeof(full_path), "%s/%s.log", log_dir, name);
+    n = snprintf(full_path, sizeof(full_path), "%s/%s.log", log_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(full_path), "full_path truncated");
 
     if (access(full_path, F_OK) != 0) {
         return -1;
@@ -492,6 +514,7 @@ int cmd_create(const char *name, const char *command)
 {
     ASSERT_MSG(name != NULL, "cmd_create: name is NULL");
     ASSERT_MSG(command != NULL, "cmd_create: command is NULL");
+    int n;
 
     if (name[0] == '\0' || command[0] == '\0') {
         fprintf(stderr, "Error: create requires <name> and <command>\n");
@@ -530,7 +553,8 @@ int cmd_create(const char *name, const char *command)
     }
 
     char pipe_cmd[MAX_FILE_PATH];
-    snprintf(pipe_cmd, sizeof(pipe_cmd), "cat >> '%s/%s.log'", log_dir, name);
+    n = snprintf(pipe_cmd, sizeof(pipe_cmd), "cat >> '%s/%s.log'", log_dir, name);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(pipe_cmd), "pipe_cmd truncated");
 
     const char *pipe_argv[] = {
         "tmux", "pipe-pane", "-t", session, "-o", pipe_cmd, NULL
@@ -755,6 +779,7 @@ int cmd_list(void)
     printf("Active pty-session sessions:\n");
 
     int has_sessions = 0;
+    int n;
 
     /* List running sessions */
     char *buf = malloc(CAPTURE_BUF_SIZE);
@@ -819,8 +844,9 @@ int cmd_list(void)
                     has_sessions = 1;
 
                     if (seen_count < 256) {
-                        snprintf(seen_names[seen_count], sizeof(seen_names[0]),
+                        n = snprintf(seen_names[seen_count], sizeof(seen_names[0]),
                                  "%s", sname);
+                        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(seen_names[0]), "seen_names truncated");
                         seen_count++;
                     }
                 }
