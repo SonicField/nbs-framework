@@ -24,24 +24,8 @@
 #include <stdlib.h>
 #include <time.h>
 
-/*
- * ASSERT_MSG — Assert with context-aware message.
- *
- * Unlike standard assert(), this macro:
- *   - Always fires (not gated by NDEBUG) — asserts are executable specifications
- *   - Prints file, line, and a formatted message with context values
- *   - Calls abort() for a core dump
- *
- * Usage: ASSERT_MSG(ptr != NULL, "chat_read: path is NULL")
- *        ASSERT_MSG(count >= 0, "message_count went negative: %d", count)
- */
-#define ASSERT_MSG(cond, fmt, ...) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "ASSERT FAILED %s:%d: " fmt "\n", \
-                __FILE__, __LINE__, ##__VA_ARGS__); \
-        abort(); \
-    } \
-} while(0)
+/* ASSERT_MSG — shared across NBS components */
+#include "../nbs-common/nbs_assert.h"
 
 /* Maximum sizes */
 #define MAX_HANDLE_LEN 64
