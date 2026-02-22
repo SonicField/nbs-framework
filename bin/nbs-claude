@@ -1031,14 +1031,16 @@ poll_sidecar_tmux() {
         # idle. This runs unconditionally at the top of every loop iteration
         # (every ~1s) before any content hashing or idle detection.
         #
-        # Interrupt mode: persistently retry Escape + wait-for-prompt in a
-        # loop until the agent responds or 60s elapses. On timeout, post
-        # AGENT NOT RESPONDING to chat so the human knows.
+        # Interrupt mode: retry Escape + wait-for-prompt up to 4 times.
+        # On failure after 4 retries, post AGENT NOT RESPONDING to chat
+        # so the team can decide whether to escalate (e.g. level 4 restart).
         if check_interrupt_events; then
-            local interrupt_deadline=$(($(date +%s) + 60))
+            local interrupt_retries=0
             local interrupt_succeeded=0
 
-            while [[ $(date +%s) -lt $interrupt_deadline ]]; do
+            while [[ $interrupt_retries -lt 4 ]]; do
+                interrupt_retries=$((interrupt_retries + 1))
+
                 # Send Escape to cancel current operation
                 tmux send-keys -t "$pane_id" Escape || true
                 sleep 1
@@ -1060,7 +1062,7 @@ poll_sidecar_tmux() {
             done
 
             if [[ $interrupt_succeeded -eq 0 ]]; then
-                # Timeout — agent did not respond to interrupt within 60s
+                # 4 retries exhausted — agent did not respond
                 # Post warning to first registered chat
                 if [[ -f "$CONTROL_REGISTRY" ]]; then
                     local warn_chat=""
@@ -1071,9 +1073,9 @@ poll_sidecar_tmux() {
                     done < "$CONTROL_REGISTRY"
                     if [[ -n "$warn_chat" ]]; then
                         if is_remote; then
-                            remote_cmd "nbs-chat send $(printf '%q' "$warn_chat") sidecar $(printf '%q' "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared.")" 2>/dev/null || true
+                            remote_cmd "nbs-chat send $(printf '%q' "$warn_chat") sidecar $(printf '%q' "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation.")" 2>/dev/null || true
                         else
-                            nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared." 2>/dev/null || true
+                            nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation." 2>/dev/null || true
                         fi
                     fi
                 fi
@@ -1322,12 +1324,14 @@ poll_sidecar_pty() {
         check_control_inbox
 
         # --- Out-of-band interrupt check (same logic as tmux mode) ---
-        # Persistent retry with 60s timeout + AGENT NOT RESPONDING warning.
+        # 4 retries + AGENT NOT RESPONDING warning on failure.
         if check_interrupt_events; then
-            local interrupt_deadline=$(($(date +%s) + 60))
+            local interrupt_retries=0
             local interrupt_succeeded=0
 
-            while [[ $(date +%s) -lt $interrupt_deadline ]]; do
+            while [[ $interrupt_retries -lt 4 ]]; do
+                interrupt_retries=$((interrupt_retries + 1))
+
                 # Send Escape to cancel current operation
                 "$pty" send "$session" --no-enter $'\x1b' || true
                 sleep 1
@@ -1349,7 +1353,7 @@ poll_sidecar_pty() {
             done
 
             if [[ $interrupt_succeeded -eq 0 ]]; then
-                # Timeout — agent did not respond to interrupt within 60s
+                # 4 retries exhausted — agent did not respond
                 if [[ -f "$CONTROL_REGISTRY" ]]; then
                     local warn_chat=""
                     while IFS= read -r wl; do
@@ -1358,7 +1362,7 @@ poll_sidecar_pty() {
                         esac
                     done < "$CONTROL_REGISTRY"
                     if [[ -n "$warn_chat" ]]; then
-                        nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt within 60s. Escape was sent repeatedly but the prompt never appeared." 2>/dev/null || true
+                        nbs-chat send "$warn_chat" sidecar "AGENT NOT RESPONDING: ${SIDECAR_HANDLE} did not respond to interrupt after 4 retries. Escape was sent but the prompt never appeared. Team decision required for escalation." 2>/dev/null || true
                     fi
                 fi
             fi
