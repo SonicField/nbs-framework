@@ -123,7 +123,7 @@ static int registry_remove(const char *registry_path, const char *entry)
         size_t len = strlen(line);
         char stripped[MAX_ENTRY];
         memcpy(stripped, line, len + 1);
-        if (len > 0 && stripped[len - 1] == '\0')
+        if (len > 0 && stripped[len - 1] == '\n')
             stripped[len - 1] = '\0';
 
         if (strcmp(stripped, entry) != 0) {
