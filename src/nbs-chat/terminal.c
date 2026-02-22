@@ -681,7 +681,10 @@ static char *open_editor(void) {
     char tmppath[] = "/tmp/nbs-chat-edit.XXXXXX";
     int fd = mkstemp(tmppath);
     if (fd < 0) return NULL;
-    close(fd);
+    if (close(fd) != 0) {
+        unlink(tmppath);
+        return NULL;
+    }
 
     /* Fork and exec editor */
     pid_t pid = fork();
@@ -738,7 +741,11 @@ static char *open_editor(void) {
 
     /* Parent: wait for editor */
     int wstatus;
-    waitpid(pid, &wstatus, 0);
+    pid_t wait_ret = waitpid(pid, &wstatus, 0);
+    if (wait_ret < 0) {
+        unlink(tmppath);
+        return NULL;
+    }
 
     if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
         unlink(tmppath);
@@ -755,7 +762,11 @@ static char *open_editor(void) {
         return NULL;
     }
 
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        unlink(tmppath);
+        return NULL;
+    }
     long len = ftell(f);
     if (len < 0) {
         /* ftell failed — cannot determine file size */
@@ -763,7 +774,11 @@ static char *open_editor(void) {
         unlink(tmppath);
         return NULL;
     }
-    fseek(f, 0, SEEK_SET);
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        unlink(tmppath);
+        return NULL;
+    }
 
     if (len == 0) {
         fclose(f);
@@ -992,7 +1007,16 @@ int main(int argc, char **argv) {
                     }
                 }
                 char *msg = open_editor();
-                /* Back to raw mode */
+                /* Back to raw mode. Reset terminal state after editor:
+                 * - Leave alternate screen buffer if vim entered it
+                 * - Reset cursor visibility
+                 * - Clear from cursor to end of screen
+                 * - Move to column 0 for clean prompt */
+                printf("\033[?1049l");  /* leave alternate screen */
+                printf("\033[?25h");    /* show cursor */
+                printf("\033[0m");      /* reset attributes */
+                printf("\r\n");         /* fresh line */
+                fflush(stdout);
                 if (have_termios) {
                     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
                         fprintf(stderr, "warning: tcsetattr(raw after editor) failed: %s\n",

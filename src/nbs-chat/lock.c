@@ -87,5 +87,9 @@ void chat_lock_release(int lock_fd) {
         }
     }
 
-    close(lock_fd);
+    int close_ret = close(lock_fd);
+    if (close_ret != 0) {
+        fprintf(stderr, "warning: chat_lock_release: close failed for fd %d: %s\n",
+                lock_fd, strerror(errno));
+    }
 }
