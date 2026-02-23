@@ -839,6 +839,7 @@ SPEC_SUB_TESTS=(
     test_binary_op_add_int
     test_binary_subscr_deopt
     test_for_iter_list_mutation
+    test_load_global
     test_for_iter_polymorphic_deopt
     test_load_attr_instance_value
     test_load_attr_module_inline
@@ -874,7 +875,7 @@ run_specialisation() {
 
     # tests/ subdirectory tests
     if [ -z "$SPEC_TESTS_DIR" ]; then
-        echo "  ${YELLOW}NOTE${RESET} — tests/ subdirectory not found, skipping 6 tests"
+        echo "  ${YELLOW}NOTE${RESET} — tests/ subdirectory not found, skipping ${#SPEC_SUB_TESTS[@]} tests"
         skip=$((skip + ${#SPEC_SUB_TESTS[@]}))
     else
         for test in "${SPEC_SUB_TESTS[@]}"; do
