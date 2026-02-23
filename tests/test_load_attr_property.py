@@ -6,46 +6,49 @@ LOAD_ATTR_PROPERTY specialisation.
 Targets: LOAD_ATTR_PROPERTY.
 
 LOAD_ATTR_PROPERTY specialises attribute load operations (obj.attr) when
-attr is a property descriptor (@property). Instead of going through the
-generic LOAD_ATTR path (which calls PyObject_GetAttr → tp_getattro →
-PyObject_GenericGetAttr → descriptor __get__ protocol), the specialisation
-caches the property's fget function and calls it directly.
+the attribute is defined as a @property on the class. Instead of going
+through the generic LOAD_ATTR path (which must check descriptors, instance
+dict, and class dict), the specialisation directly calls the property's
+fget function.
 
 The adaptive specialiser emits LOAD_ATTR_PROPERTY after observing repeated
-property accesses on instances of the same type.
+attribute access on instances whose type has a property descriptor for the
+accessed attribute name. The specialisation caches the property descriptor
+and calls fget directly, bypassing the full descriptor protocol.
 
 Deopt triggers:
-  - Object type changes (different class)
-  - Property descriptor is replaced or deleted on the class
-  - Object type gains a __getattribute__ override
-  - Attribute is shadowed by an instance dict entry
+  - Object type changes (different class with different property)
+  - Property descriptor is replaced with a plain attribute
+  - Property descriptor is deleted from the class
+  - Object switches to a type without property for that attribute
+  - Property descriptor is replaced with a different descriptor type
 
 Tests cover:
-  - Basic @property access
+  - Basic property getter
+  - Computed property (derived from other attributes)
+  - Property with getter, setter, and deleter
   - Property returning different types
-  - Property with computation (derived value)
-  - Read-only property (no setter)
-  - Property with getter and setter
-  - Property raising an exception
-  - Property accessing instance state
-  - Deopt: switch to different class with same property name
-  - Deopt: switch to object with plain attribute (not property)
-  - Deopt: switch to object with __getattr__
+  - Property with side effects (access counter)
+  - Property raising exception
+  - Inherited property
+  - Overridden property in subclass
+  - Deopt: replace property with plain attribute
+  - Deopt: switch to class without property
+  - Deopt: switch to class with different property
   - Property in loop
-  - Property on subclass (inherited)
-  - Property on subclass (overridden)
-  - Property with side effects (call counting)
-  - Multiple properties in one function
+  - Multiple properties on same class
   - Property returning None
-  - Nested property (obj.prop returns object with prop)
-  - Property vs direct fget() equivalence
-  - Class property monkey-patched at runtime
-  - Rapid type alternation
+  - Cached property pattern (manual)
+  - Property with __slots__
+  - Property on dynamically created class (type())
+  - Rapid type alternation with property
+  - Property deleted from class at runtime
+  - Property access vs fget equivalence
 
 FALSIFICATION DESIGN:
   Each test verifies:
   1. Correct result when JIT-compiled (warmup -> JIT -> check)
-  2. Correct result after type change (deopt fires)
+  2. Correct result after type/descriptor change (deopt fires)
   3. Error handling preserved (AttributeError, custom exceptions)
 
   A test PASSES only if all assertions hold.
@@ -114,710 +117,744 @@ def main():
     passed = 0
     failed = 0
 
-    # ── Helper classes ─────────────────────────────────────────────────
-
-    class Circle:
-        def __init__(self, radius):
-            self._radius = radius
-
-        @property
-        def radius(self):
-            return self._radius
-
-        @property
-        def area(self):
-            return 3.14159265 * self._radius * self._radius
-
-        @property
-        def diameter(self):
-            return self._radius * 2
-
-    class Rect:
-        def __init__(self, w, h):
-            self._w = w
-            self._h = h
-
-        @property
-        def area(self):
-            return self._w * self._h
-
-        @property
-        def perimeter(self):
-            return 2 * (self._w + self._h)
-
-    # ── Test 1: Basic @property access ─────────────────────────────────
-
-    def load_prop_1(obj):
-        return obj.radius
-
-    c = Circle(5)
-
-    for _ in range(WARMUP):
-        load_prop_1(c)
-
-    check_jit_compiled(load_prop_1, "load_prop_1")
-
+    # ------------------------------------------------------------------ #
+    # Test 1: Basic property getter
+    # ------------------------------------------------------------------ #
     try:
-        assert load_prop_1(c) == 5
-        c._radius = 10
-        assert load_prop_1(c) == 10
-        c._radius = 0
-        assert load_prop_1(c) == 0
-        print("PASS  Test 1: basic @property access")
+        class BasicProp:
+            def __init__(self, x):
+                self._x = x
+
+            @property
+            def value(self):
+                return self._x
+
+        def get_value(obj):
+            return obj.value
+
+        obj = BasicProp(42)
+        for _ in range(WARMUP):
+            get_value(obj)
+
+        check_jit_compiled(get_value, "get_value")
+        result = get_value(obj)
+        assert result == 42, f"Expected 42, got {result}"
+        obj2 = BasicProp(99)
+        assert get_value(obj2) == 99, "Property should work with different instance"
+        print("  PASS: test_basic_property_getter")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 1: basic property — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_basic_property_getter — {e}")
         failed += 1
 
-    # ── Test 2: Property returning different types ─────────────────────
-
-    class TypeVary:
-        def __init__(self, val):
-            self._val = val
-
-        @property
-        def value(self):
-            return self._val
-
-    def load_types_2(obj):
-        return obj.value
-
-    tv = TypeVary(42)
-
-    for _ in range(WARMUP):
-        load_types_2(tv)
-
-    check_jit_compiled(load_types_2, "load_types_2")
-
+    # ------------------------------------------------------------------ #
+    # Test 2: Computed property (derived from other attributes)
+    # ------------------------------------------------------------------ #
     try:
-        assert load_types_2(tv) == 42
-        tv._val = "hello"
-        assert load_types_2(tv) == "hello"
-        tv._val = None
-        assert load_types_2(tv) is None
-        tv._val = [1, 2, 3]
-        assert load_types_2(tv) == [1, 2, 3]
-        tv._val = {"a": 1}
-        assert load_types_2(tv) == {"a": 1}
-        print("PASS  Test 2: property returning different types")
+        class Rectangle:
+            def __init__(self, w, h):
+                self.width = w
+                self.height = h
+
+            @property
+            def area(self):
+                return self.width * self.height
+
+        def get_area(obj):
+            return obj.area
+
+        rect = Rectangle(3, 7)
+        for _ in range(WARMUP):
+            get_area(rect)
+
+        check_jit_compiled(get_area, "get_area")
+        assert get_area(rect) == 21, f"Expected 21, got {get_area(rect)}"
+        rect.width = 10
+        assert get_area(rect) == 70, "Computed property should reflect updated attributes"
+        print("  PASS: test_computed_property")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 2: type vary — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_computed_property — {e}")
         failed += 1
 
-    # ── Test 3: Property with computation (derived value) ──────────────
-
-    def load_area_3(obj):
-        return obj.area
-
-    c3 = Circle(1)
-
-    for _ in range(WARMUP):
-        load_area_3(c3)
-
-    check_jit_compiled(load_area_3, "load_area_3")
-
+    # ------------------------------------------------------------------ #
+    # Test 3: Property with getter, setter, and deleter
+    # ------------------------------------------------------------------ #
     try:
-        c3._radius = 1
-        area = load_area_3(c3)
-        assert abs(area - 3.14159265) < 1e-6, f"area={area}"
+        class FullProp:
+            def __init__(self, x):
+                self._x = x
 
-        c3._radius = 10
-        area = load_area_3(c3)
-        assert abs(area - 314.159265) < 1e-4, f"area={area}"
+            @property
+            def value(self):
+                return self._x
 
-        c3._radius = 0
-        assert load_area_3(c3) == 0.0
+            @value.setter
+            def value(self, v):
+                self._x = v * 2  # Doubles on set
 
-        print("PASS  Test 3: computed property (area)")
+            @value.deleter
+            def value(self):
+                self._x = 0
+
+        def read_value(obj):
+            return obj.value
+
+        obj = FullProp(5)
+        for _ in range(WARMUP):
+            read_value(obj)
+
+        check_jit_compiled(read_value, "read_value")
+        assert read_value(obj) == 5, "Getter should return 5"
+        obj.value = 10
+        assert read_value(obj) == 20, "Setter doubles, getter returns 20"
+        del obj.value
+        assert read_value(obj) == 0, "Deleter resets to 0"
+        print("  PASS: test_property_getter_setter_deleter")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 3: computed — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_property_getter_setter_deleter — {e}")
         failed += 1
 
-    # ── Test 4: Read-only property (no setter) ─────────────────────────
-
-    class ReadOnly:
-        def __init__(self, val):
-            self._val = val
-
-        @property
-        def value(self):
-            return self._val
-
-    def load_readonly_4(obj):
-        return obj.value
-
-    ro = ReadOnly(42)
-
-    for _ in range(WARMUP):
-        load_readonly_4(ro)
-
-    check_jit_compiled(load_readonly_4, "load_readonly_4")
-
+    # ------------------------------------------------------------------ #
+    # Test 4: Property returning different types
+    # ------------------------------------------------------------------ #
     try:
-        assert load_readonly_4(ro) == 42
+        class MultiType:
+            def __init__(self, val):
+                self._val = val
 
-        # Verify it is read-only
+            @property
+            def data(self):
+                return self._val
+
+        def get_data(obj):
+            return obj.data
+
+        obj_int = MultiType(42)
+        obj_str = MultiType("hello")
+        obj_list = MultiType([1, 2, 3])
+        obj_none = MultiType(None)
+
+        for _ in range(WARMUP):
+            get_data(obj_int)
+
+        check_jit_compiled(get_data, "get_data")
+        assert get_data(obj_int) == 42
+        assert get_data(obj_str) == "hello"
+        assert get_data(obj_list) == [1, 2, 3]
+        assert get_data(obj_none) is None
+        print("  PASS: test_property_returning_different_types")
+        passed += 1
+    except Exception as e:
+        print(f"  FAIL: test_property_returning_different_types — {e}")
+        failed += 1
+
+    # ------------------------------------------------------------------ #
+    # Test 5: Property with side effects (access counter)
+    # ------------------------------------------------------------------ #
+    try:
+        class Counted:
+            def __init__(self, x):
+                self._x = x
+                self.access_count = 0
+
+            @property
+            def value(self):
+                self.access_count += 1
+                return self._x
+
+        def get_counted(obj):
+            return obj.value
+
+        obj = Counted(7)
+        obj.access_count = 0
+        for _ in range(WARMUP):
+            get_counted(obj)
+
+        check_jit_compiled(get_counted, "get_counted")
+        count_before = obj.access_count
+        result = get_counted(obj)
+        assert result == 7
+        assert obj.access_count == count_before + 1, (
+            f"Property getter must be called each time. "
+            f"Before: {count_before}, after: {obj.access_count}"
+        )
+        print("  PASS: test_property_with_side_effects")
+        passed += 1
+    except Exception as e:
+        print(f"  FAIL: test_property_with_side_effects — {e}")
+        failed += 1
+
+    # ------------------------------------------------------------------ #
+    # Test 6: Property raising exception
+    # ------------------------------------------------------------------ #
+    try:
+        class ErrorProp:
+            @property
+            def bad(self):
+                raise ValueError("property error")
+
+        def get_bad(obj):
+            return obj.bad
+
+        obj = ErrorProp()
+
+        # Warmup with a working object, then switch to error-raising one
+        class GoodProp:
+            @property
+            def bad(self):
+                return 42
+
+        good = GoodProp()
+        for _ in range(WARMUP):
+            get_bad(good)
+
+        check_jit_compiled(get_bad, "get_bad")
+
+        # After JIT compilation, the error-raising property should still raise
+        caught = False
         try:
-            ro.value = 99
-            assert False, "expected AttributeError for read-only property"
-        except AttributeError:
+            get_bad(obj)
+        except ValueError as ex:
+            caught = True
+            assert "property error" in str(ex)
+        assert caught, "Property should raise ValueError"
+        print("  PASS: test_property_raising_exception")
+        passed += 1
+    except Exception as e:
+        print(f"  FAIL: test_property_raising_exception — {e}")
+        failed += 1
+
+    # ------------------------------------------------------------------ #
+    # Test 7: Inherited property
+    # ------------------------------------------------------------------ #
+    try:
+        class Base:
+            def __init__(self, x):
+                self._x = x
+
+            @property
+            def value(self):
+                return self._x
+
+        class Child(Base):
             pass
 
-        # Still readable after failed set
-        assert load_readonly_4(ro) == 42
+        def get_inherited(obj):
+            return obj.value
 
-        print("PASS  Test 4: read-only property")
+        child = Child(33)
+        for _ in range(WARMUP):
+            get_inherited(child)
+
+        check_jit_compiled(get_inherited, "get_inherited")
+        assert get_inherited(child) == 33, "Inherited property should work"
+        base = Base(44)
+        assert get_inherited(base) == 44, "Base property should also work"
+        print("  PASS: test_inherited_property")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 4: read-only — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_inherited_property — {e}")
         failed += 1
 
-    # ── Test 5: Property with getter and setter ────────────────────────
-
-    class Temperature:
-        def __init__(self, celsius):
-            self._celsius = celsius
-
-        @property
-        def celsius(self):
-            return self._celsius
-
-        @celsius.setter
-        def celsius(self, val):
-            self._celsius = val
-
-        @property
-        def fahrenheit(self):
-            return self._celsius * 9 / 5 + 32
-
-    def load_temp_5(obj):
-        return obj.fahrenheit
-
-    t = Temperature(0)
-
-    for _ in range(WARMUP):
-        load_temp_5(t)
-
-    check_jit_compiled(load_temp_5, "load_temp_5")
-
+    # ------------------------------------------------------------------ #
+    # Test 8: Overridden property in subclass
+    # ------------------------------------------------------------------ #
     try:
-        assert load_temp_5(t) == 32.0  # 0C = 32F
-        t.celsius = 100
-        assert load_temp_5(t) == 212.0  # 100C = 212F
-        t.celsius = -40
-        assert load_temp_5(t) == -40.0  # -40C = -40F
-        print("PASS  Test 5: property with getter+setter (temperature)")
+        class Parent:
+            def __init__(self, x):
+                self._x = x
+
+            @property
+            def value(self):
+                return self._x
+
+        class Override(Parent):
+            @property
+            def value(self):
+                return self._x * 10
+
+        def get_override(obj):
+            return obj.value
+
+        parent = Parent(5)
+        for _ in range(WARMUP):
+            get_override(parent)
+
+        check_jit_compiled(get_override, "get_override")
+        assert get_override(parent) == 5, "Parent property returns 5"
+
+        over = Override(5)
+        assert get_override(over) == 50, "Overridden property returns 50"
+        print("  PASS: test_overridden_property_in_subclass")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 5: getter+setter — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_overridden_property_in_subclass — {e}")
         failed += 1
 
-    # ── Test 6: Property raising an exception ──────────────────────────
-
-    class Guarded:
-        def __init__(self):
-            self._val = None
-
-        @property
-        def value(self):
-            if self._val is None:
-                raise ValueError("value not set")
-            return self._val
-
-    def load_guarded_6(obj):
-        return obj.value
-
-    g = Guarded()
-    g._val = 42
-
-    for _ in range(WARMUP):
-        load_guarded_6(g)
-
-    check_jit_compiled(load_guarded_6, "load_guarded_6")
-
+    # ------------------------------------------------------------------ #
+    # Test 9: Deopt — replace property with plain attribute
+    # ------------------------------------------------------------------ #
     try:
-        assert load_guarded_6(g) == 42
+        class PropToPlain:
+            def __init__(self, x):
+                self._x = x
 
-        g._val = None
-        try:
-            load_guarded_6(g)
-            assert False, "expected ValueError"
-        except ValueError as e:
-            assert "not set" in str(e)
+            @property
+            def value(self):
+                return self._x * 2
 
-        # Works again after error
-        g._val = 99
-        assert load_guarded_6(g) == 99
+        def get_prop_or_plain(obj):
+            return obj.value
 
-        print("PASS  Test 6: property raising exception")
+        obj = PropToPlain(10)
+        for _ in range(WARMUP):
+            get_prop_or_plain(obj)
+
+        check_jit_compiled(get_prop_or_plain, "get_prop_or_plain")
+        assert get_prop_or_plain(obj) == 20, "Property returns 20"
+
+        # Replace property with plain attribute on the instance
+        obj.__dict__['value'] = 999
+        # Property descriptor on class still takes precedence (data descriptor)
+        # So this should still return 20 — property is a data descriptor
+        result = get_prop_or_plain(obj)
+        assert result == 20, (
+            f"Data descriptor (property) takes precedence over instance dict. "
+            f"Expected 20, got {result}"
+        )
+
+        # Now replace the property on the CLASS with a non-descriptor
+        PropToPlain.value = 777
+        # Now instance dict entry or class attribute should be used
+        # Class attribute is checked — PropToPlain.value is now 777
+        # But obj.__dict__['value'] = 999, and 777 is not a descriptor,
+        # so instance dict takes precedence
+        result = get_prop_or_plain(obj)
+        assert result == 999, (
+            f"After removing property from class, instance dict should win. "
+            f"Expected 999, got {result}"
+        )
+        print("  PASS: test_deopt_property_to_plain_attribute")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 6: exception — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_deopt_property_to_plain_attribute — {e}")
         failed += 1
 
-    # ── Test 7: Property accessing instance state ──────────────────────
-
-    class Counter:
-        def __init__(self):
-            self._count = 0
-            self._accesses = 0
-
-        @property
-        def count(self):
-            self._accesses += 1
-            return self._count
-
-    def load_count_7(obj):
-        return obj.count
-
-    ctr = Counter()
-    ctr._count = 10
-
-    for _ in range(WARMUP):
-        load_count_7(ctr)
-
-    check_jit_compiled(load_count_7, "load_count_7")
-
+    # ------------------------------------------------------------------ #
+    # Test 10: Deopt — switch to class without property
+    # ------------------------------------------------------------------ #
     try:
-        ctr._accesses = 0
-        ctr._count = 42
-        assert load_count_7(ctr) == 42
-        assert ctr._accesses == 1
-        load_count_7(ctr)
-        load_count_7(ctr)
-        assert ctr._accesses == 3
-        print("PASS  Test 7: property accessing instance state")
+        class WithProp:
+            def __init__(self, x):
+                self._x = x
+
+            @property
+            def value(self):
+                return self._x
+
+        class WithoutProp:
+            def __init__(self, x):
+                self.value = x  # Plain attribute, not property
+
+        def get_value_10(obj):
+            return obj.value
+
+        wp = WithProp(42)
+        for _ in range(WARMUP):
+            get_value_10(wp)
+
+        check_jit_compiled(get_value_10, "get_value_10")
+        assert get_value_10(wp) == 42
+
+        # Switch to class without property — should deopt
+        wop = WithoutProp(99)
+        assert get_value_10(wop) == 99, "Plain attribute should return 99"
+        print("  PASS: test_deopt_switch_to_class_without_property")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 7: instance state — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_deopt_switch_to_class_without_property — {e}")
         failed += 1
 
-    # ── Test 8: Deopt — different class with same property name ────────
-
-    def load_area_8(obj):
-        return obj.area
-
-    for _ in range(WARMUP):
-        load_area_8(Circle(5))
-
-    check_jit_compiled(load_area_8, "load_area_8")
-
+    # ------------------------------------------------------------------ #
+    # Test 11: Deopt — switch to class with different property
+    # ------------------------------------------------------------------ #
     try:
-        c8 = Circle(5)
-        area_c = load_area_8(c8)
-        assert abs(area_c - 3.14159265 * 25) < 1e-4
+        class PropA:
+            def __init__(self, x):
+                self._x = x
 
-        # Rect has same property name but different computation
-        r8 = Rect(3, 4)
-        assert load_area_8(r8) == 12
+            @property
+            def value(self):
+                return self._x + 1
 
-        # Circle still works
-        assert abs(load_area_8(c8) - area_c) < 1e-10
+        class PropB:
+            def __init__(self, x):
+                self._x = x
 
-        print("PASS  Test 8: deopt — different class, same property name")
+            @property
+            def value(self):
+                return self._x * 3
+
+        def get_value_11(obj):
+            return obj.value
+
+        a = PropA(10)
+        for _ in range(WARMUP):
+            get_value_11(a)
+
+        check_jit_compiled(get_value_11, "get_value_11")
+        assert get_value_11(a) == 11, "PropA: 10+1=11"
+
+        b = PropB(10)
+        assert get_value_11(b) == 30, "PropB: 10*3=30"
+        print("  PASS: test_deopt_switch_to_different_property")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 8: deopt class — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_deopt_switch_to_different_property — {e}")
         failed += 1
 
-    # ── Test 9: Deopt — plain attribute (not property) ─────────────────
-
-    class PlainArea:
-        def __init__(self, area):
-            self.area = area  # Plain attribute, not a property
-
-    def load_area_9(obj):
-        return obj.area
-
-    for _ in range(WARMUP):
-        load_area_9(Circle(5))
-
-    check_jit_compiled(load_area_9, "load_area_9")
-
+    # ------------------------------------------------------------------ #
+    # Test 12: Property in loop
+    # ------------------------------------------------------------------ #
     try:
-        c9 = Circle(3)
-        assert abs(load_area_9(c9) - 3.14159265 * 9) < 1e-4
+        class Counter:
+            def __init__(self, start):
+                self._val = start
 
-        # Plain attribute (deopt — not a property descriptor)
-        pa = PlainArea(42)
-        assert load_area_9(pa) == 42
+            @property
+            def current(self):
+                return self._val
 
-        # Circle still works
-        assert abs(load_area_9(c9) - 3.14159265 * 9) < 1e-4
+        def sum_property_loop(obj, n):
+            total = 0
+            for _ in range(n):
+                total += obj.current
+            return total
 
-        print("PASS  Test 9: deopt — plain attribute vs property")
+        c = Counter(3)
+        for _ in range(WARMUP):
+            sum_property_loop(c, 1)
+
+        check_jit_compiled(sum_property_loop, "sum_property_loop")
+        result = sum_property_loop(c, 100)
+        assert result == 300, f"3 * 100 = 300, got {result}"
+        print("  PASS: test_property_in_loop")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 9: deopt plain — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_property_in_loop — {e}")
         failed += 1
 
-    # ── Test 10: Deopt — object with __getattr__ ───────────────────────
-
-    class WithGetattr:
-        def __getattr__(self, name):
-            if name == "area":
-                return 999
-            raise AttributeError(name)
-
-    def load_area_10(obj):
-        return obj.area
-
-    for _ in range(WARMUP):
-        load_area_10(Circle(5))
-
-    check_jit_compiled(load_area_10, "load_area_10")
-
+    # ------------------------------------------------------------------ #
+    # Test 13: Multiple properties on same class
+    # ------------------------------------------------------------------ #
     try:
-        c10 = Circle(2)
-        assert abs(load_area_10(c10) - 3.14159265 * 4) < 1e-4
+        class MultiProp:
+            def __init__(self, x, y, z):
+                self._x = x
+                self._y = y
+                self._z = z
 
-        wg = WithGetattr()
-        assert load_area_10(wg) == 999
+            @property
+            def x(self):
+                return self._x
 
-        assert abs(load_area_10(c10) - 3.14159265 * 4) < 1e-4
+            @property
+            def y(self):
+                return self._y
 
-        print("PASS  Test 10: deopt — __getattr__ fallback")
+            @property
+            def z(self):
+                return self._z
+
+        def get_all_props(obj):
+            return (obj.x, obj.y, obj.z)
+
+        mp = MultiProp(1, 2, 3)
+        for _ in range(WARMUP):
+            get_all_props(mp)
+
+        check_jit_compiled(get_all_props, "get_all_props")
+        result = get_all_props(mp)
+        assert result == (1, 2, 3), f"Expected (1, 2, 3), got {result}"
+
+        mp2 = MultiProp(10, 20, 30)
+        assert get_all_props(mp2) == (10, 20, 30)
+        print("  PASS: test_multiple_properties_on_same_class")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 10: deopt __getattr__ — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_multiple_properties_on_same_class — {e}")
         failed += 1
 
-    # ── Test 11: Property in loop ──────────────────────────────────────
-
-    def sum_prop_11(obj, n):
-        total = 0
-        for _ in range(n):
-            total += obj.radius
-        return total
-
-    c11 = Circle(7)
-
-    for _ in range(WARMUP):
-        sum_prop_11(c11, 5)
-
-    check_jit_compiled(sum_prop_11, "sum_prop_11")
-
+    # ------------------------------------------------------------------ #
+    # Test 14: Property returning None
+    # ------------------------------------------------------------------ #
     try:
-        assert sum_prop_11(c11, 100) == 700
-        c11._radius = 3
-        assert sum_prop_11(c11, 10) == 30
-        assert sum_prop_11(c11, 0) == 0
-        print("PASS  Test 11: property in loop")
+        class NullProp:
+            @property
+            def nothing(self):
+                return None
+
+        def get_nothing(obj):
+            return obj.nothing
+
+        np = NullProp()
+        for _ in range(WARMUP):
+            get_nothing(np)
+
+        check_jit_compiled(get_nothing, "get_nothing")
+        result = get_nothing(np)
+        assert result is None, f"Expected None, got {result}"
+        print("  PASS: test_property_returning_none")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 11: loop — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_property_returning_none — {e}")
         failed += 1
 
-    # ── Test 12: Property on subclass (inherited) ──────────────────────
-
-    class Sphere(Circle):
-        def __init__(self, radius):
-            super().__init__(radius)
-
-        @property
-        def volume(self):
-            return (4 / 3) * 3.14159265 * self._radius ** 3
-
-    def load_inherited_12(obj):
-        return obj.radius  # Inherited from Circle
-
-    sp = Sphere(3)
-
-    for _ in range(WARMUP):
-        load_inherited_12(sp)
-
-    check_jit_compiled(load_inherited_12, "load_inherited_12")
-
+    # ------------------------------------------------------------------ #
+    # Test 15: Cached property pattern (manual)
+    # ------------------------------------------------------------------ #
     try:
-        assert load_inherited_12(sp) == 3
-        sp._radius = 10
-        assert load_inherited_12(sp) == 10
+        class CachedProp:
+            def __init__(self, x):
+                self._x = x
+                self._cache = None
 
-        # Circle also works
-        c12 = Circle(7)
-        assert load_inherited_12(c12) == 7
+            @property
+            def expensive(self):
+                if self._cache is None:
+                    self._cache = self._x ** 2
+                return self._cache
 
-        print("PASS  Test 12: inherited property from subclass")
+        def get_expensive(obj):
+            return obj.expensive
+
+        cp = CachedProp(7)
+        for _ in range(WARMUP):
+            get_expensive(cp)
+
+        check_jit_compiled(get_expensive, "get_expensive")
+        assert get_expensive(cp) == 49, f"7**2=49, got {get_expensive(cp)}"
+
+        # Verify caching: _cache should be set
+        assert cp._cache == 49
+
+        # New instance — cache should be None until accessed
+        cp2 = CachedProp(5)
+        assert cp2._cache is None
+        assert get_expensive(cp2) == 25
+        assert cp2._cache == 25
+        print("  PASS: test_cached_property_pattern")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 12: inherited — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_cached_property_pattern — {e}")
         failed += 1
 
-    # ── Test 13: Property on subclass (overridden) ─────────────────────
-
-    class SpecialCircle(Circle):
-        @property
-        def area(self):
-            # Override: returns int instead of float
-            return int(3.14159265 * self._radius * self._radius)
-
-    def load_overridden_13(obj):
-        return obj.area
-
-    for _ in range(WARMUP):
-        load_overridden_13(Circle(5))
-
-    check_jit_compiled(load_overridden_13, "load_overridden_13")
-
+    # ------------------------------------------------------------------ #
+    # Test 16: Property with __slots__
+    # ------------------------------------------------------------------ #
     try:
-        c13 = Circle(5)
-        area_float = load_overridden_13(c13)
-        assert isinstance(area_float, float)
+        class SlottedProp:
+            __slots__ = ('_x',)
 
-        sc = SpecialCircle(5)
-        area_int = load_overridden_13(sc)
-        assert isinstance(area_int, int)
-        assert area_int == 78  # int(3.14159265 * 25)
+            def __init__(self, x):
+                self._x = x
 
-        # Circle still works
-        assert isinstance(load_overridden_13(c13), float)
+            @property
+            def value(self):
+                return self._x
 
-        print("PASS  Test 13: overridden property on subclass")
+        def get_slotted(obj):
+            return obj.value
+
+        sp = SlottedProp(88)
+        for _ in range(WARMUP):
+            get_slotted(sp)
+
+        check_jit_compiled(get_slotted, "get_slotted")
+        assert get_slotted(sp) == 88
+        sp2 = SlottedProp(77)
+        assert get_slotted(sp2) == 77
+        print("  PASS: test_property_with_slots")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 13: overridden — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_property_with_slots — {e}")
         failed += 1
 
-    # ── Test 14: Property with side effects (call counting) ────────────
-
-    class Counted:
-        def __init__(self, val):
-            self._val = val
-            self.call_count = 0
-
-        @property
-        def value(self):
-            self.call_count += 1
-            return self._val
-
-    def load_counted_14(obj):
-        return obj.value
-
-    cnt = Counted(42)
-
-    for _ in range(WARMUP):
-        load_counted_14(cnt)
-
-    check_jit_compiled(load_counted_14, "load_counted_14")
-
+    # ------------------------------------------------------------------ #
+    # Test 17: Property on class created dynamically (type())
+    # ------------------------------------------------------------------ #
     try:
-        cnt.call_count = 0
-        assert load_counted_14(cnt) == 42
-        assert cnt.call_count == 1
-        load_counted_14(cnt)
-        load_counted_14(cnt)
-        assert cnt.call_count == 3
+        def make_prop_class(multiplier):
+            def getter(self):
+                return self._x * multiplier
+            return type('DynProp', (), {
+                '__init__': lambda self, x: setattr(self, '_x', x),
+                'value': property(getter),
+            })
 
-        # Each access is a new call
-        for _ in range(10):
-            load_counted_14(cnt)
-        assert cnt.call_count == 13
+        DynA = make_prop_class(2)
+        DynB = make_prop_class(5)
 
-        print("PASS  Test 14: property with side effects (call counting)")
+        def get_dyn(obj):
+            return obj.value
+
+        a = DynA(10)
+        for _ in range(WARMUP):
+            get_dyn(a)
+
+        check_jit_compiled(get_dyn, "get_dyn")
+        assert get_dyn(a) == 20, f"10*2=20, got {get_dyn(a)}"
+
+        b = DynB(10)
+        assert get_dyn(b) == 50, f"10*5=50, got {get_dyn(b)}"
+        print("  PASS: test_property_on_dynamic_class")
         passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 14: counting — {e}")
+    except Exception as e:
+        print(f"  FAIL: test_property_on_dynamic_class — {e}")
         failed += 1
 
-    # ── Test 15: Multiple properties in one function ───────────────────
-
-    def load_multi_15(obj):
-        return obj.radius, obj.diameter, obj.area
-
-    c15 = Circle(5)
-
-    for _ in range(WARMUP):
-        load_multi_15(c15)
-
-    check_jit_compiled(load_multi_15, "load_multi_15")
-
+    # ------------------------------------------------------------------ #
+    # Test 18: Rapid type alternation with property
+    # ------------------------------------------------------------------ #
     try:
-        r, d, a = load_multi_15(c15)
-        assert r == 5
-        assert d == 10
-        assert abs(a - 3.14159265 * 25) < 1e-4
+        class TypeX:
+            def __init__(self, x):
+                self._x = x
 
-        c15._radius = 1
-        r, d, a = load_multi_15(c15)
-        assert r == 1
-        assert d == 2
-        assert abs(a - 3.14159265) < 1e-6
+            @property
+            def val(self):
+                return self._x
 
-        print("PASS  Test 15: multiple properties in one function")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 15: multi prop — {e}")
-        failed += 1
+        class TypeY:
+            def __init__(self, x):
+                self._x = x
 
-    # ── Test 16: Property returning None ────────────────────────────────
+            @property
+            def val(self):
+                return self._x + 100
 
-    class NoneHolder:
-        @property
-        def value(self):
-            return None
+        def get_val(obj):
+            return obj.val
 
-    def load_none_16(obj):
-        return obj.value
+        tx = TypeX(1)
+        for _ in range(WARMUP):
+            get_val(tx)
 
-    nh = NoneHolder()
+        check_jit_compiled(get_val, "get_val")
 
-    for _ in range(WARMUP):
-        load_none_16(nh)
-
-    check_jit_compiled(load_none_16, "load_none_16")
-
-    try:
-        assert load_none_16(nh) is None
-        # Repeated access
-        for _ in range(100):
-            assert load_none_16(nh) is None
-        print("PASS  Test 16: property returning None")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 16: None — {e}")
-        failed += 1
-
-    # ── Test 17: Nested property ───────────────────────────────────────
-
-    class Outer:
-        def __init__(self):
-            self._inner = Circle(5)
-
-        @property
-        def inner(self):
-            return self._inner
-
-    def load_nested_17(obj):
-        return obj.inner.radius
-
-    outer = Outer()
-
-    for _ in range(WARMUP):
-        load_nested_17(outer)
-
-    check_jit_compiled(load_nested_17, "load_nested_17")
-
-    try:
-        assert load_nested_17(outer) == 5
-        outer._inner._radius = 10
-        assert load_nested_17(outer) == 10
-        outer._inner = Circle(3)
-        assert load_nested_17(outer) == 3
-        print("PASS  Test 17: nested property (obj.prop.attr)")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 17: nested — {e}")
-        failed += 1
-
-    # ── Test 18: Property vs direct fget() equivalence ─────────────────
-
-    def load_prop_18(obj):
-        return obj.radius
-
-    c18 = Circle(7)
-
-    for _ in range(WARMUP):
-        load_prop_18(c18)
-
-    check_jit_compiled(load_prop_18, "load_prop_18")
-
-    try:
-        fget = Circle.radius.fget
-        for r in [0, 1, 5, 10, 100, -1]:
-            c18._radius = r
-            prop_result = load_prop_18(c18)
-            fget_result = fget(c18)
-            assert prop_result == fget_result, (
-                f"mismatch for r={r}: prop={prop_result}, fget={fget_result}"
-            )
-        print("PASS  Test 18: property matches direct fget() call")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 18: fget equiv — {e}")
-        failed += 1
-
-    # ── Test 19: Monkey-patch property at runtime ──────────────────────
-
-    class Patchable:
-        def __init__(self, val):
-            self._val = val
-
-        @property
-        def value(self):
-            return self._val
-
-    def load_patch_19(obj):
-        return obj.value
-
-    pat = Patchable(42)
-
-    for _ in range(WARMUP):
-        load_patch_19(pat)
-
-    check_jit_compiled(load_patch_19, "load_patch_19")
-
-    try:
-        assert load_patch_19(pat) == 42
-
-        # Monkey-patch the property
-        Patchable.value = property(lambda self: self._val * 100)
-        assert load_patch_19(pat) == 4200
-
-        # Restore
-        Patchable.value = property(lambda self: self._val)
-        assert load_patch_19(pat) == 42
-
-        print("PASS  Test 19: monkey-patch property at runtime")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 19: monkey-patch — {e}")
-        failed += 1
-
-    # ── Test 20: Rapid type alternation ────────────────────────────────
-
-    def load_area_20(obj):
-        return obj.area
-
-    for _ in range(WARMUP):
-        load_area_20(Circle(5))
-
-    check_jit_compiled(load_area_20, "load_area_20")
-
-    try:
-        c20 = Circle(5)
-        r20 = Rect(3, 4)
-        pa20 = PlainArea(999)
-
+        # Rapid alternation — forces repeated deopt
+        ty = TypeY(1)
+        ok = True
         for i in range(50):
-            if i % 3 == 0:
-                result = load_area_20(c20)
-                assert abs(result - 3.14159265 * 25) < 1e-4
-            elif i % 3 == 1:
-                assert load_area_20(r20) == 12
-            else:
-                assert load_area_20(pa20) == 999
+            rx = get_val(tx)
+            ry = get_val(ty)
+            if rx != 1:
+                print(f"  FAIL: TypeX iteration {i}: expected 1, got {rx}")
+                ok = False
+                break
+            if ry != 101:
+                print(f"  FAIL: TypeY iteration {i}: expected 101, got {ry}")
+                ok = False
+                break
 
-        # Final Circle check
-        assert abs(load_area_20(c20) - 3.14159265 * 25) < 1e-4
-
-        print("PASS  Test 20: rapid type alternation (50 cycles)")
-        passed += 1
-    except (AssertionError, Exception) as e:
-        print(f"FAIL  Test 20: type alternation — {e}")
+        if ok:
+            print("  PASS: test_rapid_type_alternation_with_property")
+            passed += 1
+        else:
+            failed += 1
+    except Exception as e:
+        print(f"  FAIL: test_rapid_type_alternation_with_property — {e}")
         failed += 1
 
-    # ── Summary ──────────────────────────────────────────────────────
+    # ------------------------------------------------------------------ #
+    # Test 19: Property deleted from class at runtime
+    # ------------------------------------------------------------------ #
+    try:
+        class Deletable:
+            def __init__(self, x):
+                self._x = x
+                self.value = x * 3  # Also set instance attr as fallback
 
+            @property
+            def prop(self):
+                return self._x * 2
+
+        def get_prop(obj):
+            return obj.prop
+
+        d = Deletable(10)
+        for _ in range(WARMUP):
+            get_prop(d)
+
+        check_jit_compiled(get_prop, "get_prop")
+        assert get_prop(d) == 20, "Property returns 10*2=20"
+
+        # Delete the property from the class
+        del Deletable.prop
+
+        # Now obj.prop should raise AttributeError (no instance attr 'prop')
+        caught = False
+        try:
+            get_prop(d)
+        except AttributeError:
+            caught = True
+        assert caught, "After deleting property, AttributeError expected"
+        print("  PASS: test_property_deleted_from_class")
+        passed += 1
+    except Exception as e:
+        print(f"  FAIL: test_property_deleted_from_class — {e}")
+        failed += 1
+
+    # ------------------------------------------------------------------ #
+    # Test 20: Property access vs fget equivalence
+    # ------------------------------------------------------------------ #
+    try:
+        class EquivProp:
+            def __init__(self, x):
+                self._x = x
+
+            @property
+            def value(self):
+                return self._x
+
+        def via_attr(obj):
+            return obj.value
+
+        obj = EquivProp(42)
+        for _ in range(WARMUP):
+            via_attr(obj)
+
+        check_jit_compiled(via_attr, "via_attr")
+
+        # Compare property access (JIT path) with direct fget call
+        fget = EquivProp.value.fget
+        for val in [0, 1, -1, 100, 999]:
+            o = EquivProp(val)
+            jit_result = via_attr(o)
+            fget_result = fget(o)
+            assert jit_result == fget_result, (
+                f"Mismatch for val={val}: attr={jit_result}, fget={fget_result}"
+            )
+
+        print("  PASS: test_property_access_vs_fget_equivalence")
+        passed += 1
+    except Exception as e:
+        print(f"  FAIL: test_property_access_vs_fget_equivalence — {e}")
+        failed += 1
+
+    # ------------------------------------------------------------------ #
+    # Summary
+    # ------------------------------------------------------------------ #
     print()
-    total = passed + failed
-    print(f"Results: {passed}/{total} passed, {failed}/{total} failed")
-    if failed > 0:
-        sys.exit(1)
-    else:
+    print(f"LOAD_ATTR_PROPERTY: {passed}/{passed + failed} passed, "
+          f"{failed}/{passed + failed} failed")
+    if failed == 0:
         print("ALL TESTS PASSED")
-        sys.exit(0)
+    else:
+        print("SOME TESTS FAILED")
+    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
