@@ -610,3 +610,119 @@ int trigger_shepard_spawn(const char *nbs_root) {
 
     return (rc == 0) ? 0 : -1;
 }
+
+/* --- Fixup trigger (wall-clock, hourly) --- */
+
+static time_t read_fixup_last_run(const char *nbs_root) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/fixup-last-run", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    char buf[32];
+    time_t last = 0;
+    if (fgets(buf, sizeof(buf), f)) {
+        char *endptr;
+        long long parsed = strtoll(buf, &endptr, 10);
+        if (endptr != buf && parsed > 0)
+            last = (time_t)parsed;
+    }
+    fclose(f);
+    return last;
+}
+
+static void write_fixup_last_run(const char *nbs_root, time_t when) {
+    char path[4096], tmp_path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/fixup-last-run", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    n = snprintf(tmp_path, sizeof(tmp_path),
+                 "%s/.nbs/fixup-last-run.tmp", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return;
+
+    FILE *f = fopen(tmp_path, "w");
+    if (f) {
+        fprintf(f, "%lld\n", (long long)when);
+        if (fclose(f) == 0) {
+            rename(tmp_path, path);
+        } else {
+            unlink(tmp_path);
+        }
+    }
+}
+
+int trigger_fixup_check(const char *nbs_root, int interval_secs) {
+    ASSERT_MSG(nbs_root != NULL, "trigger_fixup_check: nbs_root is NULL");
+
+    if (interval_secs <= 0) return 1;
+
+    time_t now = time(NULL);
+    time_t last_run = read_fixup_last_run(nbs_root);
+
+    /* First run: initialise timestamp without firing */
+    if (last_run == 0) {
+        write_fixup_last_run(nbs_root, now);
+        return 1;
+    }
+
+    if ((now - last_run) < interval_secs) {
+        return 1;
+    }
+
+    /* Time elapsed — claim and spawn */
+    write_fixup_last_run(nbs_root, now);
+    trigger_fixup_spawn(nbs_root);
+    return 0;
+}
+
+int trigger_fixup_spawn(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "trigger_fixup_spawn: nbs_root is NULL");
+
+    char lock_path[4096];
+    int n = snprintf(lock_path, sizeof(lock_path),
+                     "%s/.nbs/fixup.lock", nbs_root);
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(lock_path),
+               "trigger_fixup_spawn: lock path overflow");
+
+    int fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "trigger_fixup_spawn: open lock failed: %s\n",
+                strerror(errno));
+        return -1;
+    }
+
+    struct flock fl = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+
+    if (fcntl(fd, F_SETLK, &fl) < 0) {
+        close(fd);
+        return 1;
+    }
+
+    const char *task_desc =
+        "Load /nbs-fixup-auto. Run /nbs-teams-fixup on all agents. "
+        "Post summary to chat. Exit.";
+
+    const char *argv[] = {
+        "nbs-worker", "spawn", "fixup", nbs_root, task_desc, NULL
+    };
+    int rc = exec_fire_and_forget(argv);
+
+    struct flock unlock = {
+        .l_type = F_UNLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+    fcntl(fd, F_SETLK, &unlock);
+    close(fd);
+
+    return (rc == 0) ? 0 : -1;
+}
