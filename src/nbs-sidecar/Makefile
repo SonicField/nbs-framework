@@ -18,7 +18,7 @@ CHAT_LIB_OBJS = $(CHAT_SRC_DIR)/base64.o $(CHAT_SRC_DIR)/lock.o
 
 # Sidecar sources
 SRCS = main.c sidecar.c transport_tmux.c transport_pty.c detect.c exec_util.c \
-       bus_client.c chat_client.c registry.c triggers.c hash.c
+       bus_client.c chat_client.c registry.c triggers.c hash.c strip_ansi.c
 OBJS = $(SRCS:.c=.o)
 TARGET = nbs-sidecar
 

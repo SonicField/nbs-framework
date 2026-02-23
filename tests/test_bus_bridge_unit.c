@@ -514,6 +514,56 @@ static void test_email_interrupt_excluded(void) {
     TEST_PASS("user@example.com! excluded (email filter)");
 }
 
+/* --- Query pattern (@handle?) tests --- */
+
+static void test_query_basic(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@worker? what are you doing",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 1, "query basic: expected 1, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "worker") == 0,
+                "query basic: expected 'worker', got '%s'", handles[0]);
+    TEST_ASSERT(flags[0] == 2,
+                "query basic: expected flag 2 (query), got %d", flags[0]);
+
+    TEST_PASS("@handle? sets query flag (2)");
+}
+
+static void test_query_vs_normal_vs_interrupt(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@alice and @bob! and @charlie?",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 3, "query tri: expected 3, got %d", count);
+    TEST_ASSERT(flags[0] == 0,
+                "query tri: alice should be normal (0), got %d", flags[0]);
+    TEST_ASSERT(flags[1] == 1,
+                "query tri: bob should be interrupt (1), got %d", flags[1]);
+    TEST_ASSERT(flags[2] == 2,
+                "query tri: charlie should be query (2), got %d", flags[2]);
+
+    TEST_PASS("@handle vs @handle! vs @handle? all distinguished");
+}
+
+static void test_query_at_end(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("check @scribe?",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 1, "query end: expected 1, got %d", count);
+    TEST_ASSERT(flags[0] == 2,
+                "query end: expected flag 2, got %d", flags[0]);
+
+    TEST_PASS("@handle? at end of message works");
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -562,6 +612,11 @@ int main(void) {
     test_interrupt_null_flags();
     test_no_interrupt_without_bang();
     test_email_interrupt_excluded();
+
+    /* Query pattern (@handle?) */
+    test_query_basic();
+    test_query_vs_normal_vs_interrupt();
+    test_query_at_end();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

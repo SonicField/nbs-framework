@@ -22,6 +22,7 @@
 #include "registry.h"
 #include "triggers.h"
 #include "exec_util.h"
+#include "strip_ansi.h"
 #include "../nbs-common/nbs_assert.h"
 
 #include <stdio.h>
@@ -152,6 +153,34 @@ done:
             chat_client_send(chat_path, "sidecar", msg);
         }
     }
+}
+
+/*
+ * handle_query — Capture own pane content and post to chat.
+ *
+ * Triggered by @handle? in chat. The target agent's sidecar captures
+ * its own pane, strips ANSI escapes, and posts the content to chat.
+ */
+static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
+                           const char *registry_path) {
+    /* Capture own pane (100 lines of scrollback) */
+    char *content = tp->capture(tp, 100);
+    if (!content) return;
+
+    /* Strip ANSI escape sequences */
+    strip_ansi(content);
+
+    /* Find first registered chat and send */
+    char chat_path[SIDECAR_MAX_PATH];
+    if (registry_find_first(registry_path, "chat",
+                             chat_path, sizeof(chat_path)) == 0) {
+        char msg[SIDECAR_MAX_CONTENT];
+        snprintf(msg, sizeof(msg),
+                 "tmux pane for %s:\n%s", cfg->handle, content);
+        chat_client_send(chat_path, "sidecar", msg);
+    }
+
+    free(content);
 }
 
 /* --- Dialogue response --- */
@@ -428,6 +457,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         snprintf(state.mention_payload,
                                  sizeof(state.mention_payload), "%s", payload);
                     }
+                }
+            }
+        }
+
+        /* --- Out-of-band query check (every tick) --- */
+        {
+            char bus_dir[SIDECAR_MAX_PATH];
+            if (registry_find_first(registry_path, "bus",
+                                     bus_dir, sizeof(bus_dir)) == 0) {
+                char payload[SIDECAR_MAX_MESSAGE];
+                if (bus_client_check_typed(bus_dir, "chat-query",
+                                            cfg->handle, payload,
+                                            sizeof(payload)) == 0) {
+                    handle_query(tp, cfg, registry_path);
                 }
             }
         }

@@ -104,14 +104,16 @@ int trigger_pythia_check(const char *registry_path, const char *nbs_root,
     if (current_bucket > last_bucket && decision_count > 0) {
         *last_trigger_count = decision_count;
 
-        /* Phase 1: publish pythia-checkpoint bus event.
-         * Phase 2 replaces this with trigger_pythia_spawn(). */
+        /* Publish bus event for observability */
         char payload[256];
         snprintf(payload, sizeof(payload),
                  "Decision count: %d. Sidecar-triggered Pythia assessment.",
                  decision_count);
         bus_client_publish(bus_dir, "sidecar", "pythia-checkpoint", "high",
                            payload);
+
+        /* Spawn Pythia worker (lock-guarded, fire-and-forget) */
+        trigger_pythia_spawn(nbs_root);
         return 0;
     }
 
