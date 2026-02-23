@@ -213,11 +213,11 @@ static void test_prompt_visible_positive(void)
     TEST_PASS("prompt_visible positive");
 }
 
-/* ---- 11. prompt_visible negative: ❯ not in last 3 lines ---- */
+/* ---- 11. prompt_visible negative: ❯ not in last 6 lines ---- */
 
 static void test_prompt_visible_negative(void)
 {
-    const char *content = "\xe2\x9d\xaf\nmany\nlines\nafter";
+    const char *content = "\xe2\x9d\xaf\nmany\nlines\nafter\nmore\nstuff\nhere";
     int result = detect_prompt_visible(content);
 
     TEST_ASSERT(result == 0,

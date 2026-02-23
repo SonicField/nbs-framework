@@ -155,8 +155,10 @@ int detect_prompt_visible(const char *content)
         return 0;
 
     /*
-     * Find the start of the last 3 lines.
+     * Find the start of the last 6 lines.
      * Walk backwards from end, counting newlines.
+     * 6 lines covers: prompt line + separator + bypass permissions +
+     * blank line + context percentage + possible extra status line.
      */
     const char *search_start = content;
     int newlines_found = 0;
@@ -169,7 +171,7 @@ int detect_prompt_visible(const char *content)
     while (p >= content) {
         if (*p == '\n') {
             newlines_found++;
-            if (newlines_found == 3) {
+            if (newlines_found == 6) {
                 search_start = p + 1;
                 break;
             }
