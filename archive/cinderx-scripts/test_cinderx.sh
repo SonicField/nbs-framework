@@ -838,6 +838,7 @@ SPEC_ROOT_TESTS=(
 SPEC_SUB_TESTS=(
     test_binary_op_add_int
     test_binary_subscr_deopt
+    test_contains_op_dict
     test_for_iter_list_mutation
     test_load_global
     test_to_bool
