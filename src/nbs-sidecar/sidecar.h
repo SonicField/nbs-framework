@@ -93,6 +93,7 @@ typedef struct {
     time_t last_poll_time;
     int notify_fail_count;
     int pythia_last_trigger_count;
+    int shepard_last_trigger_count;
     int mention_detected;
     char mention_payload[SIDECAR_MAX_MESSAGE];
 

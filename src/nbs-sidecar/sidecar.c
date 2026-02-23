@@ -261,6 +261,12 @@ static int should_inject_notify(const sidecar_config_t *cfg,
                               &state->pythia_last_trigger_count);
     }
 
+    /* Shepard trigger (side-effect: may spawn worker) */
+    if (has_bus) {
+        trigger_shepard_check(registry_path, cfg->nbs_root,
+                               &state->shepard_last_trigger_count);
+    }
+
     /* Standup trigger (side-effect: may post to chat) */
     trigger_standup_check(registry_path, cfg->nbs_root, cfg->handle,
                            cfg->standup_interval,
