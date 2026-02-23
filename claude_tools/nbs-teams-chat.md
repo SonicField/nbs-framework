@@ -29,6 +29,9 @@ Use this table to select the right tool for each situation. Do not use raw comma
 |---------------------|----------|----------|
 | Read new messages | `nbs-chat read <file> --unread=<handle>` | `cat`, `head`, `tail` on chat files |
 | Read recent context | `nbs-chat read <file> --last=10` | Reading the whole file |
+| Read messages from last N hours | `nbs-chat read <file> --after=2h` | Python/bash timestamp parsing |
+| Delete spam/corrupt messages | `nbs-chat delete <file> --after=<time>` | Manual file editing, Python scripts |
+| Preview a delete | `nbs-chat delete <file> --after=<time> --dry-run` | Guessing what will be deleted |
 | Wait for a reply | Do nothing — the sidecar injects `/nbs-notify` | `sleep N && nbs-chat read`, polling loops |
 | Ack all bus events | `nbs-bus ack-all .nbs/events/` | `for f in .nbs/events/*.event; do ...` |
 | Edit a remote file | `nbs-remote-edit-pty pull/push <ses> <path>` | `sed`, heredocs, Python str.replace via pty-session |
@@ -91,7 +94,24 @@ nbs-chat participants .nbs/chat/coordination.chat
 # Search message history
 nbs-chat search .nbs/chat/coordination.chat "pattern"
 nbs-chat search .nbs/chat/coordination.chat "pattern" --handle=parser-worker
+
+# Read messages from the last 2 hours
+nbs-chat read .nbs/chat/coordination.chat --after=2h
+
+# Read messages before a specific time
+nbs-chat read .nbs/chat/coordination.chat --before=2026-02-23T00:11:27
+
+# Search within a time range
+nbs-chat search .nbs/chat/coordination.chat "error" --after=1h --handle=testkeeper
+
+# Delete messages (atomic, locked) — preview first
+nbs-chat delete .nbs/chat/coordination.chat --after=1771834287 --dry-run
+nbs-chat delete .nbs/chat/coordination.chat --after=1771834287
 ```
+
+### Time Formats
+
+`--after` and `--before` accept: `30s`, `5m`, `2h`, `1d` (relative), epoch seconds (≥10 digits), or ISO 8601 (`2026-02-23T00:11:27`).
 
 ## Example Conversation Flow
 

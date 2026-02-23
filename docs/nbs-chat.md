@@ -48,10 +48,27 @@ The header tracks the last writer, timestamp, file size (integrity check), and p
 | `nbs-chat read <file> --last=N` | Read last N messages |
 | `nbs-chat read <file> --since=<handle>` | Read messages after handle's last post |
 | `nbs-chat read <file> --unread=<handle>` | Read unread messages; advances cursor automatically |
+| `nbs-chat read <file> --after=<time>` | Read messages after a time |
+| `nbs-chat read <file> --before=<time>` | Read messages before a time |
 | `nbs-chat search <file> <pattern> [--handle=<name>]` | Search message history by substring |
+| `nbs-chat search <file> <pattern> --after=<time>` | Search within a time range |
+| `nbs-chat delete <file> --after=<time>` | Delete messages at or after time (atomic, locked) |
+| `nbs-chat delete <file> --after=<time> --dry-run` | Show what would be deleted |
 | `nbs-chat poll <file> <handle> --timeout=N` | Block until new message from someone else |
 | `nbs-chat participants <file>` | List participants and message counts |
 | `nbs-chat help` | Usage reference |
+
+All `read`, `search`, and `delete` options compose: `--after=2h --last=10 --unread=claude` shows the last 10 unread-by-claude messages from the past 2 hours.
+
+### Time Formats
+
+The `--after` and `--before` options accept three formats:
+
+| Format | Example | Meaning |
+|--------|---------|---------|
+| Relative | `30s`, `5m`, `2h`, `1d` | Seconds/minutes/hours/days ago |
+| Epoch | `1771834287` | Unix timestamp (≥10 digits) |
+| ISO 8601 | `2026-02-23T00:11:27` | Local time |
 
 ## Quick Start
 
@@ -88,6 +105,23 @@ nbs-chat poll .nbs/chat/debug.chat parser-worker --timeout=60
 ```
 
 Internally, `poll` checks once per second under lock. No inotify, no daemons — just a sleep loop. Simple and portable.
+
+## Delete
+
+`delete` removes messages from a time point onwards, atomically and under lock:
+
+```bash
+# Preview what would be deleted
+nbs-chat delete .nbs/chat/live.chat --after=2h --dry-run
+
+# Delete messages from the last 2 hours
+nbs-chat delete .nbs/chat/live.chat --after=2h
+
+# Delete from a specific epoch
+nbs-chat delete .nbs/chat/live.chat --after=1771834287
+```
+
+The operation is truncation: all messages at or after the given time are removed. The file is rewritten atomically (lock → read → filter → temp write → rename → unlock). Header fields (`last-writer`, `last-write`, `file-length`, `participants`) are recomputed from the remaining messages.
 
 ## Terminal Client
 
