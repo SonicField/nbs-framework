@@ -22,7 +22,7 @@
 #   torch        8 PyTorch P0 smoke tests
 #   benchmarks   Benchmark-based correctness tests (5 benchmarks)
 #   bugs         Bug 1 + Bug 4 regression tests
-#   specialisation  13 standalone specialisation correctness tests
+#   specialisation  14 standalone specialisation correctness tests
 #   all          Everything above
 #
 # Multiple suites can be combined:
@@ -803,7 +803,7 @@ run_benchmarks() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# Suite: specialisation — 13 standalone specialisation correctness tests
+# Suite: specialisation — 14 standalone specialisation correctness tests
 # ══════════════════════════════════════════════════════════════════════════
 #
 # These are standalone Python test scripts that:
@@ -817,7 +817,7 @@ run_benchmarks() {
 #   test_binary_subscr_correctness.py  BINARY_SUBSCR correctness
 #   test_super_fix.py                  super().__init__() JIT bug fix
 #
-# tests/ subdirectory (13):
+# tests/ subdirectory (14):
 #   test_binary_op_add_int.py          BINARY_OP_ADD_INT/SUBTRACT/MULTIPLY correctness
 #   test_binary_subscr_deopt.py        BINARY_SUBSCR deoptimisation
 #   test_call_builtin_class.py         CALL_BUILTIN_CLASS constructor correctness
@@ -831,6 +831,7 @@ run_benchmarks() {
 #   test_store_attr_instance_value.py  STORE_ATTR_INSTANCE_VALUE correctness
 #   test_store_subscr_list_int.py      STORE_SUBSCR_LIST_INT correctness
 #   test_to_bool.py                    TO_BOOL_BOOL/INT/STR/LIST/NONE correctness
+#   test_unpack_sequence_two_tuple.py  UNPACK_SEQUENCE_TWO_TUPLE correctness
 
 # Specialisation tests in the root directory
 SPEC_ROOT_TESTS=(
@@ -855,6 +856,7 @@ SPEC_SUB_TESTS=(
     test_load_attr_module_inline
     test_store_attr_instance_value
     test_store_subscr_list_int
+    test_unpack_sequence_two_tuple
 )
 
 run_specialisation() {
