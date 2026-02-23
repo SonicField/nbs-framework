@@ -137,5 +137,6 @@ Have you read all pillars in this session?
 - verification-cycle.md
 - zero-code-contract.md
 - coordination.md *(you are here)*
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now.

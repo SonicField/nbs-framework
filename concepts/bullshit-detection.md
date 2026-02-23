@@ -55,7 +55,7 @@ What negative outcome am I not reporting? If there is none, either I have not tr
 
 ## Pillar Check
 
-Have you read all six pillars in this session?
+Have you read all pillars in this session?
 
 - goals.md
 - falsifiability.md
@@ -63,5 +63,6 @@ Have you read all six pillars in this session?
 - bullshit-detection.md *(you are here)*
 - verification-cycle.md
 - zero-code-contract.md
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now. Next: `verification-cycle.md`

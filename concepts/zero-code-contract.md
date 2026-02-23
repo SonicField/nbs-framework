@@ -58,7 +58,7 @@ Am I reviewing criteria or reviewing code? If code, I have lost. Scale to the tr
 
 ## Pillar Check
 
-Have you read all six pillars in this session?
+Have you read all pillars in this session?
 
 - goals.md
 - falsifiability.md
@@ -66,5 +66,6 @@ Have you read all six pillars in this session?
 - bullshit-detection.md
 - verification-cycle.md
 - zero-code-contract.md *(you are here)*
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now. Next: `goals.md`

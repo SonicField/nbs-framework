@@ -48,79 +48,12 @@ Each agent receives the same prompt template with the file path substituted:
 ```
 You are auditing `{FILE_PATH}` against engineering standards.
 
-First, read the engineering standards from the project's CLAUDE.md (look for the path to the engineering-standards.md file). If not found, apply the standards below.
+Read the engineering standards from `{{NBS_ROOT}}/concepts/engineering-standards.md`.
+If a project-level CLAUDE.md references a different engineering-standards.md, read that too and apply the union of both.
 
-## Engineering Standards (apply these exactly)
-
-### Philosophy
-Safety comes from verbs, not nouns. Correctness emerges from actions — checking, validating, asserting, testing — not from static structures. The act of verification matters more than the classification system.
-
-### The Assertion Protocol
-
-Assertions are executable specifications. A triggered assertion is proof of a bug.
-
-**Three levels — ALL are required:**
-
-**Level 1: Preconditions (Entry Guards)**
-- Verify assumptions about inputs before processing
-- Fail fast with clear messages when violated
-- Every public function must validate its inputs
-
-**Level 2: Postconditions (Exit Guarantees)**
-- Verify promises about outputs before returning
-- Capture relationships between inputs and outputs
-- Detect corruption that occurred during processing
-
-**Level 3: Invariants (Always-True Properties)**
-- Properties that must hold at all times
-- Checked at key state transitions
-- Represent fundamental system correctness constraints
-
-### Assertion Messages
-
-Every assertion message MUST answer three questions:
-- **What** was expected?
-- **What** actually occurred?
-- **Why** does this matter?
-
-BAD:  assert x > 0, "x must be greater than 0"
-GOOD: assert x > 0, f"Request count must be positive for rate limiting, got {x}"
-
-(Adapt syntax to the project's language — the principle is universal.)
-
-### Anti-Patterns to Flag
-
-**Anti-Pattern 1: Silent Failure**
-Catching exceptions and discarding them with no logging, no re-raise, and no signal to the caller. This is the canonical violation. Every `except: pass`, `catch (...) {}`, or equivalent is a finding.
-
-**Anti-Pattern 2: Unfalsifiable Claims**
-Docstrings or comments claiming properties (e.g. "Thread-safe", "Idempotent", "Always returns valid X") without any mechanism enforcing them. A claim without a falsifier is bullshit.
-
-**Anti-Pattern 3: Unreachable Guards**
-Validation checks ordered so that earlier checks make later checks unreachable. Example: checking `isinstance(x, int)` before `isinstance(x, bool)` when bool is a subclass of int.
-
-**Anti-Pattern 4: Quick Fix Trap**
-Silently returning a default value or None for unexpected conditions instead of asserting. Comments like "TODO: handle properly" are a signal.
-
-**Anti-Pattern 5: Type-System False Confidence**
-Code that relies on type annotations for safety without runtime assertions. "It type-checks, therefore it is correct" substitutes a noun (the type) for the verb (the check). Flag functions whose type signature implies guarantees (e.g. `-> ValidatedOutput`, `-> SafeResult`) without postcondition assertions verifying those guarantees.
-
-**Anti-Pattern 6: Mock-Heavy Testing**
-Tests where every dependency is mocked prove only that the mock behaves as expected. Flag test files where three or more dependencies are mocked simultaneously — this is a sign that integration tests are missing. Mocks are acceptable at true system boundaries (external APIs the project does not control) and at **conversion boundaries during porting** — when replacing code piece by piece, mocking the boundary between ported and unported code is the methodology, not a shortcut. The mock proves the ported piece is behaviourally equivalent to the original in isolation before fusing. Outside these two cases, prefer integration tests against the real system.
-
-**Anti-Pattern 7: No Runtime Verification**
-Long-running processes or services that lack health checks, invariant monitoring, or graceful degradation. Flag services or daemons that do not periodically verify internal state. Flag code that silently continues after an invariant violation rather than logging, alerting, and containing the corruption. After an invariant violation, the data is no longer trustworthy — the system must log full context, alert operators, contain the corruption, degrade to a safe mode, and recover or await intervention.
-
-**Anti-Pattern 8: Missing Dynamic Analysis**
-Code without dynamic analysis tooling is code whose runtime behaviour is unverified. Static checks (type systems, linters, compilation) are necessary but insufficient — they cannot catch use-after-free, data races, undefined behaviour, or input-dependent failures. Flag projects that lack build targets or CI stages for dynamic analysis appropriate to their language:
-
-- **C/C++**: AddressSanitizer (ASan), ThreadSanitizer (TSan), UndefinedBehaviourSanitizer (UBSan), Valgrind
-- **Rust**: Miri (for unsafe code), sanitizer builds, `cargo test` under ASan/TSan
-- **Python**: `pytest` with `-x` (fail fast), `python -X dev` mode, `faulthandler`, Hypothesis for property-based testing
-- **Concurrent code in any language**: a thread/race analysis tool (TSan, Go race detector, Helgrind)
-- **Code handling untrusted input**: fuzz testing (libFuzzer, AFL, cargo-fuzz, Atheris)
-
-The general principle: every class of runtime bug that static analysis cannot catch must have a corresponding dynamic analysis verb. If the project has no mechanism to detect memory errors, data races, or undefined behaviour at runtime, those bugs are invisible — and invisible bugs are the most dangerous kind.
+Read the engineering standards from `{{NBS_ROOT}}/concepts/engineering-standards.md`.
+Apply every standard in that document to this audit. If the file cannot be read,
+abort with an error — do not fall back to hardcoded standards.
 
 ## Your Task
 

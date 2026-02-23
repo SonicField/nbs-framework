@@ -58,7 +58,7 @@ The antidote is periodic re-grounding: stop, state the terminal goal, check alig
 
 ## Pillar Check
 
-Have you read all six pillars in this session?
+Have you read all pillars in this session?
 
 - goals.md *(you are here)*
 - falsifiability.md
@@ -66,5 +66,6 @@ Have you read all six pillars in this session?
 - bullshit-detection.md
 - verification-cycle.md
 - zero-code-contract.md
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now. Next: `falsifiability.md`
