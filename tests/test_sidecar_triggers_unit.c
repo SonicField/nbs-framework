@@ -9,6 +9,9 @@
  *    3. First run syncs without firing
  *    4. Already past threshold, no re-fire
  *    5. Config file sets interval
+ *   17. Cross-sidecar dedup: second sidecar suppressed by shared file
+ *   18. Cross-sidecar dedup: new bucket after shared file triggers normally
+ *   19. Cross-sidecar dedup: missing shared file does not suppress
  *
  *   trigger_standup_check:
  *    6. Interval not elapsed
@@ -155,7 +158,7 @@ static void create_standup_env(const char *tmpdir,
 {
     snprintf(nbs_root, nr_size, "%s/project", tmpdir);
 
-    char chat_dir[L2];
+    char chat_dir[L1];
     snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", nbs_root);
     mkdirs(chat_dir);
 
@@ -602,6 +605,125 @@ int main(void)
             };
             fcntl(fd, F_SETLK, &unlock);
             close(fd);
+        }
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * Cross-sidecar Pythia dedup tests (D-1902 / D-1771840755d)
+     *
+     * The bug: multiple sidecars each have independent in-memory
+     * last_trigger_count. When a bucket boundary is crossed, ALL
+     * sidecars independently detect it and fire. The fix: a shared
+     * file (.nbs/pythia-last-bucket) records the last triggered
+     * bucket, preventing duplicate triggers across sidecars.
+     * ================================================================= */
+    printf("\n-- trigger_pythia_check (cross-sidecar dedup) --\n");
+
+    /* Test 17: Second sidecar suppressed by shared file */
+    {
+        char sub[] = "/tmp/nbs_trig_t17_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
+                          registry, sizeof(registry),
+                          bus_dir, sizeof(bus_dir), 20);
+
+        /*
+         * Simulate sidecar A having already triggered bucket 1:
+         * Write shared file with bucket=1, then call trigger_pythia_check
+         * as sidecar B with last=1 (bucket 0). Sidecar B sees the bucket
+         * crossing but the shared file says bucket 1 was already handled.
+         */
+        char shared_path[L3];
+        snprintf(shared_path, sizeof(shared_path),
+                 "%s/.nbs/pythia-last-bucket", nbs_root);
+        write_file(shared_path, "1\n");
+
+        int last = 1;  /* bucket 0 for interval 20 */
+        int rc = trigger_pythia_check(registry, nbs_root, &last);
+        CHECK("T17: second sidecar suppressed by shared file, returns 1",
+              rc == 1);
+        CHECK("T17: last_trigger_count still updated to 20", last == 20);
+
+        rmrf(sub);
+    }
+
+    /* Test 18: New bucket after shared file triggers normally */
+    {
+        char sub[] = "/tmp/nbs_trig_t18_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
+                          registry, sizeof(registry),
+                          bus_dir, sizeof(bus_dir), 40);
+
+        /*
+         * Shared file says bucket 1 was triggered. Decision count is 40,
+         * so current_bucket=2 (40/20). Since 2 > 1, this is a new bucket
+         * that hasn't been handled — should fire.
+         */
+        char shared_path[L3];
+        snprintf(shared_path, sizeof(shared_path),
+                 "%s/.nbs/pythia-last-bucket", nbs_root);
+        write_file(shared_path, "1\n");
+
+        int last = 21;  /* bucket 1 for interval 20 */
+        int rc = trigger_pythia_check(registry, nbs_root, &last);
+        CHECK("T18: new bucket fires despite shared file, returns 0",
+              rc == 0);
+        CHECK("T18: last_trigger_count updated to 40", last == 40);
+
+        /* Verify shared file was updated to bucket 2 */
+        FILE *f = fopen(shared_path, "r");
+        int stored_bucket = -1;
+        if (f) {
+            char buf[32];
+            if (fgets(buf, sizeof(buf), f)) {
+                stored_bucket = atoi(buf);
+            }
+            fclose(f);
+        }
+        CHECK("T18: shared file updated to bucket 2", stored_bucket == 2);
+
+        rmrf(sub);
+    }
+
+    /* Test 19: Missing shared file does not suppress (first trigger) */
+    {
+        char sub[] = "/tmp/nbs_trig_t19_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
+                          registry, sizeof(registry),
+                          bus_dir, sizeof(bus_dir), 20);
+
+        /* No shared file exists — first trigger should succeed */
+        char shared_path[L3];
+        snprintf(shared_path, sizeof(shared_path),
+                 "%s/.nbs/pythia-last-bucket", nbs_root);
+        unlink(shared_path);  /* ensure absent */
+
+        int last = 1;  /* bucket 0 for interval 20 */
+        int rc = trigger_pythia_check(registry, nbs_root, &last);
+        CHECK("T19: missing shared file allows trigger, returns 0", rc == 0);
+        CHECK("T19: last_trigger_count updated to 20", last == 20);
+
+        /* Verify shared file was created with bucket 1 */
+        FILE *f = fopen(shared_path, "r");
+        CHECK("T19: shared file was created", f != NULL);
+        if (f) {
+            char buf[32];
+            int stored_bucket = -1;
+            if (fgets(buf, sizeof(buf), f)) {
+                stored_bucket = atoi(buf);
+            }
+            fclose(f);
+            CHECK("T19: shared file contains bucket 1", stored_bucket == 1);
         }
 
         rmrf(sub);

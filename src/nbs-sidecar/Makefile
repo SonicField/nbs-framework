@@ -31,7 +31,8 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_exec_unit \
              $(UNIT_TEST_DIR)/test_sidecar_registry_unit \
              $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit \
-             $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit
+             $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_triggers_unit
 
 .PHONY: all clean install debug asan test test-unit test-all
 
@@ -85,6 +86,9 @@ $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit: $(UNIT_TEST_DIR)/test_sideca
 $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit.c strip_ansi.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
+$(UNIT_TEST_DIR)/test_sidecar_triggers_unit: $(UNIT_TEST_DIR)/test_sidecar_triggers_unit.c triggers.o bus_client.o chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
 test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_detect_unit
 	$(UNIT_TEST_DIR)/test_sidecar_hash_unit
@@ -92,6 +96,7 @@ test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_registry_unit
 	$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit
 	$(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit
+	$(UNIT_TEST_DIR)/test_sidecar_triggers_unit
 
 test: all install
 	./$(ASSERT_CHECK)
