@@ -22,7 +22,7 @@
 #   torch        8 PyTorch P0 smoke tests
 #   benchmarks   Benchmark-based correctness tests (5 benchmarks)
 #   bugs         Bug 1 + Bug 4 regression tests
-#   specialisation  14 standalone specialisation correctness tests
+#   specialisation  15 standalone specialisation correctness tests
 #   all          Everything above
 #
 # Multiple suites can be combined:
@@ -803,7 +803,7 @@ run_benchmarks() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# Suite: specialisation — 14 standalone specialisation correctness tests
+# Suite: specialisation — 15 standalone specialisation correctness tests
 # ══════════════════════════════════════════════════════════════════════════
 #
 # These are standalone Python test scripts that:
@@ -817,8 +817,9 @@ run_benchmarks() {
 #   test_binary_subscr_correctness.py  BINARY_SUBSCR correctness
 #   test_super_fix.py                  super().__init__() JIT bug fix
 #
-# tests/ subdirectory (14):
+# tests/ subdirectory (15):
 #   test_binary_op_add_int.py          BINARY_OP_ADD_INT/SUBTRACT/MULTIPLY correctness
+#   test_binary_op_inplace_add_unicode.py BINARY_OP_INPLACE_ADD_UNICODE str += correctness
 #   test_binary_subscr_deopt.py        BINARY_SUBSCR deoptimisation
 #   test_call_builtin_class.py         CALL_BUILTIN_CLASS constructor correctness
 #   test_contains_op_dict.py           CONTAINS_OP_DICT dict 'in' operator
@@ -844,6 +845,7 @@ SPEC_ROOT_TESTS=(
 # Specialisation tests in the tests/ subdirectory
 SPEC_SUB_TESTS=(
     test_binary_op_add_int
+    test_binary_op_inplace_add_unicode
     test_binary_subscr_deopt
     test_call_builtin_class
     test_contains_op_dict
