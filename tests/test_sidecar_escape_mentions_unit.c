@@ -172,6 +172,50 @@ int main(void) {
               strcmp(buf, "") == 0);
     }
 
+    /* 15. Sync: escape_mentions and bus_extract_mentions agree on all 256 bytes.
+     * For each byte value c, construct "@<c>rest" and check:
+     *   - escape_mentions escapes (inserts \) iff
+     *   - bus_extract_mentions would extract a mention starting with c.
+     * This catches divergence between is_mention_handle_char and is_handle_char. */
+    {
+        int sync_failures = 0;
+        for (int c = 0; c < 256; c++) {
+            char input[8];
+            input[0] = '@';
+            input[1] = (char)c;
+            input[2] = 'x';  /* Need ≥1 more handle char so extraction proceeds */
+            input[3] = '\0';
+
+            /* Does escape_mentions escape the @ ? */
+            char *escaped = escape_mentions(input);
+            int did_escape = (strlen(escaped) > strlen(input));
+            free(escaped);
+
+            /* Does bus_extract_mentions extract a mention from " @<c>x" ?
+             * Prepend space so @ is preceded by whitespace (not email context). */
+            char extract_input[8];
+            extract_input[0] = ' ';
+            extract_input[1] = '@';
+            extract_input[2] = (char)c;
+            extract_input[3] = 'x';
+            extract_input[4] = ' ';
+            extract_input[5] = '\0';
+
+            char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+            int count = bus_extract_mentions(extract_input, handles,
+                                              MAX_MENTIONS, NULL);
+            int did_extract = (count > 0);
+
+            if (did_escape != did_extract) {
+                printf("      byte 0x%02x: escape=%d extract=%d\n",
+                       c, did_escape, did_extract);
+                sync_failures++;
+            }
+        }
+        CHECK("sync: escape_mentions matches bus_extract_mentions for all 256 bytes",
+              sync_failures == 0);
+    }
+
     printf("%d/%d passed\n", tests - fails, tests);
     return fails;
 }

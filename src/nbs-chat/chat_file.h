@@ -134,6 +134,25 @@ int chat_read(const char *path, chat_state_t *state);
 int chat_send(const char *path, const char *handle, const char *message);
 
 /*
+ * chat_truncate — Remove messages beyond keep_count, rewrite atomically.
+ *
+ * Preconditions:
+ *   - path != NULL (must refer to an existing chat file)
+ *   - keep_count >= 0
+ *
+ * Postconditions:
+ *   - On success (returns 0): file contains at most keep_count messages.
+ *     Header fields (last-writer, last-write, file-length, participants)
+ *     are recomputed from the remaining messages. File permissions preserved.
+ *   - If keep_count >= message_count: no-op, returns 0.
+ *   - On error (returns -1): file may or may not have been modified.
+ *
+ * Acquires lock, reads file, keeps first keep_count messages, rewrites.
+ * Returns 0 on success, -1 on error.
+ */
+int chat_truncate(const char *path, int keep_count);
+
+/*
  * chat_poll — Wait for a new message not from the given handle.
  *
  * Preconditions:

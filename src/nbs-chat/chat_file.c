@@ -1033,6 +1033,245 @@ int chat_send(const char *path, const char *handle, const char *message) {
     return 0;
 }
 
+int chat_truncate(const char *path, int keep_count) {
+    ASSERT_MSG(path != NULL, "chat_truncate: path is NULL");
+    ASSERT_MSG(keep_count >= 0, "chat_truncate: keep_count %d is negative", keep_count);
+
+    int lock_fd = chat_lock_acquire(path);
+    if (lock_fd < 0) return -1;
+
+    /* Read current state for decoded message data (handles, timestamps) */
+    chat_state_t state;
+    if (chat_read(path, &state) < 0) {
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    /* No-op if keep_count >= message_count */
+    if (keep_count >= state.message_count) {
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return 0;
+    }
+
+    /* Read raw base64 lines from file (same pattern as chat_send) */
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    char **encoded_lines = NULL;
+    int encoded_line_count = 0;
+    char line_buf[MAX_MESSAGE_LEN];
+    int past_delim = 0;
+
+    while (fgets(line_buf, sizeof(line_buf), f)) {
+        size_t ll = strlen(line_buf);
+        while (ll > 0 && (line_buf[ll-1] == '\n' || line_buf[ll-1] == '\r'))
+            line_buf[--ll] = '\0';
+
+        if (!past_delim) {
+            if (strcmp(line_buf, "---") == 0 && encoded_line_count == 0)
+                past_delim = 1;
+            continue;
+        }
+
+        if (ll > 0) {
+            /* Only collect lines up to keep_count */
+            if (encoded_line_count >= keep_count) {
+                encoded_line_count++;
+                continue;  /* Count but don't store */
+            }
+            char **tmp = realloc(encoded_lines,
+                                 sizeof(char *) * (encoded_line_count + 1));
+            if (!tmp) {
+                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+                free(encoded_lines);
+                fclose(f);
+                chat_state_free(&state);
+                chat_lock_release(lock_fd);
+                return -1;
+            }
+            encoded_lines = tmp;
+            encoded_lines[encoded_line_count] = strdup(line_buf);
+            if (!encoded_lines[encoded_line_count]) {
+                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+                free(encoded_lines);
+                fclose(f);
+                chat_state_free(&state);
+                chat_lock_release(lock_fd);
+                return -1;
+            }
+            encoded_line_count++;
+        }
+    }
+    fclose(f);
+
+    /* encoded_line_count now holds the stored count (= keep_count) */
+    int stored = (encoded_line_count > keep_count) ? keep_count : encoded_line_count;
+
+    /* Recompute participants from kept messages */
+    participant_t parts[MAX_PARTICIPANTS];
+    int part_count = 0;
+    for (int i = 0; i < keep_count && i < state.message_count; i++) {
+        part_count = update_participants(parts, part_count,
+                                         state.messages[i].handle, MAX_PARTICIPANTS);
+    }
+
+    /* Set last-writer and last-write from last kept message */
+    char last_writer[MAX_HANDLE_LEN];
+    char last_write[64];
+    if (keep_count > 0 && keep_count <= state.message_count) {
+        snprintf(last_writer, sizeof(last_writer), "%s",
+                 state.messages[keep_count - 1].handle);
+        time_t last_ts = state.messages[keep_count - 1].timestamp;
+        if (last_ts > 0) {
+            struct tm tm_buf;
+            struct tm *tm = localtime_r(&last_ts, &tm_buf);
+            if (tm) {
+                strftime(last_write, sizeof(last_write),
+                         "%Y-%m-%dT%H:%M:%S%z", tm);
+            } else {
+                get_timestamp(last_write, sizeof(last_write));
+            }
+        } else {
+            get_timestamp(last_write, sizeof(last_write));
+        }
+    } else {
+        /* Truncating to 0 messages */
+        last_writer[0] = '\0';
+        get_timestamp(last_write, sizeof(last_write));
+    }
+
+    /* Format participants string */
+    char parts_str[4096];
+    format_participants(parts, part_count, parts_str, sizeof(parts_str));
+
+    /* Build header (without file-length) */
+    char header[8192];
+    int header_len = snprintf(header, sizeof(header),
+        "=== nbs-chat ===\n"
+        "last-writer: %s\n"
+        "last-write: %s\n"
+        "participants: %s\n"
+        "---\n",
+        last_writer, last_write, parts_str);
+    ASSERT_MSG(header_len > 0 && (size_t)header_len < sizeof(header),
+               "chat_truncate: header snprintf overflow");
+
+    /* Build content without file-length for size computation */
+    size_t content_size = header_len;
+    for (int i = 0; i < stored; i++) {
+        content_size += strlen(encoded_lines[i]) + 1;
+    }
+
+    char *content_no_fl = malloc(content_size + 1);
+    if (!content_no_fl) {
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    size_t offset = 0;
+    memcpy(content_no_fl + offset, header, header_len);
+    offset += header_len;
+    for (int i = 0; i < stored; i++) {
+        size_t ll = strlen(encoded_lines[i]);
+        memcpy(content_no_fl + offset, encoded_lines[i], ll);
+        offset += ll;
+        content_no_fl[offset++] = '\n';
+    }
+    content_no_fl[offset] = '\0';
+
+    int64_t file_len = compute_file_length(content_no_fl);
+
+    /* Atomic write: .tmp then rename */
+    char tmp_path[MAX_PATH_LEN + 8];
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    ASSERT_MSG(tn > 0 && (size_t)tn < sizeof(tmp_path),
+               "chat_truncate: tmp_path overflow");
+
+    int wfd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (wfd < 0) {
+        free(content_no_fl);
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    f = fdopen(wfd, "w");
+    if (!f) {
+        close(wfd);
+        unlink(tmp_path);
+        free(content_no_fl);
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    int write_err = 0;
+    if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
+    if (fprintf(f, "last-writer: %s\n", last_writer) < 0) write_err = 1;
+    if (fprintf(f, "last-write: %s\n", last_write) < 0) write_err = 1;
+    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
+    if (fprintf(f, "---\n") < 0) write_err = 1;
+    for (int i = 0; i < stored; i++) {
+        if (fprintf(f, "%s\n", encoded_lines[i]) < 0) write_err = 1;
+    }
+    if (write_err) {
+        fclose(f);
+        unlink(tmp_path);
+        free(content_no_fl);
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        unlink(tmp_path);
+        free(content_no_fl);
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    /* Verify file-length */
+    struct stat st;
+    if (stat(tmp_path, &st) == 0 && (int64_t)st.st_size != file_len) {
+        fprintf(stderr, "warning: chat_truncate: file-length %" PRId64
+                " != actual %" PRId64 "\n", file_len, (int64_t)st.st_size);
+    }
+
+    /* Atomic rename */
+    if (rename(tmp_path, path) != 0) {
+        unlink(tmp_path);
+        free(content_no_fl);
+        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+
+    free(content_no_fl);
+    for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+    free(encoded_lines);
+    chat_state_free(&state);
+    chat_lock_release(lock_fd);
+    return 0;
+}
+
 int chat_poll(const char *path, const char *handle, int timeout_secs) {
     ASSERT_MSG(path != NULL, "chat_poll: path is NULL");
     ASSERT_MSG(handle != NULL, "chat_poll: handle is NULL");

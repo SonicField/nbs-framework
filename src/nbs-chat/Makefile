@@ -12,7 +12,7 @@ TEST_DIR = ../../tests/automated
 UNIT_TEST_DIR = ../../tests
 
 # Shared library objects (used by both binaries)
-LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c
+LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
 
 # nbs-chat CLI
@@ -45,6 +45,8 @@ UNIT_TEST_BUS_BRIDGE = $(UNIT_TEST_DIR)/test_bus_bridge_unit
 UNIT_TEST_LOCK = $(UNIT_TEST_DIR)/test_lock_unit
 UNIT_TEST_REMOTE = $(UNIT_TEST_DIR)/test_remote_unit
 UNIT_TEST_TERMINAL = $(UNIT_TEST_DIR)/test_terminal_unit
+UNIT_TEST_TIME = $(UNIT_TEST_DIR)/test_chat_time_unit
+UNIT_TEST_TRUNCATE = $(UNIT_TEST_DIR)/test_chat_truncate_unit
 
 .PHONY: all clean install debug asan test test-debug test-asan test-unit test-all
 
@@ -109,6 +111,12 @@ $(UNIT_TEST_REMOTE): $(UNIT_TEST_DIR)/test_remote_unit.c remote.c
 $(UNIT_TEST_TERMINAL): $(UNIT_TEST_DIR)/test_terminal_unit.c
 	$(CC) $(CFLAGS) -o $@ $(UNIT_TEST_DIR)/test_terminal_unit.c $(LDFLAGS)
 
+$(UNIT_TEST_TIME): $(UNIT_TEST_DIR)/test_chat_time_unit.c time_parse.c time_parse.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_chat_time_unit.c time_parse.c $(LDFLAGS)
+
+$(UNIT_TEST_TRUNCATE): $(UNIT_TEST_DIR)/test_chat_truncate_unit.c chat_file.c lock.c base64.c chat_file.h lock.h base64.h
+	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_chat_truncate_unit.c chat_file.c lock.c base64.c $(LDFLAGS)
+
 # --- Test targets ---
 
 test: all install
@@ -132,19 +140,21 @@ test-asan: asan install
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 	bash $(TEST_DIR)/test_nbs_chat_web.sh
 
-test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL)
+test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE)
 	$(UNIT_TEST_CHAT_FILE)
 	$(UNIT_TEST_BASE64)
 	$(UNIT_TEST_BUS_BRIDGE)
 	$(UNIT_TEST_LOCK)
 	$(UNIT_TEST_REMOTE)
 	$(UNIT_TEST_TERMINAL)
+	$(UNIT_TEST_TIME)
+	$(UNIT_TEST_TRUNCATE)
 
 # Full test run: release + ASan
 test-all: test-unit test test-asan
 
 # Dependencies
-main.o: main.c chat_file.h bus_bridge.h
+main.o: main.c chat_file.h bus_bridge.h time_parse.h
 terminal.o: terminal.c chat_file.h bus_bridge.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h chat_file.h
@@ -155,4 +165,4 @@ web.o: web.c web_assets.h chat_file.h
 
 clean:
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(TERM_OBJS) $(REMOTE_OBJS) $(WEB_OBJS) $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(WEB_TARGET) $(ASSERT_CHECK) web_assets.h
-	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL)
+	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE)

@@ -9,6 +9,7 @@
  *   read <file> [options]            Read messages
  *   poll <file> <handle> [options]   Wait for new message
  *   search <file> <pattern> [opts]   Search message history
+ *   delete <file> --after=<time>     Delete messages after time
  *   participants <file>              List participants
  *   help                             Show usage
  *
@@ -22,6 +23,7 @@
 
 #include "bus_bridge.h"
 #include "chat_file.h"
+#include "time_parse.h"
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -40,15 +42,27 @@ static void print_usage(void) {
     printf("  read <file> [options]            Read messages\n");
     printf("  poll <file> <handle> [options]   Wait for new message\n");
     printf("  search <file> <pattern> [opts]   Search message history\n");
+    printf("  delete <file> --after=<time>     Delete messages after time\n");
     printf("  participants <file>              List participants and counts\n");
     printf("  help                             Show this help\n\n");
     printf("Read options:\n");
     printf("  --last=N           Show only the last N messages\n");
     printf("  --since=<handle>   Show messages after last message from <handle>\n");
     printf("  --unread=<handle>  Show messages after read cursor for <handle>\n");
-    printf("                     Auto-advances cursor after displaying\n\n");
+    printf("                     Auto-advances cursor after displaying\n");
+    printf("  --after=<time>     Show messages after time (epoch, 2h, ISO 8601)\n");
+    printf("  --before=<time>    Show messages before time\n\n");
     printf("Search options:\n");
-    printf("  --handle=<name>  Only search messages from this handle\n\n");
+    printf("  --handle=<name>  Only search messages from this handle\n");
+    printf("  --after=<time>   Only search messages after time\n");
+    printf("  --before=<time>  Only search messages before time\n\n");
+    printf("Delete options:\n");
+    printf("  --after=<time>   Delete messages at or after time (required)\n");
+    printf("  --dry-run        Show what would be deleted without modifying\n\n");
+    printf("Time formats:\n");
+    printf("  30s, 5m, 2h, 1d    Relative (ago from now)\n");
+    printf("  1771834287          Epoch seconds (>=10 digits)\n");
+    printf("  2026-02-23T00:11:27 ISO 8601 (local time)\n\n");
     printf("Poll options:\n");
     printf("  --timeout=N      Timeout in seconds (default: 10)\n\n");
     printf("Exit codes:\n");
@@ -198,6 +212,8 @@ static int cmd_read(int argc, char **argv) {
     int last_n = -1;
     const char *since_handle = NULL;
     const char *unread_handle = NULL;
+    time_t after_time = 0;
+    time_t before_time = 0;
 
     /* Parse options */
     for (int i = 3; i < argc; i++) {
@@ -222,6 +238,16 @@ static int cmd_read(int argc, char **argv) {
             if (unread_handle[0] == '\0') {
                 fprintf(stderr, "Warning: --unread= value is empty, ignoring\n");
                 unread_handle = NULL;
+            }
+        } else if (strncmp(argv[i], "--after=", 8) == 0) {
+            if (parse_timespec(argv[i] + 8, &after_time) < 0) {
+                fprintf(stderr, "Error: Invalid --after value: %s\n", argv[i] + 8);
+                return 4;
+            }
+        } else if (strncmp(argv[i], "--before=", 9) == 0) {
+            if (parse_timespec(argv[i] + 9, &before_time) < 0) {
+                fprintf(stderr, "Error: Invalid --before value: %s\n", argv[i] + 9);
+                return 4;
             }
         } else {
             fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
@@ -276,6 +302,20 @@ static int cmd_read(int argc, char **argv) {
         }
         if (last_from >= 0) {
             start = last_from + 1;
+        }
+    }
+
+    /* Apply --after filter: advance start to first message at or after time */
+    if (after_time > 0) {
+        while (start < end && state.messages[start].timestamp < after_time) {
+            start++;
+        }
+    }
+
+    /* Apply --before filter: retreat end to exclude messages after time */
+    if (before_time > 0) {
+        while (end > start && state.messages[end - 1].timestamp > before_time) {
+            end--;
         }
     }
 
@@ -483,6 +523,8 @@ static int cmd_search(int argc, char **argv) {
     const char *path = argv[2];
     const char *pattern = argv[3];
     const char *filter_handle = NULL;
+    time_t after_time = 0;
+    time_t before_time = 0;
 
     /* Preconditions: args validated from argv */
     ASSERT_MSG(path != NULL, "cmd_search: path argument is NULL");
@@ -502,6 +544,16 @@ static int cmd_search(int argc, char **argv) {
             if (filter_handle[0] == '\0') {
                 fprintf(stderr, "Warning: --handle= value is empty, ignoring\n");
                 filter_handle = NULL;
+            }
+        } else if (strncmp(argv[i], "--after=", 8) == 0) {
+            if (parse_timespec(argv[i] + 8, &after_time) < 0) {
+                fprintf(stderr, "Error: Invalid --after value: %s\n", argv[i] + 8);
+                return 4;
+            }
+        } else if (strncmp(argv[i], "--before=", 9) == 0) {
+            if (parse_timespec(argv[i] + 9, &before_time) < 0) {
+                fprintf(stderr, "Error: Invalid --before value: %s\n", argv[i] + 9);
+                return 4;
             }
         } else {
             fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
@@ -524,6 +576,14 @@ static int cmd_search(int argc, char **argv) {
     for (int i = 0; i < state.message_count; i++) {
         /* Apply handle filter if specified */
         if (filter_handle && strcmp(state.messages[i].handle, filter_handle) != 0) {
+            continue;
+        }
+
+        /* Apply time filters */
+        if (after_time > 0 && state.messages[i].timestamp < after_time) {
+            continue;
+        }
+        if (before_time > 0 && state.messages[i].timestamp > before_time) {
             continue;
         }
 
@@ -558,6 +618,92 @@ static int cmd_search(int argc, char **argv) {
     return 0;
 }
 
+static int cmd_delete(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: nbs-chat delete <file> --after=<time> [--dry-run]\n");
+        return 4;
+    }
+    ASSERT_MSG(argc >= 3, "cmd_delete: argc %d after validation", argc);
+
+    const char *path = argv[2];
+
+    ASSERT_MSG(path != NULL, "cmd_delete: path argument is NULL");
+
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_delete") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
+    time_t after_time = 0;
+    int dry_run = 0;
+
+    for (int i = 3; i < argc; i++) {
+        if (strncmp(argv[i], "--after=", 8) == 0) {
+            if (parse_timespec(argv[i] + 8, &after_time) < 0) {
+                fprintf(stderr, "Error: Invalid --after value: %s\n", argv[i] + 8);
+                return 4;
+            }
+        } else if (strcmp(argv[i], "--dry-run") == 0) {
+            dry_run = 1;
+        } else {
+            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+        }
+    }
+
+    if (after_time == 0) {
+        fprintf(stderr, "Error: --after=<time> is required for delete\n");
+        return 4;
+    }
+
+    /* Read file to find truncation point */
+    chat_state_t state;
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Failed to read chat file: %s\n", path);
+        return 1;
+    }
+
+    /* Find first message at or after the cutoff time */
+    int truncate_at = state.message_count;  /* default: nothing to delete */
+    for (int i = 0; i < state.message_count; i++) {
+        if (state.messages[i].timestamp >= after_time) {
+            truncate_at = i;
+            break;
+        }
+    }
+
+    int to_delete = state.message_count - truncate_at;
+
+    if (to_delete == 0) {
+        printf("No messages to delete (0 messages at or after the specified time)\n");
+        chat_state_free(&state);
+        return 0;
+    }
+
+    if (dry_run) {
+        printf("Would delete %d message(s) (keeping %d)\n",
+               to_delete, truncate_at);
+        chat_state_free(&state);
+        return 0;
+    }
+
+    chat_state_free(&state);
+
+    int rc = chat_truncate(path, truncate_at);
+    if (rc < 0) {
+        fprintf(stderr, "Error: Failed to truncate chat file\n");
+        return 1;
+    }
+
+    printf("Deleted %d message(s) (kept %d)\n", to_delete, truncate_at);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Error: No command specified\n");
@@ -577,6 +723,7 @@ int main(int argc, char **argv) {
     else if (strcmp(cmd, "read") == 0) rc = cmd_read(argc, argv);
     else if (strcmp(cmd, "poll") == 0) rc = cmd_poll(argc, argv);
     else if (strcmp(cmd, "search") == 0) rc = cmd_search(argc, argv);
+    else if (strcmp(cmd, "delete") == 0) rc = cmd_delete(argc, argv);
     else if (strcmp(cmd, "participants") == 0) rc = cmd_participants(argc, argv);
     else if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
     else {
