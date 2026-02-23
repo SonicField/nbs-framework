@@ -18,7 +18,8 @@ CHAT_LIB_OBJS = $(CHAT_SRC_DIR)/base64.o $(CHAT_SRC_DIR)/lock.o
 
 # Sidecar sources
 SRCS = main.c sidecar.c transport_tmux.c transport_pty.c detect.c exec_util.c \
-       bus_client.c chat_client.c registry.c triggers.c hash.c strip_ansi.c
+       bus_client.c chat_client.c registry.c triggers.c hash.c strip_ansi.c \
+       mention_escape.c
 OBJS = $(SRCS:.c=.o)
 TARGET = nbs-sidecar
 
@@ -28,7 +29,8 @@ ASSERT_CHECK = assert_check
 UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_hash_unit \
              $(UNIT_TEST_DIR)/test_sidecar_exec_unit \
-             $(UNIT_TEST_DIR)/test_sidecar_registry_unit
+             $(UNIT_TEST_DIR)/test_sidecar_registry_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit
 
 .PHONY: all clean install debug asan test test-unit test-all
 
@@ -76,11 +78,15 @@ $(UNIT_TEST_DIR)/test_sidecar_exec_unit: $(UNIT_TEST_DIR)/test_sidecar_exec_unit
 $(UNIT_TEST_DIR)/test_sidecar_registry_unit: $(UNIT_TEST_DIR)/test_sidecar_registry_unit.c registry.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
+$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit: $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit.c mention_escape.o $(CHAT_SRC_DIR)/bus_bridge.o
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
 test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_detect_unit
 	$(UNIT_TEST_DIR)/test_sidecar_hash_unit
 	$(UNIT_TEST_DIR)/test_sidecar_exec_unit
 	$(UNIT_TEST_DIR)/test_sidecar_registry_unit
+	$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit
 
 test: all install
 	./$(ASSERT_CHECK)
