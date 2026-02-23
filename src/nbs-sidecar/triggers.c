@@ -82,6 +82,64 @@ static int read_pythia_interval(const char *bus_dir) {
     return interval;
 }
 
+/*
+ * read_shared_pythia_bucket — Read last triggered bucket from shared file.
+ *
+ * Multiple sidecars run independently, each with their own in-memory
+ * last_trigger_count. Without coordination, all sidecars independently
+ * detect a bucket transition and fire — producing duplicate Pythia
+ * assessments. This shared file records which bucket was last triggered
+ * by ANY sidecar, preventing duplicates.
+ *
+ * Returns the last triggered bucket number, or -1 if the file does
+ * not exist or is unreadable (first run).
+ */
+static int read_shared_pythia_bucket(const char *nbs_root) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/pythia-last-bucket", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    char buf[32];
+    int bucket = -1;
+    if (fgets(buf, sizeof(buf), f)) {
+        char *endptr;
+        long parsed = strtol(buf, &endptr, 10);
+        if (endptr != buf && parsed >= 0)
+            bucket = (int)parsed;
+    }
+    fclose(f);
+    return bucket;
+}
+
+/*
+ * write_shared_pythia_bucket — Atomically write last triggered bucket.
+ *
+ * Uses tmp+rename for atomicity — same pattern as standup timestamp.
+ */
+static void write_shared_pythia_bucket(const char *nbs_root, int bucket) {
+    char path[4096], tmp_path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/pythia-last-bucket", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    n = snprintf(tmp_path, sizeof(tmp_path),
+                 "%s/.nbs/pythia-last-bucket.tmp", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return;
+
+    FILE *f = fopen(tmp_path, "w");
+    if (f) {
+        fprintf(f, "%d\n", bucket);
+        if (fclose(f) == 0) {
+            rename(tmp_path, path);
+        } else {
+            unlink(tmp_path);
+        }
+    }
+}
+
 int trigger_pythia_check(const char *registry_path, const char *nbs_root,
                           int *last_trigger_count) {
     ASSERT_MSG(registry_path != NULL, "trigger_pythia_check: registry_path is NULL");
@@ -102,6 +160,28 @@ int trigger_pythia_check(const char *registry_path, const char *nbs_root,
     int last_bucket = *last_trigger_count / interval;
 
     if (current_bucket > last_bucket && decision_count > 0) {
+        /*
+         * Cross-sidecar dedup: check shared file before triggering.
+         *
+         * Multiple sidecars each have independent in-memory state. When
+         * a bucket boundary is crossed, ALL sidecars detect it independently.
+         * The shared file records which bucket was last triggered by ANY
+         * sidecar. If another sidecar already triggered this bucket, skip.
+         *
+         * This is analogous to the standup CSMA/CD shared timestamp file
+         * (.standup-ts), but uses bucket numbers instead of timestamps.
+         * The flock in trigger_pythia_spawn provides a secondary guard,
+         * but releases too quickly to prevent sequential duplicates.
+         */
+        int shared_bucket = read_shared_pythia_bucket(nbs_root);
+        if (shared_bucket >= current_bucket) {
+            /* Another sidecar already triggered this bucket */
+            *last_trigger_count = decision_count;
+            return 1;
+        }
+
+        /* We are the first sidecar to see this bucket — claim it */
+        write_shared_pythia_bucket(nbs_root, current_bucket);
         *last_trigger_count = decision_count;
 
         /* Publish bus event for observability */
