@@ -28,6 +28,39 @@ Usage:
 
 import sys
 
+WARMUP = 15000  # CinderX auto-compilation typically needs 10000+ calls
+
+# Set to True to require JIT compilation when cinderjit is available.
+REQUIRE_JIT = True
+
+
+def check_jit_compiled(func, name):
+    """Verify function is JIT-compiled.
+
+    If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
+    when the function is not compiled. If cinderjit is not available, always
+    returns False (interpreter-only mode, tests still run for correctness).
+    """
+    try:
+        import cinderjit
+        if cinderjit.is_jit_compiled(func):
+            return True
+        compiled = cinderjit.get_compiled_functions()
+        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
+        for cf in compiled:
+            if func_name in str(cf):
+                return True
+        if REQUIRE_JIT:
+            assert False, (
+                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
+                "Test cannot verify JIT path — increase WARMUP or check "
+                "cinderjit.auto() is enabled."
+            )
+        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
+        return False
+    except (ImportError, AttributeError):
+        return False
+
 
 def get_interpreter_result(test_fn, *args):
     """Run test_fn without JIT to get reference result."""
@@ -224,7 +257,7 @@ def main():
             cinderjit.enable_specialized_opcodes()
         except AttributeError:
             pass  # Older builds may not have this
-    except ImportError:
+    except (ImportError, AttributeError):
         print("SKIP — cinderx/cinderjit not available")
         sys.exit(0)
 
@@ -319,18 +352,14 @@ def main():
     ]
 
     # Warm up all functions (need 10000+ calls for JIT compilation with cinderjit.auto())
-    print("  Warming up (15000 calls per function)...")
+    print("  Warming up (WARMUP calls per function)...")
     for name, fn, make_input in jit_fns:
-        for _ in range(15000):
+        for _ in range(WARMUP):
             fn(make_input())
 
-    # Verify JIT compilation where possible
+    # Verify JIT compilation
     for name, fn, _ in jit_fns:
-        try:
-            compiled = cinderjit.is_jit_compiled(fn)
-            print(f"  {name}: jit_compiled={compiled}")
-        except AttributeError:
-            pass
+        check_jit_compiled(fn, name)
 
     # Test: JIT results must match interpreter references
     print()
