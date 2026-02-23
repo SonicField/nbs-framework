@@ -23,6 +23,7 @@
 #include "triggers.h"
 #include "exec_util.h"
 #include "strip_ansi.h"
+#include "mention_escape.h"
 #include "../nbs-common/nbs_assert.h"
 
 #include <stdio.h>
@@ -170,16 +171,25 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
     /* Strip ANSI escape sequences */
     strip_ansi(content);
 
+    /* Escape @ signs to prevent mention feedback loops.
+     * The pane content may contain @handle references which would
+     * trigger re-extraction by bus_extract_mentions.
+     * Layer 1: sanitise_at_signs replaces all @ with \xc0 (primary defence).
+     * Layer 2: escape_mentions inserts \ after @ (independently testable fallback). */
+    sanitise_at_signs(content);
+    char *escaped = escape_mentions(content);
+
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
     if (registry_find_first(registry_path, "chat",
                              chat_path, sizeof(chat_path)) == 0) {
         char msg[SIDECAR_MAX_CONTENT];
         snprintf(msg, sizeof(msg),
-                 "tmux pane for %s:\n%s", cfg->handle, content);
+                 "tmux pane for %s:\n%s", cfg->handle, escaped);
         chat_client_send(chat_path, "sidecar", msg);
     }
 
+    free(escaped);
     free(content);
 }
 
