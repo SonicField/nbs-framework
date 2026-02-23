@@ -53,37 +53,50 @@ Each sub-agent should summarise:
 
 Synthesise the 4 summaries into a unified picture of the team's current state.
 
-### Step 2: Assess team effectiveness
+### Step 2: Run the full /nbs review
 
-Apply the NBS review framework mentally. Read the pillar documents if needed:
-- `/home/alexturner/.nbs/concepts/goals.md` — terminal vs instrumental goals
-- `/home/alexturner/.nbs/concepts/rhetoric.md` — ethos/pathos/logos failures
+**MANDATORY:** Read all six NBS pillar documents before assessing. Do not skip any.
 
-Assess these dimensions:
+```bash
+cat /home/alexturner/.nbs/concepts/goals.md
+cat /home/alexturner/.nbs/concepts/falsifiability.md
+cat /home/alexturner/.nbs/concepts/rhetoric.md
+cat /home/alexturner/.nbs/concepts/bullshit-detection.md
+cat /home/alexturner/.nbs/concepts/verification-cycle.md
+cat /home/alexturner/.nbs/concepts/zero-code-contract.md
+```
 
-1. **Terminal goal alignment:** What is the stated terminal goal? Is each agent's current work contributing to it, or has anyone drifted into tangential work?
+Then apply the full NBS review framework (as defined in `/nbs`) to the team's recent work. Assess all dimensions:
 
-2. **Idle agents:** Who has posted "waiting for..." or "nothing to do" or simply gone silent? What useful work could they pick up?
+**From the NBS review framework:**
+1. **Terminal goals** — are they clearly articulated? Has there been drift?
+2. **Instrumental goals** — is there a coherent sequence or just "the next thing"?
+3. **Ethos/Pathos/Logos** — is anyone appealing to authority over evidence? Is the work serving the humans who need it? Are there aesthetic detours disguised as logic?
+4. **Documentation state** — do plans and progress logs exist and are they current?
+5. **Falsifiability discipline** — is each choice backed by falsifiable evidence? Tests before code? Assertions present?
+6. **Bullshit check** — are all outcomes being reported or are we cherry-picking?
 
-3. **Blocked agents:** Who is waiting on something — a build, a review, a decision, access to a resource? Can the blocker be resolved by reassigning work or escalating?
-
-4. **Coordination failures:** Are agents duplicating analysis? Talking past each other? Posting walls of text that nobody reads? Is the supervisor actually coordinating or just echoing what others say?
-
-5. **Missing roles:** Is there work that nobody is doing? Test gaps, documentation, code review, infrastructure maintenance?
+**Team-specific dimensions:**
+7. **Idle agents** — who has no useful work? What should they do?
+8. **Blocked agents** — who is waiting on something? Can it be unblocked?
+9. **Coordination failures** — agents duplicating work? Talking past each other? Supervisor echoing rather than coordinating?
+10. **Missing roles** — is there work nobody is doing?
 
 ### Step 3: Post recommendations to chat
 
-Post to the primary chat channel using this format:
+Post to the primary chat channel. The report must cover BOTH the NBS review dimensions (1–6) and the team-specific dimensions (7–10):
 
 ```bash
 nbs-chat send .nbs/chat/live.chat shepard "SHEPARD CHECKPOINT
 
-**Goal alignment:** [which agents are aligned with the terminal goal, which have drifted, what the drift is]
+**Terminal goal:** [what it is, whether it's clearly stated]
+**Goal drift:** [which agents have drifted, what the drift is]
+**Falsifiability:** [are claims backed by evidence? Tests before code? Missing falsifiers?]
+**Bullshit check:** [are negative results being reported? Cherry-picking?]
+**Ethos/Pathos/Logos:** [authority-over-evidence? aesthetic detours? work not serving humans?]
 
 **Idle agents:** [who is idle, specific task each should pick up]
-
 **Blocked agents:** [who is blocked, what's blocking them, suggested resolution]
-
 **Coordination:** [specific issues observed, suggested fixes]
 
 **Recommended assignments:**

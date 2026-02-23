@@ -29,9 +29,9 @@ Not all participants in chat are agents to be spawned. Distinguish:
 | Type | Examples | Spawning |
 |------|----------|----------|
 | **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `nbs-claude` / `nbs-worker continue` during restart |
-| **Infrastructure** | sidecar, pythia | **Do NOT spawn during restart.** Sidecars are launched automatically by `nbs-claude` for each agent. Pythia is triggered by sidecar configuration (pythia-interval). |
+| **Infrastructure** | sidecar, pythia, shepard | **Do NOT spawn during restart.** Sidecars are launched automatically by `nbs-claude` for each agent. Pythia is triggered by sidecar configuration (pythia-interval). Shepard is triggered by sidecar configuration (shepard-interval, every 100 chat messages). |
 
-The `participants` list in chat includes both types. When triaging, skip sidecar and pythia — they are not independent agents.
+The `participants` list in chat includes both types. When triaging, skip sidecar, pythia, and shepard — they are not independent agents.
 
 ## Process
 
