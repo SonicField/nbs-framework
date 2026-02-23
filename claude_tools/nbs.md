@@ -146,15 +146,16 @@ Before anything else, ask yourself: **Do I have clear memory of having read the 
 - If **yes** (you can recall specific content from goals.md, falsifiability.md, etc.): proceed to Step 2.
 - If **no** or **unsure**: Read the foundation documents now. Context compaction erodes pillar knowledge - re-reading restores it.
 
-**Read all six pillars** (required, no exceptions):
+**Read all pillars** (required, no exceptions):
 1. `{{NBS_ROOT}}/concepts/goals.md` - the foundation
 2. `{{NBS_ROOT}}/concepts/falsifiability.md` - the method
 3. `{{NBS_ROOT}}/concepts/rhetoric.md` - human intent and failure modes
 4. `{{NBS_ROOT}}/concepts/bullshit-detection.md` - honest reporting
 5. `{{NBS_ROOT}}/concepts/verification-cycle.md` - the process
 6. `{{NBS_ROOT}}/concepts/zero-code-contract.md` - human-AI roles
+7. `{{NBS_ROOT}}/concepts/engineering-standards.md` - the standards
 
-Do not skip any. Do not read "the most relevant ones." Read all six.
+Do not skip any. Do not read "the most relevant ones." Read all of them.
 
 The framework lives at: `{{NBS_ROOT}}/` (or locate via the symlink at `~/.claude/commands/nbs.md`).
 
@@ -181,6 +182,7 @@ For any dimension where you lack clarity, read the relevant pillar before conclu
 | Falsifiability | `{{NBS_ROOT}}/concepts/falsifiability.md` | Making claims without falsifiers |
 | Honest reporting | `{{NBS_ROOT}}/concepts/bullshit-detection.md` | Only reporting positive outcomes |
 | Human-AI roles | `{{NBS_ROOT}}/concepts/zero-code-contract.md` | Unclear who decides what |
+| Engineering standards | `{{NBS_ROOT}}/concepts/engineering-standards.md` | Assertions missing, anti-patterns present, testing methodology unclear |
 
 **Judgement call**: If the issue is obvious (no plan exists), don't spend tokens reading pillars. If the issue is nuanced (is this Ethos or Logos? why does the human want this?), read for guidance.
 

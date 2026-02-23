@@ -4,6 +4,12 @@ Rock does not shatter because someone decided it should be gravel. It transforms
 
 Code transforms the same way, or it does not transform at all.
 
+> **Archival note (February 2026):** The C-quality engineering standards from this methodology
+> (ASan, leak analysis, refcount discipline, calling convention discipline) have been migrated
+> to `concepts/engineering-standards.md` in the NBS framework. This methodology document is
+> retained for reference but the engineering standards document is now the canonical source
+> for C/CPython quality gates.
+
 ## The Anti-Pattern
 
 "Rewrite for performance" is demolition. It assumes the replacement is better before evidence exists. It replaces an understood system with an unproven one in a single commitment. It is Ethos — trusting the authority of a language's reputation over measured outcomes.
@@ -229,5 +235,6 @@ Have you read all pillars in this session?
 - zero-code-contract.md
 - pte.md
 - terminal-weathering.md *(you are here)*
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now. Next: `goals.md`

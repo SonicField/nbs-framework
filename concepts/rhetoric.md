@@ -46,7 +46,7 @@ Asking is not weakness. It is the only honest response to uncertainty.
 
 ## Pillar Check
 
-Have you read all six pillars in this session?
+Have you read all pillars in this session?
 
 - goals.md
 - falsifiability.md
@@ -54,5 +54,6 @@ Have you read all six pillars in this session?
 - bullshit-detection.md
 - verification-cycle.md
 - zero-code-contract.md
+- engineering-standards.md
 
 If you cannot clearly recall reading each one, read them now. Next: `bullshit-detection.md`
