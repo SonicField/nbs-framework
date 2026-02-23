@@ -22,7 +22,7 @@
 #   torch        8 PyTorch P0 smoke tests
 #   benchmarks   Benchmark-based correctness tests (5 benchmarks)
 #   bugs         Bug 1 + Bug 4 regression tests
-#   specialisation  10 standalone specialisation correctness tests
+#   specialisation  11 standalone specialisation correctness tests
 #   all          Everything above
 #
 # Multiple suites can be combined:
@@ -803,7 +803,7 @@ run_benchmarks() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# Suite: specialisation — 10 standalone specialisation correctness tests
+# Suite: specialisation — 11 standalone specialisation correctness tests
 # ══════════════════════════════════════════════════════════════════════════
 #
 # These are standalone Python test scripts that:
@@ -817,7 +817,8 @@ run_benchmarks() {
 #   test_binary_subscr_correctness.py  BINARY_SUBSCR correctness
 #   test_super_fix.py                  super().__init__() JIT bug fix
 #
-# tests/ subdirectory (6):
+# tests/ subdirectory (7):
+#   test_binary_op_add_int.py          BINARY_OP_ADD_INT/SUBTRACT/MULTIPLY correctness
 #   test_binary_subscr_deopt.py        BINARY_SUBSCR deoptimisation
 #   test_for_iter_list_mutation.py     FOR_ITER_LIST mutation handling
 #   test_for_iter_polymorphic_deopt.py FOR_ITER polymorphic deoptimisation
@@ -835,6 +836,7 @@ SPEC_ROOT_TESTS=(
 
 # Specialisation tests in the tests/ subdirectory
 SPEC_SUB_TESTS=(
+    test_binary_op_add_int
     test_binary_subscr_deopt
     test_for_iter_list_mutation
     test_for_iter_polymorphic_deopt
