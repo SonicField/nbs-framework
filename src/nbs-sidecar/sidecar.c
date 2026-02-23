@@ -521,10 +521,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             }
 
             /* Wall-clock /nbs-poll injection — safety net for missed events.
-             * Fires every poll_interval seconds regardless of idle counters. */
+             * Fires every poll_interval seconds regardless of idle counters.
+             * Only suppressed during blocking dialogues and context stress. */
             if (cfg->poll_interval > 0 &&
                 (now_wc - state.last_poll_time) >= cfg->poll_interval) {
-                if (detect_prompt_visible(content) &&
+                if (detect_blocking_dialogue(content, NULL) == DIALOGUE_NONE &&
                     !detect_context_stress(content)) {
                     tp->send_text(tp, "/nbs-poll");
                     usleep(300000);
