@@ -22,7 +22,7 @@
 #   torch        8 PyTorch P0 smoke tests
 #   benchmarks   Benchmark-based correctness tests (5 benchmarks)
 #   bugs         Bug 1 + Bug 4 regression tests
-#   specialisation  11 standalone specialisation correctness tests
+#   specialisation  13 standalone specialisation correctness tests
 #   all          Everything above
 #
 # Multiple suites can be combined:
@@ -803,7 +803,7 @@ run_benchmarks() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# Suite: specialisation — 11 standalone specialisation correctness tests
+# Suite: specialisation — 13 standalone specialisation correctness tests
 # ══════════════════════════════════════════════════════════════════════════
 #
 # These are standalone Python test scripts that:
@@ -817,14 +817,20 @@ run_benchmarks() {
 #   test_binary_subscr_correctness.py  BINARY_SUBSCR correctness
 #   test_super_fix.py                  super().__init__() JIT bug fix
 #
-# tests/ subdirectory (7):
+# tests/ subdirectory (13):
 #   test_binary_op_add_int.py          BINARY_OP_ADD_INT/SUBTRACT/MULTIPLY correctness
 #   test_binary_subscr_deopt.py        BINARY_SUBSCR deoptimisation
+#   test_call_builtin_class.py         CALL_BUILTIN_CLASS constructor correctness
+#   test_contains_op_dict.py           CONTAINS_OP_DICT dict 'in' operator
 #   test_for_iter_list_mutation.py     FOR_ITER_LIST mutation handling
 #   test_for_iter_polymorphic_deopt.py FOR_ITER polymorphic deoptimisation
+#   test_load_attr_class.py            LOAD_ATTR_CLASS class attribute access
 #   test_load_attr_instance_value.py   LOAD_ATTR_INSTANCE_VALUE correctness
 #   test_load_attr_module_inline.py    LOAD_ATTR_MODULE inline correctness
+#   test_load_global.py                LOAD_GLOBAL_MODULE/BUILTIN correctness
 #   test_store_attr_instance_value.py  STORE_ATTR_INSTANCE_VALUE correctness
+#   test_store_subscr_list_int.py      STORE_SUBSCR_LIST_INT correctness
+#   test_to_bool.py                    TO_BOOL_BOOL/INT/STR/LIST/NONE correctness
 
 # Specialisation tests in the root directory
 SPEC_ROOT_TESTS=(
@@ -838,6 +844,7 @@ SPEC_ROOT_TESTS=(
 SPEC_SUB_TESTS=(
     test_binary_op_add_int
     test_binary_subscr_deopt
+    test_call_builtin_class
     test_contains_op_dict
     test_for_iter_list_mutation
     test_load_global
