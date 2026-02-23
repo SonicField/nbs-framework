@@ -23,6 +23,31 @@ src/nbs-chat/*.o
 src/nbs-bus/nbs-bus
 src/nbs-bus/assert_check
 src/nbs-bus/*.o
+src/nbs-sidecar/*.o
+src/nbs-sidecar/nbs-sidecar
+src/nbs-worker/*.o
+src/nbs-pty-session/*.o
+src/nbs-pty-session/nbs-pty-session
+
+# macOS resource forks
+._*
+
+# Stray fix/bench scripts (session-specific, not framework code)
+fix_*.py
+abba_bench.py
+remove_debug.py
+
+# Benchmark results (session-specific output)
+benchmark_results/
+
+# Archived session scripts
+archive/
+
+# Proxy certificates (accidental downloads)
+fwdproxy:*
+
+# Claude Code config
+.claude/
 
 # NBS teams working directory (project-specific, not framework)
 .nbs/
