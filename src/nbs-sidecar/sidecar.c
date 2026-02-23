@@ -421,6 +421,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             state.sidecar_start_time = time(NULL);
             state.last_flush_time = state.sidecar_start_time;
             state.last_poll_time = state.sidecar_start_time;
+            state.last_fixup_check = state.sidecar_start_time;
             free(content);
             break;
         }
@@ -535,6 +536,15 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     sleep(5);
                     continue;
                 }
+            }
+
+            /* Wall-clock fixup trigger — spawns fixup worker hourly.
+             * Only one sidecar fires (shared timestamp + lock dedup).
+             * Checked once per minute to avoid excessive file I/O. */
+            if (cfg->fixup_interval > 0 &&
+                (now_wc - state.last_fixup_check) >= 60) {
+                state.last_fixup_check = now_wc;
+                trigger_fixup_check(cfg->nbs_root, cfg->fixup_interval);
             }
         }
 

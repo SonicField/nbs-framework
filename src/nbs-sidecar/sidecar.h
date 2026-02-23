@@ -64,6 +64,7 @@ typedef struct {
     int active_heartbeat;       /* seconds between heartbeats (0=disabled) */
     int flush_interval;         /* seconds between bare Enter flushes (0=disabled) */
     int poll_interval;          /* seconds between /nbs-poll injections (0=disabled) */
+    int fixup_interval;         /* seconds between auto-fixup runs (0=disabled) */
 
     int is_remote;
     char remote_host[256];
@@ -91,6 +92,7 @@ typedef struct {
     time_t last_heartbeat_time;
     time_t last_flush_time;
     time_t last_poll_time;
+    time_t last_fixup_check;
     int notify_fail_count;
     int pythia_last_trigger_count;
     int shepard_last_trigger_count;
