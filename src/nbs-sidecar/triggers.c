@@ -413,3 +413,200 @@ int trigger_pythia_spawn(const char *nbs_root) {
 
     return (rc == 0) ? 0 : -1;
 }
+
+/* --- Shepard trigger --- */
+
+/*
+ * count_chat_message_events — Count chat-message event files in processed/.
+ */
+static int count_chat_message_events(const char *bus_dir) {
+    ASSERT_MSG(strlen(bus_dir) < 4000,
+           "count_chat_message_events: bus_dir too long: %zu", strlen(bus_dir));
+    char processed_path[4096];
+    int n = snprintf(processed_path, sizeof(processed_path),
+                     "%s/processed", bus_dir);
+    if (n < 0 || (size_t)n >= sizeof(processed_path)) return 0;
+
+    DIR *d = opendir(processed_path);
+    if (!d) return 0;
+
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strstr(entry->d_name, "chat-message") != NULL) {
+            count++;
+        }
+    }
+    int crc = closedir(d);
+    ASSERT_MSG(crc == 0, "count_chat_message_events: closedir failed: %s", strerror(errno));
+    return count;
+}
+
+/*
+ * read_shepard_interval — Read shepard-interval from config.yaml.
+ */
+static int read_shepard_interval(const char *bus_dir) {
+    ASSERT_MSG(strlen(bus_dir) < 4000,
+           "read_shepard_interval: bus_dir too long: %zu", strlen(bus_dir));
+    char config_path[4096];
+    int n = snprintf(config_path, sizeof(config_path),
+                     "%s/config.yaml", bus_dir);
+    if (n < 0 || (size_t)n >= sizeof(config_path)) return 100;
+
+    FILE *f = fopen(config_path, "r");
+    if (!f) return 100;
+
+    int interval = 100;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "shepard-interval:", 17) == 0) {
+            char *val = line + 17;
+            while (*val == ' ' || *val == '\t') val++;
+            char *endptr;
+            long parsed = strtol(val, &endptr, 10);
+            if (endptr != val && (*endptr == '\n' || *endptr == '\0') && parsed > 0 && parsed <= 100000)
+                interval = (int)parsed;
+            break;
+        }
+    }
+    fclose(f);
+    return interval;
+}
+
+static int read_shared_shepard_bucket(const char *nbs_root) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/shepard-last-bucket", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    char buf[32];
+    int bucket = -1;
+    if (fgets(buf, sizeof(buf), f)) {
+        char *endptr;
+        long parsed = strtol(buf, &endptr, 10);
+        if (endptr != buf && parsed >= 0)
+            bucket = (int)parsed;
+    }
+    fclose(f);
+    return bucket;
+}
+
+static void write_shared_shepard_bucket(const char *nbs_root, int bucket) {
+    char path[4096], tmp_path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/shepard-last-bucket", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    n = snprintf(tmp_path, sizeof(tmp_path),
+                 "%s/.nbs/shepard-last-bucket.tmp", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return;
+
+    FILE *f = fopen(tmp_path, "w");
+    if (f) {
+        fprintf(f, "%d\n", bucket);
+        if (fclose(f) == 0) {
+            rename(tmp_path, path);
+        } else {
+            unlink(tmp_path);
+        }
+    }
+}
+
+int trigger_shepard_check(const char *registry_path, const char *nbs_root,
+                           int *last_trigger_count) {
+    ASSERT_MSG(registry_path != NULL, "trigger_shepard_check: registry_path is NULL");
+    ASSERT_MSG(nbs_root != NULL, "trigger_shepard_check: nbs_root is NULL");
+    ASSERT_MSG(last_trigger_count != NULL, "trigger_shepard_check: last_trigger_count is NULL");
+
+    char bus_dir[4096];
+    if (registry_find_first(registry_path, "bus", bus_dir, sizeof(bus_dir)) != 0) {
+        return 1;
+    }
+
+    int interval = read_shepard_interval(bus_dir);
+    int message_count = count_chat_message_events(bus_dir);
+
+    int current_bucket = message_count / interval;
+    int last_bucket = *last_trigger_count / interval;
+
+    if (current_bucket > last_bucket && message_count > 0) {
+        /* Cross-sidecar dedup */
+        int shared_bucket = read_shared_shepard_bucket(nbs_root);
+        if (shared_bucket >= current_bucket) {
+            *last_trigger_count = message_count;
+            return 1;
+        }
+
+        write_shared_shepard_bucket(nbs_root, current_bucket);
+        *last_trigger_count = message_count;
+
+        /* Publish bus event */
+        char payload[256];
+        snprintf(payload, sizeof(payload),
+                 "Message count: %d. Sidecar-triggered Shepard assessment.",
+                 message_count);
+        bus_client_publish(bus_dir, "sidecar", "shepard-checkpoint", "normal",
+                           payload);
+
+        trigger_shepard_spawn(nbs_root);
+        return 0;
+    }
+
+    /* Sync counter on first run */
+    if (*last_trigger_count == 0 && message_count > 0) {
+        *last_trigger_count = message_count;
+    }
+
+    return 1;
+}
+
+int trigger_shepard_spawn(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "trigger_shepard_spawn: nbs_root is NULL");
+
+    char lock_path[4096];
+    int n = snprintf(lock_path, sizeof(lock_path),
+                     "%s/.nbs/shepard.lock", nbs_root);
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(lock_path),
+               "trigger_shepard_spawn: lock path overflow");
+
+    int fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "trigger_shepard_spawn: open lock failed: %s\n",
+                strerror(errno));
+        return -1;
+    }
+
+    struct flock fl = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+
+    if (fcntl(fd, F_SETLK, &fl) < 0) {
+        close(fd);
+        return 1;
+    }
+
+    const char *task_desc =
+        "Load /nbs-shepard. Read recent chat via sub-agents. "
+        "Assess team effectiveness. Post recommendations to supervisor. Exit.";
+
+    const char *argv[] = {
+        "nbs-worker", "spawn", "shepard", nbs_root, task_desc, NULL
+    };
+    int rc = exec_fire_and_forget(argv);
+
+    struct flock unlock = {
+        .l_type = F_UNLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+    fcntl(fd, F_SETLK, &unlock);
+    close(fd);
+
+    return (rc == 0) ? 0 : -1;
+}

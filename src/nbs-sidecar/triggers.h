@@ -52,4 +52,25 @@ int trigger_heartbeat(const char *registry_path, const char *handle,
  */
 int trigger_pythia_spawn(const char *nbs_root);
 
+/*
+ * trigger_shepard_check — Deterministic Shepard checkpoint trigger.
+ *
+ * Counts chat-message events in processed/. When count crosses
+ * a multiple of shepard-interval (from config.yaml, default 100),
+ * spawns Shepard worker for team effectiveness assessment.
+ *
+ * Returns: 0 = action taken, 1 = no action, -1 = error
+ */
+int trigger_shepard_check(const char *registry_path, const char *nbs_root,
+                           int *last_trigger_count);
+
+/*
+ * trigger_shepard_spawn — Spawn Shepard worker via lock + fork+exec.
+ *
+ * Uses non-blocking lock to prevent concurrent spawns across sidecars.
+ *
+ * Returns: 0 = spawned, 1 = lock busy, -1 = error
+ */
+int trigger_shepard_spawn(const char *nbs_root);
+
 #endif /* NBS_TRIGGERS_H */
