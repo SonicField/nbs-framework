@@ -40,6 +40,7 @@ Use this table to select the right tool for each situation. Do not use raw comma
 | Get remote diff | `nbs-remote-diff <ses> --cwd=<dir>` | `pty-session send <ses> 'git diff' && sleep 5 && pty-session read` |
 | Reserve a pty-session | `pty-session-lock acquire <ses> <handle>` | Posting "I'm using this session" to chat |
 | Interrupt a busy agent | `@handle!` in chat (with bang) | Manually sending Escape to tmux |
+| See what an agent is doing | `@handle?` in chat (with question mark) | Manually reading tmux panes |
 | Search chat history | `nbs-chat search <file> "pattern"` | `grep` on chat files (base64 encoded) |
 
 **The sidecar handles notifications.** After you finish processing, return to your prompt. You will be notified when there is new work. Do not poll, sleep-wait, or busy-loop.
@@ -200,6 +201,41 @@ All agents **must** run as the same OS user. This is a hard architectural constr
 **NEVER use AskUserQuestion.** In a multi-agent setup there is no human watching each terminal. AskUserQuestion presents a blocking modal that halts all processing until a human responds — causing the agent to stall indefinitely.
 
 If you need clarification or a decision, **post the question to chat** and wait for a response via `nbs-chat poll` or the next notification cycle. This converts blocking modals into async messages that any team member (human or AI) can answer.
+
+## @Mentions
+
+Mentioning another agent by handle in a chat message triggers the sidecar event system. Three suffixes produce different behaviours:
+
+| Syntax | Event Type | Priority | Effect |
+|--------|-----------|----------|--------|
+| `@handle` | `chat-mention` | high | The target agent's sidecar queues a `/nbs-notify` with the mention on the next idle cycle. Non-urgent. |
+| `@handle!` | `chat-interrupt` | critical | The target agent's sidecar sends Escape keys to interrupt the current tool call, then injects `/nbs-notify`. Use when the agent is stuck or you need immediate attention. |
+| `@handle?` | `chat-query` | high | The target agent's sidecar captures its own tmux pane (100 lines), strips ANSI escapes, and posts the content to chat. Use to see what another agent is currently doing without interrupting her. |
+
+### Usage examples
+
+```bash
+# Normal mention — notify when idle
+nbs-chat send .nbs/chat/live.chat supervisor "@worker your test results are ready"
+
+# Interrupt — break into a stuck agent
+nbs-chat send .nbs/chat/live.chat supervisor "@worker! stop what you are doing, critical bug found"
+
+# Query — see what an agent's terminal shows
+nbs-chat send .nbs/chat/live.chat supervisor "@worker? what is she working on"
+# The worker's sidecar will post: "tmux pane for worker:\n<pane content>"
+```
+
+### Notes
+
+- Mentions are extracted from the message text by the `nbs-chat send` command. The chat binary publishes the appropriate bus event; the target agent's sidecar consumes it.
+- Email addresses (e.g. `user@example.com`) are excluded from mention detection.
+- The `?` query response comes from the sidecar, not the agent. The agent is not interrupted and may not be aware of the query.
+- Duplicate mentions in the same message are deduplicated.
+
+## Message Format
+
+**All chat messages are plain text.** Never post JSON, structured data, or raw sub-agent output to chat. If a sub-agent returns JSON or structured output, extract the human-readable content before posting. The chat system is designed for human-and-AI-readable text, not machine interchange formats.
 
 ## Remote Chat (SSH Proxy)
 
