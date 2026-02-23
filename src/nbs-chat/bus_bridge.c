@@ -112,9 +112,15 @@ int bus_extract_mentions(const char *message,
 
         if (!is_dup) {
             memcpy(out_handles[found], candidate, handle_len + 1);
-            /* Check for interrupt suffix: '!' immediately after handle */
+            /* Check for suffix: '!' (interrupt) or '?' (query) after handle */
             if (out_interrupt_flags != NULL) {
-                out_interrupt_flags[found] = (*end == '!') ? 1 : 0;
+                if (*end == '!') {
+                    out_interrupt_flags[found] = 1;
+                } else if (*end == '?') {
+                    out_interrupt_flags[found] = 2;
+                } else {
+                    out_interrupt_flags[found] = 0;
+                }
             }
             found++;
         }
@@ -353,14 +359,18 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
     int mention_count = bus_extract_mentions(message, mentions, MAX_MENTIONS,
                                              interrupt_flags);
 
-    /* Publish chat-mention or chat-interrupt events for each @handle found */
+    /* Publish chat-mention, chat-interrupt, or chat-query events */
     for (int i = 0; i < mention_count; i++) {
         char mention_payload[MAX_PAYLOAD_LEN];
         snprintf(mention_payload, sizeof(mention_payload),
                  "@%s from %s: %s", mentions[i], handle, message);
-        if (interrupt_flags[i]) {
+        if (interrupt_flags[i] == 1) {
             /* @handle! — interrupt pattern: critical priority */
             bus_publish(events_dir, "nbs-chat", "chat-interrupt", "critical",
+                        mention_payload);
+        } else if (interrupt_flags[i] == 2) {
+            /* @handle? — pane query: high priority */
+            bus_publish(events_dir, "nbs-chat", "chat-query", "high",
                         mention_payload);
         } else {
             /* @handle — normal mention: high priority */
