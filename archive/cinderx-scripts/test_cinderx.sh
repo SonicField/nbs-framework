@@ -840,6 +840,7 @@ SPEC_SUB_TESTS=(
     test_binary_subscr_deopt
     test_for_iter_list_mutation
     test_load_global
+    test_to_bool
     test_for_iter_polymorphic_deopt
     test_load_attr_instance_value
     test_load_attr_module_inline
