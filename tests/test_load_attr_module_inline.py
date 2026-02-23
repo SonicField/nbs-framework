@@ -28,6 +28,45 @@ import sys
 import types
 
 
+WARMUP = 15000  # CinderX auto-compilation typically needs 10000+ calls
+
+# Set to True to require JIT compilation when cinderjit is available.
+# When True, tests FAIL if the function is not compiled — avoids false
+# confidence from interpreter-only execution.
+REQUIRE_JIT = True
+
+
+def check_jit_compiled(func, name):
+    """Verify function is JIT-compiled.
+
+    If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
+    when the function is not compiled — the test is not exercising the JIT
+    path it claims to test. If cinderjit is not available, always returns
+    False (interpreter-only mode, tests still run for correctness baseline).
+    """
+    try:
+        import cinderjit
+        # Primary check (broken on AArch64, works on x86_64)
+        if cinderjit.is_jit_compiled(func):
+            return True
+        # Fallback: check get_compiled_functions()
+        compiled = cinderjit.get_compiled_functions()
+        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
+        for cf in compiled:
+            if func_name in str(cf):
+                return True
+        if REQUIRE_JIT:
+            assert False, (
+                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
+                "Test cannot verify JIT path — increase WARMUP or check "
+                "cinderjit.auto() is enabled."
+            )
+        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
+        return False
+    except (ImportError, AttributeError):
+        return False
+
+
 def make_test_module(name, **attrs):
     """Create a fresh module with given attributes."""
     mod = types.ModuleType(name)
@@ -49,7 +88,7 @@ def main():
             cinderjit.enable_specialized_opcodes()
         except AttributeError:
             pass
-    except ImportError:
+    except (ImportError, AttributeError):
         print("SKIP — cinderx/cinderjit not available")
         sys.exit(0)
 
@@ -77,11 +116,8 @@ def main():
         get_pi()
         get_e()
 
-    try:
-        print(f"  get_pi jit_compiled={cinderjit.is_jit_compiled(get_pi)}")
-        print(f"  get_e jit_compiled={cinderjit.is_jit_compiled(get_e)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_pi, "get_pi")
+    check_jit_compiled(get_e, "get_e")
 
     jit_pi = get_pi()
     jit_e = get_e()
@@ -107,10 +143,7 @@ def main():
     for _ in range(15000):
         get_value(test_mod)
 
-    try:
-        print(f"  get_value jit_compiled={cinderjit.is_jit_compiled(get_value)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_value, "get_value")
 
     # Verify original value
     result1 = get_value(test_mod)

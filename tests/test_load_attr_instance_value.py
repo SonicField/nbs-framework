@@ -35,6 +35,44 @@ Usage:
 """
 
 import sys
+
+WARMUP = 15000  # CinderX auto-compilation typically needs 10000+ calls
+
+# Set to True to require JIT compilation when cinderjit is available.
+# When True, tests FAIL if the function is not compiled — avoids false
+# confidence from interpreter-only execution.
+REQUIRE_JIT = True
+
+
+def check_jit_compiled(func, name):
+    """Verify function is JIT-compiled.
+
+    If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
+    when the function is not compiled — the test is not exercising the JIT
+    path it claims to test. If cinderjit is not available, always returns
+    False (interpreter-only mode, tests still run for correctness baseline).
+    """
+    try:
+        import cinderjit
+        # Primary check (broken on AArch64, works on x86_64)
+        if cinderjit.is_jit_compiled(func):
+            return True
+        # Fallback: check get_compiled_functions()
+        compiled = cinderjit.get_compiled_functions()
+        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
+        for cf in compiled:
+            if func_name in str(cf):
+                return True
+        if REQUIRE_JIT:
+            assert False, (
+                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
+                "Test cannot verify JIT path — increase WARMUP or check "
+                "cinderjit.auto() is enabled."
+            )
+        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
+        return False
+    except (ImportError, AttributeError):
+        return False
 import types
 
 
@@ -51,7 +89,7 @@ def main():
             cinderjit.enable_specialized_opcodes()
         except AttributeError:
             pass
-    except ImportError:
+    except (ImportError, AttributeError):
         print("SKIP — cinderx/cinderjit not available")
         sys.exit(0)
 
@@ -81,11 +119,8 @@ def main():
         get_x(p)
         get_y(p)
 
-    try:
-        print(f"  get_x jit_compiled={cinderjit.is_jit_compiled(get_x)}")
-        print(f"  get_y jit_compiled={cinderjit.is_jit_compiled(get_y)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_x, "get_x")
+    check_jit_compiled(get_y, "get_y")
 
     jit_x = get_x(p)
     jit_y = get_y(p)
@@ -114,11 +149,7 @@ def main():
     for _ in range(15000):
         get_counter_value(c)
 
-    try:
-        print(f"  get_counter_value jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_counter_value)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_counter_value, "get_counter_value")
 
     # Verify original value
     result1 = get_counter_value(c)
@@ -166,11 +197,7 @@ def main():
     for _ in range(15000):
         get_extra(f)
 
-    try:
-        print(f"  get_extra jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_extra)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_extra, "get_extra")
 
     result = get_extra(f)
     if result == 777:
@@ -202,11 +229,7 @@ def main():
         get_target(d)
         get_keep(d)
 
-    try:
-        print(f"  get_target jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_target)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_target, "get_target")
 
     del d.target
 
@@ -247,11 +270,7 @@ def main():
     for _ in range(15000):
         get_val(p1)
 
-    try:
-        print(f"  get_val jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_val)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_val, "get_val")
 
     r1 = get_val(p1)
     r2 = get_val(p2)
@@ -287,11 +306,7 @@ def main():
     for _ in range(15000):
         get_base_x(b)
 
-    try:
-        print(f"  get_base_x jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_base_x)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_base_x, "get_base_x")
 
     # Base still works
     base_result = get_base_x(b)
@@ -343,11 +358,7 @@ def main():
     for _ in range(15000):
         get_name(dog)
 
-    try:
-        print(f"  get_name jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_name)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_name, "get_name")
 
     cat = Cat("Whiskers")
     fish = Fish("Nemo")
@@ -420,11 +431,7 @@ def main():
     for _ in range(15000):
         get_rapid_counter(r)
 
-    try:
-        print(f"  get_rapid_counter jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_rapid_counter)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_rapid_counter, "get_rapid_counter")
 
     rapid_failures = 0
     for i in range(1000):
@@ -458,11 +465,7 @@ def main():
     for _ in range(15000):
         get_tc_val(tc)
 
-    try:
-        print(f"  get_tc_val jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_tc_val)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_tc_val, "get_tc_val")
 
     # int -> str
     tc.val = "hello"
@@ -506,13 +509,8 @@ def main():
         get_slotted_x(s)
         get_slotted_y(s)
 
-    try:
-        print(f"  get_slotted_x jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_slotted_x)}")
-        print(f"  get_slotted_y jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_slotted_y)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_slotted_x, "get_slotted_x")
+    check_jit_compiled(get_slotted_y, "get_slotted_y")
 
     sx = get_slotted_x(s)
     sy = get_slotted_y(s)
@@ -561,11 +559,7 @@ def main():
     for _ in range(15000):
         get_mixed_name(dc)
 
-    try:
-        print(f"  get_mixed_name jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_mixed_name)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_mixed_name, "get_mixed_name")
 
     sc = SlotClass("slot_instance")
 
@@ -604,11 +598,7 @@ def main():
     for _ in range(15000):
         get_alt_val(a)
 
-    try:
-        print(f"  get_alt_val jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_alt_val)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_alt_val, "get_alt_val")
 
     alt_failures = 0
     for cycle in range(1000):
@@ -650,11 +640,7 @@ def main():
     for _ in range(15000):
         get_stable_x(st)
 
-    try:
-        print(f"  get_stable_x jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_stable_x)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(get_stable_x, "get_stable_x")
 
     stability_failures = 0
     for i in range(10000):

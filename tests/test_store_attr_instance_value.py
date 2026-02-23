@@ -38,6 +38,44 @@ Usage:
 
 import sys
 
+WARMUP = 15000  # CinderX auto-compilation typically needs 10000+ calls
+
+# Set to True to require JIT compilation when cinderjit is available.
+# When True, tests FAIL if the function is not compiled — avoids false
+# confidence from interpreter-only execution.
+REQUIRE_JIT = True
+
+
+def check_jit_compiled(func, name):
+    """Verify function is JIT-compiled.
+
+    If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
+    when the function is not compiled — the test is not exercising the JIT
+    path it claims to test. If cinderjit is not available, always returns
+    False (interpreter-only mode, tests still run for correctness baseline).
+    """
+    try:
+        import cinderjit
+        # Primary check (broken on AArch64, works on x86_64)
+        if cinderjit.is_jit_compiled(func):
+            return True
+        # Fallback: check get_compiled_functions()
+        compiled = cinderjit.get_compiled_functions()
+        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
+        for cf in compiled:
+            if func_name in str(cf):
+                return True
+        if REQUIRE_JIT:
+            assert False, (
+                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
+                "Test cannot verify JIT path — increase WARMUP or check "
+                "cinderjit.auto() is enabled."
+            )
+        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
+        return False
+    except (ImportError, AttributeError):
+        return False
+
 
 def main():
     print("=== STORE_ATTR_INSTANCE_VALUE / STORE_ATTR_SLOT Tests ===")
@@ -52,7 +90,7 @@ def main():
             cinderjit.enable_specialized_opcodes()
         except AttributeError:
             pass
-    except ImportError:
+    except (ImportError, AttributeError):
         print("SKIP — cinderx/cinderjit not available")
         sys.exit(0)
 
@@ -75,10 +113,7 @@ def main():
     for _ in range(15000):
         set_value(b, 42)
 
-    try:
-        print(f"  set_value jit_compiled={cinderjit.is_jit_compiled(set_value)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_value, "set_value")
 
     set_value(b, 99)
     if b.value == 99:
@@ -105,10 +140,7 @@ def main():
     for _ in range(15000):
         set_count(c, 1)
 
-    try:
-        print(f"  set_count jit_compiled={cinderjit.is_jit_compiled(set_count)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_count, "set_count")
 
     # Overwrite several times
     set_count(c, 10)
@@ -141,10 +173,7 @@ def main():
     for _ in range(15000):
         set_val(th, 42)
 
-    try:
-        print(f"  set_val jit_compiled={cinderjit.is_jit_compiled(set_val)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_val, "set_val")
 
     set_val(th, "hello")
     str_ok = th.val == "hello"
@@ -185,10 +214,7 @@ def main():
     for _ in range(15000):
         set_data(b1, "warm")
 
-    try:
-        print(f"  set_data jit_compiled={cinderjit.is_jit_compiled(set_data)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_data, "set_data")
 
     set_data(b1, "x")
     set_data(b2, "y")
@@ -229,10 +255,7 @@ def main():
     for _ in range(15000):
         set_extra(temp, 0)
 
-    try:
-        print(f"  set_extra jit_compiled={cinderjit.is_jit_compiled(set_extra)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_extra, "set_extra")
 
     # Now store to original instance which has no 'extra'
     set_extra(e, 777)
@@ -267,11 +290,7 @@ def main():
     for _ in range(15000):
         set_animal_name(a, "generic")
 
-    try:
-        print(f"  set_animal_name jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_animal_name)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_animal_name, "set_animal_name")
 
     # Store to base — should work fine
     set_animal_name(a, "base_val")
@@ -318,11 +337,7 @@ def main():
     for _ in range(15000):
         set_shade(r, "warm")
 
-    try:
-        print(f"  set_shade jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_shade)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_shade, "set_shade")
 
     bl = Blue("dark")
     g = Green("forest")
@@ -373,13 +388,8 @@ def main():
         set_slot_x(sp, 1)
         set_slot_y(sp, 2)
 
-    try:
-        print(f"  set_slot_x jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_slot_x)}")
-        print(f"  set_slot_y jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_slot_y)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_slot_x, "set_slot_x")
+    check_jit_compiled(set_slot_y, "set_slot_y")
 
     set_slot_x(sp, 42)
     set_slot_y(sp, 84)
@@ -424,11 +434,7 @@ def main():
     for _ in range(15000):
         set_tag(ds, "warm")
 
-    try:
-        print(f"  set_tag jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_tag)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_tag, "set_tag")
 
     ss = SlotStore("s")
 
@@ -463,13 +469,8 @@ def main():
         set_rapid_n(rp, 0)
         get_rapid_n(rp)
 
-    try:
-        print(f"  set_rapid_n jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_rapid_n)}")
-        print(f"  get_rapid_n jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_rapid_n)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_rapid_n, "set_rapid_n")
+    check_jit_compiled(get_rapid_n, "get_rapid_n")
 
     rapid_failures = 0
     for i in range(1000):
@@ -511,13 +512,8 @@ def main():
         set_data_poly(aa, 0)
         get_data_poly(aa)
 
-    try:
-        print(f"  set_data_poly jit_compiled="
-              f"{cinderjit.is_jit_compiled(set_data_poly)}")
-        print(f"  get_data_poly jit_compiled="
-              f"{cinderjit.is_jit_compiled(get_data_poly)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(set_data_poly, "set_data_poly")
+    check_jit_compiled(get_data_poly, "get_data_poly")
 
     bb = Beta(0)
     alt_failures = 0
@@ -555,11 +551,7 @@ def main():
     for _ in range(15000):
         store_sink(sk, 0)
 
-    try:
-        print(f"  store_sink jit_compiled="
-              f"{cinderjit.is_jit_compiled(store_sink)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(store_sink, "store_sink")
 
     for i in range(10000):
         store_sink(sk, i)

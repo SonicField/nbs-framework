@@ -26,6 +26,39 @@ Usage:
 
 import sys
 
+WARMUP = 15000  # CinderX auto-compilation typically needs 10000+ calls
+
+# Set to True to require JIT compilation when cinderjit is available.
+REQUIRE_JIT = True
+
+
+def check_jit_compiled(func, name):
+    """Verify function is JIT-compiled.
+
+    If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
+    when the function is not compiled. If cinderjit is not available, always
+    returns False (interpreter-only mode, tests still run for correctness).
+    """
+    try:
+        import cinderjit
+        if cinderjit.is_jit_compiled(func):
+            return True
+        compiled = cinderjit.get_compiled_functions()
+        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
+        for cf in compiled:
+            if func_name in str(cf):
+                return True
+        if REQUIRE_JIT:
+            assert False, (
+                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
+                "Test cannot verify JIT path — increase WARMUP or check "
+                "cinderjit.auto() is enabled."
+            )
+        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
+        return False
+    except (ImportError, AttributeError):
+        return False
+
 
 def main():
     print("=== FOR_ITER Polymorphic Deopt Tests ===")
@@ -41,7 +74,7 @@ def main():
             cinderjit.enable_specialized_opcodes()
         except AttributeError:
             pass  # Older builds may not have this
-    except ImportError:
+    except (ImportError, AttributeError):
         print("SKIP — cinderx/cinderjit not available")
         sys.exit(0)
 
@@ -60,13 +93,10 @@ def main():
     # Warm up with list input (triggers FOR_ITER_LIST specialisation)
     # CinderX auto() mode needs 10000+ calls for compilation
     print("Test 1: List-compiled, then range deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_1(list(range(50)))
 
-    try:
-        print(f"  jit_compiled={cinderjit.is_jit_compiled(sum_iter_1)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(sum_iter_1, "sum_iter_1")
 
     # Verify list still works
     list_result = sum_iter_1(list(range(100)))
@@ -101,13 +131,10 @@ def main():
 
     print()
     print("Test 2: Range-compiled, then list deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_2(range(50))
 
-    try:
-        print(f"  jit_compiled={cinderjit.is_jit_compiled(sum_iter_2)}")
-    except AttributeError:
-        pass
+    check_jit_compiled(sum_iter_2, "sum_iter_2")
 
     range_result = sum_iter_2(range(100))
     assert range_result == expected
@@ -130,8 +157,10 @@ def main():
 
     print()
     print("Test 3: List-compiled, then tuple deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_3(list(range(50)))
+
+    check_jit_compiled(sum_iter_3, "sum_iter_3")
 
     tuple_result = sum_iter_3(tuple(range(100)))
     if tuple_result == expected:
@@ -151,8 +180,10 @@ def main():
 
     print()
     print("Test 4: List-compiled, then generator deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_4(list(range(50)))
+
+    check_jit_compiled(sum_iter_4, "sum_iter_4")
 
     gen_result = sum_iter_4(x for x in range(100))
     if gen_result == expected:
@@ -172,8 +203,10 @@ def main():
 
     print()
     print("Test 5: List-compiled, then dict.keys() deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_5(list(range(50)))
+
+    check_jit_compiled(sum_iter_5, "sum_iter_5")
 
     d = {i: None for i in range(100)}
     dict_result = sum_iter_5(d)  # iterates over keys
@@ -194,8 +227,10 @@ def main():
 
     print()
     print("Test 6: Rapid alternation (list/range/tuple, 1000 cycles)")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_iter_6(list(range(50)))
+
+    check_jit_compiled(sum_iter_6, "sum_iter_6")
 
     alt_failures = 0
     for cycle in range(1000):
@@ -234,8 +269,10 @@ def main():
 
     print()
     print("Test 7: Complex loop body with deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         process_iter(list(range(30)))
+
+    check_jit_compiled(process_iter, "process_iter")
 
     ref_list = process_iter(list(range(50)))
     ref_range = process_iter(range(50))
@@ -265,8 +302,10 @@ def main():
     print()
     print("Test 8: Nested loops with mixed iterator types")
     # Warm up with list/list
-    for _ in range(15000):
+    for _ in range(WARMUP):
         nested_mixed(list(range(10)), list(range(10)))
+
+    check_jit_compiled(nested_mixed, "nested_mixed")
 
     ref = nested_mixed(list(range(20)), list(range(20)))
 
@@ -308,8 +347,10 @@ def main():
 
     print()
     print("Test 9: Exception handler inside loop with deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_with_try(list(range(50)))
+
+    check_jit_compiled(sum_with_try, "sum_with_try")
 
     # list input (compiled path)
     try_list = sum_with_try(list(range(100)))
@@ -342,8 +383,10 @@ def main():
 
     print()
     print("Test 10: TypeError actually caught after deopt")
-    for _ in range(15000):
+    for _ in range(WARMUP):
         sum_with_try_mixed(list(range(50)))
+
+    check_jit_compiled(sum_with_try_mixed, "sum_with_try_mixed")
 
     mixed_input = list(range(10)) + ["not_a_number"] + list(range(10))
     ref_result = sum_with_try_mixed(mixed_input[:])  # interpreter-compiled path
