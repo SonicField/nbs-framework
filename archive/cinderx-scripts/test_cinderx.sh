@@ -844,6 +844,7 @@ SPEC_SUB_TESTS=(
     test_to_bool
     test_for_iter_polymorphic_deopt
     test_load_attr_instance_value
+    test_load_attr_class
     test_load_attr_module_inline
     test_store_attr_instance_value
     test_store_subscr_list_int
