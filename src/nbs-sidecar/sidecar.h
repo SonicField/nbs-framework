@@ -63,6 +63,7 @@ typedef struct {
     int standup_interval;       /* minutes between standups (0=disabled) */
     int active_heartbeat;       /* seconds between heartbeats (0=disabled) */
     int flush_interval;         /* seconds between bare Enter flushes (0=disabled) */
+    int poll_interval;          /* seconds between /nbs-poll injections (0=disabled) */
 
     int is_remote;
     char remote_host[256];
@@ -83,12 +84,13 @@ typedef struct {
 typedef struct {
     int idle_seconds;
     int bus_check_counter;
-    int flush_counter;
     uint64_t last_content_hash;
     time_t sidecar_start_time;
     time_t last_notify_time;
     time_t last_standup_time;
     time_t last_heartbeat_time;
+    time_t last_flush_time;
+    time_t last_poll_time;
     int notify_fail_count;
     int pythia_last_trigger_count;
     int mention_detected;

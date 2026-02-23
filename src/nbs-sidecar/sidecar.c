@@ -413,6 +413,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                               : 5;
             sleep(init_settle);
             state.sidecar_start_time = time(NULL);
+            state.last_flush_time = state.sidecar_start_time;
+            state.last_poll_time = state.sidecar_start_time;
             free(content);
             break;
         }
@@ -497,11 +499,43 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         size_t content_len = strlen(content);
         uint64_t current_hash = fnv1a_hash(content, content_len);
 
+        /* Wall-clock Enter flush — fires regardless of idle state.
+         * Ensures the UI is flushed periodically even when the content
+         * hash is changing (agent appears busy). Only suppressed during
+         * blocking dialogues where Enter would select an option. */
+        {
+            time_t now_wc = time(NULL);
+            if (cfg->flush_interval > 0 &&
+                (now_wc - state.last_flush_time) >= cfg->flush_interval) {
+                if (detect_blocking_dialogue(content, NULL) == DIALOGUE_NONE) {
+                    tp->send_key(tp, "Enter");
+                    state.last_flush_time = now_wc;
+                }
+            }
+
+            /* Wall-clock /nbs-poll injection — safety net for missed events.
+             * Fires every poll_interval seconds regardless of idle counters. */
+            if (cfg->poll_interval > 0 &&
+                (now_wc - state.last_poll_time) >= cfg->poll_interval) {
+                if (detect_prompt_visible(content) &&
+                    !detect_context_stress(content)) {
+                    tp->send_text(tp, "/nbs-poll");
+                    usleep(300000);
+                    tp->send_key(tp, "Enter");
+                    state.last_poll_time = now_wc;
+                    state.idle_seconds = 0;
+                    state.last_content_hash = 0;
+                    free(content);
+                    sleep(5);
+                    continue;
+                }
+            }
+        }
+
         if (current_hash != state.last_content_hash) {
             /* Content changed */
             state.idle_seconds = 0;
             state.bus_check_counter = 0;
-            state.flush_counter = 0;
             state.last_content_hash = current_hash;
 
             /* Check for blocking dialogue on content change */
@@ -539,18 +573,6 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
         state.idle_seconds++;
         state.bus_check_counter++;
-        state.flush_counter++;
-
-        /* Periodic Enter flush */
-        if (cfg->flush_interval > 0 &&
-            state.flush_counter >= cfg->flush_interval) {
-            state.flush_counter = 0;
-            if (detect_prompt_visible(content) &&
-                detect_blocking_dialogue(content, NULL) == DIALOGUE_NONE &&
-                !detect_context_stress(content)) {
-                tp->send_key(tp, "Enter");
-            }
-        }
 
         /* Bus-aware check */
         if (state.bus_check_counter >= cfg->bus_check_interval) {

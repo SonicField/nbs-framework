@@ -110,6 +110,7 @@ int main(int argc, char **argv) {
     cfg.standup_interval = env_int("NBS_STANDUP_INTERVAL", 15);
     cfg.active_heartbeat = env_int("NBS_ACTIVE_HEARTBEAT", 0);
     cfg.flush_interval = env_int("NBS_FLUSH_INTERVAL", 60);
+    cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
 
     /* After all env_int calls, before config validation */
     ASSERT_MSG(cfg.bus_check_interval > 0 && cfg.bus_check_interval < cfg.notify_cooldown,

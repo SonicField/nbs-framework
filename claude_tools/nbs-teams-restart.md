@@ -22,6 +22,17 @@ You are performing a **restart** — recovering a multi-agent team after downtim
 - First-time setup → use /nbs-teams-start
 - Healthy team that just needs a task → post to chat directly
 
+## Agents vs Infrastructure
+
+Not all participants in chat are agents to be spawned. Distinguish:
+
+| Type | Examples | Spawning |
+|------|----------|----------|
+| **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `nbs-claude` / `nbs-worker continue` during restart |
+| **Infrastructure** | sidecar, pythia | **Do NOT spawn during restart.** Sidecars are launched automatically by `nbs-claude` for each agent. Pythia is triggered by sidecar configuration (pythia-interval). |
+
+The `participants` list in chat includes both types. When triaging, skip sidecar and pythia — they are not independent agents.
+
 ## Process
 
 ### Step 1: Inventory and Triage
