@@ -356,7 +356,12 @@ def main():
         if hasattr(cinderx, 'init'):
             cinderx.init()
         import cinderjit
-        print(f"CinderX JIT: enabled")
+        cinderjit.auto()
+        try:
+            cinderjit.enable_specialized_opcodes()
+        except AttributeError:
+            pass
+        print(f"CinderX JIT: enabled (auto-compilation active)")
     except (ImportError, AttributeError):
         print(f"CinderX JIT: not available (running interpreter-only)")
     print()
