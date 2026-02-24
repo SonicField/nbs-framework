@@ -164,8 +164,8 @@ done:
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
-    /* Capture own pane (100 lines of scrollback) */
-    char *content = tp->capture(tp, 100);
+    /* Capture own pane (bottom 32 lines) */
+    char *content = tp->capture(tp, 32);
     if (!content) return;
 
     /* Strip ANSI escape sequences */
