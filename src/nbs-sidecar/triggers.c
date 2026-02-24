@@ -4,6 +4,10 @@
  * These functions are called from the sidecar main loop to perform
  * time-based or count-based actions. Each trigger is independent
  * and has no side effects on the others.
+ *
+ * Standup trigger calls bin/nbs-prompts to select a randomised,
+ * multilingual check-in prompt. Falls back to hardcoded English
+ * if the script is unavailable.
  */
 
 #include "triggers.h"
@@ -331,14 +335,31 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
         return 1;
     }
 
-    /* Post standup */
-    const char *standup_msg =
-        "Check-in: @scribe post a summary of decisions and open items "
-        "since the last check-in. @supervisor once scribe has posted, "
-        "review and assign next tasks. All agents: what are you working on? "
-        "What is blocked? If you are idle, find useful work NOW \xe2\x80\x94 "
-        "do not wait for assignment. If you declared session-end without "
-        "supervisor approval, resume work immediately.";
+    /* Post standup — use randomised multilingual prompt if available */
+    char prompt_buf[2048];
+    const char *standup_msg;
+
+    const char *argv[] = {"nbs-prompts", NULL};
+    int rc = exec_capture(argv, prompt_buf, sizeof(prompt_buf));
+
+    if (rc == 0 && prompt_buf[0] != '\0') {
+        /* Strip trailing newline from script output */
+        size_t len = strlen(prompt_buf);
+        while (len > 0 && (prompt_buf[len - 1] == '\n' ||
+                           prompt_buf[len - 1] == '\r'))
+            prompt_buf[--len] = '\0';
+        standup_msg = prompt_buf;
+    } else {
+        /* Fallback: hardcoded English prompt */
+        standup_msg =
+            "Check-in: @scribe post a summary of decisions and open items "
+            "since the last check-in. @supervisor once scribe has posted, "
+            "review and assign next tasks. All agents: what are you working "
+            "on? What is blocked? If you are idle, find useful work NOW "
+            "\xe2\x80\x94 do not wait for assignment. If you declared "
+            "session-end without supervisor approval, resume work "
+            "immediately.";
+    }
 
     chat_client_send(chat_path, "sidecar", standup_msg);
 
