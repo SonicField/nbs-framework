@@ -65,6 +65,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PTY_SESSION="${SCRIPT_DIR}/pty-session"
 NBS_SIDECAR="${SCRIPT_DIR}/nbs-sidecar"
 
+# Ensure SCRIPT_DIR is on PATH so child processes (sidecar, claude, nbs-chat)
+# can find sibling binaries (nbs-bus, nbs-chat, nbs-workers) via exec*p().
+# tmux sessions don't source .bashrc, so PATH from install.sh is often missing.
+case ":${PATH}:" in
+    *":${SCRIPT_DIR}:"*) ;;  # already present
+    *) export PATH="${SCRIPT_DIR}:${PATH}" ;;
+esac
+
 if [[ ! -x "$PTY_SESSION" ]]; then
     PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 fi

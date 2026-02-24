@@ -39,7 +39,23 @@ These define the principles you operate under. Do not skip any.
 3. **Update status** - Mark State as completed, fill Started/Completed times
 4. **Report findings** - Append detailed observations to the Log section
 5. **Escalate blockers** - Do not work around problems; surface them
-6. **Never use AskUserQuestion** - This blocks the terminal. Post questions to chat instead
+6. **Never use AskUserQuestion** - This blocks the terminal. Post questions to chat using `nbs-chat send` instead
+
+## Chat Protocol
+
+**All chat communication MUST go through the `nbs-chat send` binary.** Never write directly to `.nbs/chat/*.chat` files — they use a binary encoding format that raw writes will corrupt.
+
+```bash
+# Correct — always use this
+nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+
+# WRONG — never do this (corrupts the chat file)
+echo "message" >> .nbs/chat/live.chat
+cat >> .nbs/chat/live.chat
+printf "..." >> .nbs/chat/live.chat
+```
+
+This applies to all chat interactions: posting questions, reporting status, escalating blockers, asking the supervisor for work.
 
 ## What You Don't Do
 
@@ -47,7 +63,7 @@ These define the principles you operate under. Do not skip any.
 - Make decisions that should be escalated to supervisor
 - Skip updating the status and log sections
 - Speculate without evidence
-- Write directly to `.nbs/chat/*.chat` files — always use `nbs-chat send`
+- **Write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`
 - **Work around environment problems with deprecated or legacy solutions**
 - **Create technical debt to appear to complete a task**
 
@@ -192,8 +208,8 @@ Escalation format in Log:
 
 Only the supervisor (with human approval) can end a session. When you finish a task or hit a blocker:
 
-1. Report the outcome or blocker to chat
-2. Ask the supervisor for your next task
+1. Report the outcome or blocker to chat (using `nbs-chat send`)
+2. Ask the supervisor for your next task (using `nbs-chat send`)
 3. If the supervisor is unresponsive, look for useful work: review others' output, run tests, prepare context for the next task, or research alternatives to the blocker
 
 **Never post "session complete", "signing off", or equivalent.** These phrases trigger consensus cascade — other agents see them and stop working too. If you believe the session should end, tell the supervisor why and let her decide.
