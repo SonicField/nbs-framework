@@ -1,6 +1,6 @@
 #!/bin/bash
 # CinderX JIT Performance Comparison - ABBA Design
-# Self-contained benchmark script for build-host (aarch64)
+# Self-contained benchmark script for aarch64 GPU servers
 #
 # Compares CinderX+JIT vs vanilla Meta Python (no CinderX loaded).
 # JIT ON:  Venv Python with CinderX → _cinderx.so loaded, JIT active
@@ -10,7 +10,7 @@
 # to control for thermal drift, background load, and cache effects.
 #
 # Usage:
-#   ssh build-host
+#   ssh $YOUR_GPU_HOST
 #   cd ~/local/cinderx_dev/cinderx
 #   bash cinderx_jit_benchmark.sh [OPTIONS] [N_REPS]
 #
@@ -98,7 +98,7 @@ N_REPS="${N_REPS:-2}"
 # --- Configuration ---
 CINDERX_ROOT="${CINDERX_ROOT:-$HOME/local/cinderx_dev/cinderx}"
 CINDERX_VENV="${CINDERX_VENV:-$HOME/local/cinderx_dev/venv}"
-PYTHON_VANILLA="/usr/local/internal-toolchain/platform010-aarch64/bin/python3.12"
+PYTHON_VANILLA="${PYTHON_VANILLA:-python3.12}"
 RESULTS_DIR="${RESULTS_DIR_ARG:-/tmp/cinderx_benchmark_$(date +%Y%m%d_%H%M%S)}"
 CINDERX_PYTHONPATH="${PYTHONPATH:-$CINDERX_ROOT/cinderx/PythonLib}"
 
