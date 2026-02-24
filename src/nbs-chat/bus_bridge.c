@@ -3,6 +3,13 @@
  *
  * Publishes bus events via the nbs-bus binary when .nbs/events/ exists.
  * All bus failures are non-fatal — chat_send must never fail due to bus issues.
+ *
+ * @team expansion: when a message contains @team, @team!, or @team?,
+ * the bridge reads the participants header from the chat file and publishes
+ * individual events for each participant (excluding the sender). This ensures
+ * every agent's sidecar receives its own event that it can ack independently,
+ * avoiding the single-consumer bug where only the first sidecar to tick
+ * would consume the shared @team event.
  */
 
 #include "bus_bridge.h"
@@ -95,6 +102,88 @@ static int is_handle_char(int c) {
  */
 static int is_email_prefix_char(int c) {
     return isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' || c == '+';
+}
+
+/*
+ * read_chat_participants — Extract participant handles from a chat file header.
+ *
+ * Reads only the header (up to the "---" separator). Parses the participants
+ * line which has format: "participants: handle1(N1), handle2(N2), ..."
+ *
+ * Returns the number of participants found, or 0 on any error.
+ * Each out_handles[i] is NUL-terminated. Handles exceeding MAX_MENTION_HANDLE_LEN
+ * are silently skipped.
+ */
+#define MAX_HEADER_LINE 8192
+
+static int read_chat_participants(const char *chat_path,
+                                   char out_handles[][MAX_MENTION_HANDLE_LEN],
+                                   int max_handles) {
+    if (!chat_path || !out_handles || max_handles <= 0)
+        return 0;
+
+    FILE *f = fopen(chat_path, "r");
+    if (!f)
+        return 0;
+
+    char line[MAX_HEADER_LINE];
+    int found = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        /* Strip trailing newline */
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n')
+            line[--len] = '\0';
+
+        /* Stop at separator — header is over */
+        if (strcmp(line, "---") == 0)
+            break;
+
+        /* Look for participants line */
+        const char *prefix = "participants: ";
+        size_t prefix_len = strlen(prefix);
+        if (strncmp(line, prefix, prefix_len) != 0)
+            continue;
+
+        /* Parse "handle1(N1), handle2(N2), ..." */
+        const char *p = line + prefix_len;
+        while (*p != '\0' && found < max_handles) {
+            /* Skip whitespace */
+            while (*p == ' ')
+                p++;
+            if (*p == '\0')
+                break;
+
+            /* Extract handle (everything before '(') */
+            const char *start = p;
+            while (*p != '\0' && *p != '(')
+                p++;
+
+            size_t handle_len = (size_t)(p - start);
+            if (handle_len > 0 && handle_len < MAX_MENTION_HANDLE_LEN) {
+                memcpy(out_handles[found], start, handle_len);
+                out_handles[found][handle_len] = '\0';
+                found++;
+            }
+
+            /* Skip past "(N)" */
+            if (*p == '(') {
+                while (*p != '\0' && *p != ')')
+                    p++;
+                if (*p == ')')
+                    p++;
+            }
+
+            /* Skip ", " separator */
+            if (*p == ',')
+                p++;
+        }
+
+        break; /* Only one participants line */
+    }
+
+    fclose(f);
+    return found;
 }
 
 int bus_extract_mentions(const char *message,
@@ -409,20 +498,59 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
 
     /* Publish chat-mention, chat-interrupt, or chat-query events */
     for (int i = 0; i < mention_count; i++) {
-        char mention_payload[MAX_PAYLOAD_LEN];
-        snprintf(mention_payload, sizeof(mention_payload),
-                 "@%s from %s: %s", mentions[i], handle, message);
+        /* Determine event type and priority from interrupt flag */
+        const char *event_type;
+        const char *priority;
         if (interrupt_flags[i] == 1) {
-            /* @handle! — interrupt pattern: critical priority */
-            bus_publish(events_dir, "nbs-chat", "chat-interrupt", "critical",
-                        mention_payload);
+            event_type = "chat-interrupt";
+            priority = "critical";
         } else if (interrupt_flags[i] == 2) {
-            /* @handle? — pane query: high priority */
-            bus_publish(events_dir, "nbs-chat", "chat-query", "high",
-                        mention_payload);
+            event_type = "chat-query";
+            priority = "high";
         } else {
-            /* @handle — normal mention: high priority */
-            bus_publish(events_dir, "nbs-chat", "chat-mention", "high",
+            event_type = "chat-mention";
+            priority = "high";
+        }
+
+        if (strcmp(mentions[i], "team") == 0) {
+            /*
+             * @team expansion: read participants from the chat file header
+             * and publish one event per participant (excluding the sender).
+             * This ensures every sidecar gets its own individually-addressable
+             * event that it can ack independently.
+             */
+            char participants[MAX_PARTICIPANTS][MAX_MENTION_HANDLE_LEN];
+            int pcount = read_chat_participants(chat_path, participants,
+                                                 MAX_PARTICIPANTS);
+            for (int j = 0; j < pcount; j++) {
+                /* Skip the sender — don't mention yourself */
+                if (strcmp(participants[j], handle) == 0)
+                    continue;
+                /* Skip sidecar — not a team member */
+                if (strcmp(participants[j], "sidecar") == 0)
+                    continue;
+
+                /* Copy handle to local buffer — GCC cannot infer
+                 * element size of 2D VLA for format-truncation analysis */
+                char participant[MAX_MENTION_HANDLE_LEN];
+                size_t plen = strlen(participants[j]);
+                if (plen >= sizeof(participant))
+                    plen = sizeof(participant) - 1;
+                memcpy(participant, participants[j], plen);
+                participant[plen] = '\0';
+
+                char mention_payload[MAX_PAYLOAD_LEN];
+                snprintf(mention_payload, sizeof(mention_payload),
+                         "@%s from %s: %s", participant, handle, message);
+                bus_publish(events_dir, "nbs-chat", event_type, priority,
+                            mention_payload);
+            }
+        } else {
+            /* Single-handle mention/interrupt/query */
+            char mention_payload[MAX_PAYLOAD_LEN];
+            snprintf(mention_payload, sizeof(mention_payload),
+                     "@%s from %s: %s", mentions[i], handle, message);
+            bus_publish(events_dir, "nbs-chat", event_type, priority,
                         mention_payload);
         }
     }
