@@ -49,6 +49,10 @@ Run this after any session. It detects context and dispatches:
 
 Supervisor/worker patterns for multi-agent AI work. See [NBS Teams](docs/nbs-teams.md) for the full overview.
 
+The communication layer is built on two primitives: **chat** (file-based messaging) and **bus** (file-based events). Chat files are plain text with base64-encoded messages, written atomically under `flock()`. The bus uses individual event files — publishing is an atomic write-and-rename, acknowledging moves files to a `processed/` directory. No daemons, no databases, no sockets. When a machine dies, the messages survive. When a session restarts, the queue is intact.
+
+This architecture enables direct worker-to-worker coordination without routing everything through a supervisor. A team of 12 AI agents used this system to exchange 12,803 messages over 28 days on a real compiler project, producing 374 commits with 84 self-corrections logged across 2,604 decisions. The full analysis is in [The Ant and the Anthill](blog/The-Ant-And-The-Anthill.md).
+
 Commands for setting up and using NBS teams:
 
 - [/nbs-teams-start](claude_tools/nbs-teams-start.md) - Bootstrap project with `.nbs/` structure (one command setup)
