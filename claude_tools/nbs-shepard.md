@@ -27,6 +27,29 @@ You are spawned when a `shepard-checkpoint` event triggers (every 100 chat messa
 
 ## Checkpoint Procedure
 
+### Step 0: Agent liveness check
+
+**Before reading chat**, check whether agents are actually alive. A dead agent produces no chat messages — Shepard must detect this directly, not infer it from silence.
+
+```bash
+# List all agent sessions
+nbs-workers list
+
+# For each agent, check context level
+nbs-workers status
+```
+
+Classify each agent:
+
+| Category | Indicators | Action to recommend |
+|----------|-----------|---------------------|
+| **Healthy** | Spinner active or recent output, context >25% | None |
+| **Context stressed** | Context 15–25% | Recommend `/compact` |
+| **Zombie** | Context <15%, no meaningful output | Recommend `/nbs-teams-fixup` |
+| **Dead** | Session exited, bash prompt visible, or session missing | Recommend `/nbs-teams-fixup` immediately |
+
+If ANY agent is dead or zombie, this MUST appear as the **first item** in the posted assessment, marked `ACTION REQUIRED`. Do not bury it under other findings. The supervisor and Alex need to see it immediately.
+
 ### Step 1: Read chat context
 
 Read the last 120 messages from the primary chat channel using 4 parallel sub-agents. Each sub-agent reads a 30-message window and summarises it.
@@ -91,6 +114,9 @@ Post to the primary chat channel. The report must cover BOTH the NBS review dime
 
 ```bash
 nbs-chat send .nbs/chat/live.chat shepard "SHEPARD CHECKPOINT
+
+**AGENT STATUS:** [for EACH agent: name — healthy/stressed/zombie/dead at N% context]
+**ACTION REQUIRED:** [if any agent is dead/zombie: @supervisor run /nbs-teams-fixup for @agent — otherwise omit this line]
 
 **Terminal goal:** [what it is, whether it's clearly stated]
 **Goal drift:** [which agents have drifted, what the drift is]
