@@ -1005,12 +1005,16 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Allow shell to initialise */
     sleep(2);
 
-    /* Send the initial Claude command with NBS_HANDLE for sidecar identity */
+    /* Send the initial Claude command with NBS_HANDLE for sidecar identity.
+     * Use the slug (e.g. "shepard") as the handle, not the unique name
+     * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
+     * handles in chat. The hex suffix remains on the task file and tmux
+     * session name to prevent file collisions. */
     {
         char launch_cmd[PATH_BUF_SIZE];
         snprintf(launch_cmd, sizeof(launch_cmd),
                  "NBS_HANDLE=%s bin/nbs-claude --dangerously-skip-permissions",
-                 name);
+                 slug);
         tmux_send_keys(session, launch_cmd, 1);
     }
 

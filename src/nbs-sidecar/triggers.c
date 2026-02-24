@@ -652,8 +652,10 @@ int trigger_shepard_spawn(const char *nbs_root) {
     }
 
     const char *task_desc =
-        "Load /nbs-shepard. Read recent chat via sub-agents. "
-        "Assess team effectiveness. Post recommendations to supervisor. Exit.";
+        "Load /nbs-shepard. Check agent liveness via nbs-workers list and "
+        "nbs-workers status — classify each as healthy/stressed/zombie/dead. "
+        "Read recent chat via sub-agents. Assess team effectiveness. "
+        "Post recommendations to supervisor (agent status FIRST). Exit.";
 
     const char *argv[] = {
         resolve_nbs_workers(), "spawn", "shepard", nbs_root, task_desc, NULL
