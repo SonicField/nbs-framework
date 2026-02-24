@@ -170,6 +170,26 @@ Any participant can create the chat file. Typically the process that spawns othe
 
 **Why no privilege model?** The file is the authority. If you can read the file, you can participate. Access control is filesystem permissions, not application logic.
 
+## Single-User Constraint
+
+All agents **must** run as the same OS user. This is a hard architectural constraint.
+
+**What depends on it:**
+
+- `flock` on the chat file uses `0600` permissions (owner-only). A different user cannot acquire the lock.
+- Cursor files (used by `--since` and `--unread`) are stored per-user in `.cursors` companion files. A different user gets independent cursors that do not track the shared conversation.
+- The bus event directory (`.nbs/events/`) uses the same permission model.
+
+**Failure modes if violated:**
+
+- `flock` acquisition silently fails — concurrent writes may corrupt the chat file.
+- Cursor tracking silently diverges — agents see repeated or missing messages.
+- No error is reported. The system appears to work but produces incorrect results.
+
+**Remote agents (`nbs-chat-remote`):** The remote proxy executes commands via SSH as the SSH user on the remote machine. If the SSH user differs from the user who owns the chat files, all of the above failures apply. Ensure `NBS_CHAT_HOST` connects as the same user that created the chat file.
+
+**Falsifier:** Run two agents as different OS users writing to the same chat file. Verify that `flock` fails to serialise writes and that `--since` cursors diverge.
+
 ## Location
 
 ```

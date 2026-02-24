@@ -1,6 +1,6 @@
 ---
 description: "NBS Bus: Event-driven coordination between agents"
-allowed-tools: Bash, Read, Write
+allowed-tools: Bash, Read
 ---
 
 # NBS Bus
@@ -11,9 +11,7 @@ Event-driven coordination for multi-agent projects. Use this when you need to pu
 
 - **Publishing events**: Signal that something happened (task complete, blocker found, human input)
 - **Checking the queue**: See what events are pending for you
-- **Managing the bus**: Prune old events, check status, reconfigure
-
-For routine polling (automatic heartbeat checks), use `/nbs-poll` instead — it checks the bus automatically when one exists.
+- **Managing the bus**: Prune old events, check status
 
 ## Commands
 
@@ -71,47 +69,13 @@ nbs-bus prune .nbs/events/ --days=7
 4. Acknowledge: `nbs-bus ack .nbs/events/ <file>`
 5. Publish any resulting events (e.g., new task assignment)
 
-## Creating the Bus
+## Important Rules
 
-If `.nbs/events/` does not exist:
-
-```bash
-mkdir -p .nbs/events/processed
-```
-
-Optionally add `.nbs/events/config.yaml` for non-default settings. See `docs/nbs-bus.md` for configuration options.
-
-## Design Constraints
-
-### Events are informational, not transactional
-
-The bus provides **at-most-once delivery**. An event can be lost if one consumer acknowledges it before another consumer finishes processing it. This is acceptable because all current events are informational (notifications, checkpoints, heartbeats).
-
-**What "ack" means:**
-
-- `nbs-bus ack` moves the event file from the queue to `processed/` via `rename()`.
-- This is an atomic filesystem operation — exactly one consumer's `rename()` succeeds.
-- Other consumers attempting to ack the same event get exit code 3 (`BUS_EXIT_NOT_FOUND`). This is harmless.
-
-**What "ack" does NOT mean:**
-
-- It does not mean the consumer has acted on the event.
-- If consumer A reads an event, consumer B acks it, and consumer A crashes before acting, the event is lost.
-
-**When this matters:**
-
-This design is safe as long as events are idempotent notifications. If the bus is ever used for transactional events (e.g. "deploy this", "delete that"), the architecture would need:
-
-1. Per-consumer acknowledgement (each consumer acks independently)
-2. A "processed-by" record rather than a simple file move
-3. Retry logic for unacknowledged events
-
-**Current status:** No transactional events exist. All events are fire-and-forget notifications. Exit code 3 from concurrent ack attempts is expected behaviour, not an error.
-
-**Falsifier:** Publish an event, have two consumers read it, ack it from one, then crash the other before it acts. Verify the event is lost from the second consumer's perspective.
+- **Always use `nbs-bus` CLI commands.** Never read, write, rename, move, or delete bus files directly. The CLI handles all internal bookkeeping. Direct file manipulation will corrupt the bus.
+- **Events are fire-and-forget notifications.** Do not rely on an event being available after another agent has acked it.
+- **Exit code 3 is normal.** If another agent already acked the same event, `nbs-bus ack` returns exit code 3. This is expected in a multi-agent system — ignore it.
 
 ## Reference
 
 - Full reference: `docs/nbs-bus.md`
 - Recovery protocol: `docs/nbs-bus-recovery.md`
-- Concept: `{{NBS_ROOT}}/concepts/coordination.md`

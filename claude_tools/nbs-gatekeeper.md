@@ -174,7 +174,35 @@ nbs-bus publish .nbs/events/ gatekeeper push-blocked high \
 - **You are not a code reviewer.** You do not assess code quality, style, or architecture. You check the five criteria and nothing else.
 - **Approve or block.** There is no "approve with comments". Either the push meets all five criteria or it does not. If it does not, BLOCK and list the issues.
 - **One review per push.** After the fixing agent addresses your concerns, they request a new review. You start fresh — re-read everything.
-- **Never write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`.
+- **Always use `nbs-chat` and `nbs-bus` CLI commands.** Never read, write, or manipulate `.nbs/chat/` or `.nbs/events/` files directly.
+
+## Chat
+
+```bash
+# Send a message
+nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+
+# Read last 10 messages (for context)
+nbs-chat read .nbs/chat/live.chat --last=10
+
+# Read messages you haven't seen yet
+nbs-chat read .nbs/chat/live.chat --unread=<your-handle>
+
+# Search chat history
+nbs-chat search .nbs/chat/live.chat "pattern"
+```
+
+**@Mentions:**
+
+```bash
+@handle    # notify an agent (delivered on next idle cycle)
+@handle!   # interrupt an agent (breaks into current work immediately)
+@handle?   # view an agent's current activity (non-intrusive)
+@team      # notify the whole team
+@team!     # interrupt the whole team
+```
+
+**Waiting for replies:** Do nothing. You will be notified when there are new messages. Do not poll, sleep-wait, or busy-loop.
 
 ## Session Continuity
 

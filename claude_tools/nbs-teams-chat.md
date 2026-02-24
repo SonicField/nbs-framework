@@ -5,9 +5,9 @@ allowed-tools: Bash, Read
 
 # NBS Teams Chat
 
-File-based AI-to-AI chat with atomic locking. Enables multiple AI instances to communicate through a shared file.
+AI-to-AI chat for multi-agent coordination. Multiple AI instances communicate through shared chat channels.
 
-**Always use the `nbs-chat` CLI** to read and write chat files. Never `cat`, `head`, `tail`, or manually decode the file contents. The base64 encoding and file structure are internal details — `nbs-chat` handles them for you.
+**Always use the `nbs-chat` CLI.** Never read, write, or manipulate `.nbs/chat/` files directly. Direct file access will corrupt the chat. Do not use `cat`, `head`, `tail`, `grep`, `echo`, or any other tool on chat files.
 
 ## Pronouns
 
@@ -32,22 +32,20 @@ Use this table to select the right tool for each situation. Do not use raw comma
 | Read messages from last N hours | `nbs-chat read <file> --after=2h` | Python/bash timestamp parsing |
 | Delete spam/corrupt messages | `nbs-chat delete <file> --after=<time>` | Manual file editing, Python scripts |
 | Preview a delete | `nbs-chat delete <file> --after=<time> --dry-run` | Guessing what will be deleted |
-| Wait for a reply | Do nothing — the sidecar injects `/nbs-notify` | `sleep N && nbs-chat read`, polling loops |
-| Ack all bus events | `nbs-bus ack-all .nbs/events/` | `for f in .nbs/events/*.event; do ...` |
+| Wait for a reply | Do nothing — you will be notified | `sleep N && nbs-chat read`, polling loops |
+| Ack all bus events | `nbs-bus ack-all .nbs/events/` | Manual file operations on events/ |
 | Edit a remote file | `nbs-remote-edit-pty pull/push <ses> <path>` | `sed`, heredocs, Python str.replace via pty-session |
 | Run a remote build | `nbs-remote-build <ses> '<cmd>' --chat=...` | `pty-session send <ses> 'make' && sleep 120` |
 | Check remote git state | `nbs-remote-status <ses> --cwd=<dir>` | `pty-session send <ses> 'git status' && sleep 2 && pty-session read` |
 | Get remote diff | `nbs-remote-diff <ses> --cwd=<dir>` | `pty-session send <ses> 'git diff' && sleep 5 && pty-session read` |
 | Reserve a pty-session | `pty-session-lock acquire <ses> <handle>` | Posting "I'm using this session" to chat |
-| Interrupt a busy agent | `@handle!` in chat (with bang) | Manually sending Escape to tmux |
-| See what an agent is doing | `@handle?` in chat (with question mark) | Manually reading tmux panes |
-| Search chat history | `nbs-chat search <file> "pattern"` | `grep` on chat files (base64 encoded) |
+| Search chat history | `nbs-chat search <file> "pattern"` | `grep` on chat files |
 
-**The sidecar handles notifications.** After you finish processing, return to your prompt. You will be notified when there is new work. Do not poll, sleep-wait, or busy-loop.
+**You will be notified when there are new messages.** After you finish processing, return to your prompt. Do not poll, sleep-wait, or busy-loop.
 
 ## Handles
 
-**Every agent must use a unique handle.** If two agents use the same handle, their messages and read cursors collide, causing lost messages and repeated reads.
+**Every agent must use a unique handle.** If two agents use the same handle, their messages and read tracking collide, causing lost messages and repeated reads.
 
 When launched via `nbs-claude`, your handle comes from the `NBS_HANDLE` environment variable (default: `claude`). If multiple agents are running, each must set a distinct `NBS_HANDLE` before launch:
 
@@ -64,20 +62,16 @@ Use your assigned handle consistently for all `nbs-chat send` and `--unread=` / 
 - **Supervisor broadcasting**: Supervisor sends a message that multiple workers can read
 - **Debugging collaboration**: Workers report discoveries to a shared channel so others can react
 
-## Tool
-
-The underlying tool is `nbs-chat` (installed at `~/.nbs/bin/nbs-chat` or `<project>/bin/nbs-chat`).
-
 ## Commands
 
 ```bash
 # Create a chat channel
 nbs-chat create .nbs/chat/coordination.chat
 
-# Send a message (atomic, flock-protected)
+# Send a message
 nbs-chat send .nbs/chat/coordination.chat parser-worker "Found 3 failing tests in test_parse_int"
 
-# Read all messages (decoded)
+# Read all messages
 nbs-chat read .nbs/chat/coordination.chat
 
 # Read last 5 messages only
@@ -86,8 +80,8 @@ nbs-chat read .nbs/chat/coordination.chat --last=5
 # Read messages since your last post
 nbs-chat read .nbs/chat/coordination.chat --since=parser-worker
 
-# Block until a new message arrives (not from yourself)
-nbs-chat poll .nbs/chat/coordination.chat parser-worker --timeout=30
+# Read unread messages
+nbs-chat read .nbs/chat/coordination.chat --unread=parser-worker
 
 # List participants and message counts
 nbs-chat participants .nbs/chat/coordination.chat
@@ -105,7 +99,7 @@ nbs-chat read .nbs/chat/coordination.chat --before=2026-02-23T00:11:27
 # Search within a time range
 nbs-chat search .nbs/chat/coordination.chat "error" --after=1h --handle=testkeeper
 
-# Delete messages (atomic, locked) — preview first
+# Delete messages — preview first
 nbs-chat delete .nbs/chat/coordination.chat --after=1771834287 --dry-run
 nbs-chat delete .nbs/chat/coordination.chat --after=1771834287
 ```
@@ -133,12 +127,6 @@ nbs-chat read .nbs/chat/parser-debug.chat
 #   test-runner: Confirmed - test_parse_int fails on negative inputs
 
 nbs-chat send .nbs/chat/parser-debug.chat supervisor "Both of you focus on parse_int first"
-
-# Worker 1 polls for new instructions
-nbs-chat poll .nbs/chat/parser-debug.chat parser-worker --timeout=60
-# Output:
-#   test-runner: Confirmed - test_parse_int fails on negative inputs
-#   supervisor: Both of you focus on parse_int first
 ```
 
 ## File Convention
@@ -156,35 +144,45 @@ Chat files live in `.nbs/chat/` with `.chat` extension:
 
 The supervisor or spawning process creates the chat file and passes the path to workers.
 
-## Design Properties
+## @Mentions
 
-- **Atomic**: All reads and writes are `flock`-protected. The lock is held only during each command invocation — an AI can never hold it across tool calls.
-- **Base64-encoded**: Messages are base64-encoded so content cannot break file structure.
-- **Self-consistent**: The file header includes `file-length` for integrity checking.
-- **No external dependencies**: `nbs-chat` is a self-contained binary.
-- **Single-user assumption**: All agents must run as the same OS user. The lock file is created with `0600` permissions (owner-only read/write), and cursor files for `--since`/`--unread` tracking are stored per-user. If agents run as different users, `flock` acquisition and cursor tracking silently fail. When using `nbs-chat-remote`, the remote commands execute as the SSH user on the remote machine — ensure this is the same user that owns the chat files.
+Mentioning another agent by handle in a chat message triggers different behaviours depending on the suffix:
 
-## Design Constraints
+| Syntax | Effect |
+|--------|--------|
+| `@handle` | Notify the agent on her next idle cycle. Non-urgent. |
+| `@handle!` | Interrupt the agent immediately, breaking into her current work. Use when she is stuck or you need immediate attention. |
+| `@handle?` | View the agent's current activity. Non-intrusive — she is not interrupted and may not be aware of the query. |
+| `@team` | Notify all agents. |
+| `@team!` | Interrupt all agents immediately. |
 
-### Single-user assumption
+### Usage examples
 
-All agents **must** run as the same OS user. This is a hard architectural constraint, not a suggestion.
+```bash
+# Normal mention — notify when idle
+nbs-chat send .nbs/chat/live.chat supervisor "@worker your test results are ready"
 
-**What depends on it:**
+# Interrupt — break into a stuck agent
+nbs-chat send .nbs/chat/live.chat supervisor "@worker! stop what you are doing, critical bug found"
 
-- `flock` on the chat file uses `0600` permissions (owner-only). A different user cannot acquire the lock.
-- Cursor files (used by `--since` and `--unread`) are stored per-user. A different user gets independent cursors that do not track the shared conversation.
-- The bus event directory (`.nbs/events/`) uses the same permission model.
+# Query — see what an agent is doing
+nbs-chat send .nbs/chat/live.chat supervisor "@worker? what is she working on"
 
-**Failure modes if violated:**
+# Notify the whole team
+nbs-chat send .nbs/chat/live.chat supervisor "@team standup time"
 
-- `flock` acquisition silently fails — concurrent writes may corrupt the chat file.
-- Cursor tracking silently diverges — agents see repeated or missing messages.
-- No error is reported. The system appears to work but produces incorrect results.
+# Interrupt the whole team
+nbs-chat send .nbs/chat/live.chat supervisor "@team! all stop — broken build"
+```
 
-**Remote agents (`nbs-chat-remote`):** The remote proxy executes commands via SSH as the SSH user on the remote machine. If the SSH user differs from the user who owns the chat files, all of the above failures apply. Ensure `NBS_CHAT_HOST` connects as the same user that created the chat file.
+### Notes
 
-**Falsifier:** Run two agents as different OS users writing to the same chat file. Verify that `flock` fails to serialise writes and that `--since` cursors diverge.
+- Email addresses (e.g. `user@example.com`) are excluded from mention detection.
+- Duplicate mentions in the same message are deduplicated.
+
+## Message Format
+
+**All chat messages are plain text.** Never post JSON, structured data, or raw sub-agent output to chat. If a sub-agent returns JSON or structured output, extract the human-readable content before posting. The chat system is designed for human-and-AI-readable text, not machine interchange formats.
 
 ## Exit Codes
 
@@ -198,44 +196,14 @@ All agents **must** run as the same OS user. This is a hard architectural constr
 
 ## Critical Rule: No Terminal Modals
 
-**NEVER use AskUserQuestion.** In a multi-agent setup there is no human watching each terminal. AskUserQuestion presents a blocking modal that halts all processing until a human responds — causing the agent to stall indefinitely.
+**NEVER use AskUserQuestion.** In a multi-agent setup there is no human watching each agent. AskUserQuestion halts all processing until a human responds — causing the agent to stall indefinitely.
 
-If you need clarification or a decision, **post the question to chat** and wait for a response via `nbs-chat poll` or the next notification cycle. This converts blocking modals into async messages that any team member (human or AI) can answer.
+If you need clarification or a decision, **post the question to chat** and wait for a response. You will be notified when someone replies.
 
-## @Mentions
+## Important Rules
 
-Mentioning another agent by handle in a chat message triggers the sidecar event system. Three suffixes produce different behaviours:
-
-| Syntax | Event Type | Priority | Effect |
-|--------|-----------|----------|--------|
-| `@handle` | `chat-mention` | high | The target agent's sidecar queues a `/nbs-notify` with the mention on the next idle cycle. Non-urgent. |
-| `@handle!` | `chat-interrupt` | critical | The target agent's sidecar sends Escape keys to interrupt the current tool call, then injects `/nbs-notify`. Use when the agent is stuck or you need immediate attention. |
-| `@handle?` | `chat-query` | high | The target agent's sidecar captures its own tmux pane (bottom 32 lines), strips ANSI escapes and control characters, and posts the content to chat. Use to see what another agent is currently doing without interrupting her. |
-
-### Usage examples
-
-```bash
-# Normal mention — notify when idle
-nbs-chat send .nbs/chat/live.chat supervisor "@worker your test results are ready"
-
-# Interrupt — break into a stuck agent
-nbs-chat send .nbs/chat/live.chat supervisor "@worker! stop what you are doing, critical bug found"
-
-# Query — see what an agent's terminal shows
-nbs-chat send .nbs/chat/live.chat supervisor "@worker? what is she working on"
-# The worker's sidecar will post: "tmux pane for worker:\n<pane content>"
-```
-
-### Notes
-
-- Mentions are extracted from the message text by the `nbs-chat send` command. The chat binary publishes the appropriate bus event; the target agent's sidecar consumes it.
-- Email addresses (e.g. `user@example.com`) are excluded from mention detection.
-- The `?` query response comes from the sidecar, not the agent. The agent is not interrupted and may not be aware of the query.
-- Duplicate mentions in the same message are deduplicated.
-
-## Message Format
-
-**All chat messages are plain text.** Never post JSON, structured data, or raw sub-agent output to chat. If a sub-agent returns JSON or structured output, extract the human-readable content before posting. The chat system is designed for human-and-AI-readable text, not machine interchange formats.
+- **Always use `nbs-chat` and `nbs-bus` CLI commands.** Never read, write, rename, move, or delete files in `.nbs/chat/` or `.nbs/events/` directly. The CLI handles all internal bookkeeping. Direct file manipulation will corrupt the system.
+- **All agents must run as the same OS user.** If agents run as different users, chat and bus operations will silently fail.
 
 ## Remote Chat (SSH Proxy)
 
@@ -264,4 +232,6 @@ nbs-chat-remote read /project/.nbs/chat/coordination.chat --last=5
 nbs-chat-remote send /project/.nbs/chat/coordination.chat my-handle "Message from local machine"
 ```
 
-The binary is at `~/.nbs/bin/nbs-chat-remote` or `<project>/bin/nbs-chat-remote`.
+## Reference
+
+For implementation details (encoding, locking, cursor tracking, file structure), see `docs/nbs-chat.md`.
