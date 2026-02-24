@@ -4,52 +4,8 @@
 
 1. **NBS framework installed.** Follow the instructions in the main [getting-started guide](../../docs/getting-started.md). The `/nbs-terminal-weathering` command must be available in Claude Code.
 
-2. **C compiler.** GCC or Clang with C11 support. Verify:
-   ```bash
-   gcc --version    # or clang --version
-   ```
-
-3. **CPython development headers.** Required for building C extensions against the CPython type API. Install and verify:
-   ```bash
-   # Debian/Ubuntu
-   sudo apt install python3-dev
-
-   # Fedora/RHEL
-   sudo dnf install python3-devel
-
-   # macOS (included with Xcode command line tools)
-   xcode-select --install
-
-   # Verify headers are accessible
-   python3 -c "import sysconfig; print(sysconfig.get_path('include'))"
-   ls "$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))")/Python.h"
-   ```
-
-4. **AddressSanitizer (ASan).** Comes built-in with GCC and Clang. Verify:
-   ```bash
-   echo 'int main() { return 0; }' | gcc -fsanitize=address -x c - -o /dev/null && echo "ASan supported"
-   ```
-
-5. **Valgrind.** For memory leak analysis. Install and verify:
-   ```bash
-   # Debian/Ubuntu
-   sudo apt install valgrind
-
-   # Fedora/RHEL
-   sudo dnf install valgrind
-
-   # Verify
-   valgrind --version
-   ```
-
-6. **setuptools.** For building C extensions as Python packages:
-   ```bash
-   pip install setuptools
-   python3 -c "import setuptools; print(setuptools.__version__)"
-   ```
-
-7. **Profiling tools.** At least one of:
-   - `py-spy` — sampling profiler for Python (recommended)
+2. **Profiling tools.** The research phase requires profiling before any conversion begins. At least one of:
+   - `py-spy` — sampling profiler for Python (recommended for CPU hotspots)
    - `cProfile` — built-in Python profiler
    - `tracemalloc` — built-in memory tracker
    - `memray` — detailed memory profiler
@@ -61,6 +17,22 @@
      # Verify
      perf --version
      ```
+
+3. **Approach-specific toolchain.** Not required until the research phase selects an approach. Once selected:
+
+   - **For C extension types** (typical approach when structural overhead is identified):
+     - C compiler (GCC or Clang with C11 support): `gcc --version` or `clang --version`
+     - CPython development headers: `python3-config --includes`
+     - AddressSanitizer (built into GCC/Clang): `echo 'int main(){return 0;}' | gcc -fsanitize=address -x c - -o /dev/null`
+     - Valgrind: `valgrind --version`
+     - setuptools: `pip install setuptools`
+
+   - **For Rust/PyO3** (body replacement):
+     - Rust toolchain: `rustup show`
+     - PyO3: `cargo add pyo3`
+     - maturin: `pip install maturin`
+
+   - **For algorithmic changes**: No additional toolchain — standard Python development environment.
 
 ---
 
@@ -76,11 +48,12 @@ The tool detects context automatically and dispatches to the correct phase. On f
 
 ### Goal Setting
 
-The tool asks for a terminal goal. This is not "rewrite in C." It is a measurable system improvement:
+The tool asks for a terminal goal. This is not "rewrite in C" or "convert to Rust." It is a measurable system improvement:
 
 - "Reduce P99 latency from 45ms to 15ms"
 - "Reduce peak memory from 2GB to 500MB"
-- "Eliminate call protocol overhead for nn.Module attribute access"
+- "Eliminate call protocol overhead for Cell attribute access"
+- "Achieve 2x throughput on the RB-tree benchmark"
 
 If the goal is not falsifiable — "make it faster" without specifying faster than what, by how much, measured how — the tool pushes back. This is deliberate.
 
@@ -91,7 +64,7 @@ Once the goal is confirmed, the tool creates the state directory:
 ```
 .nbs/terminal-weathering/
 ├── status.md          # Current phase, terminal goal, worker count
-├── candidates.md      # Ranked conversion candidates (type slots / call protocol paths)
+├── candidates.md      # Ranked conversion candidates (populated after survey)
 ├── trust-levels.md    # Trust gradient per conversion type
 ├── patterns.md        # Compressed learnings (initially empty)
 └── conversions/       # One file per attempted conversion
@@ -101,29 +74,61 @@ All state lives in these files. Not in conversation history, not in memory. The 
 
 ---
 
+## The Research Phase
+
+With the goal set, the tool moves to the research phase. This is the critical phase that determines the entire approach.
+
+### What happens
+
+1. **Profile the system.** The tool asks you to run profiling tools against a representative workload. The profile identifies where time is actually spent — not where you think it is spent.
+
+2. **Classify the overhead.** Based on the profile, the overhead is classified:
+   - *Structural*: Object model — attribute access, type checking, memory layout
+   - *Dispatch*: Call protocol — type slot dispatch, MRO walk, frame setup
+   - *Computational*: Loop bodies — the actual work inside functions
+   - *Algorithmic*: Complexity — O(n²) where O(n log n) is possible
+
+3. **Form a hypothesis.** A falsifiable statement with a quantitative prediction: "The overhead mechanism is X, because Y. Intervention Z should reduce it by approximately W."
+
+4. **Run a falsification experiment.** Speed-bump tests, boundary-crossing benchmarks, or synthetic workloads that isolate the hypothesised mechanism.
+
+5. **Select an approach — or stop.** If the experiment supports the hypothesis, select an architectural approach (C extension types, type slot replacement, body replacement, algorithm change). If not, the tool honestly reports that no intervention will help. Both are valid outcomes.
+
+### Toolchain verification
+
+Once the approach is selected, the tool verifies the required toolchain is available. For C extension types, this means checking for a C compiler, CPython headers, and ASan. For Rust, this means checking for the Rust toolchain and PyO3. The toolchain check is deferred to this point — we don't check for a C compiler before we know C is the right approach.
+
+### Worked examples
+
+**SOMA (success path)**: Profile → structural overhead (field access). Hypothesis → "C extension types, ~2x speedup." Experiment → Rust/PyO3 boundary-crossing benchmark falsified Rust (6% slower). C extension types confirmed (2.06x faster). Approach selected: C extension types for data containers. Toolchain verified. Proceeded to Survey.
+
+**PyTorch (stop path)**: Profile → dispatch overhead (call protocol). Hypothesis → "Type slot replacement, ~60% per-call reduction." Experiment → speed-bump test confirmed mechanism. But type slot replacement produced no measurable whole-system effect because the dynamism was load-bearing. Approach: stop. No toolchain needed.
+
+---
+
 ## What Happens Next: Survey
 
-With the goal set, the tool moves to the survey phase. It profiles the system to find what is actually hurting — not just CPU hotspots in function bodies, but high-hit-count dispatch chains where CPython's call protocol overhead dominates.
+With the research phase complete and an approach selected, the tool moves to the survey phase. It profiles the specific domain identified by the research phase to find what is actually hurting.
 
 Key activities during survey:
-- **Call protocol analysis:** Use `perf` to trace type slot dispatch. Identify which `tp_*` slots are invoked most frequently and measure per-invocation overhead.
-- **Dispatch chain mapping:** For each hot slot, trace the full chain (e.g., `tp_getattro` → `slot_tp_getattr_hook` → `_PyType_Lookup` → `call_attribute` → frame setup → body → teardown). Measure time spent in dispatch vs. body.
-- **Hit count ranking:** Rank candidates by `(hit_count × per_call_dispatch_overhead)` — total dispatch overhead eliminated by a successful slot replacement.
+- **Within the identified domain**: Profile the specific overhead mechanism. If structural, identify which types have the highest access frequency. If dispatch, identify which dispatch chains have the highest hit counts.
+- **Dependency mapping**: Identify leaf candidates — those whose replacement does not depend on other unreplaced units.
+- **Quantified ranking**: Rank candidates by total overhead contribution (frequency × per-operation cost).
 
-The output is a ranked list of type slot candidates with quantified pain. If profiling reveals that dispatch overhead is negligible, the survey says so. There is nothing to weather. This is an honest outcome, not a failure.
+The output is a ranked list of candidates with quantified overhead. If profiling reveals that the overhead is negligible in the identified domain, the survey says so. There is nothing to weather. This is an honest outcome, not a failure.
 
 ---
 
 ## A Single Conversion Cycle
 
-Here is what one cycle looks like end to end, assuming the survey has produced candidates.
+Here is what one cycle looks like end to end, assuming the research phase has selected an approach and the survey has produced candidates.
 
 ### 1. Expose
 
-The tool selects the highest-ranked candidate — a type slot that is a leaf in the dispatch graph (no deeper Python dispatch dependencies) and measurably problematic. It records baseline measurements and creates a branch:
+The tool selects the highest-ranked candidate — a leaf in the dependency graph (no deeper dependencies that must be replaced first) and measurably problematic. It records baseline measurements and creates a branch:
 
 ```bash
-git checkout -b weathering/<type>/<slot>
+git checkout -b weathering/<target>/<component>
 ```
 
 A conversion record is created in `.nbs/terminal-weathering/conversions/` with the hypothesis, falsifier, and baseline numbers.
@@ -132,28 +137,18 @@ A conversion record is created in `.nbs/terminal-weathering/conversions/` with t
 
 The verification cycle runs against the candidate:
 
-- **Design** — C implementation replacing the target type slot directly. Use CPython's type API (`tp_getattro`, `PyType_Modified`, `PyDescr_NewMethod`, etc.) to install the C function at the slot level, bypassing the Python dispatch chain.
-- **Plan** — Identify what could go wrong: reference counting errors, exception propagation, descriptor protocol compliance, MRO invalidation, thread safety.
+- **Design** — Implementation using the approach selected by the research phase. For C extension types: C struct with direct field access. For type slot replacement: C function installed at the slot level. For body replacement: compiled implementation via the appropriate toolchain.
+- **Plan** — Identify what could go wrong: the risks are approach-specific (reference counting for C, ownership for Rust, semantic drift for any replacement).
 - **Deconstruct** — Break into testable steps.
-- **Test** — Tests exercising the Python API through the C backend, plus benchmarks. **Mandatory:** Run under ASan (`-fsanitize=address`), Valgrind (`--leak-check=full`), and refcount verification (`--with-pydebug`). Zero errors from all three is a hard gate.
-- **Code** — Implement C extension with `setup.py`/`setuptools`. The Python layer remains as an overlay until proven redundant. The slot replacement is internal — consumers see no API change.
-- **Document** — Record baseline versus post-conversion measurements. Include ASan and Valgrind output as evidence artefacts.
+- **Test** — Tests exercising the Python API through the replacement backend, plus benchmarks. **Mandatory safety gates** appropriate to the approach (ASan/Valgrind/refcount for C; clippy/miri for Rust; full test suite for all).
+- **Code** — Implement the replacement. The Python layer remains as an overlay until proven redundant.
+- **Document** — Record baseline versus post-conversion measurements. Include safety gate output as evidence artefacts.
 
 At the initial trust level (Tight), every step is confirmed with the human. As trust is earned, oversight reduces.
 
 ### 3. Assess
 
-The evidence gate. Five mandatory checks:
-
-| Check | Gate Type |
-|-------|-----------|
-| Correctness (all tests pass) | Hard gate |
-| ASan clean (zero errors) | Hard gate |
-| Leak-free (Valgrind clean) | Hard gate |
-| Refcount clean (debug build) | Hard gate |
-| Performance improvement | Evidence gate |
-
-Post-conversion benchmarks are compared against baseline under the same conditions. Three performance outcomes:
+The evidence gate. Mandatory checks appropriate to the approach, then three performance outcomes:
 
 | Verdict | What Happens |
 |---------|-------------|
@@ -161,11 +156,11 @@ Post-conversion benchmarks are compared against baseline under the same conditio
 | **Benefit unclear** | More data needed. Do not merge. |
 | **Benefit falsified** | Revert. Document what was learned. Choose next candidate. |
 
-A falsified benefit is the methodology working. "This dispatch chain resists C replacement because of X" is valuable information.
+The actual result is compared against the research phase prediction. If the result does not match, the discrepancy is flagged.
 
 ### 4. Advance
 
-Back on main. The dispatch graph is updated — proven slot replacements may expose new accessible slots. The candidate list is re-ranked. The next cycle begins.
+Back on main. The dependency graph is updated — proven replacements may expose new accessible candidates. The candidate list is re-ranked. The next cycle begins.
 
 ---
 
@@ -176,7 +171,8 @@ Run `/nbs-terminal-weathering` again. The tool reads `.nbs/terminal-weathering/s
 | Signal | What the Tool Does |
 |--------|-------------------|
 | No state directory | Starts goal setting |
-| Candidates empty | Runs survey |
+| Directory exists, no `research.md` | Runs research phase |
+| `research.md` exists, candidates empty | Runs survey |
 | On `main`/`master`, candidates ranked | Selects next candidate (Expose) |
 | On a `weathering/*` branch | Continues the in-progress conversion (Weather) |
 | Conversion complete on branch | Runs the evidence gate (Assess) |

@@ -120,7 +120,7 @@ When the research phase identifies data structures as the target (the data conta
 
 **Layer 0 — Data Structures.** Replace Python classes with C extension types. Field access becomes pointer dereference. This is where the largest gains appear — SOMA's 2x speedup came almost entirely from this layer.
 
-**Layer 1 — API Surface Discipline.** Ensure the C extension uses fast calling conventions (`METH_FASTCALL`, direct struct access, interned strings). The right-foot `isinstance` cache demonstrated that calling convention changes alone can recover 96ns per call.
+**Layer 1 — API Surface Discipline.** Ensure the C extension uses fast calling conventions (`METH_FASTCALL`, direct struct access, interned strings). The `right_foot.fast_isinstance` function demonstrated that calling convention changes alone can recover 96ns per call (see `concepts/c-extension-performance.md`, "Evidence: right-foot" section).
 
 **Layer 2 — Dispatch.** Replace high-frequency dispatch paths: C builtins bypassing Python method dispatch, inline caches for type checks, register fast paths. SOMA's Phase 3 achieved ~6% test suite improvement from this layer.
 

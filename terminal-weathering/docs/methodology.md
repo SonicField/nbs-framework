@@ -1,48 +1,115 @@
 # Methodology
 
-## The Six Phases
+## The Research Phase
+
+Before any weathering begins, the target system must be characterised. The research phase determines *what kind of intervention to apply* — or whether any intervention will help at all. Skipping this phase to "just start converting" is the methodology failing.
+
+### Step 1: Profile
+
+Where is time spent? Use profiling tools appropriate to the system:
+
+- **CPU hotspots**: `py-spy`, `cProfile`, `perf`
+- **Memory**: `tracemalloc`, `memray`, `valgrind`
+- **Latency distributions**: under realistic load, not synthetic microbenchmarks
+- **Call frequency**: which functions or operations are invoked millions of times?
+
+Do not hypothesise before profiling. The profile drives the hypothesis, not the other way around.
+
+### Step 2: Classify
+
+What kind of overhead does the profile reveal?
+
+| Category | Characteristics | Example |
+|----------|----------------|---------|
+| **Structural** | Object model overhead — attribute access, type checking, memory layout | SOMA: millions of `cell.value` accesses through Python's attribute protocol |
+| **Dispatch** | Call protocol overhead — type slot dispatch, MRO walk, bound method creation, frame setup | PyTorch: `tp_getattro` → `slot_tp_getattr_hook` → `_PyType_Lookup` → `call_attribute` → frame → body → teardown |
+| **Computational** | Loop body overhead — the work inside functions dominates | Tight numerical loops, data transformation |
+| **Algorithmic** | Complexity overhead — O(n²) where O(n log n) is possible | SOMA: `remove_half` at O(n² log n), accounting for 96% of benchmark time |
+
+Most systems have multiple overhead categories. The classification identifies which is dominant and therefore which intervention will have the largest effect.
+
+### Step 3: Hypothesise
+
+Form a falsifiable hypothesis with a quantitative prediction:
+
+> "The overhead mechanism is **X**, because **Y**. Intervention **Z** should reduce it by approximately **W**."
+
+Examples:
+- "The overhead is structural (attribute access on Cell/CellRef), because py-spy shows 60% of time in `__getattr__`. C extension types should reduce per-access cost from ~80ns to ~5ns, yielding approximately 2x overall speedup." (SOMA — confirmed)
+- "The overhead is in dispatch (call protocol for `nn.Module.__getattr__`), because the speed-bump experiment shows 30.4% QPS sensitivity at function entry. Type slot replacement should reduce per-call cost from ~130ns to ~50ns." (PyTorch — the per-call prediction was correct, but the whole-system effect was unmeasurable because dispatch dynamism was load-bearing)
+
+A hypothesis without a quantitative prediction is unfalsifiable and therefore useless.
+
+### Step 4: Experiment
+
+Design a falsification experiment that isolates the hypothesised mechanism:
+
+- **Speed-bump tests**: Add artificial delay at the hypothesised bottleneck. If the system is sensitive, the mechanism is confirmed. If insensitive, the hypothesis is wrong.
+- **Boundary-crossing benchmarks**: Measure the cost of crossing between Python and a compiled implementation. If crossing cost exceeds the savings, the approach is net negative.
+- **Synthetic benchmarks**: Isolate the specific operation (field access, dispatch, computation) and measure it in controlled conditions.
+
+Run the experiment. Let the result drive the approach.
+
+### Step 5: Select or Stop
+
+Two valid outcomes:
+
+1. **Select**: Choose an architectural approach with a quantitative prediction. Document the evidence that supports it.
+2. **Stop**: Conclude that no intervention will help — the overhead is load-bearing, the algorithm dominates, the system resists acceleration. Document the evidence that supports this.
+
+"Stop" is not failure. It is the research phase preventing wasted effort. PyTorch's research phase correctly concluded "stop" — the overhead was real but could not be profitably addressed.
+
+### Exit Criterion
+
+Architectural approach selected with experimental evidence, or a documented conclusion that no intervention will help. In either case, the evidence is recorded in `research.md`.
+
+### Falsifier
+
+If the first weathering cycle does not produce improvement in the predicted range, reconsider the research phase conclusion. If three consecutive weathering cycles fail to match predictions, the diagnosis is wrong — return to the research phase.
+
+---
+
+## The Six Weathering Phases
 
 Terminal weathering is iterative, not linear. Each cycle processes one candidate through six phases. The cycle repeats until the terminal goal is met or determined unachievable.
 
-The unit of work is a **call protocol path** — a CPython dispatch chain from type slot to function body. Replacing a type slot with a C function eliminates the entire dispatch overhead for that path. This is distinct from replacing function bodies, which leaves the dispatch chain intact.
+The unit of work is determined by the research phase output. For data containers, the unit is a type. For dispatch engines, the unit is a type slot or call protocol path. For compute kernels, the unit is a function body. The phases below use parameterised language — "candidate" and "replacement" rather than "type slot" or "C implementation" — because the specific mechanism depends on the selected approach.
 
 ### Survey
 
-Identify existing cracks. Not "what could be C" but "what is already hurting" — and specifically, *where* in the dispatch chain the cost lies.
+Identify existing cracks within the domain the research phase identified.
 
 **Activities:**
-- Profile performance: CPU hotspots, latency distributions under realistic load
-- Profile memory: allocation patterns, peak usage, leaks
-- **Analyse call protocols:** Identify high-hit-count dispatch chains. Use `perf` to trace CPython slot dispatch (`tp_getattro`, `tp_call`, `tp_richcompare`, etc.) and measure per-invocation overhead. The question is not "which function body is slow" but "which dispatch path is invoked millions of times"
-- Map the call graph. Identify leaf type slots — those with no deeper Python dispatch dependencies
+- Profile the specific domain: data container access patterns if the research identified structural overhead; dispatch chains if dispatch overhead; loop bodies if computational overhead
+- Map the dependency graph. Identify leaf candidates — those whose replacement does not depend on other unreplaced units
+- Quantify per-candidate overhead: hit counts, per-operation cost, total contribution to runtime
 - Search for code already marked problematic: TODOs, FIXMEs, HACKs, performance comments, open issues
 
-**Exit criterion:** Ranked list of candidates with quantified pain. Each candidate identifies both the type slot and the dispatch chain it replaces, with measured hit counts and per-call overhead.
+**Exit criterion:** Ranked list of candidates with quantified overhead. Each candidate identifies the target, the overhead mechanism, and baseline measurements.
 
-**Falsifier:** If no measurable pain exists, stop. There is nothing to weather. Report this honestly — it is not failure, it is the survey doing its job. If pain exists in function bodies but not in dispatch chains, terminal weathering is the wrong tool — consider PyO3 or Cython for body-level replacement instead.
+**Falsifier:** If no measurable overhead exists in the domain the research phase identified, stop. There is nothing to weather. Report this honestly — it is not failure, it is the survey doing its job.
 
 ### Expose
 
 Select a single candidate from the ranked list.
 
 The candidate must be:
-- A **type slot or call protocol path** — not a function body in isolation
-- A leaf or near-leaf in the dispatch graph: no deeper Python dispatch dependencies that must be replaced first
-- Measurably problematic — not "might have dispatch overhead" but "dispatch chain accounts for X% of call cost, measured with perf"
+- A leaf in the dependency graph: no deeper dependencies that must be replaced first
+- Measurably problematic — not "might be slow" but "accounts for X% of runtime, measured"
 - Small enough to convert in one verification cycle
 
-Baseline measurements are recorded: per-call cost (distribution, not single run), dispatch chain depth, hit count under realistic load, and any domain-specific metrics. These are the numbers the conversion must beat.
+Baseline measurements are recorded: per-operation cost (distribution, not single run), hit count under realistic load, and any domain-specific metrics. These are the numbers the conversion must beat.
 
 Work happens on an isolated branch:
 ```
-weathering/<type>/<slot>
+weathering/<target>/<component>
 ```
 
-A conversion record is created in `.nbs/terminal-weathering/conversions/` containing the hypothesis ("replacing `tp_getattro` on `Module` with a C implementation will [specific measurable improvement]") and its falsifier.
+A conversion record is created in `.nbs/terminal-weathering/conversions/` containing the hypothesis and its falsifier.
 
-**Exit criterion:** Single type slot or call protocol path selected with baseline measurements recorded.
+**Exit criterion:** Single candidate selected with baseline measurements recorded.
 
-**Falsifier:** If the candidate cannot be isolated as a leaf in the dispatch graph, it is not ready. Decompose further or choose another.
+**Falsifier:** If the candidate cannot be isolated as a leaf in the dependency graph, it is not ready. Decompose further or choose another.
 
 ### Weather
 
@@ -50,34 +117,36 @@ Apply the verification cycle to the selected candidate.
 
 The six steps of the verification cycle apply directly:
 
-1. **Design** — C implementation replacing the target type slot directly against CPython's type API. The implementation installs a C function at the slot level (e.g., `tp_getattro`), bypassing the entire Python dispatch chain. Use `PyType_Spec` or direct slot assignment via `PyType_Modified` as appropriate.
-2. **Plan** — Identify what could go wrong. Semantic drift between Python and C (reference counting, exception propagation, descriptor protocol compliance). Edge cases the Python dispatch handles implicitly. Thread safety under free-threaded CPython. MRO invalidation when slots change.
+1. **Design** — Implementation replacing the target using the approach selected by the research phase. For C extension types: C struct with direct field access. For type slot replacement: C function installed at the slot level via `PyType_Modified`. For body replacement: compiled implementation via the appropriate toolchain.
+2. **Plan** — Identify what could go wrong. The risk profile depends on the approach:
+   - *C extensions*: Reference counting errors, exception propagation, descriptor protocol compliance, MRO invalidation, thread safety under free-threaded CPython
+   - *Rust/PyO3*: Ownership semantics, GIL interactions, boundary crossing overhead
+   - *Any replacement*: Semantic drift between Python and compiled implementation, edge cases the Python version handles implicitly
 3. **Deconstruct** — Break the conversion into testable steps. Each step is small enough to verify independently.
-4. **Test** — Write tests exercising the Python API through the C backend. Write benchmarks. The tests must cover the same edge cases the Python dispatch chain handles. **Mandatory sub-steps:**
-   - **ASan verification:** Build the C extension with AddressSanitizer enabled (`-fsanitize=address`). Run the full test suite under ASan. Zero ASan errors is a hard gate — no exceptions, no suppressions without documented justification.
-   - **Leak analysis:** Run the test suite under Valgrind (`valgrind --leak-check=full`). All memory allocated by the C extension must be accounted for. CPython's own allocations are excluded via suppression file, but extension-allocated memory must be clean.
-   - **Reference count verification:** Instrument with `Py_INCREF`/`Py_DECREF` audit or use CPython debug builds (`--with-pydebug`) to detect refcount errors. Leaked references are memory leaks by another name.
-5. **Code** — Implement C. Build via `setuptools` with a `setup.py` or `pyproject.toml` defining the C extension module. The Python layer remains — the C implementation overlays the type slots, it does not remove the Python module. Consumers continue to import from Python. The slot replacement is internal.
-6. **Document** — Record measurements in the conversion record. Baseline versus post-conversion, under the same conditions. Include ASan and Valgrind output as evidence artefacts.
+4. **Test** — Write tests exercising the Python API through the replacement backend. Write benchmarks. Apply safety gates appropriate to the approach:
+   - *C extensions*: ASan verification (mandatory), leak analysis (mandatory), refcount verification (mandatory)
+   - *Rust/PyO3*: `cargo clippy`, miri for unsafe code, PyO3 safety checks
+   - *All approaches*: Full existing test suite against both implementations
+5. **Code** — Implement the replacement. The Python layer remains — the replacement overlays, it does not remove the Python module. Consumers continue to import from Python. The replacement is internal.
+6. **Document** — Record measurements in the conversion record. Baseline versus post-conversion, under the same conditions. Include safety gate output as evidence artefacts.
 
 The level of human interaction during Weather depends on the trust level (see below).
 
-**Exit criterion:** Tests pass, ASan clean, leak-free, benchmarks collected, Python API unchanged.
+**Exit criterion:** Tests pass, safety gates clean, benchmarks collected, Python API unchanged.
 
-**Falsifier:** "This conversion provides measurable benefit" — attempt to falsify by benchmarking under realistic load, testing edge cases the Python dispatch chain handled implicitly, and measuring total system impact rather than isolated slot performance.
+**Falsifier:** "This conversion provides measurable benefit" — attempt to falsify by benchmarking under realistic load, testing edge cases the Python implementation handled implicitly, and measuring total system impact rather than isolated component performance.
 
 ### Assess
 
 The evidence gate. Every conversion passes through this phase. No exceptions.
 
-**Five mandatory checks:**
+**Mandatory checks (approach-dependent):**
 
 | Check | Criterion | Gate |
 |-------|-----------|------|
-| **Correctness** | All tests pass through the C backend | Hard gate |
-| **ASan clean** | Zero AddressSanitizer errors | Hard gate |
-| **Leak-free** | Valgrind reports no extension-allocated leaks | Hard gate |
-| **Refcount clean** | No reference count errors under debug build | Hard gate |
+| **Correctness** | All tests pass through the replacement backend | Hard gate |
+| **Safety gates** | All approach-appropriate safety checks pass (ASan for C, clippy/miri for Rust, etc.) | Hard gate |
+| **Memory safety** | No leaks, no undefined behaviour (Valgrind for C, miri for Rust) | Hard gate |
 | **Performance** | Measurements show improvement beyond noise | Evidence gate |
 
 **Three outcomes for performance, no others:**
@@ -88,14 +157,16 @@ The evidence gate. Every conversion passes through this phase. No exceptions.
 | **Benefit unclear** | Measurements are ambiguous | More data needed. Do not merge. |
 | **Benefit falsified** | No improvement, or regression | Revert. Document learnings. |
 
-A conversion that passes all four hard gates but fails the performance evidence gate is still reverted — correct C code that provides no benefit is complexity without value. However, the correctness evidence is preserved: it proves the type slot *can* be replaced, which informs future work.
+A conversion that passes all hard gates but fails the performance evidence gate is still reverted — correct replacement code that provides no benefit is complexity without value. However, the correctness evidence is preserved.
 
-**"Benefit falsified" is not failure.** It is the methodology working. A reverted conversion that taught us "this dispatch chain resists C replacement because of X" is more valuable than a committed conversion nobody measured.
+**"Benefit falsified" is not failure.** It is the methodology working.
 
-Evidence quality matters. Single-run comparisons are insufficient. Use statistical methods — distributions, confidence intervals, multiple runs under varying load. If you cannot distinguish the three verdicts with evidence, your measurement methodology is wrong. Fix that before proceeding.
+**Prediction tracking:** Compare the actual result against the research phase prediction. If the result does not match the predicted range, flag this. If three consecutive conversions miss their predictions, the research phase diagnosis must be reconsidered.
+
+Evidence quality matters. Single-run comparisons are insufficient. Use statistical methods — distributions, confidence intervals, multiple runs under varying load.
 
 After the verdict:
-- Update the conversion record with full evidence (including ASan/Valgrind output)
+- Update the conversion record with full evidence
 - Update `trust-levels.md` (success increments consecutive count; failure resets to Tight)
 - Return to main branch
 
@@ -103,29 +174,29 @@ After the verdict:
 
 Update the landscape and select the next candidate.
 
-With proven type slot replacements, the dispatch graph changes:
-- New type slots become accessible: once `tp_getattro` is proven on `Module`, `tp_setattro` can be attempted, or the same slot on related types
-- Patterns emerge: which types of slot replacement yield benefit, which do not
-- The candidate list is re-ranked based on new accessible slots, accumulated evidence, and remaining distance to the terminal goal
+With proven replacements, the dependency graph changes:
+- New candidates become accessible: dependencies already replaced
+- Patterns emerge: which types of replacement yield benefit, which do not
+- The candidate list is re-ranked based on newly accessible candidates, accumulated evidence, and remaining distance to the terminal goal
 
-No blanket rules. "`tp_getattro` replacements always work" is a hypothesis to test per type, not a policy to apply wholesale.
+No blanket rules. "This type of replacement always works" is a hypothesis to test per candidate, not a policy to apply wholesale.
 
-**Exit criterion:** Next candidate selected based on updated dispatch graph and accumulated evidence.
+**Exit criterion:** Next candidate selected based on updated dependency graph and accumulated evidence.
 
 ### Fuse
 
-When sufficient contiguous C slot coverage exists within a type, consider removing the Python dispatch chain entirely for that type. This is a separate verification cycle with its own evidence gate — not an automatic consequence of successful conversions.
+When sufficient contiguous coverage exists within a type or module, consider removing the Python layer entirely. This is a separate verification cycle with its own evidence gate — not an automatic consequence of successful conversions.
 
-**What fusion means in practice:** When all significant type slots on a type (`tp_getattro`, `tp_setattro`, `tp_call`, etc.) have been replaced with C implementations, the type can be defined entirely in C, eliminating the Python class definition and its associated `slot_*` wrappers. The Python module remains for API compatibility, but the type object is created in C.
+**What fusion means in practice:** When all significant components of a type or module have been replaced, the Python definitions can be removed. The replacement becomes the primary implementation. Consumers still import from the same module — the interface is unchanged.
 
 **Risks specific to fusion:**
 - Python-side consumers that subclass the type
 - Dynamic dispatch that routes through the Python layer
 - Monkey-patching in test fixtures
-- Implicit interface contracts that the Python dispatch chain satisfies but the C slots do not
+- Implicit interface contracts that the Python layer satisfies but the replacement does not
 - MRO interactions with other Python types in the hierarchy
 
-**Falsifier:** "Removing the Python dispatch chain does not break any consumer" — test exhaustively. If any consumer breaks, the Python layer remains.
+**Falsifier:** "Removing the Python layer does not break any consumer" — test exhaustively. If any consumer breaks, the Python layer remains.
 
 ---
 
@@ -133,15 +204,9 @@ When sufficient contiguous C slot coverage exists within a type, consider removi
 
 Human oversight is expensive. Applying full oversight to every step of every conversion does not scale. But removing oversight without evidence is negligence.
 
-### What Enables Trust in C
+### What Enables Trust
 
-Rust's borrow checker provides compile-time memory safety guarantees. C has no such guarantees. In this methodology, the role of the borrow checker is replaced by **ASan and leak analysis as mandatory verification gates**. Trust advancement requires not just correct behaviour but proven memory safety through tooling:
-
-- **ASan** catches buffer overflows, use-after-free, double-free, and other memory errors at runtime
-- **Valgrind** catches memory leaks and uninitialised memory access
-- **CPython debug builds** catch reference count errors
-
-These tools are not optional aids — they are the mechanism by which C code earns trust. A conversion that passes correctness tests but has not been run under ASan and Valgrind has not been verified.
+The trust gradient controls human oversight frequency, not safety gate strictness. Safety gates (ASan for C, clippy/miri for Rust, full test suite for all approaches) are mandatory at every level. What changes is whether the human reviews every step or only the final evidence.
 
 ### The Four Levels
 
@@ -156,10 +221,10 @@ These tools are not optional aids — they are the mechanism by which C code ear
 
 | Level | During Weather | During Assess | Human Interaction |
 |-------|---------------|---------------|-------------------|
-| **Tight** | Confirm every step | Present all evidence (including ASan/Valgrind output) | Continuous |
-| **Gate** | Run autonomously | Present evidence at gate (ASan/Valgrind must be clean) | At Assess only |
-| **Batch** | Run autonomously, multiple | Present batch evidence (aggregate ASan/Valgrind results) | At batch Assess |
-| **Review** | Run continuously | Flag anomalies only (ASan/Valgrind failures always flag) | On exception |
+| **Tight** | Confirm every step | Present all evidence | Continuous |
+| **Gate** | Run autonomously | Present evidence at gate | At Assess only |
+| **Batch** | Run autonomously, multiple | Present batch evidence | At batch Assess |
+| **Review** | Run continuously | Flag anomalies only | On exception |
 
 ### Transitions
 
@@ -167,14 +232,14 @@ These tools are not optional aids — they are the mechanism by which C code ear
 
 | Transition | Requirement |
 |-----------|------------|
-| Tight → Gate | N consecutive successes where human review found no issues the evidence gate missed — including no ASan/Valgrind issues the automated gate missed. N is project-dependent — ask the human. |
+| Tight → Gate | N consecutive successes where human review found no issues the evidence gate missed. N is project-dependent — ask the human. |
 | Gate → Batch | Further consecutive successes at Gate level. Supervisor may batch-assign. |
 | Batch → Review | Extensive track record. Mature measurement infrastructure. Human explicitly approves. |
-| Any → Tight | Single failure where oversight level was insufficient — the human discovers a problem the evidence gate missed. **Any ASan or Valgrind failure that reached Assess without being caught reverts trust to Tight immediately.** |
+| Any → Tight | Single failure where oversight level was insufficient — the human discovers a problem the evidence gate missed. |
 
 **Transitions are reversible.** A single conversion where the oversight level was insufficient — where the human discovers a problem the evidence gate missed — reverts the level. Trust is slow to build and fast to lose.
 
-**The gradient applies per conversion type, not globally.** `tp_getattro` replacements may earn Gate level while `tp_call` replacements remain at Tight. Each domain of conversion builds its own trust independently.
+**The gradient applies per conversion type, not globally.** Each domain of conversion builds its own trust independently.
 
 ---
 
@@ -186,7 +251,7 @@ Raw conversion records accumulate. Patterns hide in the noise. Without periodic 
 
 Every three conversion workers, the supervisor must:
 
-1. **Spawn a compression worker.** This is a pure role — it reads all conversion records in `.nbs/terminal-weathering/conversions/`, extracts patterns (which slot replacements succeed, which fail, common pitfalls, useful techniques), and writes compressed patterns to `patterns.md`. It does not make decisions. It summarises.
+1. **Spawn a compression worker.** This is a pure role — it reads all conversion records in `.nbs/terminal-weathering/conversions/`, extracts patterns (which replacements succeed, which fail, common pitfalls, useful techniques), and writes compressed patterns to `patterns.md`. It does not make decisions. It summarises.
 
 2. **Run `/nbs`.** The standard NBS audit checks goal alignment, falsifiability discipline, and drift detection. This is separate from the compression worker — compression handles patterns, `/nbs` handles epistemics.
 
@@ -198,8 +263,9 @@ Frequent enough to catch drift before it compounds. Infrequent enough not to dom
 
 ### What Good Compression Looks Like
 
-- "Three out of four `tp_getattro` replacements on `nn.Module` subclasses showed >20% reduction in per-call overhead. The exception was a type with a complex descriptor protocol that required MRO traversal even in C."
-- "All slot replacements required explicit reference count management for the return value. Two out of five initial implementations had refcount leaks caught by Valgrind."
+- "Three out of four C extension type conversions showed >2x reduction in per-access overhead. The exception was a type with dynamic attribute generation that required the Python descriptor protocol."
+- "All C conversions required explicit reference count management for the return value. Two out of five initial implementations had refcount leaks caught by Valgrind."
+- "Research phase prediction accuracy: 4/5 conversions fell within the predicted range. The outlier was a type where the profile underestimated cold-cache effects."
 
 ### What Bad Compression Looks Like
 
@@ -214,27 +280,28 @@ For codebases at scale — millions of lines — terminal weathering maps onto t
 
 ### Supervisor
 
-The supervisor holds the terminal goal, the ranked candidate list, and the evidence gates.
+The supervisor holds the terminal goal, the research phase output, the ranked candidate list, and the evidence gates.
 
 **Responsibilities:**
-- Maintain `status.md`, `candidates.md`, `trust-levels.md`
-- Select candidates and assign individual type slot conversions to workers
-- Adjudicate at the Assess phase — workers report evidence (including ASan/Valgrind results), the supervisor decides
+- Lead the research phase (workers are not spawned until an approach is selected)
+- Maintain `status.md`, `candidates.md`, `trust-levels.md`, `research.md`
+- Select candidates and assign individual conversions to workers
+- Adjudicate at the Assess phase — workers report evidence, the supervisor decides
 - Track trust levels and adjust oversight accordingly
+- Track prediction accuracy — compare each conversion result against the research phase prediction
 - Run the epistemic garbage collector every three workers
 - Escalate to the human when uncertain
 
-**The supervisor does not write C extensions.** It delegates, monitors, and decides.
+**The supervisor does not write code.** It delegates, monitors, and decides.
 
 ### Conversion Workers
 
-Each worker executes one type slot conversion on an isolated `weathering/<type>/<slot>` branch.
+Each worker executes one conversion on an isolated branch.
 
 **Responsibilities:**
-- Execute the full Weather phase, including mandatory ASan and leak analysis
-- Build the C extension via `setuptools` with appropriate compiler flags (`-fsanitize=address` for ASan builds)
+- Execute the full Weather phase, including mandatory safety gates
 - Record observations in the conversion record
-- Return evidence to the supervisor at Assess, including ASan and Valgrind output
+- Return evidence to the supervisor at Assess
 - Operate within the trust level assigned by the supervisor
 
 **Workers do not adjudicate.** They report evidence. The supervisor (and ultimately the human) decides.
@@ -245,7 +312,8 @@ A periodic, pure role that distils raw learnings into compressed patterns. Spawn
 
 **Responsibilities:**
 - Read all conversion records
-- Extract patterns: which slot replacements succeed, which fail, common refcount pitfalls, ASan findings, useful CPython API techniques
+- Extract patterns: which replacements succeed, which fail, common pitfalls, safety gate findings, useful techniques
+- Track research phase prediction accuracy
 - Write compressed patterns to `patterns.md`
 
 **The compression worker does not make decisions.** It summarises.
@@ -259,30 +327,28 @@ A periodic, pure role that distils raw learnings into compressed patterns. Spawn
 - Benchmarks run under realistic load, not synthetic microbenchmarks alone
 - Statistical distributions, not single-run numbers
 - Memory measurements under sustained operation, not just peak
-- **ASan output showing zero errors** across the full test suite
-- **Valgrind output showing zero extension-allocated leaks**
-- **Refcount verification** under CPython debug build (`--with-pydebug`)
-- Edge cases explicitly tested — the ones the Python dispatch chain handled implicitly
-- Total system impact measured, not just isolated slot performance
-- Comparison conditions identical to baseline (same hardware, same data, same load)
+- Safety gate output showing clean results (ASan for C, clippy/miri for Rust)
+- Edge cases explicitly tested — the ones the Python implementation handled implicitly
+- Total system impact measured, not just isolated component performance
+- Comparison conditions identical to baseline (same hardware, same data, same load, same Python version)
+- Research phase prediction compared against actual result
 
 ### What Bad Evidence Looks Like
 
 - "It feels faster" (not measured)
 - A single benchmark run showing 2x improvement (not statistically significant)
 - Microbenchmark in isolation without system-level measurement (does not capture integration costs)
-- Missing edge case coverage (the Python dispatch chain might handle cases the C slot does not)
+- Missing edge case coverage
 - Different conditions from baseline (invalidates comparison)
-- **ASan not run** ("it compiled cleanly" is not evidence of memory safety)
-- **Valgrind not run** ("I checked the refcounts manually" is not evidence of leak freedom)
-- **ASan suppressions without justification** (suppressing errors is hiding evidence)
+- Safety gates not run ("it compiled cleanly" is not evidence of memory safety)
+- Research phase prediction not tracked (how do we know the diagnosis was correct?)
 
 ### Failed Conversions as Positive Outcomes
 
 A conversion that fails the evidence gate teaches something. Document it:
 
-- **What was the hypothesis?** "Replacing `tp_getattro` on `Module` with a C function will reduce per-call overhead by 50%."
-- **What did the evidence show?** "Per-call overhead reduced by 8%, within noise. The dispatch chain is only three levels deep for this type — most overhead is in the descriptor protocol, which remains in Python."
-- **What did we learn?** "Shallow dispatch chains are poor candidates. Target types where the chain depth exceeds five levels."
+- **What was the hypothesis?** "Replacing Cell with a C extension type will reduce per-access overhead by 90%."
+- **What did the evidence show?** "Per-access overhead reduced by 15%, within noise. The attribute protocol is only three levels deep for this type — most overhead is in the descriptor protocol, which remains in Python."
+- **What did we learn?** "Shallow attribute chains are poor candidates for this approach. Target types where the access depth exceeds five levels, or where the access frequency is extremely high."
 
 This is more valuable than a successful conversion that nobody examined critically. A conversion log showing 100% success rate is either dishonest or insufficiently ambitious.
