@@ -13,6 +13,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Ensure bin/ is in PATH so sidecars can find nbs-prompts, nbs-bus, etc.
+case ":${PATH}:" in
+    *":${SCRIPT_DIR}:"*) ;;
+    *) export PATH="${SCRIPT_DIR}:${PATH}" ;;
+esac
+
 TARGET_HANDLE="${1:-}"
 
 if [[ "${TARGET_HANDLE}" == "--help" || "${TARGET_HANDLE}" == "-h" ]]; then
