@@ -14,7 +14,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-SUPERVISOR_DOC="$PROJECT_ROOT/claude_tools/nbs-teams-supervisor.md"
+SUPERVISOR_DOC="$PROJECT_ROOT/claude_tools/nbs-supervisor.md"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios/supervisor_nbs_worker"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="$SCRIPT_DIR/verdicts/supervisor_adv_no_old_pattern_output_$TIMESTAMP.txt"
@@ -78,7 +78,7 @@ if echo "$OUTPUT" | grep -qi "pty-session send.*Read.*\.nbs/workers"; then
 fi
 
 # Check for manual worker file creation before spawn
-# (nbs-worker creates this automatically)
+# (nbs-workers creates this automatically)
 if echo "$OUTPUT" | grep -qi "cat >.*\.nbs/workers.*\.md" || \
    echo "$OUTPUT" | grep -qi "cat >.*worker-[0-9]"; then
     OLD_PATTERNS_FOUND+=("manual task file creation before spawn detected")

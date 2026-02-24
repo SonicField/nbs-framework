@@ -15,21 +15,21 @@ all:
 	$(MAKE) -C src/nbs-chat
 	$(MAKE) -C src/nbs-sidecar
 	$(MAKE) -C src/nbs-pty-session
-	$(MAKE) -C src/nbs-worker
+	$(MAKE) -C src/nbs-workers
 
 install: all
 	$(MAKE) -C src/nbs-bus install
 	$(MAKE) -C src/nbs-chat install
 	$(MAKE) -C src/nbs-sidecar install
 	$(MAKE) -C src/nbs-pty-session install
-	$(MAKE) -C src/nbs-worker install
+	$(MAKE) -C src/nbs-workers install
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
 	$(MAKE) -C src/nbs-chat clean
 	$(MAKE) -C src/nbs-sidecar clean
 	-$(MAKE) -C src/nbs-pty-session clean
-	-$(MAKE) -C src/nbs-worker clean
+	-$(MAKE) -C src/nbs-workers clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
@@ -46,7 +46,7 @@ test: install
 	$(MAKE) -C src/nbs-chat test
 	$(MAKE) -C src/nbs-sidecar test
 	$(MAKE) -C src/nbs-pty-session test
-	$(MAKE) -C src/nbs-worker test
+	$(MAKE) -C src/nbs-workers test
 	bash tests/automated/test_interrupt_pattern.sh
 	bash tests/automated/test_auto_archive.sh
 

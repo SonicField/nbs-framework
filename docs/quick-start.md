@@ -95,18 +95,18 @@ Type messages, see agent responses in real time. Use `@handle` to address a spec
 
 ```bash
 # Spawn a worker (creates task file, starts Claude session, sends prompt)
-nbs-worker spawn parser /path/to/your/project \
+nbs-workers spawn parser /path/to/your/project \
   "Implement the parser. Pass all 84 tests."
 # Output: parser-a3f1  (generated name)
 
 # Check worker status
-nbs-worker status parser-a3f1
+nbs-workers status parser-a3f1
 
 # Extract results after completion
-nbs-worker results parser-a3f1
+nbs-workers results parser-a3f1
 
 # List all workers
-nbs-worker list
+nbs-workers list
 ```
 
 ## What Happens Automatically

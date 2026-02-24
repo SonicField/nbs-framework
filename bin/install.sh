@@ -139,6 +139,15 @@ done
 echo "Installing Claude Code commands..."
 mkdir -p "$CLAUDE_COMMANDS_DIR"
 
+# Remove stale skill names from prior installs
+for stale in nbs-teams-supervisor.md nbs-teams-worker.md; do
+    stale_path="$CLAUDE_COMMANDS_DIR/$stale"
+    if [[ -e "$stale_path" || -L "$stale_path" ]]; then
+        rm "$stale_path"
+        echo "  Removed stale: /$stale"
+    fi
+done
+
 for cmd in "$PREFIX/commands"/*.md; do
     if [[ -f "$cmd" ]]; then
         name=$(basename "$cmd")

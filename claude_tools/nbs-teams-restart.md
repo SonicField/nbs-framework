@@ -28,7 +28,7 @@ Not all participants in chat are agents to be spawned. Distinguish:
 
 | Type | Examples | Spawning |
 |------|----------|----------|
-| **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `nbs-claude` / `nbs-worker continue` during restart |
+| **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `nbs-claude` / `nbs-workers continue` during restart |
 | **Infrastructure** | sidecar, pythia, shepard | **Do NOT spawn during restart.** Sidecars are launched automatically by `nbs-claude` for each agent. Pythia is triggered by sidecar configuration (pythia-interval). Shepard is triggered by sidecar configuration (shepard-interval, every 100 chat messages). |
 
 The `participants` list in chat includes both types. When triaging, skip sidecar, pythia, and shepard — they are not independent agents.
@@ -108,7 +108,7 @@ For each agent in recovery order, apply the /nbs-teams-fixup escalation ladder:
 ```
 Level 1 (Ping): tmux send-keys Enter, wait 15s
 Level 2 (Compact): Ctrl-C + /compact, wait 60s, check context
-Level 3 (Continue): nbs-worker continue <handle> (or manual --resume if no metadata)
+Level 3 (Continue): nbs-workers continue <handle> (or manual --resume if no metadata)
 Level 4 (Hard restart): kill, respawn fresh
 ```
 
@@ -121,7 +121,7 @@ Level 4 (Hard restart): kill, respawn fresh
 **Context-based shortcuts** (from /nbs-teams-fixup zombie classification):
 - Context <10%: skip to Level 4 — agent cannot process commands
 - Context at compaction floor (10-15% after compact, no improvement): skip to Level 4
-- Session metadata available (`.nbs/sessions/<handle>.json`): use `nbs-worker continue <handle>` for Level 3
+- Session metadata available (`.nbs/sessions/<handle>.json`): use `nbs-workers continue <handle>` for Level 3
 - Session started without --resume and no session metadata: skip Level 3
 
 ### Step 5: Stale Pidfile Cleanup
@@ -177,19 +177,32 @@ This ensures respawned agents do not see a backlog of hundreds of old messages o
 
 ### Step 6: Respawn Dead Agents
 
+#### Role→Skill Mapping
+
+When spawning agents with `NBS_INITIAL_PROMPT`, use the correct skill for each role:
+
+| Handle | Skill | Initial prompt |
+|--------|-------|---------------|
+| `supervisor` | `/nbs-supervisor` | `NBS_INITIAL_PROMPT="/nbs-supervisor"` |
+| `scribe` | `/nbs-scribe` | `NBS_INITIAL_PROMPT="/nbs-scribe"` |
+| `gatekeeper` | `/nbs-gatekeeper` | `NBS_INITIAL_PROMPT="/nbs-gatekeeper"` |
+| `testkeeper` | `/nbs-testkeeper` | `NBS_INITIAL_PROMPT="/nbs-testkeeper"` |
+| Named workers (e.g. `helper`, `generalist`, `hypergrep`) | `/nbs-worker` | `NBS_INITIAL_PROMPT="/nbs-worker"` |
+| `theologian` | `/nbs-worker` | Worker role with architecture focus |
+
 For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts.
 
-**If session metadata exists** (agent was started with `nbs-claude` which writes `.nbs/sessions/<handle>.json`), use `nbs-worker continue` to preserve session context:
+**If session metadata exists** (agent was started with `nbs-claude` which writes `.nbs/sessions/<handle>.json`), use `nbs-workers continue` to preserve session context:
 
 ```bash
 # Continue with existing session ID and model from metadata
-nbs-worker continue <handle>
+nbs-workers continue <handle>
 
 # Or override the model on continue
-nbs-worker continue <handle> --model=opus
+nbs-workers continue <handle> --model=opus
 
 # Inspect metadata before continuing
-nbs-worker session <handle>
+nbs-workers session <handle>
 ```
 
 **If no session metadata** (fresh respawn, Level 4):

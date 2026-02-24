@@ -55,15 +55,18 @@ Synthesise the 4 summaries into a unified picture of the team's current state.
 
 ### Step 2: Run the full /nbs review
 
-**MANDATORY:** Read all six NBS pillar documents before assessing. Do not skip any.
+**MANDATORY:** Read all NBS concept documents before assessing. Do not skip any.
 
 ```bash
-cat /home/alexturner/.nbs/concepts/goals.md
-cat /home/alexturner/.nbs/concepts/falsifiability.md
-cat /home/alexturner/.nbs/concepts/rhetoric.md
-cat /home/alexturner/.nbs/concepts/bullshit-detection.md
-cat /home/alexturner/.nbs/concepts/verification-cycle.md
-cat /home/alexturner/.nbs/concepts/zero-code-contract.md
+cat {{NBS_ROOT}}/concepts/goals.md
+cat {{NBS_ROOT}}/concepts/falsifiability.md
+cat {{NBS_ROOT}}/concepts/rhetoric.md
+cat {{NBS_ROOT}}/concepts/bullshit-detection.md
+cat {{NBS_ROOT}}/concepts/verification-cycle.md
+cat {{NBS_ROOT}}/concepts/zero-code-contract.md
+cat {{NBS_ROOT}}/concepts/engineering-standards.md
+cat {{NBS_ROOT}}/concepts/coordination.md
+cat {{NBS_ROOT}}/concepts/pte.md
 ```
 
 Then apply the full NBS review framework (as defined in `/nbs`) to the team's recent work. Assess all dimensions:

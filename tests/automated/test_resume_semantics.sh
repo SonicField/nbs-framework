@@ -2,7 +2,7 @@
 # Test: Resume semantics — session metadata infrastructure
 #
 # Tests that nbs-claude creates and manages session metadata files
-# in .nbs/sessions/<handle>.json, enabling nbs-worker continue.
+# in .nbs/sessions/<handle>.json, enabling nbs-workers continue.
 #
 # Deterministic tests:
 #   1.  Session metadata directory created on startup
@@ -24,17 +24,17 @@
 #   15. Invalid model name — passed through (claude validates)
 #   16. UUID generation works without uuidgen (fallback)
 #
-# nbs-worker tests:
-#   17. nbs-worker session reads metadata correctly
-#   18. nbs-worker continue reads session_id from metadata
-#   19. nbs-worker continue with --model override
+# nbs-workers tests:
+#   17. nbs-workers session reads metadata correctly
+#   18. nbs-workers continue reads session_id from metadata
+#   19. nbs-workers continue with --model override
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 NBS_CLAUDE="$PROJECT_ROOT/bin/nbs-claude"
-NBS_WORKER="$PROJECT_ROOT/bin/nbs-worker"
+NBS_WORKERS="$PROJECT_ROOT/bin/nbs-workers"
 
 ERRORS=0
 
@@ -169,27 +169,27 @@ else
 fi
 
 echo ""
-echo "nbs-worker tests:"
+echo "nbs-workers tests:"
 
-# 13. nbs-worker has 'continue' command
-if [[ -f "$NBS_WORKER" ]] && grep -q 'continue\|cmd_continue' "$NBS_WORKER"; then
-    check "13. nbs-worker has continue command" "pass"
+# 13. nbs-workers has 'continue' command
+if [[ -f "$NBS_WORKERS" ]] && grep -q 'continue\|cmd_continue' "$NBS_WORKERS"; then
+    check "13. nbs-workers has continue command" "pass"
 else
-    check "13. nbs-worker has continue command" "fail"
+    check "13. nbs-workers has continue command" "fail"
 fi
 
-# 14. nbs-worker has 'session' command
-if [[ -f "$NBS_WORKER" ]] && grep -q 'session\|cmd_session' "$NBS_WORKER"; then
-    check "14. nbs-worker has session command" "pass"
+# 14. nbs-workers has 'session' command
+if [[ -f "$NBS_WORKERS" ]] && grep -q 'session\|cmd_session' "$NBS_WORKERS"; then
+    check "14. nbs-workers has session command" "pass"
 else
-    check "14. nbs-worker has session command" "fail"
+    check "14. nbs-workers has session command" "fail"
 fi
 
-# 15. nbs-worker continue reads session metadata
-if [[ -f "$NBS_WORKER" ]] && grep -q 'sessions.*json\|session.*metadata' "$NBS_WORKER"; then
-    check "15. nbs-worker continue reads session metadata" "pass"
+# 15. nbs-workers continue reads session metadata
+if [[ -f "$NBS_WORKERS" ]] && grep -q 'sessions.*json\|session.*metadata' "$NBS_WORKERS"; then
+    check "15. nbs-workers continue reads session metadata" "pass"
 else
-    check "15. nbs-worker continue reads session metadata" "fail"
+    check "15. nbs-workers continue reads session metadata" "fail"
 fi
 
 echo ""

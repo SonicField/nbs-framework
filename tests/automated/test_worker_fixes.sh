@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test: nbs-worker audit fixes (16 violations: 4 BUG, 5 SECURITY, 7 HARDENING)
+# Test: nbs-workers audit fixes (16 violations: 4 BUG, 5 SECURITY, 7 HARDENING)
 #
 # Falsification approach:
 # Each test targets a specific violation fix. For each fix, we construct an input
@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-NBS_WORKER="$PROJECT_ROOT/bin/nbs-worker"
+NBS_WORKER="$PROJECT_ROOT/bin/nbs-workers"
 
 TEST_DIR=$(mktemp -d)
 ORIGINAL_DIR=$(pwd)
@@ -43,7 +43,7 @@ skip() {
     SKIPPED=$((SKIPPED + 1))
 }
 
-echo "=== nbs-worker Audit Fix Tests ==="
+echo "=== nbs-workers Audit Fix Tests ==="
 echo "Test directory: $TEST_DIR"
 echo ""
 
@@ -390,7 +390,7 @@ fi
 # Verify the help command works (basic smoke test)
 echo "E3. help command works under set -e..."
 HELP_OUT=$("$NBS_WORKER" help 2>&1) || true
-if echo "$HELP_OUT" | grep -q "nbs-worker"; then
+if echo "$HELP_OUT" | grep -q "nbs-workers"; then
     pass "help command produces output"
 else
     fail "help command failed: $HELP_OUT"

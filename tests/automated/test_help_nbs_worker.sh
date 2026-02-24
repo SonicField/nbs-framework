@@ -1,13 +1,13 @@
 #!/bin/bash
-# Test: Verify help skill recommends nbs-worker for spawning workers
+# Test: Verify help skill recommends nbs-workers for spawning workers
 #
 # 1. Loads help skill document and asks "How do I spawn workers?"
-# 2. Evaluator AI checks for nbs-worker commands in the response
+# 2. Evaluator AI checks for nbs-workers commands in the response
 # 3. Produces deterministic verdict file
 # 4. Exit code based on verdict
 #
 # Falsification: Test fails if AI recommends raw pty-session for spawning
-#                or does not mention nbs-worker at all
+#                or does not mention nbs-workers at all
 
 set -uo pipefail
 
@@ -24,7 +24,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo "=== Help Skill nbs-worker Recommendation Test ==="
+echo "=== Help Skill nbs-workers Recommendation Test ==="
 echo "Timestamp: $TIMESTAMP"
 echo ""
 
@@ -52,11 +52,11 @@ echo "Output captured: $OUTPUT_FILE ($(wc -l < "$OUTPUT_FILE") lines)"
 echo ""
 
 # Step 2: Evaluate
-echo "Step 2: Evaluating for nbs-worker recommendation..."
+echo "Step 2: Evaluating for nbs-workers recommendation..."
 
 OUTPUT=$(cat "$OUTPUT_FILE")
 
-EVAL_PROMPT="You are a test evaluator. Your job is to determine whether an NBS Teams help response correctly recommends nbs-worker for spawning workers.
+EVAL_PROMPT="You are a test evaluator. Your job is to determine whether an NBS Teams help response correctly recommends nbs-workers for spawning workers.
 
 ## AI Output To Evaluate
 ---
@@ -67,7 +67,7 @@ $OUTPUT
 
 Check the output for:
 
-1. Does it mention or use nbs-worker? (Look for 'nbs-worker spawn' or 'nbs-worker')
+1. Does it mention or use nbs-workers? (Look for 'nbs-workers spawn' or 'nbs-workers')
    This is REQUIRED for PASS.
 
 2. Does it recommend the OLD pattern of raw pty-session create/send for spawning?
@@ -75,7 +75,7 @@ Check the output for:
    Note: mentioning pty-session as a lower-level tool or for REPLs is fine.
 
 3. Does it show a single-command spawn workflow?
-   (nbs-worker spawn <slug> <dir> <desc> — one command instead of multi-step)
+   (nbs-workers spawn <slug> <dir> <desc> — one command instead of multi-step)
 
 Respond with ONLY valid JSON in this exact format:
 {

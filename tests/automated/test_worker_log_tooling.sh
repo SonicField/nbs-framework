@@ -1,19 +1,19 @@
 #!/bin/bash
-# Test: Verify worker uses nbs-worker search for log access
+# Test: Verify worker uses nbs-workers search for log access
 #
 # 1. Gives AI a worker task file with Tooling section + a task needing log access
-# 2. Evaluator AI checks for nbs-worker search usage vs raw log access
+# 2. Evaluator AI checks for nbs-workers search usage vs raw log access
 # 3. Produces deterministic verdict file
 # 4. Exit code based on verdict
 #
 # Falsification: Test fails if AI reads raw .log files instead of using
-#                nbs-worker search
+#                nbs-workers search
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-WORKER_DOC="$PROJECT_ROOT/claude_tools/nbs-teams-worker.md"
+WORKER_DOC="$PROJECT_ROOT/claude_tools/nbs-worker.md"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios/worker_log_tooling"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="$SCRIPT_DIR/verdicts/worker_log_tooling_output_$TIMESTAMP.txt"
@@ -35,7 +35,7 @@ cd "$SCENARIO_DIR" || exit 1
 
 WORKER_CONTENT=$(cat "$WORKER_DOC")
 
-# Simulate a task file as nbs-worker spawn would create it
+# Simulate a task file as nbs-workers spawn would create it
 TASK_FILE_CONTENT='# Worker: log-checker
 
 ## Task
@@ -45,10 +45,10 @@ Look in its logs for evidence of test results. Report whether all tests passed.
 
 ## Tooling
 
-Your supervisor monitors you via `nbs-worker`. These tips avoid common mistakes:
+Your supervisor monitors you via `nbs-workers`. These tips avoid common mistakes:
 
-- **Do not read raw .log files** — they contain ANSI escape codes. Use `nbs-worker search <name> <regex>` for clean, searchable output.
-- **Update Status and Log sections** in this file when done — your supervisor reads them via `nbs-worker results`.
+- **Do not read raw .log files** — they contain ANSI escape codes. Use `nbs-workers search <name> <regex>` for clean, searchable output.
+- **Update Status and Log sections** in this file when done — your supervisor reads them via `nbs-workers results`.
 - **Escalate blockers** by setting State to `escalated` — do not work around problems silently.
 
 ## Status
@@ -67,7 +67,7 @@ PROMPT="You are acting as an NBS Teams worker. Here is your role document:
 $WORKER_CONTENT
 ---
 
-Here is your task file (created by nbs-worker spawn):
+Here is your task file (created by nbs-workers spawn):
 
 ---
 $TASK_FILE_CONTENT
@@ -89,7 +89,7 @@ echo "Step 2: Evaluating output..."
 CRITERIA=$(cat "$SCENARIO_DIR/TEST_CRITERIA.md")
 OUTPUT=$(cat "$OUTPUT_FILE")
 
-EVAL_PROMPT="You are a test evaluator. Your job is to determine whether a worker AI correctly uses nbs-worker tooling for log access instead of reading raw log files.
+EVAL_PROMPT="You are a test evaluator. Your job is to determine whether a worker AI correctly uses nbs-workers tooling for log access instead of reading raw log files.
 
 ## Test Criteria
 $CRITERIA
@@ -103,11 +103,11 @@ $OUTPUT
 
 Check the output for these two conditions:
 
-### Condition 1: Uses nbs-worker commands (REQUIRED for PASS)
-Does the output use nbs-worker for checking logs? Look for:
-- \"nbs-worker search\" (the search command for logs)
-- \"nbs-worker results\" (reading completed task results)
-- \"nbs-worker status\" (checking worker status)
+### Condition 1: Uses nbs-workers commands (REQUIRED for PASS)
+Does the output use nbs-workers for checking logs? Look for:
+- \"nbs-workers search\" (the search command for logs)
+- \"nbs-workers results\" (reading completed task results)
+- \"nbs-workers status\" (checking worker status)
 
 At least one of these must be present.
 

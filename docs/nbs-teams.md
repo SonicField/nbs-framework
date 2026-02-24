@@ -75,11 +75,12 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 |---------|---------|
 | `/nbs-teams-start` | Bootstrap `.nbs/` structure |
 | `/nbs-teams-help` | Interactive guidance - ask Claude for help |
-| `/nbs-teams-supervisor` | Supervisor role reference |
-| `/nbs-teams-worker` | Worker role reference |
+| `/nbs-supervisor` | Supervisor role reference |
+| `/nbs-worker` | Worker role reference |
+| `/nbs-testkeeper` | Testkeeper role reference |
 | `/nbs-teams-chat` | AI-to-AI chat reference |
 | `/nbs-teams-fixup` | Diagnose and restart stalled agents |
-| `/nbs-tmux-worker` | nbs-worker command reference |
+| `/nbs-tmux-worker` | nbs-workers command reference |
 
 ### Getting Help
 

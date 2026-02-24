@@ -10,7 +10,7 @@ BIN_DIR = ../../bin
 
 SRCS = main.c worker.c
 OBJS = $(SRCS:.c=.o)
-TARGET = nbs-worker
+TARGET = nbs-workers
 
 # NDEBUG verification
 ASSERT_CHECK = assert_check
@@ -30,7 +30,7 @@ $(ASSERT_CHECK): assert_check.c
 
 install: all
 	mkdir -p $(BIN_DIR)
-	cp $(TARGET) $(BIN_DIR)/nbs-worker
+	cp $(TARGET) $(BIN_DIR)/nbs-workers
 
 test: all install
 	./$(ASSERT_CHECK)
