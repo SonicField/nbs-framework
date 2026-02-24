@@ -1,5 +1,6 @@
 /*
- * strip_ansi.c — Strip ANSI/terminal escape sequences from text.
+ * strip_ansi.c — Strip ANSI/terminal escape sequences and bare control
+ *                characters from text.
  */
 
 #include "strip_ansi.h"
@@ -43,6 +44,11 @@ size_t strip_ansi(char *text) {
                 rd++;
             }
             /* else: bare ESC at end of string — skip it */
+        } else if ((unsigned char)*rd < 0x20 &&
+                   *rd != '\n' && *rd != '\t') {
+            /* Strip bare control characters (CR, BEL, etc.)
+             * but preserve newlines and tabs */
+            rd++;
         } else {
             *wr++ = *rd++;
         }
