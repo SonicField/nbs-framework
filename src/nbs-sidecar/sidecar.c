@@ -444,6 +444,9 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 char payload[SIDECAR_MAX_MESSAGE];
                 if (bus_client_check_typed(bus_dir, "chat-interrupt",
                                             cfg->handle, payload,
+                                            sizeof(payload)) == 0 ||
+                    bus_client_check_typed(bus_dir, "chat-interrupt",
+                                            "team", payload,
                                             sizeof(payload)) == 0) {
                     handle_interrupt(tp, cfg, registry_path);
                     state.idle_seconds = 0;
@@ -462,6 +465,9 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 char payload[SIDECAR_MAX_MESSAGE];
                 if (bus_client_check_typed(bus_dir, "chat-mention",
                                             cfg->handle, payload,
+                                            sizeof(payload)) == 0 ||
+                    bus_client_check_typed(bus_dir, "chat-mention",
+                                            "team", payload,
                                             sizeof(payload)) == 0) {
                     state.mention_detected = 1;
                     /* Cap payload */
