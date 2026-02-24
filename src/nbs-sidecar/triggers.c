@@ -355,10 +355,8 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
             "Check-in: @scribe post a summary of decisions and open items "
             "since the last check-in. @supervisor once scribe has posted, "
             "review and assign next tasks. All agents: what are you working "
-            "on? What is blocked? If you are idle, find useful work NOW "
-            "\xe2\x80\x94 do not wait for assignment. If you declared "
-            "session-end without supervisor approval, resume work "
-            "immediately.";
+            "on? What is blocked? If you declared session-end without "
+            "supervisor approval, resume work immediately.";
     }
 
     chat_client_send(chat_path, "sidecar", standup_msg);
