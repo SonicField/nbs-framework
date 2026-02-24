@@ -70,28 +70,48 @@ static const char *resolve_nbs_workers(void)
 /* --- Pythia trigger --- */
 
 /*
- * count_decision_events — Count decision-logged event files in processed/.
+ * count_dir_by_type — Count files containing type_substr in name.
  */
-static int count_decision_events(const char *bus_dir) {
-    ASSERT_MSG(strlen(bus_dir) < 4000,
-           "count_decision_events: bus_dir too long: %zu", strlen(bus_dir));
-    char processed_path[4096];
-    int n = snprintf(processed_path, sizeof(processed_path),
-                     "%s/processed", bus_dir);
-    if (n < 0 || (size_t)n >= sizeof(processed_path)) return 0;
-
-    DIR *d = opendir(processed_path);
+static int count_dir_by_type(const char *dir_path, const char *type_substr) {
+    DIR *d = opendir(dir_path);
     if (!d) return 0;
 
     int count = 0;
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
-        if (strstr(entry->d_name, "decision-logged") != NULL) {
+        if (strstr(entry->d_name, type_substr) != NULL) {
             count++;
         }
     }
     int crc = closedir(d);
-    ASSERT_MSG(crc == 0, "count_decision_events: closedir failed: %s", strerror(errno));
+    ASSERT_MSG(crc == 0, "count_dir_by_type: closedir failed: %s",
+               strerror(errno));
+    return count;
+}
+
+/*
+ * count_bus_events_by_type — Total events of a given type across both
+ * events/ and events/processed/.
+ *
+ * Some events end up as .ack files in events/ (created by agents
+ * manually renaming instead of using nbs-bus ack). These are invisible
+ * to scan_events (.event only) but still represent logged events.
+ * Counting both directories ensures bucket counts are correct
+ * regardless of how events were acknowledged.
+ */
+static int count_bus_events_by_type(const char *bus_dir,
+                                     const char *type_substr) {
+    ASSERT_MSG(strlen(bus_dir) < 4000,
+           "count_bus_events_by_type: bus_dir too long: %zu", strlen(bus_dir));
+
+    int count = count_dir_by_type(bus_dir, type_substr);
+
+    char processed_path[4096];
+    int n = snprintf(processed_path, sizeof(processed_path),
+                     "%s/processed", bus_dir);
+    if (n >= 0 && (size_t)n < sizeof(processed_path))
+        count += count_dir_by_type(processed_path, type_substr);
+
     return count;
 }
 
@@ -197,7 +217,7 @@ int trigger_pythia_check(const char *registry_path, const char *nbs_root,
     }
 
     int interval = read_pythia_interval(bus_dir);
-    int decision_count = count_decision_events(bus_dir);
+    int decision_count = count_bus_events_by_type(bus_dir, "decision-logged");
 
     /* Check if we've crossed a new threshold */
     int current_bucket = decision_count / interval;
@@ -476,32 +496,6 @@ int trigger_pythia_spawn(const char *nbs_root) {
 /* --- Shepard trigger --- */
 
 /*
- * count_chat_message_events — Count chat-message event files in processed/.
- */
-static int count_chat_message_events(const char *bus_dir) {
-    ASSERT_MSG(strlen(bus_dir) < 4000,
-           "count_chat_message_events: bus_dir too long: %zu", strlen(bus_dir));
-    char processed_path[4096];
-    int n = snprintf(processed_path, sizeof(processed_path),
-                     "%s/processed", bus_dir);
-    if (n < 0 || (size_t)n >= sizeof(processed_path)) return 0;
-
-    DIR *d = opendir(processed_path);
-    if (!d) return 0;
-
-    int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
-        if (strstr(entry->d_name, "chat-message") != NULL) {
-            count++;
-        }
-    }
-    int crc = closedir(d);
-    ASSERT_MSG(crc == 0, "count_chat_message_events: closedir failed: %s", strerror(errno));
-    return count;
-}
-
-/*
  * read_shepard_interval — Read shepard-interval from config.yaml.
  */
 static int read_shepard_interval(const char *bus_dir) {
@@ -585,7 +579,7 @@ int trigger_shepard_check(const char *registry_path, const char *nbs_root,
     }
 
     int interval = read_shepard_interval(bus_dir);
-    int message_count = count_chat_message_events(bus_dir);
+    int message_count = count_bus_events_by_type(bus_dir, "chat-message");
 
     int current_bucket = message_count / interval;
     int last_bucket = *last_trigger_count / interval;
