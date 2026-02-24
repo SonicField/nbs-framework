@@ -23,6 +23,46 @@
 #include <time.h>
 #include <unistd.h>
 
+/*
+ * Cached absolute path to the nbs-workers binary.
+ * Resolved once via /proc/self/exe — sibling binary in same directory.
+ */
+#define WORKERS_PATH_LEN 4096
+static char nbs_workers_path[WORKERS_PATH_LEN] = "";
+static int nbs_workers_path_resolved = 0;
+
+static const char *resolve_nbs_workers(void)
+{
+    if (nbs_workers_path_resolved)
+        return nbs_workers_path[0] ? nbs_workers_path : "nbs-workers";
+
+    nbs_workers_path_resolved = 1;
+
+    char self[WORKERS_PATH_LEN];
+    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (len <= 0)
+        return "nbs-workers";
+    self[len] = '\0';
+
+    char *slash = strrchr(self, '/');
+    if (!slash)
+        return "nbs-workers";
+
+    size_t dir_len = (size_t)(slash - self);
+    if (dir_len + sizeof("/nbs-workers") > sizeof(nbs_workers_path))
+        return "nbs-workers";
+
+    memcpy(nbs_workers_path, self, dir_len);
+    memcpy(nbs_workers_path + dir_len, "/nbs-workers", sizeof("/nbs-workers"));
+
+    if (access(nbs_workers_path, X_OK) != 0) {
+        nbs_workers_path[0] = '\0';
+        return "nbs-workers";
+    }
+
+    return nbs_workers_path;
+}
+
 /* --- Pythia trigger --- */
 
 /*
@@ -397,7 +437,7 @@ int trigger_pythia_spawn(const char *nbs_root) {
 
     /* Fork+exec nbs-workers spawn */
     const char *argv[] = {
-        "nbs-workers", "spawn", "pythia", nbs_root, task_desc, NULL
+        resolve_nbs_workers(), "spawn", "pythia", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 
@@ -595,7 +635,7 @@ int trigger_shepard_spawn(const char *nbs_root) {
         "Assess team effectiveness. Post recommendations to supervisor. Exit.";
 
     const char *argv[] = {
-        "nbs-workers", "spawn", "shepard", nbs_root, task_desc, NULL
+        resolve_nbs_workers(), "spawn", "shepard", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 
@@ -711,7 +751,7 @@ int trigger_fixup_spawn(const char *nbs_root) {
         "Post summary to chat. Exit.";
 
     const char *argv[] = {
-        "nbs-workers", "spawn", "fixup", nbs_root, task_desc, NULL
+        resolve_nbs_workers(), "spawn", "fixup", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 
