@@ -2,61 +2,53 @@
 
 ## What It Is
 
-Terminal weathering is a methodology for progressively replacing Python call protocol paths with C extensions written directly against CPython's type API. It is not a rewrite strategy. It is the NBS pillars — goals, falsifiability, verification cycle, zero-code contract — applied to call protocol optimisation.
+Terminal weathering is a methodology for hypothesis-driven performance optimisation of Python systems. It characterises the target system, identifies the overhead mechanism, selects an architectural approach supported by experimental evidence, and then applies progressive replacement through evidence-gated cycles. It is not a rewrite strategy. It is the NBS pillars — goals, falsifiability, verification cycle, zero-code contract — applied to performance optimisation.
 
 The name carries a dual meaning:
 
 - **Terminal**: the work uses terminal-based tools — CLI, pty-session, tmux. The target is a terminal goal: a measurable system improvement, not "rewrite in another language."
-- **Weathering**: geological weathering transforms rock from the surface inward. Water finds existing cracks, dissolves weaker material, leaves stronger structures behind. The methodology works from the leaf type slots of the dispatch chain inward, progressively replacing Python's call protocol with direct C implementations where evidence shows the overhead justifies it.
+- **Weathering**: geological weathering transforms rock from the surface inward. Water finds existing cracks, dissolves weaker material, leaves stronger structures behind. The methodology works from the outermost measurable overhead inward, progressively replacing Python with compiled alternatives where evidence shows the overhead justifies it.
 
 ---
 
 ## The Problem It Solves
 
-"Rewrite for performance" is demolition. It replaces an understood system with an unproven one in a single commitment, without requiring evidence at any stage. The failure mode is predictable:
+Two anti-patterns plague Python performance work:
 
-| Phase | What Happens |
-|-------|-------------|
-| Announcement | "We are rewriting for performance" |
-| Honeymoon | Early modules convert easily; team reports progress |
-| Plateau | Complex modules resist; edge cases multiply |
-| Sunk cost | Too much invested to stop; too little working to ship |
-| Outcome | Two half-working systems instead of one working one |
+1. **Rewriting without evidence.** "Rewrite for performance" is demolition. It replaces an understood system with an unproven one in a single commitment, without requiring evidence at any stage. The failure mode is predictable: two half-working systems instead of one working one.
 
-The root cause is not the target language. It is the absence of evidence gates. No individual conversion was required to prove its value before commitment.
+2. **Optimising without diagnosis.** Even with evidence gates, if the intervention targets the wrong overhead mechanism, the work produces correct, safe, well-measured code that does not help. The overhead was real — but it was in dispatch, not data access; or in the algorithm, not the language boundary. The rewrite anti-pattern skips evidence. The wrong-mechanism anti-pattern skips diagnosis.
 
----
-
-## The Journey: Rust to C
-
-Terminal weathering began with Rust/PyO3 as the replacement language. This was a defensible first choice — Rust's borrow checker provides compile-time memory safety, and PyO3 offers clean Python interop.
-
-Four leaf functions were converted to Rust. Correctness passed (52/52). ABBA benchmarks showed no significant performance effect (mean −1.4%, p > 0.05). The speed-bump experiment revealed why: the overhead is in CPython's call protocol — type slot dispatch, MRO walk, descriptor protocol, bound method creation, frame setup — not in function bodies. PyO3 replaces bodies but cannot access type slots.
-
-Replacing the dispatch chain requires writing C directly against CPython's type API. This is a technical necessity, not a language preference. The Rust work validated the methodology, produced reusable correctness tests, and identified the correct target layer.
-
-C lacks Rust's compile-time memory safety. To compensate, AddressSanitizer (ASan), memory leak analysis, and reference count verification are mandatory in every conversion's correctness phase.
-
-Independent validation from the SOMA project confirmed the pattern: a Rust/PyO3 extension was 6% slower than pure Python on fine-grained field access, while a C extension was 2.06x faster than Rust — uniformly across all operations. See [evidence/soma-weathering.md](../evidence/soma-weathering.md) and [evidence/weathering-at-the-right-layer.md](../evidence/weathering-at-the-right-layer.md) for the full data.
-
-See [terminal-weathering.md](../concepts/terminal-weathering.md) for the full analysis.
+Terminal weathering addresses both: the research phase provides diagnosis; the weathering phases provide evidence-gated intervention.
 
 ---
 
 ## How It Works
 
-Terminal weathering operates in iterative cycles. Each cycle processes one candidate — a single call protocol path (type slot) — through six phases:
+Terminal weathering operates in two stages: a research phase that characterises the system, followed by iterative weathering cycles that apply the intervention.
+
+### The Research Phase
+
+Before any conversion begins, the system is profiled, the overhead mechanism is classified, a hypothesis is formed with a quantitative prediction, and a falsification experiment is run. The research phase selects an architectural approach — or concludes that no intervention will help. Both are valid outcomes.
+
+**Worked example — PyTorch**: Profiling showed call protocol dispatch overhead (~80ns) dominating function body cost (~50ns). Hypothesis: "Type slot replacement will reduce per-call cost by ~60%." Speed-bump experiment confirmed the mechanism. But the dynamism (arbitrary `__getattr__` overrides, deep MRO hierarchies) was load-bearing. Whole-system effect: unmeasurable. Research conclusion: "stop." See [evidence/weathering-at-the-right-layer.md](../evidence/weathering-at-the-right-layer.md).
+
+**Worked example — SOMA**: Profiling showed data container field access dominating runtime. Hypothesis: "C extension types will reduce per-access cost from ~80ns to ~5ns, yielding ~2x overall speedup." Rust/PyO3 boundary-crossing benchmark falsified the Rust approach (6% slower than Python). C extension types confirmed the hypothesis: 2.06x faster, uniformly across all operations. Research conclusion: "C extension types for data containers." See [evidence/soma-weathering.md](../evidence/soma-weathering.md).
+
+### The Weathering Phases
+
+Once the research phase selects an approach, iterative weathering cycles apply the intervention:
 
 | Phase | Purpose |
 |-------|---------|
-| **Survey** | Profile the dispatch chain. Find where call protocol overhead is measurable. |
-| **Expose** | Select one leaf type slot with measured overhead. |
-| **Weather** | Apply the verification cycle: Design, Plan, Deconstruct, Test (with ASan), Code, Document. |
+| **Survey** | Within the identified domain, find where overhead is measurable. Rank candidates. |
+| **Expose** | Select one leaf candidate with measured overhead. Record baseline. |
+| **Weather** | Apply the verification cycle: Design, Plan, Deconstruct, Test (with safety gates), Code, Document. |
 | **Assess** | The evidence gate. Benefit confirmed, unclear, or falsified. Three outcomes, no others. |
-| **Advance** | Update the slot dependency map. Select the next candidate. |
-| **Fuse** | When contiguous slot coverage exists, consider removing the Python layer entirely. |
+| **Advance** | Update the dependency map. Select the next candidate. |
+| **Fuse** | When contiguous coverage exists, consider removing the Python layer entirely. |
 
-Every conversion carries a falsifiable claim: "this slot replacement provides measurable benefit." The Assess phase exists to attempt falsification. A conversion that fails this gate is reverted — and that reversion is a positive outcome, not a failure. It means the methodology is working.
+Every conversion carries a falsifiable claim: "this replacement provides measurable benefit." The Assess phase exists to attempt falsification. A conversion that fails this gate is reverted — and that reversion is a positive outcome, not a failure. It means the methodology is working.
 
 ---
 
@@ -67,10 +59,10 @@ Terminal weathering is an **application** of the NBS pillars, not a pillar itsel
 | Pillar | Application in Terminal Weathering |
 |--------|-----------------------------------|
 | Goals | The terminal goal is system improvement. Language replacement is instrumental. |
-| Falsifiability | Each conversion carries a falsifiable hypothesis with an explicit falsifier. |
-| Rhetoric | "C is faster" is Ethos. "Replacing `tp_getattro` reduces dispatch from 130ns to 50ns under production load" is Logos. Only the second is acceptable. |
-| Bullshit Detection | Failed conversions are reported. ASan findings are reported. A 100% success rate is either dishonest or insufficiently ambitious. |
-| Verification Cycle | Each conversion is one full cycle. ASan and leak analysis are part of Test. No shortcuts. |
+| Falsifiability | The research phase carries a quantitative prediction. Each conversion carries a falsifiable hypothesis. |
+| Rhetoric | "C is faster" is Ethos. "Replacing Cell field access with C struct dereference reduces per-access cost from 80ns to 2ns under production load" is Logos. Only the second is acceptable. |
+| Bullshit Detection | Failed conversions are reported. Research phases that conclude "stop" are reported. A 100% success rate is either dishonest or insufficiently ambitious. |
+| Verification Cycle | Each conversion is one full cycle. Safety gates are part of Test. No shortcuts. |
 | Zero-Code Contract | The human defines "benefit." The AI implements and reports evidence. Neither trusts the other's assertions. |
 
 ---
@@ -87,6 +79,6 @@ See [methodology.md](methodology.md) for details.
 
 ## The Epistemic Garbage Collector
 
-Every three conversion workers, the supervisor spawns a compression worker to distil raw learnings into patterns, then runs `/nbs` for goal alignment and drift detection. This prevents epistemic debt from accumulating unchecked.
+Every three conversion workers, the supervisor spawns a compression worker to distil raw learnings into patterns, then runs `/nbs` for goal alignment and drift detection. The compression worker also tracks research phase prediction accuracy — comparing each conversion's actual result against the predicted range. This prevents epistemic debt from accumulating unchecked.
 
 See [methodology.md](methodology.md) for the full mechanism.
