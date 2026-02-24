@@ -517,7 +517,7 @@ int main(void)
         mkdirs(nbs_dir);
 
         /*
-         * nbs-worker is not set up, so exec will likely fail.
+         * nbs-workers is not set up, so exec will likely fail.
          * We verify that the function returns 0 (spawned) or -1
          * (exec failed after lock acquired), but NOT 1 (lock busy).
          */

@@ -68,17 +68,17 @@ If they need help with terminal goals, explain:
 ### Spawning workers
 
 **Brief answer:**
-> "Workers are separate Claude instances. Use `nbs-worker spawn` for persistent tmux workers, or the Task tool for synchronous sub-agents."
+> "Workers are separate Claude instances. Use `nbs-workers spawn` for persistent tmux workers, or the Task tool for synchronous sub-agents."
 
-**Walk through with nbs-worker:**
+**Walk through with nbs-workers:**
 1. Spawn with a single command:
    ```bash
-   WORKER=$(nbs-worker spawn my-task /your/project "Describe what the worker should do.")
+   WORKER=$(nbs-workers spawn my-task /your/project "Describe what the worker should do.")
    echo "Spawned: $WORKER"  # e.g., my-task-a3f1
    ```
-2. Monitor with: `nbs-worker status $WORKER` or `nbs-worker search $WORKER "pattern"`
-3. Read results: `nbs-worker results $WORKER`
-4. When done: `nbs-worker dismiss $WORKER`
+2. Monitor with: `nbs-workers status $WORKER` or `nbs-workers search $WORKER "pattern"`
+3. Read results: `nbs-workers results $WORKER`
+4. When done: `nbs-workers dismiss $WORKER`
 
 **Check understanding:**
 > "What's the first task you want to delegate?"
@@ -159,12 +159,12 @@ Worker: Implement the parser. Pass all 84 tests.
 ### Monitoring workers
 
 **Brief answer:**
-> "Use `nbs-worker status <name>` for status, `nbs-worker search <name> <pattern>` to search logs, and `nbs-worker results <name>` to read completed findings. Check the worker's task file for the Log section."
+> "Use `nbs-workers status <name>` for status, `nbs-workers search <name> <pattern>` to search logs, and `nbs-workers results <name>` to read completed findings. Check the worker's task file for the Log section."
 
 **Practical notes:**
 - Don't check constantly - workers need time to work
-- Use `nbs-worker search <name> "ERROR|FAIL"` to check for problems
-- When status shows `completed`, read their findings with `nbs-worker results`
+- Use `nbs-workers search <name> "ERROR|FAIL"` to check for problems
+- When status shows `completed`, read their findings with `nbs-workers results`
 - Persistent logs survive session exit — no more lost output
 
 **Check understanding:**

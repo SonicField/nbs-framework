@@ -42,7 +42,7 @@ Chat ──read──▶ Scribe ──threshold──▶ Bus ──trigger──
 
 2. **Scribe → Bus.** After each decision, Scribe publishes a `decision-logged` event. When the decision count reaches a threshold (configurable, default 20), Scribe publishes a `pythia-checkpoint` event at high priority.
 
-3. **Bus → Pythia.** The checkpoint event triggers Pythia's spawn. Pythia is created as a worker (via `nbs-worker`) or invoked manually. She is ephemeral — born for one assessment, terminated after posting.
+3. **Bus → Pythia.** The checkpoint event triggers Pythia's spawn. Pythia is created as a worker (via `nbs-workers`) or invoked manually. She is ephemeral — born for one assessment, terminated after posting.
 
 4. **Pythia → Chat.** Pythia reads the Scribe log and relevant source files. She posts a structured checkpoint assessment to the chat channel. The team reads it, discusses, decides.
 
@@ -137,7 +137,7 @@ The Scribe does not log:
 
 ### Role
 
-Ephemeral oracle. Spawned as an nbs-worker at defined checkpoints. Reads the Scribe's decision log. Posts a structured assessment to chat. Exits.
+Ephemeral oracle. Spawned as an nbs-workers at defined checkpoints. Reads the Scribe's decision log. Posts a structured assessment to chat. Exits.
 
 Pythia does not converse. She does not debate. She names risks, identifies assumptions, and flags gaps. The team decides what to do. The Scribe logs the outcome.
 
@@ -214,7 +214,7 @@ The Scribe triggers Pythia through the bus. No daemon, no scheduler — just eve
 2. Scribe checks: `decision_count % pythia_interval == 0`
 3. If threshold reached, Scribe publishes a `pythia-checkpoint` bus event
 4. Supervisor (or sidecar) detects the event via `nbs-bus check`
-5. Supervisor spawns Pythia as a worker: `nbs-worker spawn pythia <dir> "<checkpoint task>"`
+5. Supervisor spawns Pythia as a worker: `nbs-workers spawn pythia <dir> "<checkpoint task>"`
 6. Pythia reads `.nbs/scribe/<chat-name>-log.md`
 7. Pythia posts assessment to the designated chat channel
 8. Pythia exits (worker completes)
@@ -263,7 +263,7 @@ nbs-bus check .nbs/events/
 # [high] 1707760800123456-scribe-pythia-checkpoint-12345.event
 
 # Supervisor spawns Pythia
-PYTHIA=$(nbs-worker spawn pythia /project "Read .nbs/scribe/live-log.md. \
+PYTHIA=$(nbs-workers spawn pythia /project "Read .nbs/scribe/live-log.md. \
   Post Pythia checkpoint assessment to .nbs/chat/live.chat. \
   Review decisions D-1707753600 through D-1707760800.")
 
@@ -429,6 +429,6 @@ These must hold. Violations indicate bugs.
 
 - [nbs-bus](nbs-bus.md) — Event-driven coordination bus
 - [nbs-teams](nbs-teams.md) — Supervisor/worker pattern
-- [nbs-worker](nbs-worker.md) — Worker lifecycle management
+- [nbs-workers](nbs-workers.md) — Worker lifecycle management
 - [nbs-chat](nbs-chat.md) — File-based chat
 - [Bus Recovery](nbs-bus-recovery.md) — Startup and restart protocol

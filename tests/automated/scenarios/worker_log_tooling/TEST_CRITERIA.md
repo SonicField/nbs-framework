@@ -1,8 +1,8 @@
-# Test Scenario: Worker Uses nbs-worker search for Logs
+# Test Scenario: Worker Uses nbs-workers search for Logs
 
 ## Description
 
-Tests that a worker AI, given a task file containing the Tooling section, uses `nbs-worker search` rather than reading raw log files when it needs to check another worker's output.
+Tests that a worker AI, given a task file containing the Tooling section, uses `nbs-workers search` rather than reading raw log files when it needs to check another worker's output.
 
 ## Setup
 
@@ -11,7 +11,7 @@ The AI is given the worker role document plus a task file that includes the Tool
 ## Pass Criteria
 
 For PASS, the output must:
-1. Use `nbs-worker search` (or `nbs-worker results`) to access log content
+1. Use `nbs-workers search` (or `nbs-workers results`) to access log content
 2. NOT directly read raw `.log` files via cat, tail, Read, head, or similar
 3. Demonstrate awareness that raw logs contain ANSI escape codes
 
@@ -30,6 +30,6 @@ For FAIL, the output contains ANY of:
 ## Evaluation
 
 The evaluator should:
-1. Check for presence of `nbs-worker search` or `nbs-worker results` (REQUIRED for PASS)
+1. Check for presence of `nbs-workers search` or `nbs-workers results` (REQUIRED for PASS)
 2. Check for absence of direct raw log access patterns (REQUIRED for PASS)
 3. Return FAIL if raw log access detected, PASS otherwise

@@ -12,7 +12,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-WORKER_DOC="$PROJECT_ROOT/claude_tools/nbs-teams-worker.md"
+WORKER_DOC="$PROJECT_ROOT/claude_tools/nbs-worker.md"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios/worker_log_tooling"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="$SCRIPT_DIR/verdicts/worker_adv_no_raw_log_output_$TIMESTAMP.txt"
@@ -42,10 +42,10 @@ Look in its logs for evidence of test results. Report whether all tests passed.
 
 ## Tooling
 
-Your supervisor monitors you via `nbs-worker`. These tips avoid common mistakes:
+Your supervisor monitors you via `nbs-workers`. These tips avoid common mistakes:
 
-- **Do not read raw .log files** — they contain ANSI escape codes. Use `nbs-worker search <name> <regex>` for clean, searchable output.
-- **Update Status and Log sections** in this file when done — your supervisor reads them via `nbs-worker results`.
+- **Do not read raw .log files** — they contain ANSI escape codes. Use `nbs-workers search <name> <regex>` for clean, searchable output.
+- **Update Status and Log sections** in this file when done — your supervisor reads them via `nbs-workers results`.
 - **Escalate blockers** by setting State to `escalated` — do not work around problems silently.
 
 ## Status
@@ -64,7 +64,7 @@ PROMPT="You are acting as an NBS Teams worker. Here is your role document:
 $WORKER_CONTENT
 ---
 
-Here is your task file (created by nbs-worker spawn):
+Here is your task file (created by nbs-workers spawn):
 
 ---
 $TASK_FILE_CONTENT
@@ -107,9 +107,9 @@ if echo "$OUTPUT" | grep -qiE 'Read.*\.log'; then
     RAW_LOG_PATTERNS+=("Read tool on .log file")
 fi
 
-# Check for grep directly on .log files (without nbs-worker search)
-# Exclude lines that mention nbs-worker search (which is the correct usage)
-if echo "$OUTPUT" | grep -viE 'nbs-worker' | grep -qiE 'grep\s+.*\.log'; then
+# Check for grep directly on .log files (without nbs-workers search)
+# Exclude lines that mention nbs-workers search (which is the correct usage)
+if echo "$OUTPUT" | grep -viE 'nbs-workers' | grep -qiE 'grep\s+.*\.log'; then
     RAW_LOG_PATTERNS+=("grep directly on .log file")
 fi
 

@@ -56,8 +56,9 @@ Commands for setting up and using NBS teams:
 - [/nbs-help](claude_tools/nbs-help.md) - Interactive guidance for the NBS framework
 
 For AI-as-supervisor or AI-as-worker roles:
-- [NBS Teams Supervisor](claude_tools/nbs-teams-supervisor.md) - Role and responsibilities for supervisor
-- [NBS Teams Worker](claude_tools/nbs-teams-worker.md) - Role and responsibilities for worker
+- [NBS Supervisor](claude_tools/nbs-supervisor.md) - Role and responsibilities for supervisor
+- [NBS Worker](claude_tools/nbs-worker.md) - Role and responsibilities for worker
+- [NBS Testkeeper](claude_tools/nbs-testkeeper.md) - Role and responsibilities for testkeeper
 - [NBS Teams Chat](claude_tools/nbs-teams-chat.md) - File-based AI-to-AI chat for worker coordination
 
 ### Workflow Commands

@@ -1,20 +1,20 @@
 #!/bin/bash
-# Test: Verify supervisor role uses nbs-worker for spawning workers
+# Test: Verify supervisor role uses nbs-workers for spawning workers
 #
 # 1. Loads updated supervisor role document and asks AI to spawn a worker
-# 2. Evaluator AI checks for nbs-worker commands and absence of old pattern
+# 2. Evaluator AI checks for nbs-workers commands and absence of old pattern
 # 3. Produces deterministic verdict file
 # 4. Exit code based on verdict
 #
 # Falsification: Test fails if AI uses old pty-session spawn pattern or
-#                hedges about nbs-worker availability
+#                hedges about nbs-workers availability
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios/supervisor_nbs_worker"
-SUPERVISOR_DOC="$PROJECT_ROOT/claude_tools/nbs-teams-supervisor.md"
+SUPERVISOR_DOC="$PROJECT_ROOT/claude_tools/nbs-supervisor.md"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_FILE="$SCRIPT_DIR/verdicts/supervisor_nbs_worker_output_$TIMESTAMP.txt"
 VERDICT_FILE="$SCRIPT_DIR/verdicts/supervisor_nbs_worker_verdict_$TIMESTAMP.json"
@@ -25,7 +25,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo "=== Supervisor nbs-worker Adoption Test ==="
+echo "=== Supervisor nbs-workers Adoption Test ==="
 echo "Timestamp: $TIMESTAMP"
 echo ""
 
@@ -59,7 +59,7 @@ echo "Step 2: Evaluating output..."
 CRITERIA=$(cat "$SCENARIO_DIR/TEST_CRITERIA.md")
 OUTPUT=$(cat "$OUTPUT_FILE")
 
-EVAL_PROMPT="You are a test evaluator. Your job is to determine whether an AI supervisor correctly uses nbs-worker for worker management.
+EVAL_PROMPT="You are a test evaluator. Your job is to determine whether an AI supervisor correctly uses nbs-workers for worker management.
 
 ## Test Criteria
 $CRITERIA
@@ -73,26 +73,26 @@ $OUTPUT
 
 Check the output for these three conditions:
 
-### Condition 1: Uses nbs-worker (REQUIRED for PASS)
-Does the output contain nbs-worker commands? Look for:
-- \"nbs-worker spawn\" (the spawn command)
-- \"nbs-worker status\" or \"nbs-worker search\" or \"nbs-worker results\" (monitoring commands)
-- \"nbs-worker dismiss\" (cleanup command)
+### Condition 1: Uses nbs-workers (REQUIRED for PASS)
+Does the output contain nbs-workers commands? Look for:
+- \"nbs-workers spawn\" (the spawn command)
+- \"nbs-workers status\" or \"nbs-workers search\" or \"nbs-workers results\" (monitoring commands)
+- \"nbs-workers dismiss\" (cleanup command)
 
 ### Condition 2: No old pattern (REQUIRED for PASS)
 Does the output contain the OLD pty-session spawn pattern? Look for:
 - \"temp.sh\" (the old workaround script)
 - \"pty-session create\" used for spawning a worker (not for raw terminal use)
-- Manual task file creation BEFORE spawning (nbs-worker creates task files automatically)
+- Manual task file creation BEFORE spawning (nbs-workers creates task files automatically)
 - \"pty-session send\" with a prompt to read a task file
 
 If the old pattern is present, verdict is FAIL.
 
 ### Condition 3: No hedging (REQUIRED for PASS)
-Does the output contain hedging phrases about nbs-worker availability? (case insensitive)
-- \"if nbs-worker is installed\"
-- \"check if nbs-worker\"
-- \"ensure nbs-worker\"
+Does the output contain hedging phrases about nbs-workers availability? (case insensitive)
+- \"if nbs-workers is installed\"
+- \"check if nbs-workers\"
+- \"ensure nbs-workers\"
 - \"may not be available\"
 - \"might not be installed\"
 

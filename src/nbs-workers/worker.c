@@ -1,7 +1,7 @@
 /*
  * worker.c — Worker lifecycle management implementation.
  *
- * Implements all 8 nbs-worker commands: spawn, status, search, results,
+ * Implements all 8 nbs-workers commands: spawn, status, search, results,
  * dismiss, continue, session, list, plus help.
  *
  * All external commands (tmux, nbs-bus, nbs-claude) are invoked via
@@ -814,37 +814,37 @@ static int resolve_absolute_path(const char *input, char *output, size_t outsize
 void cmd_help(void)
 {
     printf(
-        "nbs-worker: Worker lifecycle management for NBS teams\n"
+        "nbs-workers: Worker lifecycle management for NBS teams\n"
         "\n"
         "Usage:\n"
-        "  nbs-worker spawn <slug> <project-dir> <task-description>\n"
+        "  nbs-workers spawn <slug> <project-dir> <task-description>\n"
         "      Create task file, start Claude worker, send initial prompt.\n"
         "      Returns the generated worker name (e.g., parser-a3f1).\n"
         "\n"
-        "  nbs-worker status <name>\n"
+        "  nbs-workers status <name>\n"
         "      Report worker status from tmux session and task file State field.\n"
         "\n"
-        "  nbs-worker search <name> <regex> [--context=N]\n"
+        "  nbs-workers search <name> <regex> [--context=N]\n"
         "      Search persistent log for regex matches with context (default 50).\n"
         "\n"
-        "  nbs-worker results <name>\n"
+        "  nbs-workers results <name>\n"
         "      Extract Log section from completed task file.\n"
         "\n"
-        "  nbs-worker dismiss <name>\n"
+        "  nbs-workers dismiss <name>\n"
         "      Kill tmux session, mark task file as dismissed.\n"
         "\n"
-        "  nbs-worker continue <handle> [--model=MODEL]\n"
+        "  nbs-workers continue <handle> [--model=MODEL]\n"
         "      Resume an agent from its session metadata. Kills old tmux\n"
         "      session, respawns with the saved session ID via claude --resume.\n"
         "      Optionally override the model.\n"
         "\n"
-        "  nbs-worker session <handle>\n"
+        "  nbs-workers session <handle>\n"
         "      Display session metadata (session ID, model, PID, status).\n"
         "\n"
-        "  nbs-worker list\n"
+        "  nbs-workers list\n"
         "      Show all workers with status summary.\n"
         "\n"
-        "  nbs-worker help\n"
+        "  nbs-workers help\n"
         "      Show this help.\n"
         "\n"
         "Exit codes:\n"
@@ -867,7 +867,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
         task_description[0] == '\0') {
         fprintf(stderr,
                 "Error: spawn requires <slug> <project-dir> <task-description>\n"
-                "Usage: nbs-worker spawn <slug> <project-dir> <task-description>\n");
+                "Usage: nbs-workers spawn <slug> <project-dir> <task-description>\n");
         return EXIT_BAD_ARGS;
     }
 
@@ -944,12 +944,12 @@ int cmd_spawn(const char *slug, const char *project_dir,
         "\n"
         "## Tooling\n"
         "\n"
-        "Your supervisor monitors you via `nbs-worker`. These tips avoid common mistakes:\n"
+        "Your supervisor monitors you via `nbs-workers`. These tips avoid common mistakes:\n"
         "\n"
         "- **Do not read raw .log files** — they contain ANSI escape codes. "
-        "Use `nbs-worker search <name> <regex>` for clean, searchable output.\n"
+        "Use `nbs-workers search <name> <regex>` for clean, searchable output.\n"
         "- **Update Status and Log sections** in this file when done — your "
-        "supervisor reads them via `nbs-worker results`.\n"
+        "supervisor reads them via `nbs-workers results`.\n"
         "- **Escalate blockers** by setting State to `escalated` — do not "
         "work around problems silently.\n"
         "\n"
@@ -1062,7 +1062,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
     fprintf(stderr, "  task file:  %s\n", task_file);
     fprintf(stderr, "  log file:   %s\n", log_file);
     fprintf(stderr, "  tmux:       %s\n", session);
-    fprintf(stderr, "  note: run nbs-worker commands from %s\n",
+    fprintf(stderr, "  note: run nbs-workers commands from %s\n",
             abs_project_dir);
 
     return EXIT_SUCCESS_CODE;
@@ -1426,7 +1426,7 @@ int cmd_continue(const char *handle, const char *model_override,
     if (!handle || handle[0] == '\0') {
         fprintf(stderr,
                 "Error: continue requires <handle>\n"
-                "Usage: nbs-worker continue <handle> [--model=MODEL]\n");
+                "Usage: nbs-workers continue <handle> [--model=MODEL]\n");
         return EXIT_BAD_ARGS;
     }
 
@@ -1438,7 +1438,7 @@ int cmd_continue(const char *handle, const char *model_override,
                 "Error: No session metadata for handle '%s'\n"
                 "  Expected: %s\n"
                 "  Cannot continue without session ID. "
-                "Use 'nbs-worker spawn' for a fresh start.\n",
+                "Use 'nbs-workers spawn' for a fresh start.\n",
                 handle, meta_file);
         return EXIT_NOT_FOUND;
     }
@@ -1562,7 +1562,7 @@ int cmd_session(const char *handle, const char *cwd)
     if (!handle || handle[0] == '\0') {
         fprintf(stderr,
                 "Error: session requires <handle>\n"
-                "Usage: nbs-worker session <handle>\n");
+                "Usage: nbs-workers session <handle>\n");
         return EXIT_BAD_ARGS;
     }
 

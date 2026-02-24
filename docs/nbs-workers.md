@@ -1,10 +1,10 @@
-# nbs-worker: Worker Lifecycle Management
+# nbs-workers: Worker Lifecycle Management
 
-nbs-worker manages Claude worker instances for NBS teams with persistent logging, unique naming, and integrated task files.
+nbs-workers manages Claude worker instances for NBS teams with persistent logging, unique naming, and integrated task files.
 
 ## How It Works
 
-nbs-worker wraps tmux with a higher-level abstraction:
+nbs-workers wraps tmux with a higher-level abstraction:
 
 - **Unique names** — Generated as `<slug>-<4-char-hash>` (e.g., `parser-a3f1`) to avoid collisions across supervisor sessions
 - **Persistent logging** — Uses `tmux pipe-pane` to stream all output to `.nbs/workers/<name>.log` from session start. Output survives any exit (natural or killed)
@@ -15,31 +15,31 @@ nbs-worker wraps tmux with a higher-level abstraction:
 
 | Command | Purpose |
 |---------|---------|
-| `nbs-worker spawn <slug> <dir> <desc>` | Create task file, start Claude, send prompt |
-| `nbs-worker status <name>` | tmux alive + State field from task file |
-| `nbs-worker search <name> <regex> [--context=N]` | Search persistent log (default context: 50) |
-| `nbs-worker results <name>` | Extract Log section from task file |
-| `nbs-worker dismiss <name>` | Kill session, mark dismissed, preserve log |
-| `nbs-worker list` | All workers with status summary |
-| `nbs-worker help` | Usage reference |
+| `nbs-workers spawn <slug> <dir> <desc>` | Create task file, start Claude, send prompt |
+| `nbs-workers status <name>` | tmux alive + State field from task file |
+| `nbs-workers search <name> <regex> [--context=N]` | Search persistent log (default context: 50) |
+| `nbs-workers results <name>` | Extract Log section from task file |
+| `nbs-workers dismiss <name>` | Kill session, mark dismissed, preserve log |
+| `nbs-workers list` | All workers with status summary |
+| `nbs-workers help` | Usage reference |
 
 ## Quick Start
 
 ```bash
 # Spawn a worker
-WORKER=$(nbs-worker spawn parser /path/to/project "Implement the parser. Pass all 84 tests.")
+WORKER=$(nbs-workers spawn parser /path/to/project "Implement the parser. Pass all 84 tests.")
 
 # Check status
-nbs-worker status $WORKER
+nbs-workers status $WORKER
 
 # Search for progress
-nbs-worker search $WORKER "test.*pass" --context=10
+nbs-workers search $WORKER "test.*pass" --context=10
 
 # Read completed results
-nbs-worker results $WORKER
+nbs-workers results $WORKER
 
 # Dismiss when done
-nbs-worker dismiss $WORKER
+nbs-workers dismiss $WORKER
 ```
 
 ## Status Logic
@@ -66,7 +66,7 @@ The `status` command combines tmux session state with the task file's `State:` f
 
 ## Bus Integration
 
-When `.nbs/events/` exists, `nbs-worker` lifecycle commands automatically publish bus events:
+When `.nbs/events/` exists, `nbs-workers` lifecycle commands automatically publish bus events:
 
 | Command | Bus event type | Priority |
 |---------|---------------|----------|
@@ -76,7 +76,7 @@ When `.nbs/events/` exists, `nbs-worker` lifecycle commands automatically publis
 
 A `worker-died` event is published when `status` finds the tmux session dead but the task file still shows state `running`. This allows the supervisor to detect and respond to unexpected worker exits.
 
-If `.nbs/events/` does not exist, publishing is silently skipped — `nbs-worker` works without the bus.
+If `.nbs/events/` does not exist, publishing is silently skipped — `nbs-workers` works without the bus.
 
 See [nbs-bus](nbs-bus.md) for the full bus reference.
 
@@ -92,7 +92,7 @@ See [nbs-bus](nbs-bus.md) for the full bus reference.
 ## Location
 
 ```
-bin/nbs-worker
+bin/nbs-workers
 ```
 
 Installed to `~/.nbs/bin/` by `bin/install.sh` (symlinked with the rest of `bin/`).

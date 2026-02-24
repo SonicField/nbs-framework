@@ -114,4 +114,4 @@ This design is safe as long as events are idempotent notifications. If the bus i
 
 - Full reference: `docs/nbs-bus.md`
 - Recovery protocol: `docs/nbs-bus-recovery.md`
-- Concept: `concepts/coordination.md`
+- Concept: `{{NBS_ROOT}}/concepts/coordination.md`

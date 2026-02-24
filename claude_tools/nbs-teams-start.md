@@ -207,7 +207,7 @@ Agents running:
 Your terminal goal is posted to chat.
 
 Next steps:
-1. Load /nbs-teams-supervisor for planning guidance
+1. Load /nbs-supervisor for planning guidance
 2. Decompose your goal into worker tasks
 3. Post 3Ws to chat after each worker completes
 
@@ -290,7 +290,7 @@ Or use `--force` to override: `bin/nbs-claude --force`
 ## What Happens Next
 
 The user is now the supervisor. They should:
-1. Load `/nbs-teams-supervisor` for planning guidance
+1. Load `/nbs-supervisor` for planning guidance
 2. Decompose work into worker tasks
 3. Use chat for all coordination — post tasks, read updates, capture 3Ws
 4. Run `/nbs-teams-fixup` if agents stall

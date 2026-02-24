@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test: nbs-worker search with ANSI stripping and context
+# Test: nbs-workers search with ANSI stripping and context
 #
 # Falsification approach:
 # - Write test data directly to log file for deterministic testing
@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-NBS_WORKER="$PROJECT_ROOT/bin/nbs-worker"
+NBS_WORKER="$PROJECT_ROOT/bin/nbs-workers"
 
 TEST_DIR=$(mktemp -d)
 ORIGINAL_DIR=$(pwd)
@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== nbs-worker Search Test ==="
+echo "=== nbs-workers Search Test ==="
 echo "Test directory: $TEST_DIR"
 echo ""
 

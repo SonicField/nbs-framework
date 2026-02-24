@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test: nbs-worker lifecycle with evidence-based verification
+# Test: nbs-workers lifecycle with evidence-based verification
 #
 # Tests: spawn (without Claude), status, search, results, dismiss, list
 # Uses a modified spawn approach: creates task file + tmux session manually
@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-NBS_WORKER="$PROJECT_ROOT/bin/nbs-worker"
+NBS_WORKER="$PROJECT_ROOT/bin/nbs-workers"
 
 # Use a temp directory so we don't pollute the real .nbs/workers/
 TEST_DIR=$(mktemp -d)
@@ -31,7 +31,7 @@ cleanup() {
     tmux kill-session -t "pty_persist-test" 2>/dev/null || true
     tmux kill-session -t "pty_crossdir-test" 2>/dev/null || true
     tmux kill-session -t "pty_bus-test" 2>/dev/null || true
-    # Kill any sessions spawned via nbs-worker (pty_ prefix + generated hash)
+    # Kill any sessions spawned via nbs-workers (pty_ prefix + generated hash)
     for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^pty_crossdir-" || true); do
         tmux kill-session -t "$s" 2>/dev/null || true
     done
@@ -41,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== nbs-worker Lifecycle Test ==="
+echo "=== nbs-workers Lifecycle Test ==="
 echo "Test directory: $TEST_DIR"
 echo ""
 
@@ -353,7 +353,7 @@ echo "12. Cross-directory spawn (task files land in project dir)..."
 cd "$CROSS_DIR_OTHER"
 
 # Spawn from here, pointing at the project dir
-# nbs-worker spawn launches Claude, which we don't want in tests.
+# nbs-workers spawn launches Claude, which we don't want in tests.
 # Instead, test the file placement logic directly by calling spawn
 # and immediately killing the tmux session before Claude starts.
 CROSS_NAME=$("$NBS_WORKER" spawn crossdir "$CROSS_DIR_PROJECT" "Cross-directory test task" 2>/dev/null)

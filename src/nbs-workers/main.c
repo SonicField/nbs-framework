@@ -1,11 +1,11 @@
 /*
- * main.c — nbs-worker entry point and command dispatch.
+ * main.c — nbs-workers entry point and command dispatch.
  *
  * Parses command-line arguments and dispatches to the appropriate
  * command handler in worker.c. Passes the current working directory
  * to all commands for path resolution.
  *
- * Usage: nbs-worker <command> [args...]
+ * Usage: nbs-workers <command> [args...]
  *
  * Exit codes:
  *   0 = success
@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
             fprintf(stderr,
                     "Error: spawn requires <slug> <project-dir> "
                     "<task-description>\n"
-                    "Usage: nbs-worker spawn <slug> <project-dir> "
+                    "Usage: nbs-workers spawn <slug> <project-dir> "
                     "<task-description>\n");
             return EXIT_BAD_ARGS;
         }
@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
         if (argc < 3) {
             fprintf(stderr,
                     "Error: continue requires <handle>\n"
-                    "Usage: nbs-worker continue <handle> [--model=MODEL]\n");
+                    "Usage: nbs-workers continue <handle> [--model=MODEL]\n");
             return EXIT_BAD_ARGS;
         }
 
@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
         if (argc < 3) {
             fprintf(stderr,
                     "Error: session requires <handle>\n"
-                    "Usage: nbs-worker session <handle>\n");
+                    "Usage: nbs-workers session <handle>\n");
             return EXIT_BAD_ARGS;
         }
         return cmd_session(argv[2], cwd);
@@ -155,6 +155,6 @@ int main(int argc, char *argv[])
 
     /* Unknown command */
     fprintf(stderr, "Unknown command: %s\n", command);
-    fprintf(stderr, "Run 'nbs-worker help' for usage\n");
+    fprintf(stderr, "Run 'nbs-workers help' for usage\n");
     return EXIT_BAD_ARGS;
 }

@@ -91,11 +91,11 @@ cd tests/automated
 | `test_pty_session_adv_no_collision.sh` | Tests pty-session isolation from user sessions | Fails if user sessions affected |
 | `test_pty_session_adv_invalid.sh` | Tests pty-session error handling | Fails if invalid input crashes |
 | `test_evaluator_catches_bad.sh` | Meta-test: evaluator catches bad reports | Fails if evaluator passes a known-bad report |
-| `test_nbs_worker_lifecycle.sh` | Tests nbs-worker spawn/status/search/results/dismiss cycle | Fails if any lifecycle operation errors |
-| `test_nbs_worker_search.sh` | Tests nbs-worker search with ANSI stripping and context | Fails if search misses markers or context is wrong |
-| `test_supervisor_nbs_worker.sh` | Tests supervisor uses nbs-worker for spawning | Fails if AI doesn't use nbs-worker commands |
+| `test_nbs_worker_lifecycle.sh` | Tests nbs-workers spawn/status/search/results/dismiss cycle | Fails if any lifecycle operation errors |
+| `test_nbs_worker_search.sh` | Tests nbs-workers search with ANSI stripping and context | Fails if search misses markers or context is wrong |
+| `test_supervisor_nbs_worker.sh` | Tests supervisor uses nbs-workers for spawning | Fails if AI doesn't use nbs-workers commands |
 | `test_supervisor_adv_no_old_pattern.sh` | Tests supervisor does NOT use old pty-session spawn pattern | Fails if temp.sh or raw pty-session create/send pattern detected |
-| `test_help_nbs_worker.sh` | Tests help skill recommends nbs-worker for spawning | Fails if help recommends old pty-session pattern |
+| `test_help_nbs_worker.sh` | Tests help skill recommends nbs-workers for spawning | Fails if help recommends old pty-session pattern |
 
 ### Scenarios
 
@@ -118,8 +118,8 @@ cd tests/automated
 - `INVESTIGATION-STATUS.md` - Mock investigation in progress
 - Used to test `/nbs` dispatch to investigation review mode
 
-**supervisor_nbs_worker/**: Minimal supervisor context for nbs-worker tests.
-- Tests that supervisor role uses nbs-worker for worker management
+**supervisor_nbs_worker/**: Minimal supervisor context for nbs-workers tests.
+- Tests that supervisor role uses nbs-workers for worker management
 - Tests that old pty-session spawn pattern is not used
 
 ### Verdict Files

@@ -1,7 +1,7 @@
 /*
  * worker.h — Worker lifecycle management declarations.
  *
- * Defines the interface for all 8 nbs-worker commands:
+ * Defines the interface for all 8 nbs-workers commands:
  *   spawn, status, search, results, dismiss, continue, session, list
  *
  * Exit codes:
@@ -11,8 +11,8 @@
  *   4 = bad arguments
  */
 
-#ifndef NBS_WORKER_H
-#define NBS_WORKER_H
+#ifndef NBS_WORKERS_H
+#define NBS_WORKERS_H
 
 #include <stddef.h>
 
@@ -202,4 +202,4 @@ int cmd_list(const char *cwd);
 
 void cmd_help(void);
 
-#endif /* NBS_WORKER_H */
+#endif /* NBS_WORKERS_H */
