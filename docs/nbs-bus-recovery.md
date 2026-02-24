@@ -77,7 +77,7 @@ Processing rules by event type:
 | `worker-dismissed` | Note the worker was dismissed. Update your tracking if relevant. |
 | `worker-died` | Worker tmux session died unexpectedly. Read the worker's task file and log. Decide whether to respawn or escalate. |
 | `decision-logged` | Scribe recorded a decision. No action required unless tracking decision activity. |
-| `pythia-checkpoint` | Decision threshold reached. Spawn a Pythia worker: `nbs-worker spawn pythia <dir> "Read .nbs/scribe/live-log.md and post checkpoint assessment."` |
+| `pythia-checkpoint` | Decision threshold reached. Spawn a Pythia worker: `nbs-workers spawn pythia <dir> "Read .nbs/scribe/live-log.md and post checkpoint assessment."` |
 | `assessment-posted` | Pythia has posted an assessment to chat. Read and discuss as a team. Scribe logs any resulting decisions. |
 | `config-change` | Re-read `config.yaml`. Adjust behaviour. |
 | `heartbeat` | Note the source is alive. No action required unless the heartbeat is unexpectedly old. |
@@ -111,7 +111,7 @@ Clean state. Either nothing happened while you were away, or someone already pro
 
 **Checks:**
 1. Is the publisher writing to the correct directory? `ls -la .nbs/events/*.event`
-2. Is the publisher running? Check worker status: `nbs-worker list`
+2. Is the publisher running? Check worker status: `nbs-workers list`
 3. Is deduplication too aggressive? Check `dedup-window` in config
 4. Are events being acknowledged before you see them? Check `.nbs/events/processed/` for recent entries
 

@@ -26,9 +26,10 @@ src/nbs-bus/*.o
 src/nbs-sidecar/*.o
 src/nbs-sidecar/nbs-sidecar
 src/nbs-sidecar/assert_check
-src/nbs-worker/*.o
-src/nbs-worker/nbs-worker
-src/nbs-worker/assert_check
+src/nbs-workers/*.o
+src/nbs-workers/nbs-workers
+src/nbs-workers/nbs-worker
+src/nbs-workers/assert_check
 src/nbs-pty-session/*.o
 src/nbs-pty-session/nbs-pty-session
 src/nbs-pty-session/assert_check

@@ -137,7 +137,7 @@ The Scribe does not log:
 
 ### Role
 
-Ephemeral oracle. Spawned as an nbs-workers at defined checkpoints. Reads the Scribe's decision log. Posts a structured assessment to chat. Exits.
+Ephemeral oracle. Spawned via `nbs-workers` at defined checkpoints. Reads the Scribe's decision log. Posts a structured assessment to chat. Exits.
 
 Pythia does not converse. She does not debate. She names risks, identifies assumptions, and flags gaps. The team decides what to do. The Scribe logs the outcome.
 

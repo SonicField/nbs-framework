@@ -206,4 +206,4 @@ See [nbs-bus](nbs-bus.md) for the full bus reference and [Bus Recovery](nbs-bus-
 
 - [nbs-bus](nbs-bus.md) — Event-driven coordination bus
 - [NBS Teams](nbs-teams.md) — Supervisor/worker pattern overview
-- [nbs-worker](nbs-worker.md) — Worker lifecycle management
+- [nbs-workers](nbs-workers.md) — Worker lifecycle management
