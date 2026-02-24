@@ -24,6 +24,53 @@
  */
 #define MAX_PAYLOAD_LEN 2048
 
+/* Maximum path length for resolved binary paths */
+#define MAX_PATH_LEN 4096
+
+/*
+ * Cached absolute path to the nbs-bus binary.
+ * Resolved once on first use via /proc/self/exe — the binary is expected
+ * to be in the same directory as nbs-chat (sibling binary).
+ * If resolution fails, falls back to "nbs-bus" (PATH search via execlp).
+ */
+static char nbs_bus_path[MAX_PATH_LEN] = "";
+static int nbs_bus_path_resolved = 0;
+
+static const char *resolve_nbs_bus(void)
+{
+    if (nbs_bus_path_resolved)
+        return nbs_bus_path[0] ? nbs_bus_path : "nbs-bus";
+
+    nbs_bus_path_resolved = 1;
+
+    char self[MAX_PATH_LEN];
+    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (len <= 0)
+        return "nbs-bus";
+    self[len] = '\0';
+
+    /* Find last '/' to get directory */
+    char *slash = strrchr(self, '/');
+    if (!slash)
+        return "nbs-bus";
+
+    /* Replace binary name with "nbs-bus" */
+    size_t dir_len = (size_t)(slash - self);
+    if (dir_len + sizeof("/nbs-bus") > sizeof(nbs_bus_path))
+        return "nbs-bus";
+
+    memcpy(nbs_bus_path, self, dir_len);
+    memcpy(nbs_bus_path + dir_len, "/nbs-bus", sizeof("/nbs-bus"));
+
+    /* Verify it exists */
+    if (access(nbs_bus_path, X_OK) != 0) {
+        nbs_bus_path[0] = '\0';
+        return "nbs-bus";
+    }
+
+    return nbs_bus_path;
+}
+
 /*
  * Maximum number of parent directories to walk when searching for
  * .nbs/events/. 10 is generous: project roots are typically 2-3 levels
@@ -286,9 +333,10 @@ static int bus_publish(const char *events_dir, const char *source,
             close(STDERR_FILENO);
         }
 
-        execlp("nbs-bus", "nbs-bus", "publish",
-               events_dir, source, type, priority,
-               truncated_payload, "--dedup-window=0", (char *)NULL);
+        const char *bus_bin = resolve_nbs_bus();
+        execl(bus_bin, "nbs-bus", "publish",
+              events_dir, source, type, priority,
+              truncated_payload, "--dedup-window=0", (char *)NULL);
 
         /* exec failed — exit silently */
         _exit(1);

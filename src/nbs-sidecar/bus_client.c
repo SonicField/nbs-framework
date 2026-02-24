@@ -21,8 +21,51 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define CMD_BUF_SIZE 8192
+
+/*
+ * Cached absolute path to the nbs-bus binary.
+ * Resolved once on first use via /proc/self/exe — the binary is expected
+ * to be in the same directory as nbs-sidecar (sibling binary).
+ * If resolution fails, falls back to "nbs-bus" (PATH search via execvp).
+ */
+#define BUS_PATH_LEN 4096
+static char nbs_bus_path[BUS_PATH_LEN] = "";
+static int nbs_bus_path_resolved = 0;
+
+static const char *resolve_nbs_bus(void)
+{
+    if (nbs_bus_path_resolved)
+        return nbs_bus_path[0] ? nbs_bus_path : "nbs-bus";
+
+    nbs_bus_path_resolved = 1;
+
+    char self[BUS_PATH_LEN];
+    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (len <= 0)
+        return "nbs-bus";
+    self[len] = '\0';
+
+    char *slash = strrchr(self, '/');
+    if (!slash)
+        return "nbs-bus";
+
+    size_t dir_len = (size_t)(slash - self);
+    if (dir_len + sizeof("/nbs-bus") > sizeof(nbs_bus_path))
+        return "nbs-bus";
+
+    memcpy(nbs_bus_path, self, dir_len);
+    memcpy(nbs_bus_path + dir_len, "/nbs-bus", sizeof("/nbs-bus"));
+
+    if (access(nbs_bus_path, X_OK) != 0) {
+        nbs_bus_path[0] = '\0';
+        return "nbs-bus";
+    }
+
+    return nbs_bus_path;
+}
 
 int bus_client_check(const char *bus_dir, int *event_count,
                      char *max_priority, size_t mp_size,
@@ -36,7 +79,7 @@ int bus_client_check(const char *bus_dir, int *event_count,
     ASSERT_MSG(summary != NULL, "bus_client_check: summary is NULL");
     ASSERT_MSG(sum_size > 0, "bus_client_check: sum_size is 0");
 
-    const char *argv[] = {"nbs-bus", "check", bus_dir, NULL};
+    const char *argv[] = {resolve_nbs_bus(), "check", bus_dir, NULL};
     char buf[CMD_BUF_SIZE];
 
     int rc = exec_capture(argv, buf, sizeof(buf));
@@ -93,7 +136,7 @@ int bus_client_read(const char *bus_dir, const char *event_file,
     ASSERT_MSG(payload != NULL, "bus_client_read: payload is NULL");
     ASSERT_MSG(payload_size > 0, "bus_client_read: payload_size is 0");
 
-    const char *argv[] = {"nbs-bus", "read", bus_dir, event_file, NULL};
+    const char *argv[] = {resolve_nbs_bus(), "read", bus_dir, event_file, NULL};
 
     int rc = exec_capture(argv, payload, payload_size);
     if (rc < 0)
@@ -109,7 +152,7 @@ int bus_client_ack(const char *bus_dir, const char *event_file)
     ASSERT_MSG(event_file != NULL, "bus_client_ack: event_file is NULL");
     ASSERT_MSG(event_file[0] != '\0', "bus_client_ack: event_file is empty");
 
-    const char *argv[] = {"nbs-bus", "ack", bus_dir, event_file, NULL};
+    const char *argv[] = {resolve_nbs_bus(), "ack", bus_dir, event_file, NULL};
 
     int rc = exec_fire_and_forget(argv);
     if (rc < 0)
@@ -132,7 +175,7 @@ int bus_client_publish(const char *bus_dir, const char *source,
     ASSERT_MSG(priority[0] != '\0', "bus_client_publish: priority is empty");
     ASSERT_MSG(payload != NULL, "bus_client_publish: payload is NULL");
 
-    const char *argv[] = {"nbs-bus", "publish", bus_dir,
+    const char *argv[] = {resolve_nbs_bus(), "publish", bus_dir,
                           source, type, priority, payload, NULL};
 
     int rc = exec_fire_and_forget(argv);
@@ -156,7 +199,7 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
     ASSERT_MSG(payload_size > 0, "bus_client_check_typed: payload_size is 0");
 
     /* Run nbs-bus check to get the event listing */
-    const char *argv[] = {"nbs-bus", "check", bus_dir, NULL};
+    const char *argv[] = {resolve_nbs_bus(), "check", bus_dir, NULL};
     char buf[CMD_BUF_SIZE];
 
     int rc = exec_capture(argv, buf, sizeof(buf));
