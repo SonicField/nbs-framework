@@ -166,7 +166,7 @@ DIAG: [0] code=_RPacket.append_to isJit=true isInlined=true
 
 **Two fixes applied/identified:**
 - **LICM fix** (applied, defence-in-depth): `isHoistableGuard` in `licm.cpp` rejects guards with `inlineDepth() > 0`. Prevents LICM from hoisting inlined guards to the preheader where the inlined call has not occurred. This is semantically correct regardless of the frame bug.
-- **Frame reification fix** (Phase 2, NOT yet applied): The deopt path must handle the case where the outer function's frame was created by the interpreter. Options: (a) convert the frame to JIT-style at JIT entry, (b) teach `getUnitFrames` to tolerate interpreter-created outer frames, (c) fix `reifyLightweightFrames` to detect and handle this case.
+- **Frame reification fix** (Phase 2, APPLIED by generalist): `updatePrevInstr` moved out of `convertInterpreterFrameFromStackToSlab` and called once in `prepareForDeopt` BEFORE `reifyLightweightFrames`, while all frames still have their JIT reifiers. This handles the case where the outer function's frame was created by the interpreter. Files changed: `frame.cpp`, `frame.h`, `gen_asm.cpp`. Verified: 2×2 matrix ALL PASS, richards_full with spec ON + inliner ON produces correct result (returns 1). Clean rebuild (without diagnostic logging) in progress on build-host
 
 **Investigation timeline (9 hypotheses):**
 1. LICM + inlined FrameState (08:19) — **PARTIALLY CORRECT** (confirmed 09:12 by inliner falsifier)
@@ -334,9 +334,28 @@ To measure the full JIT potential (specialisation + inlining), the inliner bug m
 
 richards_full exposes a fundamental interaction between specialisation and type polymorphism. The benchmark uses inheritance-based polymorphism: multiple `Task` subclasses (`DeviceTask`, `HandlerTask`, `IdleTask`, `WorkerTask`) sharing `.fn()` method dispatch via a scheduling loop.
 
-**The mechanism:**
+**The mechanism (definitive analysis, helper 10:09 + generalist 10:09):**
 
-With `enable_specialized_opcodes()`, the JIT emits `GuardType` instructions for each specialised attribute access (`LOAD_ATTR_INSTANCE_VALUE`). For monomorphic call sites (e.g. `richards_slots` where `__slots__` constrains the type), these guards succeed on every iteration and branch prediction makes them nearly free. For polymorphic call sites (richards_full's dispatch loop), the type changes on each iteration. The guards fail repeatedly, triggering deopt — the JIT falls back to the interpreter, which then re-enters the JIT code, which hits the guard again.
+The guards causing deopt storms are NOT `GuardType` (type version checks). They are **dict values check** guards — the split-dict / values-pointer optimisation for `LOAD_ATTR_INSTANCE_VALUE`. These guards check `tp_version_tag` against a cached version to verify that the type's `__dict__` layout has not changed.
+
+The 340 guard failures per iteration in `_RPacket.append_to` occur because individual `_RPacket` instances have different dict layouts (different insertion orders or extra attributes). The TYPE is the same (`_RPacket`) — this is NOT polymorphic type dispatch. It is dict version invalidation across instances of the same class.
+
+**Deopt site breakdown** (via `cinderjit.get_and_clear_runtime_stats()`, single iteration, force_compile, spec ON, inliner OFF):
+
+| Function | Line | Deopts | Guard type |
+|----------|------|--------|------------|
+| `_RPacket.append_to` | 174 | 340 | dict values check |
+| `_RTaskState.isTaskWaiting` | 212 | 6 | dict values check |
+| `_RTaskState.isPacketPending` | 209 | 6 | dict values check |
+| `_RTaskState.isTaskHolding` | 206 | 6 | dict values check |
+| `_RTaskState.isTaskHoldingOrWaiting` | — | 1 | GuardType |
+| `_richards_schedule` | 377 | 1 | GuardType |
+
+Total: 360 deopts/iteration, 6 unique deopt sites, 71 compiled functions.
+
+**Cost model (generalist, 10:09):** The JIT compiles each function ONCE (invocation-count-based recompilation, not deopt-count-based). On each call to `_RPacket.append_to`, the same compiled code is re-entered, the dict values guard fails, and the function falls back to the interpreter for the rest of that invocation. Per-call cost: JIT entry + guard check + deopt transition (register save, frame reification) + interpreter execution. This is WORSE than pure interpreter (which skips JIT entry and deopt entirely).
+
+For monomorphic call sites (e.g. `richards_slots` where `__slots__` constrains the type and dict layout), the guards succeed on every iteration and branch prediction makes them nearly free.
 
 **Quantitative impact:**
 
@@ -352,18 +371,18 @@ With `enable_specialized_opcodes()`, the JIT emits `GuardType` instructions for 
 
 1. **force_compile** (matches sweep methodology): Spec ON has NO EFFECT on polymorphic code (+0.4pp, noise). The specialised guards on the top-level function's attribute accesses do not cause deopt storms because force_compile only compiles the benchmark function, not the polymorphic helpers. The guards on the benchmark function's monomorphic local types succeed.
 
-2. **auto-JIT** (testkeeper's supplementary run): Spec ON causes a 10× regression. `cinderjit.auto()` compiles ALL hot functions including the polymorphic dispatch helpers (`_RPacket.append_to`, `_RHandlerTask.fn`, etc.). With spec ON, these helpers get GuardType checks that fail on every iteration because the receiver type changes (TaskA → TaskB → TaskC in the scheduling loop). Each guard failure triggers deopt → interpreter fallback → re-entry → deopt again.
+2. **auto-JIT** (testkeeper's supplementary run): Spec ON causes a 10× regression. `cinderjit.auto()` compiles ALL hot functions including the polymorphic dispatch helpers (`_RPacket.append_to`, `_RHandlerTask.fn`, etc.). With spec ON, these helpers get dict values check guards that fail on every call because `_RPacket` instances have varying dict layouts. Each guard failure triggers deopt → interpreter fallback. The JIT does NOT recompile after deopt (invocation-count-based, not deopt-count-based), so the same failing guard is hit on every subsequent call.
 
 **Why the inliner solves both:** The inliner specialises each call site for its observed type, converting megamorphic guards into monomorphic per-callsite guards that succeed. Run 1 shows +27.5% with inliner ON (spec OFF) — the inliner contributed the entirety of the benefit. The target configuration (spec ON + inliner ON) should combine both effects.
 
 **Contrast with richards_slots:** richards_slots uses `__slots__` classes with uniform types in the hot loop. Spec effect: +32.9pp (best in suite). This demonstrates that specialisation IS effective when types are monomorphic.
 
-**Implication for the JIT compilation strategy:** The auto-JIT pathology reveals that `cinderjit.auto()` needs a polymorphism heuristic. Three potential mitigations:
-1. **Polymorphism heuristic in auto()**: skip JIT compilation for functions with high type diversity at guarded sites (IC miss rate above threshold)
-2. **Guard coalescing**: combine multiple guards into a single polymorphic check
-3. **Inliner fix** (Phase 2): the inliner naturally solves this by per-callsite specialisation — but only after the frame reification bug is fixed
+**Implication for the JIT compilation strategy:** The auto-JIT pathology reveals that `cinderjit.auto()` needs guard-failure awareness. Three potential mitigations:
+1. **Per-site deopt counting** (Phase 3): after N guard failures at the same site, de-specialise that guard (remove the dict values check, fall through to generic LoadAttr). With 4 unique guard sites × threshold 3 = 12 deopts then stable. This directly addresses the 'warm code with cold guards' problem.
+2. **Guard coalescing**: combine multiple dict values guards into a single check per type per function
+3. **Inliner fix** (Phase 2, DONE): the inliner naturally solves this by per-callsite specialisation — but only after the frame reification bug is fixed (now fixed by generalist)
 
-**Deopt storm investigation:** testkeeper confirmed the auto-JIT regression is from deopt storms — `cinderjit.auto()` compiles polymorphic helpers that the force_compile approach correctly leaves in the interpreter.
+**Deopt storm investigation (CLOSED):** helper's runtime stats analysis + generalist's recompilation mechanism check definitively identified the root cause as dict layout variation across `_RPacket` instances, NOT type polymorphism or recompilation. The force_compile approach correctly leaves inner helpers in the interpreter, avoiding the pathology entirely.
 
 ### Output Validation (testkeeper, 09:41 UTC)
 
@@ -401,7 +420,7 @@ richards_full with force_compile shows spec effect of +0.4pp (noise). The 23-ben
 
 **Auto-JIT caveat:** testkeeper's auto-JIT measurement showed a 10× regression for richards_full (308ms vs 28ms). This is caused by `cinderjit.auto()` over-compiling polymorphic helper functions — the guards on those helpers cause deopt storms. With `force_compile` (top-level only), polymorphic helpers remain in the interpreter and handle dispatch efficiently. The 22-benchmark sweep used force_compile, so this auto-JIT pathology does not affect the sweep data.
 
-**Key finding:** Specialisation helps monomorphic/dimorphic workloads (+3.8pp across 22 benchmarks) and is neutral for polymorphic code when using force_compile. The auto-JIT over-compilation of polymorphic helpers is a separate concern — the JIT compilation strategy needs a polymorphism heuristic to avoid compiling megamorphic functions.
+**Key finding:** Specialisation helps monomorphic/dimorphic workloads (+3.8pp across 22 benchmarks) and is neutral for polymorphic code when using force_compile. The auto-JIT over-compilation of inner helpers is a separate concern — the JIT needs per-site deopt counting to de-specialise guards that fail repeatedly on dict layout variation (not type polymorphism).
 
 All 22 benchmarks from the original sweep completed without crash in both conditions. ABBA ×2 design, 16 runs total (8 per condition). richards_full timing from supervisor's force_compile supplementary measurement (warmup + force_compile, N_ITER=100000, matching sweep methodology).
 
@@ -413,4 +432,90 @@ All 22 benchmarks from the original sweep completed without crash in both condit
 - [x] Output validation: 23/23 benchmarks produce identical return values spec ON vs spec OFF (testkeeper, 09:41)
 - [x] Per-benchmark timing breakdown — DONE (helper 09:42 + supervisor 09:55; all 23 benchmarks)
 - [x] richards_full timing data — RESOLVED: force_compile shows +0.4pp (noise), auto-JIT shows -90% (separate pathology, documented)
+- [x] Deopt mechanism — CLOSED: dict values check guards on varying `_RPacket` dict layouts, not type polymorphism or recompilation (helper 10:09 + generalist 10:09)
 - [ ] Raw data archived locally — PENDING
+
+---
+
+## Phase 2: Frame Reification Fix — Status
+
+**Fix applied by generalist (10:00 UTC).** Three files changed on build-host `frame.cpp`, `frame.h`, `gen_asm.cpp`. The fix moves `updatePrevInstr` to `prepareForDeopt`, called ONCE before `reifyLightweightFrames` while all frames still have JIT reifiers.
+
+### Phase 2 Gate Status (gatekeeper, 10:18 — CONDITIONAL PASS)
+
+| Gate | Status | Evidence |
+|------|--------|----------|
+| 1. Crash gate | **PASS** | generalist 2×2 matrix ALL PASS + richards_full smoke test (spec ON + inliner ON, returns 1) |
+| 2. Correctness gate | **PASS** | 80/80 spec opcode tests PASS (testkeeper, 10:08). 22/23 output validation PASS (10:15). Bug C (spec OFF crash) is non-target config. |
+| 3. Performance gate | AWAITING | Needs clean rebuild + ABBA sweep. Prediction: 22 monomorphic benchmarks improve, richards_full regresses under auto-JIT (accepted limitation). |
+| 4. Document gate | AWAITING | Results to be documented after sweep. |
+
+### Phase 2 Correctness (testkeeper, 10:08)
+
+80/80 spec opcode correctness tests PASS with inliner ON:
+- FOR_ITER_RANGE: 20/20
+- FOR_ITER_TUPLE: 20/20
+- LOAD_ATTR_INSTANCE_VALUE: 20/20
+- STORE_SUBSCR_DICT: 20/20
+
+Config: PYTHONJIT=1, inliner enabled (default). Reification fix does NOT break any specialised opcode family.
+
+**Note:** Tests ran against build WITH diagnostic logging (pre-rebuild). Correctness results are valid — JIT_LOG does not change code generation or semantics. Performance measurements require the clean rebuild.
+
+### Pending
+
+- Supervisor: clean rebuild on build-host (removing diagnostic JIT_LOG lines)
+- ~~Testkeeper: 23/23 output validation with inliner ON~~ DONE (22/23 PASS, see Bug C below)
+- After clean rebuild: gate-quality ABBA performance sweep (spec ON + inliner ON) → Run 4
+
+### Phase 2 Output Validation (testkeeper, 10:15)
+
+**22/23 PASS, 1 mismatch** (auto-JIT, inliner ON):
+
+- Interpreter only: 23/23 OK (spec ON vs spec OFF outputs match)
+- JIT mode (auto-JIT, inliner ON): 22/23 OK
+
+**The mismatch is richards_full — but the failure is in spec OFF, not spec ON:**
+- Spec OFF + auto-JIT + inliner ON: **CRASH** (rc=1, Python exception in `_richards_schedule` line 264)
+- Spec ON + auto-JIT + inliner ON: returns 1 (correct)
+
+**This is Bug C — a NEW bug, distinct from the Phase 1 crash (Bug A):**
+
+| | Bug A (Phase 1) | Bug C (Phase 2, NEW) |
+|---|---|---|
+| Config | spec ON + inliner ON | spec OFF + inliner ON + auto-JIT |
+| Exit code | rc=-6 (C abort) | rc=1 (Python exception) |
+| Location | frame.cpp:163 | `_richards_schedule` line 264 |
+| Cause | Frame reification ordering | UNKNOWN — awaiting traceback |
+| Status | FIXED (generalist) | OPEN |
+
+**Why this was not seen before:** Generalist's 2×2 matrix used `force_compile`, which does not compile inner helpers. Run 1 also used `force_compile` (helper confirmed, 10:17). The Bug C crash requires auto-JIT to compile the inner polymorphic helpers (`_RPacket.append_to`, etc.) WITHOUT specialised guards (spec OFF). This configuration was never tested before testkeeper's output validation. The crash is NOT necessarily a regression from the reification fix — it may be pre-existing but only triggered under auto-JIT compilation of inner helpers.
+
+**Impact on Phase 2:** Bug C does NOT block the Phase 2 performance sweep. The target configuration is spec ON + inliner ON, which passes. Bug C affects the non-target configuration (spec OFF + inliner ON) and should be filed for Phase 3 investigation.
+
+### Phase 2 Key Question: Does the Inliner Fix richards_full?
+
+**Critical clarification (helper, 10:12):** The benchmark script uses auto-JIT via warmup, NOT `force_compile`. All inner functions that become hot during warmup are compiled — including `_RPacket.append_to`. The Phase 2 performance sweep will therefore show the richards_full deopt storm UNLESS the inliner (now enabled) changes the guard behaviour.
+
+**ANSWER: NO — the inliner does NOT fix the deopt pathology (helper, 10:15).**
+
+Deopt counts for richards_full, spec ON + auto-JIT, single iteration:
+
+| Config | Total deopts | Dominant site | Guard type |
+|--------|-------------|---------------|------------|
+| Inliner OFF | 360 | `_RPacket.append_to` (340) | dict values check |
+| Inliner ON | 11,646 | `_RTask.qpkt` (11,625) | GuardType |
+
+The inliner successfully inlined `_RPacket.append_to` (it disappears from the deopt list). But this shifted the guard failure upstream to `_RTask.qpkt`, which now has 11,625 GuardType deopts — **30× more** than the inliner-OFF configuration. The inliner widened the blast radius: more code is in the JIT-compiled region, so more code falls back to interpreter on each deopt.
+
+**Timing paradox:** Despite 30× more deopts, timing is slightly better (42ms vs 48ms). The inliner reduces call overhead on the non-deopt path, roughly offsetting the increased deopt cost.
+
+**Prediction (a) FALSIFIED:** The inliner does NOT eliminate deopt storms on polymorphic code. The Phase 2 sweep will still show a large richards_full regression under auto-JIT.
+
+**Implications:**
+- The +3.5pp aggregate from Phase 1 will NOT improve for the 23-benchmark set with inliner ON
+- richards_full remains a major outlier under auto-JIT methodology
+- The fix is per-site deopt counting (Phase 3), not inlining
+
+**Methodology note (helper, 10:17):** Run 1 used `force_compile`, NOT auto-JIT. Run 1's +27.5% for richards_full reflected force_compile's benefit (top-level function only, inner helpers in interpreter). This was incorrectly cited as evidence that the inliner solved the deopt problem — the inliner was not the relevant factor; the compilation scope was.
+
