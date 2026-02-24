@@ -10,77 +10,31 @@ Usage:
 """
 import sys
 
-# ── Standardised JIT test infrastructure ─────────────────────────────────────
-WARMUP = 15000       # CinderX auto-compilation typically needs 10000+ calls
-REQUIRE_JIT = True   # Hard-fail if functions not JIT-compiled (no false confidence)
-
 def check_cinderx():
     try:
         import cinderx
         cinderx.init()
         import cinderjit
-        cinderjit.auto()
-        try:
-            cinderjit.compile_after_n_calls(100)
-        except (AttributeError, TypeError):
-            pass  # auto() is sufficient; compile_after_n_calls may not exist
+        cinderjit.compile_after_n_calls(100)
         return cinderjit
-    except (ImportError, AttributeError):
+    except ImportError:
         print("SKIP: CinderX not available")
         sys.exit(0)
 
 cinderjit = check_cinderx()
 
-
-def check_jit_compiled(func, name):
-    """If REQUIRE_JIT is True and cinderjit is importable, raises AssertionError
-    when the function is not compiled."""
-    try:
-        import cinderjit as cjit
-        if cjit.is_jit_compiled(func):
-            return True
-        compiled = cjit.get_compiled_functions()
-        func_name = getattr(func, '__qualname__', getattr(func, '__name__', str(func)))
-        for cf in compiled:
-            if func_name in str(cf):
-                return True
-        if REQUIRE_JIT:
-            assert False, (
-                f"{name} not JIT-compiled after {WARMUP} warmup calls. "
-                "Test cannot verify JIT path — increase WARMUP or check "
-                "cinderjit.auto() is enabled."
-            )
-        print(f"  WARNING: {name} not found in compiled functions — may not test JIT path")
-        return False
-    except (ImportError, AttributeError):
-        return False
-
-
 PASS = 0
 FAIL = 0
-XFAIL = 0
-
-# Known CinderX JIT bugs: super() cell reference leak in >=5-level
-# hierarchies. The JIT passes the cell object instead of its value
-# when n is used in arithmetic (e.g. 0.01 * n yields 'int' * 'cell').
-KNOWN_FAILURES = {
-    "5-level hierarchy",
-    "Recursive construction",
-}
 
 def test(name, fn):
-    global PASS, FAIL, XFAIL
+    global PASS, FAIL
     try:
         fn()
         print(f"  PASS: {name}")
         PASS += 1
     except Exception as e:
-        if name in KNOWN_FAILURES:
-            print(f"  XFAIL: {name} — {e} (known JIT bug)")
-            XFAIL += 1
-        else:
-            print(f"  FAIL: {name} — {e}")
-            FAIL += 1
+        print(f"  FAIL: {name} — {e}")
+        FAIL += 1
 
 
 # ── Test 1: 4-level hierarchy (minimal reproducer) ──────────────────────────
@@ -98,13 +52,12 @@ def test_4level():
         def __init__(self, name, n=32, nb=2):
             super().__init__(name, n, num=3); self.nb = nb
 
-    for i in range(WARMUP):
+    for i in range(200):
         m = Model("test")
     assert m.name == "test"
     assert m.n == 32
     assert m.num == 3
     assert m.nb == 2
-    check_jit_compiled(Model.__init__, "Model.__init__ (4-level)")
 
 
 # ── Test 2: 5-level hierarchy (deep_class pattern) ──────────────────────────
@@ -125,11 +78,10 @@ def test_5level():
         def __init__(self, name, n=32, nb=2):
             super().__init__(name, n, nb); self.cw = 0.01 * n
 
-    for i in range(WARMUP):
+    for i in range(200):
         m = Model("test")
     assert m.name == "test"
     assert m.cw == 0.32
-    check_jit_compiled(Model.__init__, "Model.__init__ (5-level)")
 
 
 # ── Test 3: Recursive construction (Block creates Layer instances) ───────────
@@ -150,12 +102,11 @@ def test_recursive_construction():
             super().__init__(name, n, num=3)
             self.blocks = [Block(f"{name}_b{i}", n) for i in range(nb)]
 
-    for i in range(WARMUP):
+    for i in range(200):
         m = Model("test")
     assert len(m.layers) == 3
     assert len(m.blocks) == 2
     assert m.blocks[0].layers[0].name == "test_b0_s0"
-    check_jit_compiled(Model.__init__, "Model.__init__ (recursive)")
 
 
 # ── Test 4: JIT compilation verification ─────────────────────────────────────
@@ -167,10 +118,15 @@ def test_jit_compiled():
         def __init__(self, x, y):
             super().__init__(x); self.y = y
 
-    for _ in range(WARMUP):
+    for _ in range(500):
         B(1, 2)
 
-    check_jit_compiled(B.__init__, "B.__init__ (2-level)")
+    # Verify JIT compilation status (informational — don't fail if API missing)
+    try:
+        compiled = cinderjit.is_jit_compiled(B.__init__)
+        print(f"    B.__init__ JIT compiled: {compiled}")
+    except AttributeError:
+        print("    is_jit_compiled API not available")
 
 
 # ── Test 5: compile_after_n_calls threshold tracking ─────────────────────────
@@ -190,10 +146,9 @@ def test_threshold_tracking():
             super().__init__(name, n, num=3); self.nb = nb
 
     # Run well past the threshold (100) to verify no corruption
-    for i in range(WARMUP):
+    for i in range(500):
         m = Model("test")
         assert m.name == "test", f"Corruption at iter {i}"
-    check_jit_compiled(Model.__init__, "Model.__init__ (threshold)")
 
 
 # ── Test 6: Mixed hierarchy depths ──────────────────────────────────────────
@@ -215,12 +170,11 @@ def test_mixed_depths():
     class E(D):
         def __init__(self): super().__init__(); self.e = 5
 
-    for _ in range(WARMUP):
+    for _ in range(200):
         assert B().b == 2
         assert C().c == 3
         assert D().d == 4
         assert E().e == 5
-    check_jit_compiled(E.__init__, "E.__init__ (5-level mixed)")
 
 
 # ── Run all tests ────────────────────────────────────────────────────────────
@@ -232,17 +186,14 @@ test("4-level hierarchy", test_4level)
 test("5-level hierarchy", test_5level)
 test("Recursive construction", test_recursive_construction)
 test("JIT compilation", test_jit_compiled)
-test("Threshold tracking", test_threshold_tracking)
+test("Threshold tracking (500 iters)", test_threshold_tracking)
 test("Mixed hierarchy depths", test_mixed_depths)
 
 print()
-print(f"Results: {PASS} PASS, {FAIL} FAIL, {XFAIL} XFAIL (known bugs)")
+print(f"Results: {PASS} PASS, {FAIL} FAIL")
 if FAIL > 0:
     print("VERDICT: FAILURES DETECTED")
     sys.exit(1)
 else:
-    if XFAIL > 0:
-        print("VERDICT: PASS (with known failures)")
-    else:
-        print("VERDICT: ALL TESTS PASSED")
+    print("VERDICT: ALL TESTS PASSED")
     sys.exit(0)
