@@ -25,9 +25,50 @@
 #include <stdio.h>
 #include <string.h>
 #include <libgen.h>
+#include <unistd.h>
 
 #define MAX_LINE 4096
 #define MAX_DECODED 8192
+
+/*
+ * Cached absolute path to the nbs-chat binary.
+ * Resolved once via /proc/self/exe — sibling binary in same directory.
+ */
+#define CHAT_PATH_LEN 4096
+static char nbs_chat_path[CHAT_PATH_LEN] = "";
+static int nbs_chat_path_resolved = 0;
+
+static const char *resolve_nbs_chat(void)
+{
+    if (nbs_chat_path_resolved)
+        return nbs_chat_path[0] ? nbs_chat_path : "nbs-chat";
+
+    nbs_chat_path_resolved = 1;
+
+    char self[CHAT_PATH_LEN];
+    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (len <= 0)
+        return "nbs-chat";
+    self[len] = '\0';
+
+    char *slash = strrchr(self, '/');
+    if (!slash)
+        return "nbs-chat";
+
+    size_t dir_len = (size_t)(slash - self);
+    if (dir_len + sizeof("/nbs-chat") > sizeof(nbs_chat_path))
+        return "nbs-chat";
+
+    memcpy(nbs_chat_path, self, dir_len);
+    memcpy(nbs_chat_path + dir_len, "/nbs-chat", sizeof("/nbs-chat"));
+
+    if (access(nbs_chat_path, X_OK) != 0) {
+        nbs_chat_path[0] = '\0';
+        return "nbs-chat";
+    }
+
+    return nbs_chat_path;
+}
 
 /* ---- chat_client_count_messages ---- */
 
@@ -424,7 +465,7 @@ int chat_client_send(const char *chat_path, const char *handle,
     ASSERT_MSG(message != NULL, "chat_client_send: message is NULL");
 
     const char *argv[] = {
-        "nbs-chat", "send", chat_path, handle, message, NULL
+        resolve_nbs_chat(), "send", chat_path, handle, message, NULL
     };
 
     int rc = exec_fire_and_forget(argv);
