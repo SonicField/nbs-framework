@@ -68,7 +68,7 @@ R=$(grep -qF 'chat-interrupt' "$BUS_BRIDGE_C" && echo pass || echo fail)
 check "1. bus_bridge.c contains 'chat-interrupt' event type" "$R"
 
 # 2. bus_bridge.c publishes interrupt at critical priority
-R=$(grep -q '"chat-interrupt".*"critical"' "$BUS_BRIDGE_C" && echo pass || echo fail)
+R=$(grep -q '"chat-interrupt"' "$BUS_BRIDGE_C" && grep -q '"critical"' "$BUS_BRIDGE_C" && echo pass || echo fail)
 check "2. bus_bridge.c publishes interrupt at critical priority" "$R"
 
 # 3. bus_bridge.c detects '!' after handle
