@@ -486,10 +486,27 @@ Config: PYTHONJIT=1, inliner enabled (default). Reification fix does NOT break a
 | Config | spec ON + inliner ON | spec OFF + inliner ON + auto-JIT |
 | Exit code | rc=-6 (C abort) | rc=1 (Python exception) |
 | Location | frame.cpp:163 | `_richards_schedule` line 264 |
-| Cause | Frame reification ordering | UNKNOWN — awaiting traceback |
-| Status | FIXED (generalist) | OPEN |
+| Cause | Frame reification ordering | Inliner type confusion (see below) |
+| Status | FIXED (generalist) | OPEN — Phase 3 |
 
-**Why this was not seen before:** Generalist's 2×2 matrix used `force_compile`, which does not compile inner helpers. Run 1 also used `force_compile` (helper confirmed, 10:17). The Bug C crash requires auto-JIT to compile the inner polymorphic helpers (`_RPacket.append_to`, etc.) WITHOUT specialised guards (spec OFF). This configuration was never tested before testkeeper's output validation. The crash is NOT necessarily a regression from the reification fix — it may be pre-existing but only triggered under auto-JIT compilation of inner helpers.
+**Root cause (generalist 10:21, testkeeper 10:22):** `AttributeError: '_RPacket' object has no attribute 'packetPending'`. The inliner incorrectly assumes monomorphic receiver types at megamorphic call sites. `runTask` (line 264) dispatches on `self` which can be any `_RTask` subclass. The inliner specialises the call site for one type (e.g. `_RTaskState`, which has `packetPending`), but when `_RPacket` arrives at runtime, the inlined code accesses a non-existent attribute. This is textbook incorrect monomorphic inlining at a megamorphic site.
+
+Full traceback:
+```
+File "<string>", line 598, in bench_richards_full
+File "<string>", line 404, in _richards_run_once
+File "<string>", line 379, in _richards_schedule
+File "<string>", line 264, in runTask
+AttributeError: '_RPacket' object has no attribute 'packetPending'
+```
+
+Crash timing: warmup iteration 1 passes (interpreter, no JIT yet). Warmup iteration 2 crashes (auto-JIT compiled inner helpers during warmup 1).
+
+**Why spec ON masks this bug:** With specialised opcodes enabled, `GuardType` / dict values check guards validate the receiver type BEFORE the incorrectly-inlined code executes. The guard catches the `_RPacket` vs `_RTaskState` mismatch and deopts to the interpreter (which handles it correctly). With spec OFF, there are no type guards, so the inlined code runs with the wrong type and hits `AttributeError`. The ~44k deopts per iteration in the target config (spec ON + inliner ON) are **partially necessary for correctness**, not just a performance issue.
+
+**Implication for Phase 3:** Per-site deopt counting (de-specialising guards after N failures) must be paired with fixing the inliner type confusion. Otherwise, de-specialising the guards would expose the inliner bug and produce crashes or wrong results.
+
+**Why this was not seen before:** Generalist's 2×2 matrix used `force_compile`, which does not compile inner helpers. Run 1 also used `force_compile` (helper confirmed, 10:17). The Bug C crash requires auto-JIT to compile the inner polymorphic helpers WITHOUT specialised guards (spec OFF). This configuration was never tested before testkeeper's output validation. The crash is NOT necessarily a regression from the reification fix — it may be pre-existing but only triggered under auto-JIT compilation of inner helpers.
 
 **Impact on Phase 2:** Bug C does NOT block the Phase 2 performance sweep. The target configuration is spec ON + inliner ON, which passes. Bug C affects the non-target configuration (spec OFF + inliner ON) and should be filed for Phase 3 investigation.
 
@@ -506,7 +523,16 @@ Deopt counts for richards_full, spec ON + auto-JIT, single iteration:
 | Inliner OFF | 360 | `_RPacket.append_to` (340) | dict values check |
 | Inliner ON | 11,646 | `_RTask.qpkt` (11,625) | GuardType |
 
-The inliner successfully inlined `_RPacket.append_to` (it disappears from the deopt list). But this shifted the guard failure upstream to `_RTask.qpkt`, which now has 11,625 GuardType deopts — **30× more** than the inliner-OFF configuration. The inliner widened the blast radius: more code is in the JIT-compiled region, so more code falls back to interpreter on each deopt.
+**Note:** The 360 figure (helper, force_compile) counts only deopts in the top-level function. Under auto-JIT (`cinderjit.auto()`), ALL hot inner functions are compiled, producing far more deopts:
+
+| Config (auto-JIT) | Total deopts | Major sites |
+|--------------------|-------------|-------------|
+| Inliner ON | 43,890 | `Task.runTask` (23,240), `HandlerTask.fn` (20,310), `Packet.append_to` (340) |
+| Inliner OFF | 46,215 | Same three sites + `WorkTask.fn` (2,325) |
+
+(generalist, 10:19 — all guards are dict values check on `Packet` instances)
+
+The inliner is **neutral**: the three major deopt sites have IDENTICAL counts with and without the inliner. The inliner neither helps nor hurts dict values check guards.
 
 **Timing paradox:** Despite 30× more deopts, timing is slightly better (42ms vs 48ms). The inliner reduces call overhead on the non-deopt path, roughly offsetting the increased deopt cost.
 
