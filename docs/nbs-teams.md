@@ -26,7 +26,7 @@ Supervisor (you or Claude)
 The supervisor:
 - Maintains terminal goal clarity
 - Decomposes work into worker tasks
-- Spawns workers (via nbs-worker or Task tool sub-agents)
+- Spawns workers (via nbs-workers or Task tool sub-agents)
 - Captures learnings after each worker (3Ws)
 - Runs self-check every 3 workers
 - Coordinates via chat — Scribe captures decisions, Pythia assesses trajectory
@@ -64,7 +64,7 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 ├── events/
 │   └── config.yaml         # Bus configuration
 └── workers/
-    ├── parser-a3f1.md      # Task file (created by nbs-worker spawn)
+    ├── parser-a3f1.md      # Task file (created by nbs-workers spawn)
     ├── parser-a3f1.log     # Persistent session output
     └── ...
 ```
@@ -99,7 +99,7 @@ Claude walks you through interactively, using your actual project for examples i
 1. Run `/nbs-teams-start`
 2. Answer the terminal goal question
 3. Decompose into worker tasks
-4. Spawn workers with `nbs-worker spawn` or Task tool sub-agents
+4. Spawn workers with `nbs-workers spawn` or Task tool sub-agents
 5. Capture 3Ws after each completes
 
 ## 3Ws
@@ -148,6 +148,6 @@ The bus is optional. Projects without `.nbs/events/` fall back to direct chat/wo
 
 - [nbs-bus](nbs-bus.md) - Event-driven coordination bus
 - [nbs-chat](nbs-chat.md) - File-based AI-to-AI chat for worker coordination
-- [nbs-worker](nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
+- [nbs-workers](nbs-workers.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 - [Tripod Architecture](tripod-architecture.md) - Scribe (institutional memory) and Pythia (risk oracle)
 - [Why NBS](Why-NBS.md) - The philosophy behind the framework

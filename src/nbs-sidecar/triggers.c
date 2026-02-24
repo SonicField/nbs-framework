@@ -395,9 +395,9 @@ int trigger_pythia_spawn(const char *nbs_root) {
         "Load /nbs-pythia. Read .nbs/scribe/live-log.md. "
         "Run the checkpoint procedure. Post assessment to chat. Exit.";
 
-    /* Fork+exec nbs-worker spawn */
+    /* Fork+exec nbs-workers spawn */
     const char *argv[] = {
-        "nbs-worker", "spawn", "pythia", nbs_root, task_desc, NULL
+        "nbs-workers", "spawn", "pythia", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 
@@ -595,7 +595,7 @@ int trigger_shepard_spawn(const char *nbs_root) {
         "Assess team effectiveness. Post recommendations to supervisor. Exit.";
 
     const char *argv[] = {
-        "nbs-worker", "spawn", "shepard", nbs_root, task_desc, NULL
+        "nbs-workers", "spawn", "shepard", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 
@@ -711,7 +711,7 @@ int trigger_fixup_spawn(const char *nbs_root) {
         "Post summary to chat. Exit.";
 
     const char *argv[] = {
-        "nbs-worker", "spawn", "fixup", nbs_root, task_desc, NULL
+        "nbs-workers", "spawn", "fixup", nbs_root, task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 

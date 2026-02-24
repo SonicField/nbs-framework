@@ -16,7 +16,7 @@ Pythia is **ephemeral** — spawned at checkpoints, terminated after posting. Sh
 
 1. Scribe logs decisions to `.nbs/scribe/<chat-name>-log.md` (e.g. `live-log.md` for `live.chat`)
 2. Scribe counts decisions. At every N-th decision (configurable via `pythia-interval` in `.nbs/events/config.yaml`, default 20), Scribe publishes a `scribe pythia-checkpoint high` bus event
-3. The bus event triggers Pythia's spawn (via `nbs-worker` or manual invocation)
+3. The bus event triggers Pythia's spawn (via `nbs-workers` or manual invocation)
 4. Pythia reads the decision log (e.g. `.nbs/scribe/live-log.md`) and relevant source files
 5. Pythia posts a structured assessment to the chat channel
 6. Pythia publishes `pythia assessment-posted normal` to the bus

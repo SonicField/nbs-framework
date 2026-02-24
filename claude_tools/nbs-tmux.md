@@ -165,7 +165,7 @@ This means output is never lost, regardless of how the session ends.
 - Running processes that need monitoring and intervention
 - Any situation where you need to send input and read output across multiple tool calls
 
-**For managing Claude worker instances**, use `nbs-worker` instead (see `/nbs-tmux-worker`).
+**For managing Claude worker instances**, use `nbs-workers` instead (see `/nbs-tmux-worker`).
 
 ---
 

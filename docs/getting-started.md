@@ -48,7 +48,7 @@ The command asks for your terminal goal and creates:
 You become the supervisor. Decompose work into tasks and spawn workers:
 
 ```bash
-nbs-worker spawn <slug> /path/to/project "Task description"
+nbs-workers spawn <slug> /path/to/project "Task description"
 ```
 
 Coordinate via chat and capture learnings.

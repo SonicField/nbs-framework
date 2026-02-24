@@ -68,7 +68,7 @@ In addition to slash commands, the framework includes C binaries:
 | `nbs-chat` | File-based messaging (non-interactive commands) |
 | `nbs-chat-terminal` | Interactive terminal client for human participation |
 | `nbs-chat-remote` | SSH proxy for remote chat access |
-| `nbs-worker` | Worker lifecycle management (spawn, monitor, dismiss) |
+| `nbs-workers` | Worker lifecycle management (spawn, monitor, dismiss) |
 | `nbs-claude` | Sidecar for Claude Code integration (poll injection, plan mode auto-select) |
 
 The dispatch design keeps one entry point (`/nbs`) while allowing context-specific verification. Run `/nbs` after discovery and it verifies the report. Run it after recovery and it reviews the work. Run it mid-session and it audits for drift.

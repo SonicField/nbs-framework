@@ -170,9 +170,9 @@ Within the dedup window, a second event with the same source and type is silentl
 | `task-complete` | worker | Worker finished her task |
 | `task-blocked` | worker | Worker cannot proceed |
 | `task-failed` | worker | Worker failed |
-| `worker-spawned` | nbs-worker | Worker created and started |
-| `worker-dismissed` | nbs-worker | Worker dismissed by supervisor |
-| `worker-died` | nbs-worker | Worker tmux session died unexpectedly |
+| `worker-spawned` | nbs-workers | Worker created and started |
+| `worker-dismissed` | nbs-workers | Worker dismissed by supervisor |
+| `worker-died` | nbs-workers | Worker tmux session died unexpectedly |
 | `chat-message` | nbs-chat | New message in a chat channel |
 | `chat-mention` | nbs-chat | Message specifically @mentioning a handle |
 | `human-input` | nbs-chat-terminal | Human posted a message |
@@ -198,9 +198,9 @@ Every `nbs-chat send` publishes a `chat-message` event to the bus (if `.nbs/even
 
 This is by design. Alex's rationale: "we can get a lot of good collaborations from listening to each other's chat." An agent working on the parser might notice a chat message about a lexer edge case and adjust her approach, without anyone needing to @mention her explicitly.
 
-## Integration with nbs-worker
+## Integration with nbs-workers
 
-`nbs-worker` lifecycle events map directly to bus events:
+`nbs-workers` lifecycle events map directly to bus events:
 
 | Worker event | Bus event type | Priority |
 |-------------|---------------|----------|
@@ -211,7 +211,7 @@ This is by design. Alex's rationale: "we can get a lot of good collaborations fr
 | Worker dismissed | `worker-dismissed` | `normal` |
 | Worker died (tmux dead, state still running) | `worker-died` | `high` |
 
-These events are published automatically by `nbs-worker` lifecycle commands. The bus directory is detected via `.nbs/events/`; if it does not exist, publishing is silently skipped.
+These events are published automatically by `nbs-workers` lifecycle commands. The bus directory is detected via `.nbs/events/`; if it does not exist, publishing is silently skipped.
 
 ## File Convention
 
@@ -267,5 +267,5 @@ Installed to `~/.nbs/bin/` by `bin/install.sh`.
 - [Coordination](../concepts/coordination.md) — Why event-driven coordination matters
 - [Bus Recovery](nbs-bus-recovery.md) — Startup, restart, and diagnosis
 - [nbs-chat](nbs-chat.md) — File-based chat (conversational layer)
-- [nbs-worker](nbs-worker.md) — Worker lifecycle management
+- [nbs-workers](nbs-workers.md) — Worker lifecycle management
 - [NBS Teams](nbs-teams.md) — Supervisor/worker pattern overview
