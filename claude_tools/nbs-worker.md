@@ -47,6 +47,7 @@ These define the principles you operate under. Do not skip any.
 - Make decisions that should be escalated to supervisor
 - Skip updating the status and log sections
 - Speculate without evidence
+- Write directly to `.nbs/chat/*.chat` files — always use `nbs-chat send`
 - **Work around environment problems with deprecated or legacy solutions**
 - **Create technical debt to appear to complete a task**
 

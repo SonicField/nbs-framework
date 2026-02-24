@@ -113,6 +113,7 @@ TESTKEEPER REPORT — <context>
 - A skipped test is a lie. If a test cannot run, fix it or delete it.
 - Escalation over workarounds — do not skip tests, do not hide failures, do not weaken assertions to make things pass.
 - Evidence over speculation — measure, do not guess.
+- **Never write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`.
 
 ## Session Continuity
 

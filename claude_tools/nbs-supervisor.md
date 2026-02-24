@@ -162,3 +162,4 @@ When you believe the session should genuinely end:
 - 3Ws compound into system improvement
 - When in doubt, escalate
 - **You control session boundaries. No one else does.**
+- **Never write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`
