@@ -59,6 +59,7 @@ For AI-as-supervisor or AI-as-worker roles:
 - [NBS Supervisor](claude_tools/nbs-supervisor.md) - Role and responsibilities for supervisor
 - [NBS Worker](claude_tools/nbs-worker.md) - Role and responsibilities for worker
 - [NBS Testkeeper](claude_tools/nbs-testkeeper.md) - Role and responsibilities for testkeeper
+- [NBS Gatekeeper](claude_tools/nbs-gatekeeper.md) - Role and responsibilities for gatekeeper
 - [NBS Teams Chat](claude_tools/nbs-teams-chat.md) - File-based AI-to-AI chat for worker coordination
 
 ### Workflow Commands
@@ -190,6 +191,8 @@ ASan builds are available per-component: `make -C src/nbs-sidecar asan`
 The `bin/` directory also contains bash scripts for user-facing tools that are not performance-critical:
 
 - `nbs-claude` — Thin wrapper (~300 lines) that launches Claude Code + nbs-sidecar
+- `nbs-sidecar-restart` — Hot-restart running sidecars to pick up new binary
+- `nbs-prompts` — Multilingual standup prompt generation
 - `nbs-remote-*` — SSH proxy tools for remote operations
 - `pty-session-lock` — Advisory locking for pty sessions
 - `nbs-chat-init` — Project initialisation

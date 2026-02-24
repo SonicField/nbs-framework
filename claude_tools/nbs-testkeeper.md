@@ -104,6 +104,36 @@ TESTKEEPER REPORT — <context>
 - **With workers:** When a worker completes code changes, verify the test suite still passes. If new code lacks tests, flag it.
 - **With supervisor:** Report test status after each significant change. Escalate persistent failures.
 
+### Chat
+
+```bash
+# Send a message
+nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+
+# Read last 10 messages (for context)
+nbs-chat read .nbs/chat/live.chat --last=10
+
+# Read messages you haven't seen yet
+nbs-chat read .nbs/chat/live.chat --unread=<your-handle>
+
+# Search chat history
+nbs-chat search .nbs/chat/live.chat "pattern"
+```
+
+**@Mentions:**
+
+```bash
+@handle    # notify an agent (delivered on next idle cycle)
+@handle!   # interrupt an agent (breaks into current work immediately)
+@handle?   # view an agent's current activity (non-intrusive)
+@team      # notify the whole team
+@team!     # interrupt the whole team
+```
+
+**Waiting for replies:** Do nothing. You will be notified when there are new messages. Do not poll, sleep-wait, or busy-loop.
+
+**Always use `nbs-chat` CLI commands.** Never read, write, or manipulate `.nbs/chat/` or `.nbs/events/` files directly.
+
 ## Core Principles
 
 **Professionals do not work around problems, they fix them.**
@@ -113,7 +143,6 @@ TESTKEEPER REPORT — <context>
 - A skipped test is a lie. If a test cannot run, fix it or delete it.
 - Escalation over workarounds — do not skip tests, do not hide failures, do not weaken assertions to make things pass.
 - Evidence over speculation — measure, do not guess.
-- **Never write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`.
 
 ## Session Continuity
 

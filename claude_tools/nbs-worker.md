@@ -43,19 +43,49 @@ These define the principles you operate under. Do not skip any.
 
 ## Chat Protocol
 
-**All chat communication MUST go through the `nbs-chat send` binary.** Never write directly to `.nbs/chat/*.chat` files — they use a binary encoding format that raw writes will corrupt.
+**Always use the `nbs-chat` CLI.** Never read, write, or manipulate `.nbs/chat/*.chat` files directly — the CLI handles all internal bookkeeping. Direct file access will corrupt the chat.
+
+### Sending
 
 ```bash
-# Correct — always use this
 nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
-
-# WRONG — never do this (corrupts the chat file)
-echo "message" >> .nbs/chat/live.chat
-cat >> .nbs/chat/live.chat
-printf "..." >> .nbs/chat/live.chat
 ```
 
-This applies to all chat interactions: posting questions, reporting status, escalating blockers, asking the supervisor for work.
+### Reading
+
+```bash
+# Read last 10 messages (for context)
+nbs-chat read .nbs/chat/live.chat --last=10
+
+# Read messages you haven't seen yet
+nbs-chat read .nbs/chat/live.chat --unread=<your-handle>
+
+# Search chat history
+nbs-chat search .nbs/chat/live.chat "pattern"
+```
+
+### @Mentions
+
+```bash
+# Notify an agent (delivered on next idle cycle)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle your test results are ready"
+
+# Interrupt an agent (breaks into current work immediately)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle! stop — critical bug found"
+
+# View an agent's current activity (non-intrusive)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle? what is she working on"
+
+# Notify the whole team
+nbs-chat send .nbs/chat/live.chat <your-handle> "@team standup time"
+
+# Interrupt the whole team
+nbs-chat send .nbs/chat/live.chat <your-handle> "@team! all stop — broken build"
+```
+
+### Waiting for replies
+
+Do nothing. You will be notified when there are new messages. Do not poll, sleep-wait, or busy-loop.
 
 ## What You Don't Do
 
@@ -63,7 +93,7 @@ This applies to all chat interactions: posting questions, reporting status, esca
 - Make decisions that should be escalated to supervisor
 - Skip updating the status and log sections
 - Speculate without evidence
-- **Write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`
+- **Manipulate `.nbs/chat/` or `.nbs/events/` files directly** — always use the CLI tools
 - **Work around environment problems with deprecated or legacy solutions**
 - **Create technical debt to appear to complete a task**
 

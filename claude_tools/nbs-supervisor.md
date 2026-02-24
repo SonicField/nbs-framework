@@ -125,10 +125,51 @@ Read `/nbs-worker` for the full contract if you need to understand what a worker
 
 Use chat for all coordination — no formal state files needed. Chat is the record; Scribe captures decisions; Pythia assesses trajectory. You work within this system, not above it.
 
-- Post terminal goal to chat
-- Post task assignments to chat
-- Post 3Ws to chat
-- Read chat for worker updates
+### Sending
+
+```bash
+nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+```
+
+### Reading
+
+```bash
+# Read last 10 messages (for context)
+nbs-chat read .nbs/chat/live.chat --last=10
+
+# Read messages you haven't seen yet
+nbs-chat read .nbs/chat/live.chat --unread=<your-handle>
+
+# Search chat history
+nbs-chat search .nbs/chat/live.chat "pattern"
+```
+
+### @Mentions
+
+```bash
+# Notify an agent (delivered on next idle cycle)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@worker your test results are ready"
+
+# Interrupt an agent (breaks into current work immediately)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@worker! stop — critical bug found"
+
+# View an agent's current activity (non-intrusive)
+nbs-chat send .nbs/chat/live.chat <your-handle> "@worker? what is she working on"
+
+# Notify the whole team
+nbs-chat send .nbs/chat/live.chat <your-handle> "@team standup time"
+
+# Interrupt the whole team
+nbs-chat send .nbs/chat/live.chat <your-handle> "@team! all stop — broken build"
+```
+
+### Waiting for replies
+
+Do nothing. You will be notified when there are new messages. Do not poll, sleep-wait, or busy-loop.
+
+### Rules
+
+- **Always use `nbs-chat` CLI commands.** Never read, write, or manipulate `.nbs/chat/` or `.nbs/events/` files directly. The CLI handles all internal bookkeeping. Direct file access will corrupt the system.
 
 ## Session Continuity
 
@@ -162,4 +203,3 @@ When you believe the session should genuinely end:
 - 3Ws compound into system improvement
 - When in doubt, escalate
 - **You control session boundaries. No one else does.**
-- **Never write directly to `.nbs/chat/*.chat` files** — always use `nbs-chat send`
