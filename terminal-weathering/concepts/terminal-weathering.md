@@ -26,147 +26,184 @@ The failure mode is predictable:
 
 The root cause is not the target language. It is the absence of evidence gates. No individual conversion was required to prove its value. The decision was made once, at the top, and everything downstream was committed before falsification could occur.
 
+But there is a subtler anti-pattern: **optimising the wrong mechanism**. Even with evidence gates, even with falsifiable hypotheses and rigorous measurement, if the intervention targets the wrong layer, the work produces correct, safe, well-measured code that does not help. The rewrite anti-pattern skips evidence. The wrong-mechanism anti-pattern skips diagnosis.
+
 ## The Metaphor
 
 Geological weathering operates on three principles that map directly:
 
-1. **Existing cracks first.** Water does not attack solid rock. It finds joints, faults, grain boundaries — places where the material is already weak. In code: call protocol paths where CPython's dispatch chain creates measurable overhead.
+1. **Existing cracks first.** Water does not attack solid rock. It finds joints, faults, grain boundaries — places where the material is already weak. In code: the specific overhead mechanisms that profiling reveals.
 
-2. **Surface inward.** Weathering works from exposed surfaces toward the interior. In code: leaf type slots first — those at the bottom of the dispatch chain — then progressively inward as evidence accumulates.
+2. **Surface inward.** Weathering works from exposed surfaces toward the interior. In code: the outermost measurable overhead first, then progressively inward as evidence accumulates.
 
-3. **Differential erosion.** Weaker material dissolves; stronger material remains. In code: some dispatch paths resist replacement because they derive genuine value from Python's dynamism. This is information, not failure.
+3. **Differential erosion.** Weaker material dissolves; stronger material remains. In code: some overhead mechanisms resist intervention because they derive genuine value from Python's dynamism. This is information, not failure.
 
-## Why C, Not Rust
+## The Research Phase
 
-Rust was the right first choice.
+Before weathering begins, the system must be characterised. The decision about *what kind of intervention to apply* is the decision that determines success or failure. Two projects demonstrated this empirically.
 
-The borrow checker provides compile-time memory safety guarantees that no other systems language offers. PyO3 provides clean Python interop. For replacing Python function bodies with compiled alternatives, Rust/PyO3 is a defensible — arguably optimal — choice.
+**PyTorch `nn.Module`**: Four leaf functions were converted to Rust via PyO3. Correctness passed (52/52, full suite 88/88). ABBA benchmarks showed no significant performance effect (mean −1.4%, p > 0.05). The speed-bump experiment revealed 30.4% QPS sensitivity at function entry — the overhead was in CPython's call protocol dispatch chain, not in function bodies. The research diagnosis was correct: dispatch engine overhead. But type slot replacement also produced no measurable whole-system effect, because `nn.Module`'s dynamism (arbitrary `__getattr__` overrides, deep MRO hierarchies, descriptor protocol interactions) is load-bearing. The correct conclusion was "stop" — this system resists acceleration at this layer. See [evidence/weathering-at-the-right-layer.md](../evidence/weathering-at-the-right-layer.md).
 
-We tried it. Four leaf functions in PyTorch's `nn.Module` and `torch.utils._pytree` were converted to Rust via PyO3. Correctness tests passed: 52/52 for the converted functions, 88/88 for the full suite. The first fusion was achieved — `_get_node_type` calling `is_namedtuple_class` directly in Rust, bypassing the Python layer entirely.
+**SOMA VM**: The same investigation was applied to SOMA's interpreter. The overhead mechanism was different: data container field access. A Rust/PyO3 extension was 6% *slower* than pure Python (PyO3's per-access safety abstractions exceeded any savings). A C extension using direct struct access was 2.06x faster — uniformly across all operations. The research phase correctly identified data containers as the target and C extension types as the approach. Subsequent dispatch optimisation (C builtins, inline caches, register fast paths) added a further 6% improvement. See [evidence/soma-weathering.md](../evidence/soma-weathering.md).
 
-Then we measured. ABBA counterbalanced QPS benchmarks showed no significant performance effect: mean −1.4%, 95% CI [−5.4%, +2.5%], t = −0.82, p > 0.05. Four compiled functions, zero measurable impact.
+The difference between these outcomes was not in the weathering methodology — both projects used the same evidence gates, falsification discipline, and measurement rigour. The difference was in the initial diagnosis. PyTorch's overhead mechanism was correctly identified but could not be profitably addressed. SOMA's overhead mechanism was correctly identified *and* successfully addressed. In both cases, the research phase produced the critical information.
 
-The speed-bump experiment explained why. Adding 1µs at every `torch_python` function entry produced 30.4% QPS sensitivity. The overhead is in the **call protocol** — the dispatch chain that routes every Python method call through type slot lookup, MRO walk, descriptor protocol, bound method creation, and frame setup — not in the function bodies that execute once the dispatch arrives.
+### The Five Steps
 
-When Python executes `m.weight` on an `nn.Module`, CPython runs this chain:
+1. **Profile.** Where is time spent? Data access, dispatch, computation, I/O? Use profiling tools appropriate to the system (`py-spy`, `perf`, `cProfile`, `tracemalloc`, `memray`). Do not hypothesise before profiling.
 
-```
-m.weight
-  → tp_getattro(m, "weight")                    # C: type slot dispatch
-    → slot_tp_getattr_hook(m, "weight")          # C: looks up __getattr__ in type dict
-      → _PyType_Lookup(Module, "__getattr__")    # C: MRO walk
-      → call_attribute(m, getattr_func, "weight")# C: descriptor protocol
-        → func_descr_get(func, m, Module)        # C: creates bound method
-        → PyObject_CallOneArg(bound, "weight")   # C: call machinery
-          → _PyEval_EvalFrame(...)               # C: frame setup
-            ┌─────────────────────────────┐
-            │  self._parameters["weight"] │      ← function body
-            │  self._buffers["weight"]    │      ← PyO3/Rust replaced this
-            │  self._modules["weight"]    │
-            └─────────────────────────────┘
-          → frame teardown                       # C: cleanup
-```
+2. **Classify.** What kind of overhead is this?
+   - *Structural*: Object model overhead — attribute access, type checking, memory layout
+   - *Dispatch*: Call protocol overhead — type slot dispatch, MRO walk, bound method creation, frame setup
+   - *Computational*: Loop body overhead — the actual work inside functions
+   - *Algorithmic*: Complexity overhead — O(n²) where O(n log n) is possible
 
-PyO3 replaces what is inside the box. The dispatch chain outside the box — which runs ~80ns versus the body's ~50ns — is untouched. Shaving the body from ~50ns to ~30ns produces a ~15% improvement on a quantity that represents 0.03% of iteration time.
+3. **Hypothesise.** "The overhead mechanism is X, because Y. Intervention Z should reduce it by approximately W." Name the expected magnitude. A hypothesis without a quantitative prediction is unfalsifiable.
 
-This is not a preference for C over Rust. It is a technical constraint: PyO3 cannot access CPython type slots. `tp_getattro`, `tp_setattro`, the slot dispatch machinery — these are CPython C API internals that PyO3 does not expose. Replacing the type slot means writing a C function and installing it directly via `PyType_Modified`, so CPython calls it with zero intermediate dispatch steps. There is no way to do this from Rust without writing the same C anyway.
+4. **Experiment.** Design a falsification experiment. Speed-bump tests, boundary-crossing benchmarks, synthetic workloads isolating the hypothesised mechanism. Run it. Let the result drive the approach, not the other way around.
 
-The Rust work was not wasted:
+5. **Select or Stop.** Select an architectural approach with a quantitative prediction. Or conclude that no intervention will help — the overhead is load-bearing, the algorithm dominates, the system resists acceleration. Both are valid outcomes. "Stop" is not failure; it is the research phase preventing wasted effort.
 
-- It validated the weathering methodology: the evidence gates, correctness-first approach, and ABBA benchmarking all worked exactly as designed.
-- It produced the 52 correctness tests that define the behavioural contract for `__getattr__`, `__delattr__`, `is_namedtuple_class`, and `_get_node_type`. Those tests are reusable regardless of implementation language.
-- It demonstrated that replacing function bodies does not address the actual bottleneck — a finding that directs all future effort to the correct layer.
-- The `fast_getattr` logic (check `_parameters`, `_buffers`, `_modules` in order, raise `AttributeError` with the correct format) translates line-for-line into C.
+### Exit Criterion
 
-A second, independent validation came from SOMA — a Python-based interpreted language. The same pattern emerged, but stronger: a Rust/PyO3 extension replacing four core VM types was **6% slower than pure Python**, because PyO3's safety abstractions (GIL token validation, borrow checking, bound/unbound conversions) added more overhead than they removed on fine-grained field access patterns. A C extension doing the same work via direct struct access and CPython API calls was **2.06x faster than Rust** — uniformly across all operation types (insert, lookup, remove, traversal), with CV < 1.3%. See [evidence/soma-weathering.md](../evidence/soma-weathering.md) for full measurements, and [evidence/weathering-at-the-right-layer.md](../evidence/weathering-at-the-right-layer.md) for the PyTorch call protocol analysis.
+Architectural approach selected with experimental evidence and a quantitative prediction documented. Or: a documented conclusion that no intervention will help, with the evidence that supports this.
 
-### C Requires Different Safety Gates
+### Falsifier
 
-Rust's borrow checker catches use-after-free, double-free, and data races at compile time. C catches none of these. The argument for Rust over C originally was precisely this: unsupervised C conversion is gambling with memory safety.
+If the first weathering cycle does not produce improvement in the predicted range, reconsider the research phase conclusion. If three consecutive weathering cycles fail to match predictions, the diagnosis is wrong — return to the research phase.
 
-That argument was correct, and it still is. The response is not to ignore the risk but to address it with different tools:
+## Architectural Patterns
 
-- **AddressSanitizer (ASan)** is mandatory during the correctness phase. Every C extension must compile and pass its test suite with ASan enabled. ASan catches heap buffer overflows, use-after-free, double-free, stack buffer overflows, and memory leaks at runtime.
-- **Memory leak analysis** is mandatory at the Assess phase. Any C extension that leaks memory under the test suite fails the evidence gate, regardless of performance.
-- **Reference count auditing** is required for all CPython API calls. Every `Py_INCREF` must have a corresponding `Py_DECREF` on every code path, including error paths.
+The following patterns emerged from empirical work. They are prior knowledge — useful for forming initial hypotheses, not for classifying systems into predetermined categories. Each new system gets its own research phase.
 
-These gates replace the compile-time guarantees that Rust provided. They are not optional extras. Without them, C conversion is precisely the unsupervised gambling that motivated choosing Rust in the first place.
+### Data Containers
 
-## The Phases
+**Pattern**: The system spends most time in object field access — reading and writing attributes on Python objects millions of times per operation.
 
-Terminal weathering is iterative, not linear. Each cycle processes one candidate through six phases.
+**Observed in**: SOMA (Cell/CellRef/Store/Register types). Data container field access dominated runtime.
+
+**Effective approach**: C extension types. Replace Python classes with C structs where field access compiles to pointer dereference instead of attribute protocol traversal. `((CellObject *)cell)->value` is one instruction; `cell.value` through Python is ~80ns of attribute lookup.
+
+**Evidence**: SOMA C extension: 2.06x faster than Rust, 1.94x faster than Python, CV < 1.3% across all operation types.
+
+### Dispatch Engines
+
+**Pattern**: The system's overhead is in call dispatch — the machinery that routes method calls through type slots, MRO, descriptor protocol, and frame setup.
+
+**Observed in**: PyTorch `nn.Module`. Call protocol dispatch dominated per-call cost (~80ns dispatch vs ~50ns body).
+
+**Effective approach**: Type slot replacement *if* the dispatch dynamism is not load-bearing. If the system relies on arbitrary `__getattr__` overrides, deep MRO hierarchies, or descriptor protocol interactions, the dispatch is doing necessary work and replacing it is not viable. The correct outcome may be "stop".
+
+**Evidence**: PyTorch — type slot replacement hypothesis was technically correct (the overhead *was* in dispatch) but practically unproductive because the dynamism was load-bearing.
+
+### Compute Kernels
+
+**Pattern**: The system spends most time in loop bodies — tight inner loops doing arithmetic, comparisons, or data transformation.
+
+**Hypothetical approach**: Body replacement via Rust/PyO3, Cython, or C. The dispatch overhead is a small fraction of total cost, so replacing the body provides direct benefit.
+
+**Evidence**: Not yet tested empirically in this methodology. The hypothesis is that systems with heavy computation and light dispatch will benefit from body replacement, but this requires experimental validation.
+
+### Algorithmic Overhead
+
+**Pattern**: The system is dominated by algorithmic complexity — O(n²) where O(n log n) is possible, or unnecessary recomputation.
+
+**Observed in**: SOMA's `remove_half` operation (O(n² log n), accounting for 96% of benchmark time at N=100).
+
+**Effective approach**: Fix the algorithm. No amount of C conversion will help when the algorithm itself is the bottleneck.
+
+**Evidence**: SOMA Phase 3 dispatch optimisation was invisible in benchmarks because `remove_half`'s O(n² log n) complexity dominated. All dispatch improvements were within noise (CV ~2%).
+
+## Layered Progression
+
+When the research phase identifies data structures as the target (the data container pattern), the weathering proceeds in layers. Each layer builds on the previous and has diminishing returns.
+
+**Layer 0 — Data Structures.** Replace Python classes with C extension types. Field access becomes pointer dereference. This is where the largest gains appear — SOMA's 2x speedup came almost entirely from this layer.
+
+**Layer 1 — API Surface Discipline.** Ensure the C extension uses fast calling conventions (`METH_FASTCALL`, direct struct access, interned strings). The right-foot `isinstance` cache demonstrated that calling convention changes alone can recover 96ns per call.
+
+**Layer 2 — Dispatch.** Replace high-frequency dispatch paths: C builtins bypassing Python method dispatch, inline caches for type checks, register fast paths. SOMA's Phase 3 achieved ~6% test suite improvement from this layer.
+
+**Layer 3 — Specialisation.** System-specific optimisations informed by accumulated evidence: GC tracking elimination for acyclic types, borrowed reference traversal in hot loops, factory functions bypassing `tp_call`. Returns are smaller and more context-dependent.
+
+Each layer has its own evidence gate. Diminishing returns are expected and acceptable — the question is whether the marginal benefit justifies the marginal complexity.
+
+## The Weathering Phases
+
+Terminal weathering is iterative, not linear. Each cycle processes one candidate through six phases, parameterised by the research phase output.
 
 ### Survey
 
-Identify existing cracks. Not "what could be C" but "what is actually hurting."
+Identify existing cracks within the domain the research phase identified. The survey targets what the research phase found — data container access paths if the pattern is structural, dispatch chains if the pattern is dispatch, loop bodies if the pattern is computational.
 
-- Profile performance: CPU hotspots, latency distributions
-- Profile the call protocol: identify high-hit-count dispatch chains
-- Map type slot usage; identify which slots route the most calls
-- Identify code already marked problematic or scheduled for refactor
+**Exit criterion**: Ranked list of candidates with quantified overhead.
 
-**Exit criterion**: Ranked list of call protocol paths with quantified overhead.
-
-**Falsifier**: If no measurable overhead exists in the dispatch chain, stop. There is nothing to weather.
+**Falsifier**: If no measurable overhead exists in the identified domain, stop. There is nothing to weather.
 
 ### Expose
 
-Select a single candidate from the ranked list. It must be:
+Select a single candidate from the ranked list. It must be a leaf — a unit of work whose replacement does not depend on other unreplaced units. What constitutes a "leaf" depends on the approach: a leaf type for data containers, a leaf type slot for dispatch engines, a leaf function for compute kernels.
 
-- A leaf type slot — one whose replacement does not depend on other slot replacements
-- Measurably problematic — not "might be slow" but "is slow, here is the dispatch trace"
-- Small enough to convert in one verification cycle
+**Exit criterion**: Single candidate selected with baseline measurements recorded.
 
-**Exit criterion**: Single type slot selected with baseline measurements recorded.
-
-**Falsifier**: If the candidate cannot be isolated as a leaf slot, it is not ready. Decompose further or choose another.
+**Falsifier**: If the candidate cannot be isolated as a leaf, it is not ready. Decompose further or choose another.
 
 ### Weather
 
 Apply the verification cycle to the selected candidate:
 
-1. **Design**: C implementation replacing the type slot directly against CPython's type API
-2. **Plan**: Identify what could go wrong — reference counting errors, GIL interactions, MRO invalidation, descriptor protocol violations
+1. **Design**: Implementation replacing the target at the layer identified by the research phase
+2. **Plan**: Identify what could go wrong — the risks depend on the approach (reference counting for C, ownership for Rust, semantic drift for any replacement)
 3. **Deconstruct**: Break into testable steps
-4. **Test**: Write tests exercising the Python API through the C backend; write benchmarks; compile and test with ASan enabled
-5. **Code**: Implement the C extension; install the replacement slot via `PyType_Modified`; the Python layer remains until proven redundant
-6. **Document**: Record baseline versus post-conversion measurements; record ASan and leak analysis results
+4. **Test**: Write tests exercising the Python API through the replacement backend; write benchmarks; apply safety gates appropriate to the approach
+5. **Code**: Implement the replacement; the Python layer remains until proven redundant
+6. **Document**: Record baseline versus post-conversion measurements
 
-**Exit criterion**: Tests pass (including under ASan), benchmarks collected, Python API unchanged, no memory leaks detected.
+**Exit criterion**: Tests pass, safety gates clean, benchmarks collected, Python API unchanged.
 
-**Falsifier**: "This slot replacement provides measurable benefit" — attempt to falsify by benchmarking under realistic load, testing edge cases the Python dispatch handled implicitly, and measuring total system impact rather than isolated slot performance.
+**Falsifier**: "This replacement provides measurable benefit" — attempt to falsify by benchmarking under realistic load, testing edge cases the Python implementation handled implicitly, and measuring total system impact rather than isolated component performance.
 
 ### Assess
 
 The evidence gate. Three outcomes, no others:
 
-1. **Benefit confirmed**: Measurements show improvement beyond noise. ASan clean. No leaks. Mark conversion as permanent. Proceed.
+1. **Benefit confirmed**: Measurements show improvement beyond noise. Safety gates clean. Mark conversion as permanent. Proceed.
 2. **Benefit unclear**: Measurements are ambiguous. More data needed. Do not proceed until resolved.
-3. **Benefit falsified**: Measurements show no improvement, or regression, or memory safety violations. Revert. Document what was learned.
+3. **Benefit falsified**: Measurements show no improvement, or regression, or safety violations. Revert. Document what was learned.
 
-Outcome 3 is not failure. It is the methodology working. A reverted conversion that taught us "this dispatch path resists replacement because of X" is more valuable than a committed conversion nobody measured.
+Outcome 3 is not failure. It is the methodology working. A reverted conversion that taught us "this target resists replacement because of X" is more valuable than a committed conversion nobody measured.
 
 **Falsifier**: If we cannot distinguish outcomes 1–3 with evidence, our measurement methodology is wrong. Fix that before proceeding with any conversion.
 
 ### Advance
 
-With proven slot replacements, the next layer becomes accessible:
+With proven replacements, the next layer becomes accessible:
 
-- Former near-leaf slots may now be leaves, their dependencies already replaced
-- Patterns emerge: which types of slot replacement yield benefit, which do not
+- New candidates may now be leaves, their dependencies already replaced
+- Patterns emerge: which types of replacement yield benefit, which do not
 - Rules of thumb develop — but each conversion still passes its own evidence gate
 
-No blanket rules. "Attribute access slots convert well" is a hypothesis to test per candidate, not a policy to apply wholesale.
-
-**Exit criterion**: Next candidate selected based on updated slot dependency map and accumulated evidence.
+**Exit criterion**: Next candidate selected based on updated dependency map and accumulated evidence.
 
 ### Fuse
 
-When sufficient contiguous slot coverage exists within a type, consider removing the Python layer entirely. This is a separate verification cycle with its own evidence gate.
+When sufficient contiguous coverage exists within a type or module, consider removing the Python layer entirely. This is a separate verification cycle with its own evidence gate.
 
 Risks specific to fusion: Python-side consumers, dynamic dispatch, monkey-patching in test fixtures, implicit interface contracts, subclass slot inheritance.
 
 **Falsifier**: "Removing the Python layer does not break any consumer" — test exhaustively. If any consumer breaks, the Python layer remains.
+
+## C Safety Gates
+
+When the research phase selects C extension types as the approach, additional safety gates apply. C lacks Rust's compile-time memory safety. The response is not to ignore the risk but to address it with different tools:
+
+- **AddressSanitizer (ASan)** is mandatory during the correctness phase. Every C extension must compile and pass its test suite with ASan enabled. ASan catches heap buffer overflows, use-after-free, double-free, stack buffer overflows, and memory leaks at runtime.
+- **Memory leak analysis** is mandatory at the Assess phase. Any C extension that leaks memory under the test suite fails the evidence gate, regardless of performance.
+- **Reference count auditing** is required for all CPython API calls. Every `Py_INCREF` must have a corresponding `Py_DECREF` on every code path, including error paths.
+
+These gates replace the compile-time guarantees that Rust provides. They are not optional extras. Without them, C conversion is precisely the unsupervised gambling that motivates choosing Rust.
+
+See `concepts/c-extension-performance.md` for the full C extension cost model and calling convention discipline.
 
 ## The Trust Gradient
 
@@ -185,26 +222,26 @@ Terminal weathering defines four oversight levels, ordered from tightest to loos
 
 **Transitions are reversible.** A single conversion where oversight level was insufficient — the human discovers a problem the evidence gate missed — reverts the level. Trust is slow to build and fast to lose.
 
-**The gradient applies per conversion type, not globally.** Attribute access slot conversions may earn Gate level while call protocol slots remain at Tight. Each domain of conversion builds its own trust independently.
+**The gradient applies per conversion type, not globally.** Attribute access conversions may earn Gate level while call protocol conversions remain at Tight. Each domain of conversion builds its own trust independently.
 
 ## NBS Alignment
 
-Terminal weathering is not a new methodology. It is the existing NBS pillars applied to call protocol optimisation.
+Terminal weathering is not a new methodology. It is the existing NBS pillars applied to hypothesis-driven performance optimisation.
 
 | Pillar | Application |
 |--------|-------------|
 | Goals | The terminal goal is system improvement. Language replacement is instrumental. If the system is not measurably better, the conversion has no purpose |
-| Falsifiability | Each conversion carries "this slot replacement provides measurable benefit" as a falsifiable claim. The Assess phase exists to attempt falsification |
-| Rhetoric | "C is faster" is Ethos. "Replacing `tp_getattro` on `Module` reduces attribute access from 130ns to 50ns under production load" is Logos. Only the second is acceptable as evidence |
-| Bullshit Detection | Report failed conversions. Report ambiguous results. Report ASan findings. A conversion log showing 100% success rate is either dishonest or insufficiently ambitious |
-| Verification Cycle | Each conversion is one full cycle: Design, Plan, Deconstruct, Test, Code, Document. ASan and leak analysis are part of Test. No shortcuts |
+| Falsifiability | Each conversion carries a falsifiable claim. The research phase has its own falsifier (prediction must match first cycle results). The Assess phase exists to attempt falsification |
+| Rhetoric | "C is faster" is Ethos. "Replacing data container field access with C struct dereference reduces per-access cost from 80ns to 2ns under production load" is Logos. Only the second is acceptable as evidence |
+| Bullshit Detection | Report failed conversions. Report ambiguous results. Report safety gate findings. A conversion log showing 100% success rate is either dishonest or insufficiently ambitious |
+| Verification Cycle | Each conversion is one full cycle: Design, Plan, Deconstruct, Test, Code, Document. Safety gates are part of Test. No shortcuts |
 | Zero-Code Contract | The Engineer selects targets and defines "benefit". The Machinist implements and reports evidence. Neither trusts the other's assertions |
 
 ## NBS Teams Integration
 
 For codebases at scale — millions of lines — terminal weathering maps onto the supervisor/worker pattern:
 
-**Supervisor** maintains the ranked candidate list, assigns individual conversions to workers, aggregates evidence across conversions, detects cross-conversion patterns, and holds the evidence gates. The Supervisor decides whether a conversion passes the Assess phase — workers report, they do not adjudicate.
+**Supervisor** maintains the research phase output, the ranked candidate list, assigns individual conversions to workers, aggregates evidence across conversions, detects cross-conversion patterns, and holds the evidence gates. The Supervisor decides whether a conversion passes the Assess phase — workers report, they do not adjudicate. The research phase is supervisor-led; workers are not spawned until an approach is selected.
 
 **Workers** execute individual verification cycles. One conversion per worker. Each worker operates on an isolated branch, runs the full Weather phase, and returns evidence to the Supervisor.
 
@@ -212,14 +249,16 @@ The trust gradient applies at the Supervisor level. As evidence accumulates, the
 
 ## The Practical Questions
 
-1. What is actually hurting? Can I point to a dispatch trace, a slot hit count — not a hunch?
-2. Is this candidate a leaf slot? If not, what must be replaced first?
-3. What would prove this slot replacement does not help? Have I tried to prove it?
-4. Am I converting because of evidence, or because "C is faster" and I have not questioned that?
-5. What oversight level has this type of conversion earned? What evidence supports that level?
-6. What failed conversions have I documented? What did they teach me?
-7. Have I run ASan and leak analysis? What did they find?
-8. Does the Rust-to-C journey apply here, or am I pattern-matching from a different context?
+1. What is the overhead mechanism? Can I point to a profile, a benchmark, a measurement — not a hunch?
+2. What kind of overhead is this? Structural, dispatch, computational, algorithmic?
+3. What intervention does the evidence support? C extension types, type slot replacement, body replacement, algorithm change, or "stop"?
+4. Is this candidate a leaf? If not, what must be replaced first?
+5. What would prove this replacement does not help? Have I tried to prove it?
+6. Am I converting because of evidence, or because "C is faster" and I have not questioned that?
+7. What oversight level has this type of conversion earned? What evidence supports that level?
+8. What failed conversions have I documented? What did they teach me?
+9. Have I run the appropriate safety gates? What did they find?
+10. Does the research phase prediction match my results? If not, should I reconsider the diagnosis?
 
 ---
 
