@@ -441,14 +441,25 @@ All 22 benchmarks from the original sweep completed without crash in both condit
 
 **Fix applied by generalist (10:00 UTC).** Three files changed on devgpu004: `frame.cpp`, `frame.h`, `gen_asm.cpp`. The fix moves `updatePrevInstr` to `prepareForDeopt`, called ONCE before `reifyLightweightFrames` while all frames still have JIT reifiers.
 
-### Phase 2 Gate Status (gatekeeper, 10:18 — CONDITIONAL PASS)
+### Phase 2 Gate Status (gatekeeper, 10:30 — CONDITIONAL PASS, regression cleared)
 
 | Gate | Status | Evidence |
 |------|--------|----------|
 | 1. Crash gate | **PASS** | generalist 2×2 matrix ALL PASS + richards_full smoke test (spec ON + inliner ON, returns 1) |
 | 2. Correctness gate | **PASS** | 80/80 spec opcode tests PASS (testkeeper, 10:08). 22/23 output validation PASS (10:15). Bug C (spec OFF crash) is non-target config. |
-| 3. Performance gate | AWAITING | Needs clean rebuild + ABBA sweep. Prediction: 22 monomorphic benchmarks improve, richards_full regresses under auto-JIT (accepted limitation). |
+| 3. Performance gate | AWAITING | Clean rebuild confirmed. Regression concern CLEARED (testkeeper 10:30). ABBA sweep can proceed. |
 | 4. Document gate | AWAITING | Results to be documented after sweep. |
+
+**Regression concern RESOLVED (testkeeper, 10:30):** Force_compile timing on devgpu004 (same machine as Run 1) with reification fix:
+
+| Config | Time (ms) | Delta |
+|--------|----------|-------|
+| Spec OFF + Inliner OFF | 34.79 | baseline |
+| Spec ON + Inliner OFF | 34.24 | -1.6pp |
+| Spec OFF + Inliner ON | 34.03 | -2.2pp |
+| Spec ON + Inliner ON | 36.10 | +3.8pp |
+
+N_ITER=1000, N_WARMUP=5, N_RUNS=5, median. All configs ~34-36ms. No regression from the reification fix. Supervisor's 420ms was auto-JIT (44k deopts/iteration), not force_compile — the comparison to Run 1's 225ms was a methodology mismatch, not a regression.
 
 ### Phase 2 Correctness (testkeeper, 10:08)
 
@@ -464,8 +475,9 @@ Config: PYTHONJIT=1, inliner enabled (default). Reification fix does NOT break a
 
 ### Pending
 
-- Supervisor: clean rebuild on devgpu-arm3 (removing diagnostic JIT_LOG lines)
+- Supervisor: ~~clean rebuild on devgpu-arm3~~ DONE (10:23)
 - ~~Testkeeper: 23/23 output validation with inliner ON~~ DONE (22/23 PASS, see Bug C below)
+- ~~Regression test~~ DONE (testkeeper 10:30 — NO REGRESSION, force_compile ~34ms all configs)
 - After clean rebuild: gate-quality ABBA performance sweep (spec ON + inliner ON) → Run 4
 
 ### Phase 2 Output Validation (testkeeper, 10:15)
