@@ -141,10 +141,17 @@ mkdir -p "$CLAUDE_COMMANDS_DIR"
 
 # Remove stale skill names from prior installs
 for stale in nbs-teams-supervisor.md nbs-teams-worker.md; do
+    # Remove from processed templates
+    stale_processed="$PREFIX/commands/$stale"
+    if [[ -e "$stale_processed" ]]; then
+        rm "$stale_processed"
+        echo "  Removed stale template: $stale"
+    fi
+    # Remove from installed commands
     stale_path="$CLAUDE_COMMANDS_DIR/$stale"
     if [[ -e "$stale_path" || -L "$stale_path" ]]; then
         rm "$stale_path"
-        echo "  Removed stale: /$stale"
+        echo "  Removed stale command: /$stale"
     fi
 done
 
