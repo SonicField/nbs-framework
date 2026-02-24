@@ -210,7 +210,7 @@ Mentioning another agent by handle in a chat message triggers the sidecar event 
 |--------|-----------|----------|--------|
 | `@handle` | `chat-mention` | high | The target agent's sidecar queues a `/nbs-notify` with the mention on the next idle cycle. Non-urgent. |
 | `@handle!` | `chat-interrupt` | critical | The target agent's sidecar sends Escape keys to interrupt the current tool call, then injects `/nbs-notify`. Use when the agent is stuck or you need immediate attention. |
-| `@handle?` | `chat-query` | high | The target agent's sidecar captures its own tmux pane (100 lines), strips ANSI escapes, and posts the content to chat. Use to see what another agent is currently doing without interrupting her. |
+| `@handle?` | `chat-query` | high | The target agent's sidecar captures its own tmux pane (bottom 32 lines), strips ANSI escapes and control characters, and posts the content to chat. Use to see what another agent is currently doing without interrupting her. |
 
 ### Usage examples
 
