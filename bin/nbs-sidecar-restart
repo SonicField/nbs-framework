@@ -1,0 +1,130 @@
+#!/bin/bash
+# nbs-sidecar-restart — Hot-restart sidecar processes without killing agents.
+#
+# Usage:
+#   nbs-sidecar-restart              # restart all running sidecars
+#   nbs-sidecar-restart <handle>     # restart just one sidecar
+#
+# Reads each sidecar's command line from /proc, strips --initial-prompt
+# (to prevent re-injection into an already-running agent), kills the old
+# process, and launches a new one with the updated binary.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TARGET_HANDLE="${1:-}"
+
+if [[ "${TARGET_HANDLE}" == "--help" || "${TARGET_HANDLE}" == "-h" ]]; then
+    echo "Usage: $(basename "$0") [handle]"
+    echo ""
+    echo "Hot-restart nbs-sidecar processes to pick up new binary code."
+    echo "Agents (Claude sessions) are not affected."
+    echo ""
+    echo "  handle    Restart only the sidecar for this handle (optional)."
+    echo "            If omitted, restarts all running sidecars."
+    exit 0
+fi
+
+# Discover running sidecars
+PIDS=$(pgrep -f 'nbs-sidecar.*--handle=' 2>/dev/null || true)
+
+if [[ -z "$PIDS" ]]; then
+    echo "No running sidecars found."
+    exit 0
+fi
+
+RESTARTED=0
+FAILED=0
+
+for pid in $PIDS; do
+    # Read full command line from /proc (NUL-separated)
+    if [[ ! -r "/proc/$pid/cmdline" ]]; then
+        continue
+    fi
+
+    # Parse arguments from NUL-separated cmdline
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+
+    # Extract handle from arguments
+    HANDLE=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            --handle=*)
+                HANDLE="${arg#--handle=}"
+                ;;
+        esac
+    done
+
+    if [[ -z "$HANDLE" ]]; then
+        echo "SKIP: PID $pid — could not extract handle"
+        continue
+    fi
+
+    # If targeting a specific handle, skip others
+    if [[ -n "$TARGET_HANDLE" && "$HANDLE" != "$TARGET_HANDLE" ]]; then
+        continue
+    fi
+
+    # Reconstruct args, stripping --initial-prompt and resolving binary path
+    NEW_ARGS=()
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            --initial-prompt=*)
+                # Skip — do not re-inject into running agent
+                ;;
+            */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar)
+                # Use the current binary from bin/
+                NEW_ARGS+=("${SCRIPT_DIR}/nbs-sidecar")
+                ;;
+            *)
+                NEW_ARGS+=("$arg")
+                ;;
+        esac
+    done
+
+    # Kill old sidecar
+    echo -n "Restarting $HANDLE (PID $pid)... "
+    kill "$pid" 2>/dev/null || true
+    # Wait for process to die (up to 3s)
+    for i in 1 2 3 4 5 6; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+    done
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "FAIL — old process did not die"
+        FAILED=$((FAILED + 1))
+        continue
+    fi
+
+    # Launch new sidecar
+    "${NEW_ARGS[@]}" &
+    NEW_PID=$!
+    disown "$NEW_PID" 2>/dev/null || true
+
+    # Verify it started
+    sleep 0.5
+    if kill -0 "$NEW_PID" 2>/dev/null; then
+        echo "$pid → $NEW_PID"
+        RESTARTED=$((RESTARTED + 1))
+    else
+        echo "FAIL — new process died immediately"
+        FAILED=$((FAILED + 1))
+    fi
+
+    # Stagger restarts
+    sleep 1
+done
+
+echo ""
+echo "Restarted: $RESTARTED  Failed: $FAILED"
+
+if [[ -n "$TARGET_HANDLE" && $RESTARTED -eq 0 && $FAILED -eq 0 ]]; then
+    echo "No sidecar found for handle: $TARGET_HANDLE"
+    exit 1
+fi
+
+exit "$FAILED"
