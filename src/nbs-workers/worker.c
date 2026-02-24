@@ -1005,8 +1005,14 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Allow shell to initialise */
     sleep(2);
 
-    /* Send the initial Claude command */
-    tmux_send_keys(session, "claude --dangerously-skip-permissions", 1);
+    /* Send the initial Claude command with NBS_HANDLE for sidecar identity */
+    {
+        char launch_cmd[PATH_BUF_SIZE];
+        snprintf(launch_cmd, sizeof(launch_cmd),
+                 "NBS_HANDLE=%s bin/nbs-claude --dangerously-skip-permissions",
+                 name);
+        tmux_send_keys(session, launch_cmd, 1);
+    }
 
     /* Allow Claude to start */
     sleep(3);
