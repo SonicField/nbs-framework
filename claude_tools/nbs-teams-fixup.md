@@ -47,7 +47,7 @@ Classify the state using these heuristics:
 | `bypass permissions on` at bottom, no spinner | **Stalled on modal** | Normal | Level 1 (Enter) |
 | `Context left until auto-compact: 15-25%` | **Context low** | Moderate | Level 2 (Compact) |
 | `Context left until auto-compact: 10-15%` | **Context critical** | High | Level 2 (Compact), then assess |
-| `Context left until auto-compact: <10%` | **Zombie** | Terminal | Level 4 (Hard restart) — see zombie rules below |
+| `Context left until auto-compact: <10%` | **Zombie** | Terminal | Level 2 first (try compact), then Level 4 if no response |
 | Input accepted but no output for >30s | **Zombie (silent)** | Terminal | Check context %, follow zombie rules |
 | Repeated empty `/nbs-poll` or `/nbs-notify` responses | **Poll-burning** | High | Level 2 (Compact) |
 | Process exited / bash prompt visible | **Dead** | N/A | Level 4 (Hard restart) |
@@ -59,23 +59,25 @@ Three distinct zombie failure modes, each requiring different treatment:
 
 **(a) Recoverable zombie (10-15% context):** Agent accepts input, may produce partial output or none. Ctrl-C clears any stuck request. `/compact` can free enough context to restore function. Try Level 2.
 
-**(b) Unresponsive zombie (<10% context):** Agent cannot process ANY commands — not even `/compact` or `/exit`. Commands concatenate on the input line without being processed. The API call either silently fails or times out. Skip directly to Level 4.
+**(b) Low-context zombie (<10% context):** Agent may or may not process commands. Always try Level 2 first — `/compact` costs seconds and may succeed. If compact does not respond within 30 seconds or context does not improve, escalate to Level 4.
 
-**(c) Compaction floor zombie (10-15% context, compact does not reduce):** Agent at her compaction floor — the summarised session + skills + system context fill ~85-90% of the window. `/compact` runs but context percentage does not decrease. `--resume` will reload the same bloated session. Skip directly to Level 4.
+**(c) Compaction floor zombie (10-15% context, compact does not reduce):** Agent at her compaction floor — the summarised session + skills + system context fill ~85-90% of the window. `/compact` runs but context percentage does not decrease. `--resume` will reload the same bloated session. Escalate to Level 4.
 
 **Note on thresholds:** The context percentages above (10%, 15%) are empirical observations from 16-17 Feb 2026, not guaranteed boundaries. They may vary by model, session complexity, and loaded skills. Treat them as heuristics and adjust based on observed behaviour.
 
 **Decision tree for zombie states:**
 
 ```
-Is context < 10%?
-  YES → Level 4 (agent cannot process commands)
+Is the process dead (bash prompt, session exited)?
+  YES → Level 4 (nothing to compact)
   NO → Try Level 2 (Ctrl-C + /compact)
-         Did compact reduce context below 80%?
-           YES → Agent recovered, monitor
-           NO → Is this the compaction floor?
-                   YES → Level 4 (--resume is a trap)
-                   NO → Try Level 3 (--resume)
+        Wait 30s. Did the agent respond?
+          NO → Level 4 (truly unresponsive)
+          YES → Did compact improve context?
+                  YES → Agent recovered, monitor
+                  NO → Is this the compaction floor?
+                          YES → Level 4 (--resume is a trap)
+                          NO → Try Level 3 (--resume)
 ```
 
 ### Step 3: Report

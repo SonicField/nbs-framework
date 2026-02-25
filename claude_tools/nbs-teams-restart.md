@@ -119,8 +119,9 @@ Level 4 (Hard restart): kill, respawn fresh
 - Do NOT batch compacts — each compact needs monitoring to assess if it helped
 
 **Context-based shortcuts** (from /nbs-teams-fixup zombie classification):
-- Context <10%: skip to Level 4 — agent cannot process commands
-- Context at compaction floor (10-15% after compact, no improvement): skip to Level 4
+- Process dead (bash prompt, session exited): skip to Level 4
+- Low context (<10%): try Level 2 first (compact costs seconds), escalate to Level 4 if no response within 30s
+- Context at compaction floor (10-15% after compact, no improvement): escalate to Level 4
 - Session metadata available (`.nbs/sessions/<handle>.json`): use `nbs-workers continue <handle>` for Level 3
 - Session started without --resume and no session metadata: skip Level 3
 
