@@ -73,6 +73,17 @@ for pid in $PIDS; do
         continue
     fi
 
+    # Skip infrastructure handles — these are ephemeral workers, not
+    # persistent team agents. Restarting them is pointless (they should
+    # exit on their own) or harmful (creates duplicate workers).
+    case "$HANDLE" in
+        pythia*|shepard*|fixup*)
+            echo "SKIP: $HANDLE (PID $pid) — infrastructure, not a team agent"
+            continue
+            ;;
+    esac
+    fi
+
     # Reconstruct args, stripping --initial-prompt and resolving binary path
     NEW_ARGS=()
     for arg in "${ARGS[@]}"; do
