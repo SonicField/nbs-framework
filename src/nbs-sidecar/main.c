@@ -234,12 +234,24 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Build default initial prompt if not set */
+    /* Build initial prompt: always include handle announcement.
+     * If NBS_INITIAL_PROMPT is set, prepend the handle to it.
+     * If not set, use the default handle + chat skill prompt. */
     if (cfg.initial_prompt[0] == '\0') {
         snprintf(cfg.initial_prompt, sizeof(cfg.initial_prompt),
                  "Your NBS handle is '%s'. Load /nbs-teams-chat. "
                  "Use this handle for all nbs-chat send commands.",
                  cfg.handle);
+    } else {
+        /* Prepend handle announcement to custom initial prompt */
+        char tmp[SIDECAR_MAX_PROMPT];
+        int n = snprintf(tmp, sizeof(tmp),
+                 "Your NBS handle is '%s'. %s",
+                 cfg.handle, cfg.initial_prompt);
+        if (n >= 0 && (size_t)n < sizeof(tmp)) {
+            memcpy(cfg.initial_prompt, tmp, (size_t)n + 1);
+        }
+        /* If truncated, keep the original — better than losing it */
     }
 
     /* Redirect stderr to log file if specified */
