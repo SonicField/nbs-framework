@@ -64,6 +64,7 @@ For AI-as-supervisor or AI-as-worker roles:
 - [NBS Worker](claude_tools/nbs-worker.md) - Role and responsibilities for worker
 - [NBS Testkeeper](claude_tools/nbs-testkeeper.md) - Role and responsibilities for testkeeper
 - [NBS Gatekeeper](claude_tools/nbs-gatekeeper.md) - Role and responsibilities for gatekeeper
+- [NBS Theologian](claude_tools/nbs-theologian.md) - Role and responsibilities for theologian (theory and architecture)
 - [NBS Teams Chat](claude_tools/nbs-teams-chat.md) - File-based AI-to-AI chat for worker coordination
 
 ### Workflow Commands
