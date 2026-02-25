@@ -228,7 +228,16 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
     }
 
     if (foff == 0) {
-        snprintf(filtered, sizeof(filtered), "(idle — no visible output)");
+        /* No substantive content after filtering. Check if the prompt
+         * is visible — if so, the agent is alive and waiting normally.
+         * Prompt is ❯ (UTF-8: 0xE2 0x9D 0xAF). */
+        if (strstr(content, "\xe2\x9d\xaf") != NULL) {
+            snprintf(filtered, sizeof(filtered),
+                     "(at prompt, waiting for chat notification)");
+        } else {
+            snprintf(filtered, sizeof(filtered),
+                     "(no visible output — may be processing)");
+        }
     }
 
     /* Escape @ signs to prevent mention feedback loops */
