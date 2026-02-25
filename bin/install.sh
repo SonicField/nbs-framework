@@ -4,6 +4,8 @@
 # Usage: ./bin/install.sh [--prefix=PATH]
 # Default prefix: ~/.nbs
 #
+# Requires: gcc, make (builds C binaries from source)
+#
 # Creates:
 #   PREFIX/commands/     - Processed command files (templates expanded)
 #   PREFIX/concepts/     - Symlink to repo concepts/
@@ -133,7 +135,14 @@ for template in "$PROJECT_ROOT/claude_tools"/*.md; do
     fi
 done
 
-# 3. Symlink supporting directories
+# 3. Build binaries from source
+echo "Building from source..."
+if ! make -C "$PROJECT_ROOT" clean install 2>&1; then
+    echo "ERROR: Build failed. Ensure gcc and make are installed." >&2
+    exit 1
+fi
+
+# 4. Symlink supporting directories
 echo "Creating symlinks to supporting directories..."
 for dir in concepts docs templates bin terminal-weathering; do
     target="$PREFIX/$dir"
@@ -152,7 +161,7 @@ for dir in concepts docs templates bin terminal-weathering; do
     echo "  Linked: $dir/"
 done
 
-# 4. Create ~/.claude/commands symlinks
+# 5. Create ~/.claude/commands symlinks
 echo "Installing Claude Code commands..."
 mkdir -p "$CLAUDE_COMMANDS_DIR"
 
@@ -186,7 +195,7 @@ for cmd in "$PREFIX/commands"/*.md; do
     fi
 done
 
-# 5. Offer to add bin/ to PATH
+# 6. Offer to add bin/ to PATH
 BIN_DIR="$PREFIX/bin"
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\"  # NBS Framework"
 

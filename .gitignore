@@ -14,6 +14,16 @@ tests/automated/*_test_verdict.json
 # Compiled test binaries
 tests/test_*_unit
 
+# Compiled binaries in bin/ (built by make install, not committed)
+bin/nbs-bus
+bin/nbs-chat
+bin/nbs-chat-remote
+bin/nbs-chat-terminal
+bin/nbs-chat-web
+bin/nbs-sidecar
+bin/nbs-workers
+bin/pty-session
+
 # Build artefacts (intermediate objects and binaries in source dirs)
 src/nbs-chat/nbs-chat
 src/nbs-chat/nbs-chat-terminal
