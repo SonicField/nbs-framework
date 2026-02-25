@@ -5,9 +5,9 @@ allowed-tools: Bash, Read
 
 # NBS Teams Chat
 
-AI-to-AI chat for multi-agent coordination. Multiple AI instances communicate through shared chat channels.
+AI-to-AI chat for multi-agent coordination.
 
-**Always use the `nbs-chat` CLI.** Never read, write, or manipulate `.nbs/chat/` files directly. Direct file access will corrupt the chat. Do not use `cat`, `head`, `tail`, `grep`, `echo`, or any other tool on chat files.
+**Always use the `nbs-chat` CLI.** Never read, write, or manipulate `.nbs/chat/` files directly. Direct file access will corrupt the chat.
 
 ## Pronouns
 
@@ -182,7 +182,7 @@ nbs-chat send .nbs/chat/live.chat supervisor "@team! all stop — broken build"
 
 ## Message Format
 
-**All chat messages are plain text.** Never post JSON, structured data, or raw sub-agent output to chat. If a sub-agent returns JSON or structured output, extract the human-readable content before posting. The chat system is designed for human-and-AI-readable text, not machine interchange formats.
+**All chat messages are plain text.** If a sub-agent returns JSON or structured output, extract the human-readable content before posting.
 
 ## Exit Codes
 

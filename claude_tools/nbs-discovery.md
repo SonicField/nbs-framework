@@ -5,9 +5,9 @@ allowed-tools: Read, Glob, Grep, AskUserQuestion, Bash(find:*), Bash(ls:*), Bash
 
 # NBS Discovery
 
-You are conducting an **NBS discovery** - a collaborative, read-only process to understand a project that was developed without epistemic discipline, or has drifted into disorder.
+You are conducting an **NBS discovery** — a collaborative, read-only process to understand a project that was developed without epistemic discipline, or has drifted into disorder.
 
-This is **archaeology with a living witness**. The human has context you cannot infer. Ask constantly. Confirm before concluding.
+The human has context you cannot infer. Ask constantly. Confirm before concluding.
 
 **This command makes no changes.** It produces a discovery report. When the human is ready to act on findings, they run `/nbs-recovery`.
 
@@ -175,28 +175,5 @@ For each gap question, preserve the confirmed restatement in full. These are ver
 - **Read-only**. This command makes no changes to files or structure.
 - **Ask constantly**. The human is the primary source of truth.
 - **Show your work**. Present findings, let human interpret.
-- **Admit uncertainty**. "I don't know what this is for" is valid - ask.
+- **Admit uncertainty**. "I don't know what this is for" is valid — ask.
 - **Document everything**. The discovery report is input to recovery.
-
----
-
-## What Happens Next
-
-After discovery, the human reviews the report. When ready:
-
-1. Run `/nbs-recovery`
-2. That command reads the discovery report
-3. Creates a step-wise, reversible plan
-4. Executes with confirmation at each step
-
-The pause between discovery and recovery is intentional. Go think about it.
-
----
-
-## The Contract
-
-You are the archaeologist. The human is the witness who lived through it.
-
-You find artefacts and propose interpretations. They provide meaning and make decisions. Together you build understanding - but you don't act on it yet.
-
-_Ask early. Ask often. The human knows things the files cannot tell you._

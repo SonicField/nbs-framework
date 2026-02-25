@@ -5,7 +5,7 @@ allowed-tools: Bash, Read
 
 # NBS Poll
 
-Lightweight periodic check of active chats and workers. Designed to be injected automatically by `nbs-claude` when idle, but can also be invoked manually.
+Lightweight periodic check of active chats and workers. Designed to be injected automatically by `nbs-claude` when idle. Can also be invoked manually.
 
 ## Notification Model
 
@@ -14,7 +14,7 @@ The poll is a **safety net**, not the primary notification mechanism. The bus ha
 - **Bus** (primary): event-driven, immediate. The sidecar can detect pending events and inject notifications between tool calls.
 - **Poll** (safety net): periodic, every 5 minutes of idle time. Scans all known resources. Catches what the bus missed.
 
-The sidecar injects `/nbs-poll` as a safety net after extended idle (default 5 minutes). For event-driven notifications, see `/nbs-notify`. The sidecar checks the bus and chat cursors directly every few seconds and injects `/nbs-notify` when events or messages are pending — `/nbs-poll` only fires as a fallback.
+The sidecar injects `/nbs-poll` as a safety net after extended idle (default 5 minutes). For event-driven notifications, see `/nbs-notify`. The sidecar checks the bus and chat cursors directly every few seconds and injects `/nbs-notify` when events or messages are pending. `/nbs-poll` only fires as a fallback.
 
 ## Behaviour
 

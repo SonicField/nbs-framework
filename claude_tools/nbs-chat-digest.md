@@ -5,7 +5,7 @@ allowed-tools: Bash, Read, Write
 
 # NBS Chat Digest
 
-Extract structured learnings from `.chat` files. Produces a sanitised summary safe to commit or share — no sensitive data (paths, handles, credentials) in the output.
+Extract structured learnings from `.chat` files. Produces a sanitised summary safe to commit or share — no sensitive data in the output.
 
 ## When to Use
 
@@ -131,6 +131,6 @@ If no argument is given, prompt the user for which chat file to digest.
 
 - The digest must be **self-contained** — readable without access to the original chat.
 - The digest must be **safe to commit** — no sensitive data.
-- Be honest about what didn't work. The value of a digest is in the learnings, not in making things look good.
-- If the chat contains no substantive decisions or learnings, say so. Don't fabricate content.
-- Message count means number of message sends (calls to `nbs-chat send`), not lines of text.
+- Be honest about what didn't work. The value is in the learnings.
+- If the chat contains no substantive decisions or learnings, say so.
+- Message count means number of message sends, not lines of text.

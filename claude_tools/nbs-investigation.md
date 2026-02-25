@@ -5,7 +5,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, AskUserQuestion, Bash(git:*), Bash
 
 # NBS Investigation
 
-You are conducting an **NBS investigation** - a focused, falsification-driven exploration of a specific hypothesis. This is a **side quest**, isolated from main development work.
+You are conducting an **NBS investigation** — a focused, falsification-driven exploration of a specific hypothesis. This is isolated from main development work.
 
 **This command can be run at any time, as many times as needed.** It is not part of the discovery → recovery flow.
 
@@ -175,7 +175,7 @@ If `/nbs` is run during an investigation, it should:
 - **Falsification is the goal**. You're trying to prove yourself wrong, not right.
 - **Unexpected results are valuable**. Don't dismiss them.
 - **Human confirms each step**. No bulk execution.
-- **This is a side quest**. It does not block or replace main work.
+- **This is isolated work**. It does not block or replace main work.
 
 ---
 
@@ -186,13 +186,3 @@ If `/nbs` is run during an investigation, it should:
 - You suspect dead code, race conditions, or subtle bugs
 - Discovery raised questions that can only be answered by execution
 - You want to build confidence before a risky change
-
----
-
-## The Contract
-
-You are the scientist. The human is your collaborator.
-
-You form hypotheses together. You design experiments together. You observe results together. Neither of you trusts assertions - you both trust evidence.
-
-_Seek to falsify. Record what you observe. Let the evidence speak._

@@ -5,7 +5,7 @@ allowed-tools: Bash, Read, Write
 
 # NBS Teams: Restart (Partial Recovery)
 
-You are performing a **restart** — recovering a multi-agent team after downtime (overnight idle, crash, network partition, or context exhaustion). Unlike a cold start (/nbs-teams-start), the .nbs infrastructure already exists. Unlike a single-agent fixup (/nbs-teams-fixup), you are triaging the entire team.
+You are performing a **restart** — recovering a multi-agent team after downtime (overnight idle, crash, network partition, or context exhaustion). The `.nbs` infrastructure already exists. You are triaging the entire team, not a single agent.
 
 **Core principle:** Assess before acting. The worst outcome is killing a healthy agent or losing a session that could have been compacted. Triage first, recover in priority order, verify after each recovery.
 
@@ -18,9 +18,9 @@ You are performing a **restart** — recovering a multi-agent team after downtim
 - After network partition recovery (remote agents)
 
 **Do not use this for:**
-- Single agent recovery → use /nbs-teams-fixup
-- First-time setup → use /nbs-teams-start
-- Healthy team that just needs a task → post to chat directly
+- Single agent recovery — use `/nbs-teams-fixup`
+- First-time setup — use `/nbs-teams-start`
+- Healthy team that just needs a task — post to chat
 
 ## Agents vs Infrastructure
 
@@ -330,35 +330,34 @@ For full cross-machine recovery procedures, see `docs/cross-machine-runbook.md` 
 ### Correlated overnight zombie
 
 **Symptom:** All idle agents hit 11-12% context simultaneously.
-**Cause:** Sidecar's /nbs-poll safety net injected ~96 empty cycles overnight (every 300s for 8 hours). All agents consumed context at the same rate because the sidecar fires uniformly.
-**Prevention:** Remove /nbs-poll safety net. Use CSMA/CD standups and conditional /nbs-notify instead.
+**Cause:** Sidecar's `/nbs-poll` safety net injected ~96 empty cycles overnight (every 300s for 8 hours). All agents consumed context at the same rate.
+**Prevention:** Use CSMA/CD standups and conditional `/nbs-notify` instead.
 **Recovery:** Batch Level 4 hard restart for all zombies.
 
 ### Active agent survives, idle agents die
 
-**Symptom:** The agent doing substantive work (e.g., claude) is healthy at 30%+ context. All other agents are zombie.
-**Cause:** Active work triggers compaction, which frees context. Idle agents accumulate non-compactable poll responses.
-**Implication:** This is not a bug — it is the expected behaviour when agents have nothing to do. The fix is giving idle agents substantive standup work, not keeping them alive with empty polls.
+**Symptom:** The agent doing substantive work is healthy at 30%+ context. All other agents are zombie.
+**Cause:** Active work triggers compaction, freeing context. Idle agents accumulate non-compactable poll responses.
+**Implication:** Expected behaviour when agents have nothing to do. Give idle agents substantive standup work.
 
 ### Gatekeeper zombie blocks pipeline
 
 **Symptom:** Approved changes cannot be committed because gatekeeper is zombie.
-**Cause:** Gatekeeper was idle overnight (no commits to review), context bled from polling.
+**Cause:** Gatekeeper idle overnight, context bled from polling.
 **Recovery:** Prioritise gatekeeper recovery. Brief the new instance with pending approvals from chat.
-**Prevention:** Consider giving gatekeeper substantive overnight work (e.g., "review the last 24h of chat for any unaddressed items").
 
 ### Claude (supervisor) at low context
 
 **Symptom:** Claude is at 10-15% while other agents are healthy (freshly restarted).
 **Cause:** Claude did the recovery work, consuming its own context.
-**Recovery:** After all other agents are recovered, compact or restart claude. The recovered agents can take over coordination.
+**Recovery:** After all other agents are recovered, compact or restart Claude.
 
 ### Stale cursor after hard restart
 
 **Symptom:** Respawned agent's `--unread` and `--since` return empty despite hundreds of new messages.
-**Cause:** Level 4 hard restart creates a fresh session but the cursor file persists from the old session. The cursor points to the old session's last message position, so `--since=<handle>` finds the old messages and returns empty (no messages after the old session's last post).
+**Cause:** Level 4 hard restart creates a fresh session but the cursor file persists. The cursor points to the old session's last message position.
 **Recovery:** Reset the cursor in the `.cursors` file to the current end of the chat file (see Step 5b).
-**Prevention:** Implement option (2) — have `nbs-chat send` update the sender's cursor on write, so the first message from a respawned agent self-heals the cursor.
+**Prevention:** Have `nbs-chat send` update the sender's cursor on write, so the first message from a respawned agent self-heals the cursor.
 
 ## Rules
 
