@@ -212,6 +212,14 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
         else if (strstr(line, "ctrl+o to expand") != NULL) is_chrome = 1;
         /* Shift+tab hint */
         else if (strstr(line, "shift+tab") != NULL) is_chrome = 1;
+        /* pty-session tool suggestion banner lines */
+        else if (strstr(line, "pty-session:") != NULL) is_chrome = 1;
+        else if (strstr(line, "Edit files:") != NULL) is_chrome = 1;
+        else if (strstr(line, "nbs-remote-") != NULL) is_chrome = 1;
+        else if (strstr(line, "Git diff:") != NULL) is_chrome = 1;
+        else if (strstr(line, "Git status:") != NULL) is_chrome = 1;
+        else if (strstr(line, "Lock:") != NULL &&
+                 strstr(line, "pty-session-lock") != NULL) is_chrome = 1;
 
         if (!is_chrome && llen > 0) {
             size_t space = sizeof(filtered) - foff - 2;
