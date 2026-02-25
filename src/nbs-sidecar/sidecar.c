@@ -170,21 +170,59 @@ done:
  * handle_query — Capture own pane content, filter to useful lines, post to chat.
  *
  * Triggered by @handle? in chat. The target agent's sidecar captures
- * its own pane, strips ANSI escapes and tmux chrome, and posts a
- * compact summary to chat.
+ * its own pane, strips ANSI escapes and Claude Code UI chrome, and posts
+ * a compact summary to chat.
+ *
+ * WHY THIS FILTER EXISTS:
+ *
+ * Claude Code's terminal output has two kinds of lines:
+ *
+ *   1. Substantive content (KEEP):
+ *      - Spinner/status:  "✶ Sublimating… (8m 10s · ↑ 5k tokens)"
+ *      - Tool calls:      "● Bash(nbs-chat send ...)"
+ *      - Agent reasoning:  "● 243 tests passed from the CinderX test suite"
+ *      - Tool results:    "  ⎿  Acknowledged 2 events"
+ *
+ *   2. UI chrome (STRIP):
+ *      - Horizontal rules: "────────────────────────────────"
+ *      - Input prompt:     "❯ "
+ *      - Permission hint:  "  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+ *      - Key hints:        "esc to interrupt · ctrl+o to expand"
+ *      - pty-session banner: "┌─ pty-session: consider higher-level tools"
+ *        and its contents:   "│ Edit files:  nbs-remote-edit-pty ..."
+ *                            "│ Build:       nbs-remote-build ..."
+ *
+ * Without filtering, @handle? dumps 32 lines of mostly chrome. With it,
+ * the response is 3-8 lines of what the agent is actually doing.
+ *
+ * IF CLAUDE CODE CHANGES ITS OUTPUT FORMAT:
+ *   - New spinner characters: check they don't start with 0xE2 0x94 (─)
+ *     or 0xE2 0x9D (❯). Current spinners ●✶✻ start with 0xE2 0x97/0x9C.
+ *   - New prompt character: update the 0xE2 0x9D 0xAF check (and the
+ *     prompt detection in the idle message at the end of this function).
+ *   - New tool output prefix: the ⎿ character is NOT stripped — it carries
+ *     real output. Only the pty-session banner content inside ⎿ is stripped
+ *     via string matching ("pty-session:", "Edit files:", etc.).
+ *   - New permission/hint text: add to the strstr checks below.
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
-    /* Capture own pane (bottom 15 lines — enough for context, not noisy) */
+    /* Capture bottom 15 lines — enough for recent context without noise.
+     * Previously 32, reduced because most were chrome. */
     char *content = tp->capture(tp, 15);
     if (!content) return;
 
-    /* Strip ANSI escape sequences */
     strip_ansi(content);
 
-    /* Filter out tmux/Claude chrome lines, keep only substantive content.
-     * Chrome patterns: horizontal rules, prompt lines, bypass permissions,
-     * "esc to interrupt", "ctrl+o to expand", empty lines. */
+    /* Filter: scan each line, classify as chrome or content.
+     *
+     * Chrome detection uses two methods:
+     *   - UTF-8 byte prefix: for characters like ─ (0xE2 0x94) and ❯ (0xE2 0x9D 0xAF)
+     *   - String matching: for English text like "bypass permissions"
+     *
+     * The byte prefix approach is fragile to Claude Code changing its
+     * Unicode characters. The string matching approach is fragile to
+     * Claude Code changing its UI text. Both are documented above. */
     char filtered[SIDECAR_MAX_CONTENT];
     filtered[0] = '\0';
     size_t foff = 0;
@@ -195,24 +233,36 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
         char *nl = strchr(line, '\n');
         size_t llen = nl ? (size_t)(nl - line) : strlen(line);
 
-        /* Skip chrome lines */
         int is_chrome = 0;
         if (llen == 0) is_chrome = 1;
-        /* Horizontal rules (─ is 3 bytes in UTF-8: 0xE2 0x94 0x80) */
+
+        /* ── Horizontal rules ──
+         * ─ is UTF-8 0xE2 0x94 0x80. Matching on first two bytes catches
+         * all box-drawing characters in the U+2500 block (─│┌┐└┘├┤┬┴┼).
+         * Claude Code uses these only for decorative separators. */
         else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
                  (unsigned char)line[1] == 0x94) is_chrome = 1;
-        /* Prompt line (❯) */
+
+        /* ── Input prompt ──
+         * ❯ is UTF-8 0xE2 0x9D 0xAF. This is Claude Code's input prompt.
+         * Must not match spinners ● (0xE2 0x97 0x8F) or ✶ (0xE2 0x9C 0xB6). */
         else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
                  (unsigned char)line[1] == 0x9D &&
                  (unsigned char)line[2] == 0xAF) is_chrome = 1;
-        /* Bypass permissions */
+
+        /* ── Claude Code UI text ──
+         * These are the English strings Claude Code prints below the prompt.
+         * If Claude Code renames these, the filter will pass them through
+         * (safe failure — extra lines, not missing lines). */
         else if (strstr(line, "bypass permissions") != NULL) is_chrome = 1;
-        /* "esc to interrupt" / "ctrl+o to expand" */
         else if (strstr(line, "esc to interrupt") != NULL) is_chrome = 1;
         else if (strstr(line, "ctrl+o to expand") != NULL) is_chrome = 1;
-        /* Shift+tab hint */
         else if (strstr(line, "shift+tab") != NULL) is_chrome = 1;
-        /* pty-session tool suggestion banner lines */
+
+        /* ── pty-session tool suggestion banner ──
+         * When pty-session runs, it prints a box suggesting higher-level
+         * tools. This appears inside Claude's tool output (after ⎿) and
+         * is pure noise for status queries. */
         else if (strstr(line, "pty-session:") != NULL) is_chrome = 1;
         else if (strstr(line, "Edit files:") != NULL) is_chrome = 1;
         else if (strstr(line, "nbs-remote-") != NULL) is_chrome = 1;
