@@ -31,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* Include the headers from the source directory */
 #include "chat_file.h"
@@ -568,6 +570,168 @@ static void test_query_at_end(void) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
+/* ================================================================== */
+/* bus_find_events_dir tests                                           */
+/* ================================================================== */
+
+static void bb_mkdirs(const char *path)
+{
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
+static void bb_rmrf(const char *path)
+{
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
+    (void)system(cmd);
+}
+
+static void test_find_events_dir_standard(void) {
+    /* Standard layout: .nbs/chat/test.chat and .nbs/events/ exist */
+    char tmpdir[] = "/tmp/nbs_bb_t1_XXXXXX";
+    if (!mkdtemp(tmpdir)) { TEST_ASSERT(0, "mkdtemp failed"); return; }
+
+    char chat_dir[512], events_dir[512], chat_path[512];
+    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", tmpdir);
+    snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", tmpdir);
+    snprintf(chat_path, sizeof(chat_path), "%s/.nbs/chat/test.chat", tmpdir);
+
+    bb_mkdirs(chat_dir);
+    bb_mkdirs(events_dir);
+    /* Create the chat file */
+    FILE *f = fopen(chat_path, "w");
+    if (f) fclose(f);
+
+    char out_buf[4096];
+    int rc = bus_find_events_dir(chat_path, out_buf, sizeof(out_buf));
+    TEST_ASSERT(rc == 0, "expected 0 (found), got %d", rc);
+
+    /* Verify the resolved path contains "events" */
+    TEST_ASSERT(strstr(out_buf, "events") != NULL,
+                "out_buf should contain 'events', got '%s'", out_buf);
+
+    bb_rmrf(tmpdir);
+    TEST_PASS("bus_find_events_dir: standard layout found");
+}
+
+static void test_find_events_dir_missing(void) {
+    /* No events directory exists — should return -1 */
+    char tmpdir[] = "/tmp/nbs_bb_t2_XXXXXX";
+    if (!mkdtemp(tmpdir)) { TEST_ASSERT(0, "mkdtemp failed"); return; }
+
+    char chat_dir[512], chat_path[512];
+    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", tmpdir);
+    snprintf(chat_path, sizeof(chat_path), "%s/.nbs/chat/test.chat", tmpdir);
+
+    bb_mkdirs(chat_dir);
+    FILE *f = fopen(chat_path, "w");
+    if (f) fclose(f);
+
+    char out_buf[4096];
+    int rc = bus_find_events_dir(chat_path, out_buf, sizeof(out_buf));
+    TEST_ASSERT(rc == -1, "expected -1 (not found), got %d", rc);
+
+    bb_rmrf(tmpdir);
+    TEST_PASS("bus_find_events_dir: missing events dir returns -1");
+}
+
+static void test_find_events_dir_small_buffer(void) {
+    /* Buffer too small to hold the path — should return -1 */
+    char tmpdir[] = "/tmp/nbs_bb_t3_XXXXXX";
+    if (!mkdtemp(tmpdir)) { TEST_ASSERT(0, "mkdtemp failed"); return; }
+
+    char chat_dir[512], events_dir[512], chat_path[512];
+    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", tmpdir);
+    snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", tmpdir);
+    snprintf(chat_path, sizeof(chat_path), "%s/.nbs/chat/test.chat", tmpdir);
+
+    bb_mkdirs(chat_dir);
+    bb_mkdirs(events_dir);
+    FILE *f = fopen(chat_path, "w");
+    if (f) fclose(f);
+
+    /* Buffer of 5 bytes — too small for any real path */
+    char out_buf[5];
+    int rc = bus_find_events_dir(chat_path, out_buf, sizeof(out_buf));
+    TEST_ASSERT(rc == -1, "expected -1 (buffer too small), got %d", rc);
+
+    bb_rmrf(tmpdir);
+    TEST_PASS("bus_find_events_dir: small output buffer returns -1");
+}
+
+/* ================================================================== */
+/* bus_bridge_after_send tests                                         */
+/* ================================================================== */
+
+static void test_after_send_no_events_dir(void) {
+    /* No events dir — should return 0 (never fails) */
+    int rc = bus_bridge_after_send("/nonexistent/path/test.chat",
+                                    "test-handle", "hello world");
+    TEST_ASSERT(rc == 0, "expected 0 (never fails), got %d", rc);
+    TEST_PASS("bus_bridge_after_send: returns 0 when no events dir");
+}
+
+static void test_after_send_empty_message(void) {
+    /* Empty message — should return 0 without publishing */
+    int rc = bus_bridge_after_send("/nonexistent/path/test.chat",
+                                    "test-handle", "");
+    TEST_ASSERT(rc == 0, "expected 0 (empty message), got %d", rc);
+    TEST_PASS("bus_bridge_after_send: returns 0 for empty message");
+}
+
+static void test_after_send_with_events_dir(void) {
+    /* Set up a proper project structure with events dir */
+    char tmpdir[] = "/tmp/nbs_bb_t6_XXXXXX";
+    if (!mkdtemp(tmpdir)) { TEST_ASSERT(0, "mkdtemp failed"); return; }
+
+    char chat_dir[512], events_dir[512], chat_path[512];
+    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", tmpdir);
+    snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", tmpdir);
+    snprintf(chat_path, sizeof(chat_path), "%s/.nbs/chat/test.chat", tmpdir);
+
+    bb_mkdirs(chat_dir);
+    bb_mkdirs(events_dir);
+
+    /* Create a real chat file (nbs-chat create requires proper structure) */
+    FILE *f = fopen(chat_path, "w");
+    if (f) fclose(f);
+
+    /* bus_bridge_after_send should return 0 even if nbs-bus is not found */
+    int rc = bus_bridge_after_send(chat_path, "test-handle",
+                                    "hello @alice how are you?");
+    TEST_ASSERT(rc == 0, "expected 0 (always succeeds), got %d", rc);
+
+    bb_rmrf(tmpdir);
+    TEST_PASS("bus_bridge_after_send: returns 0 with events dir (bus may fail)");
+}
+
+/* ================================================================== */
+/* bus_bridge_human_input tests                                        */
+/* ================================================================== */
+
+static void test_human_input_no_events_dir(void) {
+    int rc = bus_bridge_human_input("/nonexistent/path/test.chat",
+                                     "human", "hello");
+    TEST_ASSERT(rc == 0, "expected 0 (never fails), got %d", rc);
+    TEST_PASS("bus_bridge_human_input: returns 0 when no events dir");
+}
+
+static void test_human_input_empty_message(void) {
+    int rc = bus_bridge_human_input("/nonexistent/path/test.chat",
+                                     "human", "");
+    TEST_ASSERT(rc == 0, "expected 0 (empty message), got %d", rc);
+    TEST_PASS("bus_bridge_human_input: returns 0 for empty message");
+}
+
 int main(void) {
     printf("=== bus_bridge unit tests ===\n\n");
 
@@ -617,6 +781,20 @@ int main(void) {
     test_query_basic();
     test_query_vs_normal_vs_interrupt();
     test_query_at_end();
+
+    /* bus_find_events_dir */
+    test_find_events_dir_standard();
+    test_find_events_dir_missing();
+    test_find_events_dir_small_buffer();
+
+    /* bus_bridge_after_send */
+    test_after_send_no_events_dir();
+    test_after_send_empty_message();
+    test_after_send_with_events_dir();
+
+    /* bus_bridge_human_input */
+    test_human_input_no_events_dir();
+    test_human_input_empty_message();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

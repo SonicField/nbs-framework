@@ -41,10 +41,10 @@
  * validate_slug — Check slug matches ^[a-z0-9]+$
  *
  * Preconditions:
- *   - None (handles NULL gracefully)
+ *   - slug != NULL (aborts via ASSERT_MSG if NULL)
  *
  * Postconditions:
- *   - Returns 1 if slug != NULL, slug[0] != '\0', and matches ^[a-z0-9]+$
+ *   - Returns 1 if slug[0] != '\0' and matches ^[a-z0-9]+$
  *   - Returns 0 otherwise
  */
 int validate_slug(const char *slug);
@@ -54,10 +54,10 @@ int validate_slug(const char *slug);
  * Path traversal defence.
  *
  * Preconditions:
- *   - None (handles NULL gracefully)
+ *   - name != NULL (aborts via ASSERT_MSG if NULL)
  *
  * Postconditions:
- *   - Returns 1 if name != NULL, name[0] != '\0', and matches ^[a-z0-9]+-[a-f0-9]{4}$
+ *   - Returns 1 if name[0] != '\0' and matches ^[a-z0-9]+-[a-f0-9]{4}$
  *   - Returns 0 otherwise
  */
 int validate_worker_name(const char *name);
@@ -66,10 +66,10 @@ int validate_worker_name(const char *name);
  * validate_uuid — Check string matches UUID format.
  *
  * Preconditions:
- *   - None (handles NULL gracefully)
+ *   - s != NULL (aborts via ASSERT_MSG if NULL)
  *
  * Postconditions:
- *   - Returns 1 if s != NULL and matches xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars, lowercase hex)
+ *   - Returns 1 if s matches xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars, lowercase hex)
  *   - Returns 0 otherwise
  */
 int validate_uuid(const char *s);

@@ -40,6 +40,7 @@ test-unit: install
 	$(MAKE) -C src/nbs-bus test-unit
 	$(MAKE) -C src/nbs-chat test-unit
 	$(MAKE) -C src/nbs-sidecar test-unit
+	$(MAKE) -C src/nbs-workers test-unit
 
 test: install
 	$(MAKE) -C src/nbs-bus test
