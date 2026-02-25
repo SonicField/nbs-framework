@@ -131,6 +131,8 @@ Always append. Never edit existing entries. Status changes are new entries refer
 
 ### Step 5: Publish bus event
 
+**MANDATORY — do not skip this step.** The bus event is how Pythia knows decisions are being made. Without it, Pythia checkpoints stop firing.
+
 ```bash
 nbs-bus publish .nbs/events/ scribe decision-logged normal \
   "D-<timestamp> <summary>"
