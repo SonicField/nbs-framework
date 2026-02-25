@@ -167,27 +167,73 @@ done:
 }
 
 /*
- * handle_query — Capture own pane content and post to chat.
+ * handle_query — Capture own pane content, filter to useful lines, post to chat.
  *
  * Triggered by @handle? in chat. The target agent's sidecar captures
- * its own pane, strips ANSI escapes, and posts the content to chat.
+ * its own pane, strips ANSI escapes and tmux chrome, and posts a
+ * compact summary to chat.
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
-    /* Capture own pane (bottom 32 lines) */
-    char *content = tp->capture(tp, 32);
+    /* Capture own pane (bottom 15 lines — enough for context, not noisy) */
+    char *content = tp->capture(tp, 15);
     if (!content) return;
 
     /* Strip ANSI escape sequences */
     strip_ansi(content);
 
-    /* Escape @ signs to prevent mention feedback loops.
-     * The pane content may contain @handle references which would
-     * trigger re-extraction by bus_extract_mentions.
-     * Layer 1: sanitise_at_signs replaces all @ with \xc0 (primary defence).
-     * Layer 2: escape_mentions inserts \ after @ (independently testable fallback). */
-    sanitise_at_signs(content);
-    char *escaped = escape_mentions(content);
+    /* Filter out tmux/Claude chrome lines, keep only substantive content.
+     * Chrome patterns: horizontal rules, prompt lines, bypass permissions,
+     * "esc to interrupt", "ctrl+o to expand", empty lines. */
+    char filtered[SIDECAR_MAX_CONTENT];
+    filtered[0] = '\0';
+    size_t foff = 0;
+    int kept = 0;
+
+    char *line = content;
+    while (line && *line && kept < 8) {
+        char *nl = strchr(line, '\n');
+        size_t llen = nl ? (size_t)(nl - line) : strlen(line);
+
+        /* Skip chrome lines */
+        int is_chrome = 0;
+        if (llen == 0) is_chrome = 1;
+        /* Horizontal rules (─ is 3 bytes in UTF-8: 0xE2 0x94 0x80) */
+        else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
+                 (unsigned char)line[1] == 0x94) is_chrome = 1;
+        /* Prompt line (❯) */
+        else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
+                 (unsigned char)line[1] == 0x9D &&
+                 (unsigned char)line[2] == 0xAF) is_chrome = 1;
+        /* Bypass permissions */
+        else if (strstr(line, "bypass permissions") != NULL) is_chrome = 1;
+        /* "esc to interrupt" / "ctrl+o to expand" */
+        else if (strstr(line, "esc to interrupt") != NULL) is_chrome = 1;
+        else if (strstr(line, "ctrl+o to expand") != NULL) is_chrome = 1;
+        /* Shift+tab hint */
+        else if (strstr(line, "shift+tab") != NULL) is_chrome = 1;
+
+        if (!is_chrome && llen > 0) {
+            size_t space = sizeof(filtered) - foff - 2;
+            if (llen > space) llen = space;
+            memcpy(filtered + foff, line, llen);
+            foff += llen;
+            filtered[foff++] = '\n';
+            filtered[foff] = '\0';
+            kept++;
+        }
+
+        if (!nl) break;
+        line = nl + 1;
+    }
+
+    if (foff == 0) {
+        snprintf(filtered, sizeof(filtered), "(idle — no visible output)");
+    }
+
+    /* Escape @ signs to prevent mention feedback loops */
+    sanitise_at_signs(filtered);
+    char *escaped = escape_mentions(filtered);
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
