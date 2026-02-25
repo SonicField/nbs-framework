@@ -33,6 +33,8 @@ static int parse_int_option(const char *arg, int default_val)
     char *endptr;
     long val = strtol(eq + 1, &endptr, 10);
     if (*endptr != '\0' || val <= 0 || val > 100000) {
+        fprintf(stderr, "Warning: invalid value in '%s', using default %d\n",
+                arg, default_val);
         return default_val;
     }
 
@@ -61,6 +63,7 @@ static char *join_args(int argc, char *argv[], int start)
     /* Calculate total length */
     size_t total = 0;
     for (int i = start; i < argc; i++) {
+        ASSERT_MSG(argv[i] != NULL, "join_args: argv[%d] is NULL", i);
         total += strlen(argv[i]);
         if (i < argc - 1) {
             total += 1; /* space */
@@ -83,6 +86,8 @@ static char *join_args(int argc, char *argv[], int start)
     }
     buf[pos] = '\0';
 
+    ASSERT_MSG(pos == total, "join_args: length mismatch, expected %zu got %zu", total, pos);
+
     return buf;
 }
 
@@ -91,6 +96,9 @@ static char *join_args(int argc, char *argv[], int start)
  */
 static int dispatch_create(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "dispatch_create: argv is NULL");
+    ASSERT_MSG(argc >= 1, "dispatch_create: argc is non-positive");
+
     if (argc < 4) {
         fprintf(stderr, "Error: create requires <name> and <command>\n");
         fprintf(stderr, "Usage: pty-session create <name> <command>\n");
@@ -114,6 +122,9 @@ static int dispatch_create(int argc, char *argv[])
  */
 static int dispatch_send(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "dispatch_send: argv is NULL");
+    ASSERT_MSG(argc >= 1, "dispatch_send: argc is non-positive");
+
     if (argc < 3) {
         fprintf(stderr, "Error: send requires <name> and <text>\n");
         return EXIT_BAD_ARGS;
@@ -150,6 +161,9 @@ static int dispatch_send(int argc, char *argv[])
  */
 static int dispatch_read(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "dispatch_read: argv is NULL");
+    ASSERT_MSG(argc >= 1, "dispatch_read: argc is non-positive");
+
     if (argc < 3) {
         fprintf(stderr, "Error: read requires <name>\n");
         return EXIT_BAD_ARGS;
@@ -179,6 +193,9 @@ static int dispatch_read(int argc, char *argv[])
  */
 static int dispatch_wait(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "dispatch_wait: argv is NULL");
+    ASSERT_MSG(argc >= 1, "dispatch_wait: argc is non-positive");
+
     if (argc < 4) {
         fprintf(stderr, "Error: wait requires <name> and <pattern>\n");
         return EXIT_BAD_ARGS;
@@ -202,6 +219,9 @@ static int dispatch_wait(int argc, char *argv[])
  */
 static int dispatch_kill(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "dispatch_kill: argv is NULL");
+    ASSERT_MSG(argc >= 1, "dispatch_kill: argc is non-positive");
+
     if (argc < 3) {
         fprintf(stderr, "Error: kill requires <name>\n");
         return EXIT_BAD_ARGS;
@@ -212,6 +232,8 @@ static int dispatch_kill(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "main: argv is NULL");
+
     if (argc < 2) {
         return cmd_help();
     }

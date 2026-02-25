@@ -24,6 +24,8 @@
 
 int main(int argc, char *argv[])
 {
+    ASSERT_MSG(argv != NULL, "main: argv is NULL");
+
     /* Get current working directory — all path construction uses this */
     char cwd[PATH_BUF_SIZE];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
@@ -75,8 +77,14 @@ int main(int argc, char *argv[])
             if (strncmp(argv[i], "--context=", 10) == 0) {
                 char *endptr;
                 long parsed = strtol(argv[i] + 10, &endptr, 10);
-                if (*endptr == '\0' && parsed >= 0 && parsed <= 10000)
+                if (*endptr == '\0' && parsed >= 0 && parsed <= 10000) {
                     context = (int)parsed;
+                } else {
+                    fprintf(stderr,
+                            "Error: invalid --context value: %s "
+                            "(expected integer 0-10000)\n", argv[i] + 10);
+                    return EXIT_BAD_ARGS;
+                }
             } else {
                 fprintf(stderr,
                         "Warning: unknown argument ignored: %s\n", argv[i]);

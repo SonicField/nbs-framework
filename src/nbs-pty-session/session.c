@@ -47,7 +47,10 @@ static void redirect_stderr_to_devnull(void)
 {
     int fd = open("/dev/null", O_WRONLY);
     if (fd >= 0) {
-        dup2(fd, STDERR_FILENO);
+        if (dup2(fd, STDERR_FILENO) < 0) {
+            close(fd);
+            _exit(126);
+        }
         close(fd);
     } else {
         close(STDERR_FILENO);
@@ -89,7 +92,9 @@ static int exec_capture(const char *const argv[], char *out_buf, size_t out_size
     if (pid == 0) {
         /* Child process */
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
+            _exit(126);
+        }
         close(pipefd[1]);
         redirect_stderr_to_devnull();
 
@@ -155,8 +160,10 @@ static int exec_fire_and_forget(const char *const argv[])
     if (pid == 0) {
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
-            dup2(fd, STDOUT_FILENO);
-            dup2(fd, STDERR_FILENO);
+            if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+                close(fd);
+                _exit(126);
+            }
             close(fd);
         } else {
             close(STDOUT_FILENO);
@@ -412,8 +419,14 @@ static int read_cache(const char *name)
     char ts_path[MAX_FILE_PATH];
     n = snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(ts_path), "ts_path truncated");
-    unlink(output_path);
-    unlink(ts_path);
+    if (unlink(output_path) != 0) {
+        fprintf(stderr, "Warning: Failed to remove cache file %s: %s\n",
+                output_path, strerror(errno));
+    }
+    if (unlink(ts_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "Warning: Failed to remove timestamp file %s: %s\n",
+                ts_path, strerror(errno));
+    }
 
     return 0;
 }
@@ -459,7 +472,10 @@ static int read_log(const char *name)
 
     int rc = exec_capture(argv, buf, CAPTURE_BUF_SIZE);
     if (rc >= 0) {
-        fputs(buf, stdout);
+        if (fputs(buf, stdout) == EOF) {
+            free(buf);
+            return -1;
+        }
     }
     free(buf);
 
@@ -510,6 +526,32 @@ static void show_tool_header(void)
 
 /* ── Command implementations ──────────────────────────────────────── */
 
+/*
+ * is_safe_name — Validate session name contains only safe characters.
+ *
+ * Accepts only [a-zA-Z0-9_-]. Rejects empty names and names containing
+ * shell metacharacters, path separators, or any other characters that
+ * could enable command injection (see V2.6 in audit report).
+ *
+ * Returns 1 if safe, 0 if unsafe.
+ */
+static int is_safe_name(const char *name)
+{
+    ASSERT_MSG(name != NULL, "is_safe_name: name is NULL");
+
+    if (name[0] == '\0') {
+        return 0;
+    }
+
+    for (const char *p = name; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int cmd_create(const char *name, const char *command)
 {
     ASSERT_MSG(name != NULL, "cmd_create: name is NULL");
@@ -519,6 +561,13 @@ int cmd_create(const char *name, const char *command)
     if (name[0] == '\0' || command[0] == '\0') {
         fprintf(stderr, "Error: create requires <name> and <command>\n");
         fprintf(stderr, "Usage: pty-session create <name> <command>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!is_safe_name(name)) {
+        fprintf(stderr,
+                "Error: Session name '%s' contains invalid characters "
+                "(only [a-zA-Z0-9_-] allowed)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -559,7 +608,10 @@ int cmd_create(const char *name, const char *command)
     const char *pipe_argv[] = {
         "tmux", "pipe-pane", "-t", session, "-o", pipe_cmd, NULL
     };
-    exec_fire_and_forget(pipe_argv);
+    int pipe_rc = exec_fire_and_forget(pipe_argv);
+    if (pipe_rc != 0) {
+        fprintf(stderr, "Warning: Failed to set up pipe-pane logging\n");
+    }
 
     printf("Created session: %s\n", name);
     return EXIT_SUCCESS_CODE;
@@ -572,6 +624,13 @@ int cmd_send(const char *name, const char *text, int no_enter)
 
     if (name[0] == '\0') {
         fprintf(stderr, "Error: send requires <name> and <text>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!is_safe_name(name)) {
+        fprintf(stderr,
+                "Error: Session name '%s' contains invalid characters "
+                "(only [a-zA-Z0-9_-] allowed)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -618,9 +677,20 @@ int cmd_send(const char *name, const char *text, int no_enter)
 int cmd_read(const char *name, int scrollback, int wait_mode, int timeout)
 {
     ASSERT_MSG(name != NULL, "cmd_read: name is NULL");
+    ASSERT_MSG(scrollback > 0, "cmd_read: scrollback must be positive, got %d", scrollback);
+    ASSERT_MSG(timeout > 0, "cmd_read: timeout must be positive, got %d", timeout);
+    ASSERT_MSG(timeout <= 100000,
+               "cmd_read: timeout out of range: %d", timeout);
 
     if (name[0] == '\0') {
         fprintf(stderr, "Error: read requires <name>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!is_safe_name(name)) {
+        fprintf(stderr,
+                "Error: Session name '%s' contains invalid characters "
+                "(only [a-zA-Z0-9_-] allowed)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -633,8 +703,8 @@ int cmd_read(const char *name, int scrollback, int wait_mode, int timeout)
 
     /* Wait mode: poll until session exits, then read cache */
     if (wait_mode) {
-        int elapsed_ms = 0;
-        int timeout_ms = timeout * 1000;
+        long elapsed_ms = 0;
+        long timeout_ms = (long)timeout * 1000;
 
         while (session_exists(session)) {
             if (elapsed_ms >= timeout_ms) {
@@ -692,9 +762,19 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
 {
     ASSERT_MSG(name != NULL, "cmd_wait: name is NULL");
     ASSERT_MSG(pattern != NULL, "cmd_wait: pattern is NULL");
+    ASSERT_MSG(timeout > 0, "cmd_wait: timeout must be positive, got %d", timeout);
+    ASSERT_MSG(timeout <= 100000,
+               "cmd_wait: timeout out of range: %d", timeout);
 
     if (name[0] == '\0' || pattern[0] == '\0') {
         fprintf(stderr, "Error: wait requires <name> and <pattern>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!is_safe_name(name)) {
+        fprintf(stderr,
+                "Error: Session name '%s' contains invalid characters "
+                "(only [a-zA-Z0-9_-] allowed)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -708,8 +788,8 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
         return EXIT_NOT_FOUND;
     }
 
-    int elapsed_ms = 0;
-    int timeout_ms = timeout * 1000;
+    long elapsed_ms = 0;
+    long timeout_ms = (long)timeout * 1000;
 
     char *buf = malloc(CAPTURE_BUF_SIZE);
     if (!buf) {
@@ -720,7 +800,7 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     while (elapsed_ms < timeout_ms) {
         if (capture_pane(session, DEFAULT_SCROLLBACK, buf, CAPTURE_BUF_SIZE) == 0) {
             if (strstr(buf, pattern) != NULL) {
-                printf("Pattern found after %d.%ds\n",
+                printf("Pattern found after %ld.%lds\n",
                        elapsed_ms / 1000, (elapsed_ms % 1000) / 100);
                 free(buf);
                 return EXIT_SUCCESS_CODE;
@@ -742,6 +822,13 @@ int cmd_kill(const char *name)
 
     if (name[0] == '\0') {
         fprintf(stderr, "Error: kill requires <name>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!is_safe_name(name)) {
+        fprintf(stderr,
+                "Error: Session name '%s' contains invalid characters "
+                "(only [a-zA-Z0-9_-] allowed)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -821,6 +908,7 @@ int cmd_list(void)
      */
     char seen_names[256][MAX_SESSION_NAME];
     int seen_count = 0;
+    int seen_overflow = 0;
 
     /* List killed sessions from cache */
     char cache_dir[MAX_PATH_LEN];
@@ -848,6 +936,11 @@ int cmd_list(void)
                                  "%s", sname);
                         ASSERT_MSG(n >= 0 && (size_t)n < sizeof(seen_names[0]), "seen_names truncated");
                         seen_count++;
+                    } else if (!seen_overflow) {
+                        fprintf(stderr,
+                                "Warning: More than 256 cached sessions, "
+                                "duplicates may appear in listing\n");
+                        seen_overflow = 1;
                     }
                 }
             }

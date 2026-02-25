@@ -102,7 +102,8 @@ static int pty_is_alive(const transport_t *self) {
     while (line) {
         /* Trim leading/trailing whitespace */
         while (*line == ' ' || *line == '\t') line++;
-        char *end = line + strlen(line) - 1;
+        size_t len = strlen(line);
+        char *end = (len > 0) ? line + len - 1 : line;
         while (end > line && (*end == ' ' || *end == '\t' || *end == '\r')) {
             *end = '\0';
             end--;
@@ -126,15 +127,16 @@ int transport_pty_init(transport_t *tp, const char *pty_path,
 
     memset(tp, 0, sizeof(*tp));
 
+    ASSERT_MSG(strlen(pty_path) < sizeof(((pty_ctx_t*)0)->pty_path),
+               "transport_pty_init: pty_path too long (%zu >= %zu)",
+               strlen(pty_path), sizeof(((pty_ctx_t*)0)->pty_path));
+    ASSERT_MSG(strlen(session_name) < sizeof(((pty_ctx_t*)0)->session_name),
+               "transport_pty_init: session_name too long (%zu >= %zu)",
+               strlen(session_name), sizeof(((pty_ctx_t*)0)->session_name));
+
     pty_ctx_t *ctx = calloc(1, sizeof(pty_ctx_t));
     if (!ctx) return -1;
 
-    ASSERT_MSG(strlen(pty_path) < sizeof(ctx->pty_path),
-               "transport_pty_init: pty_path too long (%zu >= %zu)",
-               strlen(pty_path), sizeof(ctx->pty_path));
-    ASSERT_MSG(strlen(session_name) < sizeof(ctx->session_name),
-               "transport_pty_init: session_name too long (%zu >= %zu)",
-               strlen(session_name), sizeof(ctx->session_name));
     snprintf(ctx->pty_path, sizeof(ctx->pty_path), "%s", pty_path);
     snprintf(ctx->session_name, sizeof(ctx->session_name), "%s", session_name);
 

@@ -43,6 +43,13 @@ STAGING_DIR="${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}"
 POLL="${NBS_PTY_POLL:-2}"
 TIMEOUT="${NBS_PTY_TIMEOUT:-30}"
 
+# Precondition: pty-session binary must exist
+[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+
+# Validate numeric environment variables
+[[ "$POLL" =~ ^[0-9]+$ ]] || { echo "Error: NBS_PTY_POLL must be a positive integer, got '$POLL'" >&2; exit 1; }
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || { echo "Error: NBS_PTY_TIMEOUT must be a positive integer, got '$TIMEOUT'" >&2; exit 1; }
+
 # Suppress pty-session tool header (we ARE the higher-level tool)
 export NBS_PTY_QUIET=1
 
@@ -174,8 +181,9 @@ cmd_pull() {
         remote_md5=$(echo "$remote_md5" | tr -d '[:space:]')
         local_md5=$(echo "$local_md5" | tr -d '[:space:]')
         if [[ "$remote_md5" != "$local_md5" ]]; then
-            echo "Warning: Checksum mismatch after pull (remote=$remote_md5, local=$local_md5)" >&2
-            echo "The file may be corrupted — consider retrying" >&2
+            echo "Error: Checksum mismatch after pull (remote=$remote_md5, local=$local_md5)" >&2
+            rm -f "$lpath"
+            return 1
         fi
     fi
 
@@ -299,7 +307,7 @@ cmd_diff() {
     # Pull a fresh copy for comparison
     local tmp
     tmp=$(mktemp)
-    trap "rm -f '$tmp'" RETURN
+    trap "rm -f $(printf '%q' "$tmp")" RETURN
 
     # Download via base64
     local b64_output
@@ -307,6 +315,12 @@ cmd_diff() {
         rm -f "$tmp"
         return $?
     }
+
+    if [[ -z "$b64_output" ]]; then
+        rm -f "$tmp"
+        echo "Error: Got empty base64 output for diff of ${remote_path}" >&2
+        return 1
+    fi
 
     echo "$b64_output" | tr -d '[:space:]' | base64 -d > "$tmp" 2>/dev/null || {
         rm -f "$tmp"

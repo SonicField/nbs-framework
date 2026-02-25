@@ -52,19 +52,25 @@ static const char *resolve_nbs_bus(void)
 
     char self[MAX_PATH_LEN];
     ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
-    if (len <= 0)
+    if (len <= 0) {
+        fprintf(stderr, "warning: resolve_nbs_bus: readlink /proc/self/exe failed\n");
         return "nbs-bus";
+    }
     self[len] = '\0';
 
     /* Find last '/' to get directory */
     char *slash = strrchr(self, '/');
-    if (!slash)
+    if (!slash) {
+        fprintf(stderr, "warning: resolve_nbs_bus: no '/' in /proc/self/exe path\n");
         return "nbs-bus";
+    }
 
     /* Replace binary name with "nbs-bus" */
     size_t dir_len = (size_t)(slash - self);
-    if (dir_len + sizeof("/nbs-bus") > sizeof(nbs_bus_path))
+    if (dir_len + sizeof("/nbs-bus") > sizeof(nbs_bus_path)) {
+        fprintf(stderr, "warning: resolve_nbs_bus: path too long for nbs-bus sibling\n");
         return "nbs-bus";
+    }
 
     memcpy(nbs_bus_path, self, dir_len);
     memcpy(nbs_bus_path + dir_len, "/nbs-bus", sizeof("/nbs-bus"));
@@ -119,12 +125,16 @@ static int is_email_prefix_char(int c) {
 static int read_chat_participants(const char *chat_path,
                                    char out_handles[][MAX_MENTION_HANDLE_LEN],
                                    int max_handles) {
-    if (!chat_path || !out_handles || max_handles <= 0)
-        return 0;
+    ASSERT_MSG(chat_path != NULL, "read_chat_participants: chat_path is NULL");
+    ASSERT_MSG(out_handles != NULL, "read_chat_participants: out_handles is NULL");
+    ASSERT_MSG(max_handles > 0, "read_chat_participants: max_handles must be positive, got %d", max_handles);
 
     FILE *f = fopen(chat_path, "r");
-    if (!f)
+    if (!f) {
+        fprintf(stderr, "warning: read_chat_participants: cannot open %s: %s\n",
+                chat_path, strerror(errno));
         return 0;
+    }
 
     char line[MAX_HEADER_LINE];
     int found = 0;

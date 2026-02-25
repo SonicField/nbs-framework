@@ -45,6 +45,9 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
+# Precondition: pty-session binary must exist
+[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+
 # Suppress pty-session tool header (we ARE the higher-level tool)
 export NBS_PTY_QUIET=1
 
@@ -122,6 +125,18 @@ if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
     exit 4
 fi
 
+# Validate numeric arguments
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || { echo "Error: --timeout must be a positive integer, got '$TIMEOUT'" >&2; exit 4; }
+[[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] || { echo "Error: --poll must be a positive integer, got '$POLL_INTERVAL'" >&2; exit 4; }
+
+# Validate regex pattern before entering poll loop
+_regex_rc=0
+echo "" | grep -qE "$PROMPT_PATTERN" 2>/dev/null || _regex_rc=$?
+if (( _regex_rc == 2 )); then
+    echo "Error: invalid --prompt regex: $PROMPT_PATTERN" >&2
+    exit 4
+fi
+
 # Verify session exists (try reading from it)
 if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
     echo "Error: pty-session '$SESSION' not found" >&2
@@ -129,7 +144,10 @@ if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
 fi
 
 # Send the build command
-"$PTY_SESSION" send "$SESSION" "$BUILD_CMD"
+if ! "$PTY_SESSION" send "$SESSION" "$BUILD_CMD"; then
+    echo "Error: Failed to send build command to session '$SESSION'" >&2
+    exit 1
+fi
 
 if [[ "$QUIET" != true ]]; then
     echo "Build started on $SESSION: $BUILD_CMD" >&2

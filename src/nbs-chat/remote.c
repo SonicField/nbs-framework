@@ -360,6 +360,8 @@ static char **build_ssh_argv(const remote_config_t *cfg,
                 }
                 opt = strtok_r(NULL, ",", &saveptr);
             }
+        } else {
+            fprintf(stderr, "warning: build_ssh_argv: strdup failed for SSH options, ignoring NBS_CHAT_OPTS\n");
         }
     }
 

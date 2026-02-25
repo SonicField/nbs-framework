@@ -736,6 +736,7 @@ static char *open_editor(void) {
          * would fail silently (exit 127), causing "(empty — not sent)". */
         char *argv[] = {(char *)editor, tmppath, NULL};
         execvpe(editor, argv, clean_env);
+        for (int i = 0; i < env_count; i++) free(clean_env[i]);
         _exit(127);
     }
 

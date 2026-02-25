@@ -69,8 +69,7 @@ int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
         redirect_stderr_to_devnull();
 
         execvp(argv[0], (char *const *)argv);
-        /* execvp only returns on failure — errno must be set */
-        fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
+        /* execvp only returns on failure — stderr is /dev/null, diagnostic lost */
         _exit(127);
     }
 
@@ -140,8 +139,7 @@ int exec_fire_and_forget(const char *const argv[])
         }
 
         execvp(argv[0], (char *const *)argv);
-        /* execvp only returns on failure — errno must be set */
-        fprintf(stderr, "exec failed: %s: %s\n", argv[0], strerror(errno));
+        /* execvp only returns on failure — stdout+stderr are /dev/null, diagnostic lost */
         _exit(127);
     }
 

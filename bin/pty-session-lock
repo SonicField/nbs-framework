@@ -47,7 +47,7 @@
 
 set -euo pipefail
 
-LOCK_DIR="${NBS_PTY_LOCK_DIR:-.nbs/pty-locks}"
+LOCK_DIR="${NBS_PTY_LOCK_DIR:-${HOME}/.nbs/pty-locks}"
 CHAT_FILE=""
 CHAT_HANDLE=""
 
@@ -75,7 +75,7 @@ cmd_acquire() {
             --timeout=*) timeout="${1#--timeout=}"; shift ;;
             --chat=*)    CHAT_FILE="${1#--chat=}"; shift ;;
             --chat-handle=*) CHAT_HANDLE="${1#--chat-handle=}"; shift ;;
-            *) shift ;;
+            *) echo "Warning: unknown option ignored: $1" >&2; shift ;;
         esac
     done
 
@@ -91,19 +91,6 @@ cmd_acquire() {
     local inf
     inf=$(info_file "$session")
 
-    # Check if already locked by someone else
-    if [[ -f "$inf" ]]; then
-        local current_holder
-        current_holder=$(head -1 "$inf" 2>/dev/null || true)
-        if [[ "$current_holder" == "$handle" ]]; then
-            # Already held by us — refresh timestamp
-            echo "${handle}" > "$inf"
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$inf"
-            echo "${session}: lock refreshed by ${handle}"
-            return 0
-        fi
-    fi
-
     # Try to acquire with flock
     local elapsed=0
     while true; do
@@ -115,12 +102,21 @@ cmd_acquire() {
                 local holder
                 holder=$(head -1 "$inf" 2>/dev/null || true)
                 if [[ -n "$holder" ]] && [[ "$holder" != "$handle" ]]; then
-                    exit 1
+                    # Check for stale lock via PID
+                    local holder_pid
+                    holder_pid=$(sed -n '3p' "$inf" 2>/dev/null || true)
+                    if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+                        echo "Warning: Stale lock detected (PID $holder_pid is dead), breaking lock" >&2
+                        rm -f "$inf"
+                    else
+                        exit 1
+                    fi
                 fi
             fi
-            # Write lock info
+            # Write lock info (handle, timestamp, PID)
             echo "${handle}" > "$inf"
             echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$inf"
+            echo "$$" >> "$inf"
             exit 0
         ) 200>"$lf" 2>/dev/null; then
             echo "${session}: locked by ${handle}"
@@ -166,7 +162,7 @@ cmd_release() {
         case "$1" in
             --chat=*)    CHAT_FILE="${1#--chat=}"; shift ;;
             --chat-handle=*) CHAT_HANDLE="${1#--chat-handle=}"; shift ;;
-            *) shift ;;
+            *) echo "Warning: unknown option ignored: $1" >&2; shift ;;
         esac
     done
 
@@ -177,22 +173,35 @@ cmd_release() {
 
     local inf
     inf=$(info_file "$session")
+    local lf
+    lf=$(lock_file "$session")
 
-    if [[ ! -f "$inf" ]]; then
-        echo "${session}: already unlocked"
-        return 0
+    # Hold flock during release to prevent race with concurrent acquire
+    (
+        flock -n 200 || { echo "Error: could not acquire lock file during release" >&2; exit 1; }
+
+        if [[ ! -f "$inf" ]]; then
+            echo "${session}: already unlocked"
+            exit 0
+        fi
+
+        local current_holder
+        current_holder=$(head -1 "$inf" 2>/dev/null || true)
+
+        if [[ "$current_holder" != "$handle" ]]; then
+            echo "Error: ${session} is locked by ${current_holder}, not ${handle}" >&2
+            exit 5
+        fi
+
+        rm -f "$inf"
+        echo "${session}: released by ${handle}"
+        exit 0
+    ) 200>"$lf"
+    local release_rc=$?
+
+    if [[ $release_rc -ne 0 ]]; then
+        return $release_rc
     fi
-
-    local current_holder
-    current_holder=$(head -1 "$inf" 2>/dev/null || true)
-
-    if [[ "$current_holder" != "$handle" ]]; then
-        echo "Error: ${session} is locked by ${current_holder}, not ${handle}" >&2
-        return 5
-    fi
-
-    rm -f "$inf"
-    echo "${session}: released by ${handle}"
 
     # Post to chat if configured
     if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
@@ -224,9 +233,16 @@ cmd_check() {
     local holder
     holder=$(head -1 "$inf" 2>/dev/null || echo "unknown")
     local since
-    since=$(tail -1 "$inf" 2>/dev/null || echo "unknown")
+    since=$(sed -n '2p' "$inf" 2>/dev/null || echo "unknown")
+    local holder_pid
+    holder_pid=$(sed -n '3p' "$inf" 2>/dev/null || true)
 
-    echo "${session}: locked by ${holder} (since ${since})"
+    local stale_msg=""
+    if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+        stale_msg=" [STALE — PID $holder_pid is dead]"
+    fi
+
+    echo "${session}: locked by ${holder} (since ${since})${stale_msg}"
     return 0
 }
 

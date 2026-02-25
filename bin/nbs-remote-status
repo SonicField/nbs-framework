@@ -36,6 +36,9 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
+# Precondition: pty-session binary must exist
+[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+
 # Suppress pty-session tool header (we ARE the higher-level tool)
 export NBS_PTY_QUIET=1
 
@@ -81,6 +84,9 @@ if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
     exit 4
 fi
 
+# Validate numeric arguments
+[[ "$LAST" =~ ^[0-9]+$ ]] || { echo "Error: --last must be a positive integer, got '$LAST'" >&2; exit 4; }
+
 # Verify session exists
 if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
     echo "Error: pty-session '$SESSION' not found" >&2
@@ -98,7 +104,10 @@ if [[ -n "$CWD" ]]; then
     FULL_CMD="cd $(printf '%q' "$CWD") && ${STATUS_CMD}"
 fi
 
-"$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"
+if ! "$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"; then
+    echo "Error: Failed to send status command to session '$SESSION'" >&2
+    exit 1
+fi
 
 # Wait for completion
 TIMEOUT=30
@@ -149,7 +158,7 @@ ${diffstat}"
 
         # Post to chat if requested
         if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
-            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$result" 2>/dev/null || true
+            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$result" 2>&1 || echo "Warning: Failed to post status to chat" >&2
         fi
 
         exit 0

@@ -10,6 +10,7 @@
 #include "../nbs-common/nbs_assert.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -46,7 +47,7 @@ int parse_timespec(const char *spec, time_t *out) {
             }
 
             /* Overflow check */
-            if (val > 0 && multiplier > __LONG_LONG_MAX__ / val) return -1;
+            if (val > 0 && multiplier > LLONG_MAX / val) return -1;
             long long offset = val * multiplier;
 
             time_t now = time(NULL);

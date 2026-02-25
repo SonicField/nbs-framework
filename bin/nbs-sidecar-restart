@@ -33,7 +33,8 @@ if [[ "${TARGET_HANDLE}" == "--help" || "${TARGET_HANDLE}" == "-h" ]]; then
 fi
 
 # Discover running sidecars
-PIDS=$(pgrep -f 'nbs-sidecar.*--handle=' 2>/dev/null || true)
+# V4.3: Use [n] trick to prevent pgrep from self-matching
+PIDS=$(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null || true)
 
 if [[ -z "$PIDS" ]]; then
     echo "No running sidecars found."
@@ -89,6 +90,26 @@ for pid in $PIDS; do
         esac
     done
 
+    # V4.1: Validate NEW_ARGS is non-empty before exec
+    if [[ ${#NEW_ARGS[@]} -eq 0 ]]; then
+        echo "FAIL — no command after argument filtering"
+        FAILED=$((FAILED + 1))
+        continue
+    fi
+
+    # V4.2: SECURITY — validate binary path matches expected nbs-sidecar
+    expected_binary="${SCRIPT_DIR}/nbs-sidecar"
+    if [[ "${NEW_ARGS[0]}" != "$expected_binary" ]]; then
+        echo "SKIP: PID $pid — binary '${NEW_ARGS[0]}' is not $expected_binary"
+        continue
+    fi
+
+    if [[ ! -x "${NEW_ARGS[0]}" ]]; then
+        echo "FAIL — sidecar binary not executable: ${NEW_ARGS[0]}"
+        FAILED=$((FAILED + 1))
+        continue
+    fi
+
     # Kill old sidecar
     echo -n "Restarting $HANDLE (PID $pid)... "
     kill "$pid" 2>/dev/null || true
@@ -133,4 +154,8 @@ if [[ -n "$TARGET_HANDLE" && $RESTARTED -eq 0 && $FAILED -eq 0 ]]; then
     exit 1
 fi
 
-exit "$FAILED"
+# V4.4: Use 0/1 exit code, not FAILED count (which can overflow valid range)
+if [[ "$FAILED" -gt 0 ]]; then
+    exit 1
+fi
+exit 0

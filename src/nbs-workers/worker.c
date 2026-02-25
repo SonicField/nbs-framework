@@ -208,6 +208,9 @@ static int exec_spawn_detached(const char *const argv[])
 static void build_task_file_path(char *buf, size_t bufsz,
                                  const char *cwd, const char *name)
 {
+    ASSERT_MSG(buf != NULL, "build_task_file_path: buf is NULL");
+    ASSERT_MSG(cwd != NULL, "build_task_file_path: cwd is NULL");
+    ASSERT_MSG(name != NULL, "build_task_file_path: name is NULL");
     int n = snprintf(buf, bufsz, "%s/%s/%s.md", cwd, WORKERS_SUBDIR, name);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_task_file_path: path too long");
@@ -216,6 +219,9 @@ static void build_task_file_path(char *buf, size_t bufsz,
 static void build_log_file_path(char *buf, size_t bufsz,
                                 const char *cwd, const char *name)
 {
+    ASSERT_MSG(buf != NULL, "build_log_file_path: buf is NULL");
+    ASSERT_MSG(cwd != NULL, "build_log_file_path: cwd is NULL");
+    ASSERT_MSG(name != NULL, "build_log_file_path: name is NULL");
     int n = snprintf(buf, bufsz, "%s/%s/%s.log", cwd, WORKERS_SUBDIR, name);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_log_file_path: path too long");
@@ -223,6 +229,8 @@ static void build_log_file_path(char *buf, size_t bufsz,
 
 static void build_workers_dir(char *buf, size_t bufsz, const char *cwd)
 {
+    ASSERT_MSG(buf != NULL, "build_workers_dir: buf is NULL");
+    ASSERT_MSG(cwd != NULL, "build_workers_dir: cwd is NULL");
     int n = snprintf(buf, bufsz, "%s/%s", cwd, WORKERS_SUBDIR);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_workers_dir: path too long");
@@ -231,6 +239,9 @@ static void build_workers_dir(char *buf, size_t bufsz, const char *cwd)
 static void build_session_file_path(char *buf, size_t bufsz,
                                     const char *cwd, const char *handle)
 {
+    ASSERT_MSG(buf != NULL, "build_session_file_path: buf is NULL");
+    ASSERT_MSG(cwd != NULL, "build_session_file_path: cwd is NULL");
+    ASSERT_MSG(handle != NULL, "build_session_file_path: handle is NULL");
     int n = snprintf(buf, bufsz, "%s/%s/%s.json", cwd, SESSIONS_SUBDIR, handle);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_session_file_path: path too long");
@@ -238,6 +249,8 @@ static void build_session_file_path(char *buf, size_t bufsz,
 
 static void build_events_dir(char *buf, size_t bufsz, const char *cwd)
 {
+    ASSERT_MSG(buf != NULL, "build_events_dir: buf is NULL");
+    ASSERT_MSG(cwd != NULL, "build_events_dir: cwd is NULL");
     int n = snprintf(buf, bufsz, "%s/%s", cwd, EVENTS_SUBDIR);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_events_dir: path too long");
@@ -245,6 +258,8 @@ static void build_events_dir(char *buf, size_t bufsz, const char *cwd)
 
 static void build_session_name(char *buf, size_t bufsz, const char *name)
 {
+    ASSERT_MSG(buf != NULL, "build_session_name: buf is NULL");
+    ASSERT_MSG(name != NULL, "build_session_name: name is NULL");
     int n = snprintf(buf, bufsz, "%s%s", TMUX_PREFIX, name);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_session_name: name too long");
@@ -339,6 +354,8 @@ int validate_uuid(const char *s)
  */
 static char *read_file(const char *path, size_t *out_len)
 {
+    ASSERT_MSG(path != NULL, "read_file: path is NULL");
+
     FILE *f = fopen(path, "r");
     if (!f)
         return NULL;
@@ -376,12 +393,14 @@ static char *read_file(const char *path, size_t *out_len)
 
 static int file_exists(const char *path)
 {
+    ASSERT_MSG(path != NULL, "file_exists: path is NULL");
     struct stat st;
     return (stat(path, &st) == 0 && S_ISREG(st.st_mode));
 }
 
 static int dir_exists(const char *path)
 {
+    ASSERT_MSG(path != NULL, "dir_exists: path is NULL");
     struct stat st;
     return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
 }
@@ -392,6 +411,7 @@ static int dir_exists(const char *path)
 
 static int tmux_has_session(const char *session_name)
 {
+    ASSERT_MSG(session_name != NULL, "tmux_has_session: session_name is NULL");
     const char *argv[] = {"tmux", "has-session", "-t", session_name, NULL};
     char buf[64];
     int rc = exec_capture(argv, buf, sizeof(buf));
@@ -400,6 +420,7 @@ static int tmux_has_session(const char *session_name)
 
 static int tmux_kill_session(const char *session_name)
 {
+    ASSERT_MSG(session_name != NULL, "tmux_kill_session: session_name is NULL");
     const char *argv[] = {"tmux", "kill-session", "-t", session_name, NULL};
     return exec_fire_and_forget(argv);
 }
@@ -407,6 +428,8 @@ static int tmux_kill_session(const char *session_name)
 static int tmux_send_keys(const char *session_name, const char *keys,
                           int send_enter)
 {
+    ASSERT_MSG(session_name != NULL, "tmux_send_keys: session_name is NULL");
+    ASSERT_MSG(keys != NULL, "tmux_send_keys: keys is NULL");
     if (send_enter) {
         const char *argv[] = {"tmux", "send-keys", "-t", session_name,
                               keys, "Enter", NULL};
@@ -419,6 +442,7 @@ static int tmux_send_keys(const char *session_name, const char *keys,
 
 static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
 {
+    ASSERT_MSG(session_name != NULL, "tmux_capture_pane: session_name is NULL");
     const char *argv[] = {"tmux", "capture-pane", "-t", session_name,
                           "-p", NULL};
     return exec_capture(argv, buf, bufsz);
@@ -426,6 +450,8 @@ static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
 
 static int tmux_pipe_pane(const char *session_name, const char *cmd)
 {
+    ASSERT_MSG(session_name != NULL, "tmux_pipe_pane: session_name is NULL");
+    ASSERT_MSG(cmd != NULL, "tmux_pipe_pane: cmd is NULL");
     const char *argv[] = {"tmux", "pipe-pane", "-t", session_name,
                           "-o", cmd, NULL};
     return exec_fire_and_forget(argv);
@@ -439,6 +465,11 @@ static void bus_publish(const char *cwd, const char *source,
                         const char *type, const char *priority,
                         const char *payload)
 {
+    ASSERT_MSG(cwd != NULL, "bus_publish: cwd is NULL");
+    ASSERT_MSG(source != NULL, "bus_publish: source is NULL");
+    ASSERT_MSG(type != NULL, "bus_publish: type is NULL");
+    ASSERT_MSG(priority != NULL, "bus_publish: priority is NULL");
+
     char events_dir[PATH_BUF_SIZE];
     build_events_dir(events_dir, sizeof(events_dir), cwd);
 
@@ -447,7 +478,9 @@ static void bus_publish(const char *cwd, const char *source,
 
     /* Try bin/nbs-bus first, then PATH */
     char nbs_bus_path[PATH_BUF_SIZE];
-    snprintf(nbs_bus_path, sizeof(nbs_bus_path), "%s/bin/nbs-bus", cwd);
+    int n = snprintf(nbs_bus_path, sizeof(nbs_bus_path), "%s/bin/nbs-bus", cwd);
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(nbs_bus_path),
+               "bus_publish: nbs-bus path too long");
 
     const char *nbs_bus = NULL;
     if (access(nbs_bus_path, X_OK) == 0) {
@@ -584,6 +617,10 @@ static int generate_name(const char *slug, char *buf, size_t bufsz)
 static size_t strip_ansi(const char *input, size_t input_len,
                          char *output, size_t output_size)
 {
+    ASSERT_MSG(input != NULL, "strip_ansi: input is NULL");
+    ASSERT_MSG(output != NULL, "strip_ansi: output is NULL");
+    ASSERT_MSG(output_size > 0, "strip_ansi: output_size is 0");
+
     enum { NORMAL, ESC_SEEN, CSI, OSC, CHARSET } state = NORMAL;
     size_t out_pos = 0;
 
@@ -647,6 +684,11 @@ static size_t strip_ansi(const char *input, size_t input_len,
 static int json_extract_string(const char *json, const char *key,
                                char *buf, size_t bufsz)
 {
+    ASSERT_MSG(json != NULL, "json_extract_string: json is NULL");
+    ASSERT_MSG(key != NULL, "json_extract_string: key is NULL");
+    ASSERT_MSG(buf != NULL, "json_extract_string: buf is NULL");
+    ASSERT_MSG(bufsz > 0, "json_extract_string: bufsz is 0");
+
     char pattern[256];
     int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     if (n < 0 || (size_t)n >= sizeof(pattern))
@@ -680,6 +722,9 @@ static int json_extract_string(const char *json, const char *key,
 
 static long json_extract_number(const char *json, const char *key)
 {
+    ASSERT_MSG(json != NULL, "json_extract_number: json is NULL");
+    ASSERT_MSG(key != NULL, "json_extract_number: key is NULL");
+
     char pattern[256];
     int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     if (n < 0 || (size_t)n >= sizeof(pattern))
@@ -712,6 +757,10 @@ static long json_extract_number(const char *json, const char *key)
 static int update_field_in_file(const char *path, const char *prefix,
                                 const char *new_value)
 {
+    ASSERT_MSG(path != NULL, "update_field_in_file: path is NULL");
+    ASSERT_MSG(prefix != NULL, "update_field_in_file: prefix is NULL");
+    ASSERT_MSG(new_value != NULL, "update_field_in_file: new_value is NULL");
+
     size_t file_len = 0;
     char *content = read_file(path, &file_len);
     if (!content)
@@ -754,11 +803,18 @@ static int update_field_in_file(const char *path, const char *prefix,
         free(new_content);
         return -1;
     }
-    fwrite(new_content, 1, new_total, f);
+    size_t written = fwrite(new_content, 1, new_total, f);
     fclose(f);
 
     free(content);
     free(new_content);
+
+    if (written != new_total) {
+        fprintf(stderr, "Error: short write to %s: wrote %zu of %zu bytes\n",
+                path, written, new_total);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -768,6 +824,8 @@ static int update_field_in_file(const char *path, const char *prefix,
 
 static int mkdir_p(const char *path, mode_t mode)
 {
+    ASSERT_MSG(path != NULL, "mkdir_p: path is NULL");
+
     char tmp[PATH_BUF_SIZE];
     size_t len = strlen(path);
     if (len >= sizeof(tmp))
@@ -792,6 +850,10 @@ static int mkdir_p(const char *path, mode_t mode)
 
 static int resolve_absolute_path(const char *input, char *output, size_t outsize)
 {
+    ASSERT_MSG(input != NULL, "resolve_absolute_path: input is NULL");
+    ASSERT_MSG(output != NULL, "resolve_absolute_path: output is NULL");
+    ASSERT_MSG(outsize > 0, "resolve_absolute_path: outsize is 0");
+
     char *resolved = realpath(input, NULL);
     if (!resolved)
         return -1;
@@ -890,10 +952,23 @@ int cmd_spawn(const char *slug, const char *project_dir,
         return EXIT_ERROR;
     }
 
+    /* Reject paths with single quotes — they break the shell command
+     * used in tmux new-session (cd '...' && exec bash -l) */
+    if (strchr(abs_project_dir, '\'') != NULL) {
+        fprintf(stderr,
+                "Error: project directory path contains single quote: %s\n",
+                abs_project_dir);
+        return EXIT_ERROR;
+    }
+
     /* Workers directory is relative to project */
     char workers_dir[PATH_BUF_SIZE];
-    snprintf(workers_dir, sizeof(workers_dir), "%s/%s",
-             abs_project_dir, WORKERS_SUBDIR);
+    {
+        int n = snprintf(workers_dir, sizeof(workers_dir), "%s/%s",
+                         abs_project_dir, WORKERS_SUBDIR);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(workers_dir),
+                   "cmd_spawn: workers_dir path too long");
+    }
 
     if (mkdir_p(workers_dir, 0755) != 0) {
         fprintf(stderr, "Error: failed to create workers directory: %s\n",
@@ -909,10 +984,18 @@ int cmd_spawn(const char *slug, const char *project_dir,
     }
 
     char task_file[PATH_BUF_SIZE];
-    snprintf(task_file, sizeof(task_file), "%s/%s.md", workers_dir, name);
+    {
+        int n = snprintf(task_file, sizeof(task_file), "%s/%s.md", workers_dir, name);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(task_file),
+                   "cmd_spawn: task_file path too long");
+    }
 
     char log_file[PATH_BUF_SIZE];
-    snprintf(log_file, sizeof(log_file), "%s/%s.log", workers_dir, name);
+    {
+        int n = snprintf(log_file, sizeof(log_file), "%s/%s.log", workers_dir, name);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(log_file),
+                   "cmd_spawn: log_file path too long");
+    }
 
     char session[NAME_MAX_LEN];
     build_session_name(session, sizeof(session), name);
@@ -971,8 +1054,12 @@ int cmd_spawn(const char *slug, const char *project_dir,
 
     /* Create tmux session */
     char shell_cmd[PATH_BUF_SIZE];
-    snprintf(shell_cmd, sizeof(shell_cmd), "cd '%s' && exec bash -l",
-             abs_project_dir);
+    {
+        int n = snprintf(shell_cmd, sizeof(shell_cmd), "cd '%s' && exec bash -l",
+                         abs_project_dir);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(shell_cmd),
+                   "cmd_spawn: shell_cmd too long");
+    }
 
     {
         const char *argv[] = {"tmux", "new-session", "-d", "-s", session,
@@ -987,7 +1074,9 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Start persistent logging via pipe-pane */
     {
         char pipe_cmd[PATH_BUF_SIZE + 16];
-        snprintf(pipe_cmd, sizeof(pipe_cmd), "cat >> '%s'", log_file);
+        int n = snprintf(pipe_cmd, sizeof(pipe_cmd), "cat >> '%s'", log_file);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(pipe_cmd),
+                   "cmd_spawn: pipe_cmd too long");
         if (tmux_pipe_pane(session, pipe_cmd) != 0) {
             fprintf(stderr,
                     "Warning: pipe-pane failed — log capture may not work\n");
@@ -1012,22 +1101,32 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * session name to prevent file collisions. */
     {
         char launch_cmd[PATH_BUF_SIZE];
-        snprintf(launch_cmd, sizeof(launch_cmd),
-                 "NBS_HANDLE=%s bin/nbs-claude --dangerously-skip-permissions",
-                 slug);
+        int n = snprintf(launch_cmd, sizeof(launch_cmd),
+                         "NBS_HANDLE=%s bin/nbs-claude --dangerously-skip-permissions",
+                         slug);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
+                   "cmd_spawn: launch_cmd too long");
         tmux_send_keys(session, launch_cmd, 1);
     }
 
     /* Allow Claude to start */
     sleep(3);
 
-    /* Send the task prompt */
+    /* Send the task prompt.
+     * TRUST BOUNDARY: task_description originates from the CLI user (argv[4]).
+     * It is passed to tmux send-keys which interprets it as shell input.
+     * Shell metacharacters (backticks, $(), ;, |) WILL be interpreted.
+     * This is acceptable because the caller is the same user who owns
+     * the tmux session — they cannot escalate privileges beyond what
+     * they already have. */
     {
         char prompt[PATH_BUF_SIZE * 2];
-        snprintf(prompt, sizeof(prompt),
-                 "Read %s and execute the task. "
-                 "Update the Status and Log sections when complete.",
-                 task_file);
+        int n = snprintf(prompt, sizeof(prompt),
+                         "Read %s and execute the task. "
+                         "Update the Status and Log sections when complete.",
+                         task_file);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(prompt),
+                   "cmd_spawn: prompt too long");
         tmux_send_keys(session, prompt, 1);
     }
 
@@ -1062,7 +1161,9 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Publish bus event */
     {
         char payload[PATH_BUF_SIZE];
-        snprintf(payload, sizeof(payload), "Task: %s", task_description);
+        int n = snprintf(payload, sizeof(payload), "Task: %s", task_description);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(payload),
+                   "cmd_spawn: payload too long");
         bus_publish(abs_project_dir, name, "worker-spawned", "normal", payload);
     }
 
@@ -1084,6 +1185,13 @@ int cmd_status(const char *name, const char *cwd)
 {
     if (!name || name[0] == '\0') {
         fprintf(stderr, "Error: status requires <name>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    if (!validate_worker_name(name)) {
+        fprintf(stderr,
+                "Error: invalid worker name format: %s "
+                "(expected <slug>-<4hex>)\n", name);
         return EXIT_BAD_ARGS;
     }
 
@@ -1200,7 +1308,14 @@ int cmd_search(const char *name, const char *pattern,
     int pipefd_in[2];   /* parent writes, child reads */
     int pipefd_out[2];  /* child writes, parent reads */
 
-    if (pipe(pipefd_in) < 0 || pipe(pipefd_out) < 0) {
+    if (pipe(pipefd_in) < 0) {
+        free(cleaned);
+        fprintf(stderr, "Error: pipe() failed\n");
+        return EXIT_ERROR;
+    }
+    if (pipe(pipefd_out) < 0) {
+        close(pipefd_in[0]);
+        close(pipefd_in[1]);
         free(cleaned);
         fprintf(stderr, "Error: pipe() failed\n");
         return EXIT_ERROR;
@@ -1300,6 +1415,13 @@ int cmd_results(const char *name, const char *cwd)
         return EXIT_BAD_ARGS;
     }
 
+    if (!validate_worker_name(name)) {
+        fprintf(stderr,
+                "Error: invalid worker name format: %s "
+                "(expected <slug>-<4hex>)\n", name);
+        return EXIT_BAD_ARGS;
+    }
+
     char task_file[PATH_BUF_SIZE];
     build_task_file_path(task_file, sizeof(task_file), cwd, name);
 
@@ -1356,6 +1478,13 @@ int cmd_dismiss(const char *name, const char *cwd)
         return EXIT_BAD_ARGS;
     }
 
+    if (!validate_worker_name(name)) {
+        fprintf(stderr,
+                "Error: invalid worker name format: %s "
+                "(expected <slug>-<4hex>)\n", name);
+        return EXIT_BAD_ARGS;
+    }
+
     char task_file[PATH_BUF_SIZE];
     build_task_file_path(task_file, sizeof(task_file), cwd, name);
 
@@ -1380,7 +1509,10 @@ int cmd_dismiss(const char *name, const char *cwd)
     }
 
     /* Update State field to dismissed */
-    update_field_in_file(task_file, "State:", "dismissed");
+    if (update_field_in_file(task_file, "State:", "dismissed") != 0) {
+        fprintf(stderr, "Warning: failed to update State to dismissed in %s\n",
+                task_file);
+    }
 
     /* Fill Completed timestamp if empty */
     {
@@ -1469,10 +1601,18 @@ int cmd_continue(const char *handle, const char *model_override,
 
     json_extract_string(json, "session_id", session_id, sizeof(session_id));
     json_extract_string(json, "model", model, sizeof(model));
-    json_extract_string(json, "project_root", project_root,
-                        sizeof(project_root));
-    json_extract_string(json, "tmux_session", tmux_session_name,
-                        sizeof(tmux_session_name));
+    if (json_extract_string(json, "project_root", project_root,
+                            sizeof(project_root)) != 0) {
+        free(json);
+        fprintf(stderr, "Error: missing 'project_root' in session metadata\n");
+        return EXIT_ERROR;
+    }
+    if (json_extract_string(json, "tmux_session", tmux_session_name,
+                            sizeof(tmux_session_name)) != 0) {
+        free(json);
+        fprintf(stderr, "Error: missing 'tmux_session' in session metadata\n");
+        return EXIT_ERROR;
+    }
     long old_pid = json_extract_number(json, "pid");
 
     free(json);
@@ -1606,22 +1746,22 @@ int cmd_session(const char *handle, const char *cwd)
     char project_root[PATH_BUF_SIZE] = {0};
     char tmux_session_name[NAME_MAX_LEN] = {0};
 
-    json_extract_string(json, "session_id", session_id, sizeof(session_id));
+    int has_session_id = json_extract_string(json, "session_id", session_id, sizeof(session_id)) == 0;
     json_extract_string(json, "model", model_buf, sizeof(model_buf));
-    json_extract_string(json, "started", started, sizeof(started));
-    json_extract_string(json, "project_root", project_root,
-                        sizeof(project_root));
-    json_extract_string(json, "tmux_session", tmux_session_name,
-                        sizeof(tmux_session_name));
+    int has_started = json_extract_string(json, "started", started, sizeof(started)) == 0;
+    int has_project_root = json_extract_string(json, "project_root", project_root,
+                        sizeof(project_root)) == 0;
+    int has_tmux = json_extract_string(json, "tmux_session", tmux_session_name,
+                        sizeof(tmux_session_name)) == 0;
     long pid_val = json_extract_number(json, "pid");
 
     free(json);
 
-    printf("  Session ID: %s\n", session_id);
+    printf("  Session ID: %s\n", has_session_id ? session_id : "<missing>");
     printf("  Model: %s\n", model_buf[0] ? model_buf : "<default>");
-    printf("  Started: %s\n", started);
-    printf("  Tmux: %s\n", tmux_session_name);
-    printf("  Project: %s\n", project_root);
+    printf("  Started: %s\n", has_started ? started : "<missing>");
+    printf("  Tmux: %s\n", has_tmux ? tmux_session_name : "<missing>");
+    printf("  Project: %s\n", has_project_root ? project_root : "<missing>");
     printf("  PID: %ld\n", pid_val);
 
     /* Check if PID is alive */
@@ -1645,6 +1785,8 @@ int cmd_session(const char *handle, const char *cwd)
 
 int cmd_list(const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_list: cwd is NULL");
+
     printf("NBS Workers:\n");
 
     char workers_dir[PATH_BUF_SIZE];

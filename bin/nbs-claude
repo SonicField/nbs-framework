@@ -48,8 +48,8 @@ FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
 NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
 NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
 
-# Resolve NBS_ROOT to absolute path
-NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
+# V1.4: Do not suppress cd stderr — let actual error (permission denied, not found) be visible
+NBS_ROOT="$(cd "$NBS_ROOT" && pwd)" || {
     echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT:-<unset>}" >&2
     exit 1
 }
@@ -57,6 +57,12 @@ NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
 # Validate handle
 if [[ ! "$SIDECAR_HANDLE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: NBS_HANDLE must match ^[a-zA-Z0-9_-]+\$, got '$SIDECAR_HANDLE'" >&2
+    exit 4
+fi
+
+# V1.1: Validate NBS_MODEL with safe-character regex
+if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+    echo "Error: NBS_MODEL contains invalid characters: '$NBS_MODEL'" >&2
     exit 4
 fi
 
@@ -97,9 +103,11 @@ MODE=""
 cleanup() {
     local EXIT_CODE=$?
 
-    # Remove pidfile
+    # V1.6: Fix TOCTOU — read unconditionally instead of check-then-read
     local pidfile="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
-    if [[ -f "$pidfile" ]] && [[ "$(cat "$pidfile" 2>/dev/null)" == "$$" ]]; then
+    local existing
+    existing=$(cat "$pidfile" 2>/dev/null) || true
+    if [[ "$existing" == "$$" ]]; then
         rm -f "$pidfile"
     fi
 
@@ -153,13 +161,19 @@ for arg in "$@"; do
 done
 
 # Re-resolve NBS_ROOT to absolute if overridden by --root=
-NBS_ROOT="$(cd "$NBS_ROOT" 2>/dev/null && pwd)" || {
+NBS_ROOT="$(cd "$NBS_ROOT" && pwd)" || {
     echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT}" >&2
     exit 1
 }
 if [[ ! -d "$NBS_ROOT" ]]; then
     echo "Error: NBS_ROOT is not a directory: $NBS_ROOT" >&2
     exit 1
+fi
+
+# V1.1: Re-validate NBS_MODEL if overridden by --model=
+if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+    echo "Error: NBS_MODEL contains invalid characters: '$NBS_MODEL'" >&2
+    exit 4
 fi
 
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
@@ -200,6 +214,13 @@ fi
 mkdir -p "${NBS_ROOT}/.nbs/sessions"
 SESSION_META="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
 TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-nbs-${SIDECAR_HANDLE}-live}"
+
+# V1.3: SECURITY — validate TMUX_SESSION_NAME from environment
+if [[ ! "$TMUX_SESSION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: TMUX_SESSION_NAME must match ^[a-zA-Z0-9_-]+\$, got '$TMUX_SESSION_NAME'" >&2
+    exit 4
+fi
+
 cat > "$SESSION_META" << EOF
 {
   "session_id": "$SESSION_UUID",
@@ -243,7 +264,15 @@ if [[ -n "${TMUX:-}" ]]; then
     # --- Already inside tmux ---
     MODE="tmux"
 
-    PANE_ID=$(tmux display-message -p '#{pane_id}')
+    # V1.5: Check tmux display-message exit code
+    PANE_ID=$(tmux display-message -p '#{pane_id}') || {
+        echo "Error: Failed to get tmux pane ID" >&2
+        exit 1
+    }
+    if [[ -z "$PANE_ID" ]]; then
+        echo "Error: tmux pane ID is empty" >&2
+        exit 1
+    fi
     echo "  Mode: tmux (pane $PANE_ID)"
     echo ""
 
@@ -267,20 +296,17 @@ else
     echo "  Mode: pty-session ($SESSION_NAME)"
     echo ""
 
-    # Build command string for pty-session
-    CLAUDE_CMD="claude"
-    if [[ $# -gt 0 ]]; then
-        CLAUDE_CMD_ARGS=""
-        for arg in "$@"; do
-            case "$arg" in --root=*|--remote-host=*|--remote-ssh-opts=*) continue ;; esac
-            if [[ -z "$CLAUDE_CMD_ARGS" ]]; then
-                CLAUDE_CMD_ARGS="$(printf '%q' "$arg")"
-            else
-                CLAUDE_CMD_ARGS="$CLAUDE_CMD_ARGS $(printf '%q' "$arg")"
-            fi
-        done
-        CLAUDE_CMD="claude $CLAUDE_CMD_ARGS"
-    fi
+    # V1.2: Build command string for pty-session from CLAUDE_ARGS
+    # (which already has the correct args with --model=, --continue=, --force
+    # extracted and --root=, --remote-host=, --remote-ssh-opts= removed)
+    CLAUDE_CMD=""
+    for arg in "${CLAUDE_ARGS[@]}"; do
+        if [[ -z "$CLAUDE_CMD" ]]; then
+            CLAUDE_CMD="$(printf '%q' "$arg")"
+        else
+            CLAUDE_CMD="$CLAUDE_CMD $(printf '%q' "$arg")"
+        fi
+    done
 
     # Create pty-session running claude
     if ! "$PTY_SESSION" create "$SESSION_NAME" "$CLAUDE_CMD"; then

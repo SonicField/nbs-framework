@@ -208,7 +208,10 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
 
     /* Build the @handle string for matching */
     char at_handle[256];
-    snprintf(at_handle, sizeof(at_handle), "@%s", target_handle);
+    int at_n = snprintf(at_handle, sizeof(at_handle), "@%s", target_handle);
+    ASSERT_MSG(at_n >= 0 && (size_t)at_n < sizeof(at_handle),
+               "bus_client_check_typed: at_handle truncated for handle '%s'",
+               target_handle);
 
     /*
      * Parse output line by line. Each line is:
@@ -259,7 +262,11 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                     /* Check if @handle appears in the payload */
                     if (strstr(payload_buf, at_handle) != NULL) {
                         /* Ack the event */
-                        bus_client_ack(bus_dir, event_file);
+                        int ack_rc = bus_client_ack(bus_dir, event_file);
+                        if (ack_rc != 0) {
+                            fprintf(stderr, "bus_client_check_typed: ack failed for %s\n",
+                                    event_file);
+                        }
 
                         /* Copy payload to output */
                         snprintf(payload_out, payload_size, "%s", payload_buf);

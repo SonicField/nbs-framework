@@ -93,5 +93,14 @@ prompts=(
 "チェックイン：@scribe 前回のチェックイン以降のすべての決定事項と保留中の事項の要約を記録してください。@supervisor スクライブが記録を完了したら、確認のうえ次のタスク割り当てを設定してください。全エージェントへ：現在のタスクとブロッカーを申告してください。自己割り当ての作業は認められません — すべての割り当ては @supervisor から発せられます。スーパーバイザーの許可なしにセッション終了を宣言した場合は、今すぐ作業に戻ってください。"
 )
 
-index=$(( $(od -An -tu4 -N4 /dev/urandom | tr -d ' ') % ${#prompts[@]} ))
+# V3.2: Check od pipeline failure
+raw=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ') || {
+    echo "Error: Failed to read /dev/urandom" >&2
+    exit 1
+}
+if [[ -z "$raw" ]]; then
+    echo "Error: Empty random value from /dev/urandom" >&2
+    exit 1
+fi
+index=$(( raw % ${#prompts[@]} ))
 echo "${prompts[$index]}"
