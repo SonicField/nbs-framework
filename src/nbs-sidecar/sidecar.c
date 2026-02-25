@@ -170,9 +170,9 @@ done:
  * handle_query — Capture pane snapshot and post to chat.
  *
  * Triggered by @handle? in chat. Posts the bottom 8 lines of the
- * agent's terminal after stripping ANSI escapes. No content filtering
- * — 8 lines is short enough to read directly and shows the spinner,
- * prompt, context level, and recent tool output without truncation.
+ * agent's terminal after stripping ANSI escapes and truncating
+ * each line to 80 characters. This keeps the output compact even
+ * when tool calls wrap across multiple terminal columns.
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
@@ -181,9 +181,28 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     strip_ansi(content);
 
+    /* Truncate each line to 80 characters */
+    char truncated[SIDECAR_MAX_CONTENT];
+    truncated[0] = '\0';
+    size_t toff = 0;
+    char *line = content;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        size_t llen = nl ? (size_t)(nl - line) : strlen(line);
+        size_t capped = llen > 80 ? 80 : llen;
+        size_t space = sizeof(truncated) - toff - 2;
+        if (capped > space) break;
+        memcpy(truncated + toff, line, capped);
+        toff += capped;
+        truncated[toff++] = '\n';
+        if (!nl) break;
+        line = nl + 1;
+    }
+    truncated[toff] = '\0';
+
     /* Escape @ signs to prevent mention feedback loops */
-    sanitise_at_signs(content);
-    char *escaped = escape_mentions(content);
+    sanitise_at_signs(truncated);
+    char *escaped = escape_mentions(truncated);
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
