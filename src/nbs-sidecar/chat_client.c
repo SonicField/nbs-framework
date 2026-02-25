@@ -75,6 +75,7 @@ static const char *resolve_nbs_chat(void)
 int chat_client_count_messages(const char *chat_path)
 {
     ASSERT_MSG(chat_path != NULL, "chat_client_count_messages: chat_path is NULL");
+    ASSERT_MSG(chat_path[0] != '\0', "chat_client_count_messages: chat_path is empty");
 
     FILE *f = fopen(chat_path, "r");
     if (!f)
@@ -112,6 +113,7 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
 {
     ASSERT_MSG(chat_path != NULL, "chat_client_read_cursor: chat_path is NULL");
     ASSERT_MSG(handle != NULL, "chat_client_read_cursor: handle is NULL");
+    ASSERT_MSG(handle[0] != '\0', "chat_client_read_cursor: handle is empty");
 
     char cursor_path[MAX_LINE];
     int n = snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
@@ -212,19 +214,19 @@ static int check_unread_cb(const char *path, void *user_data)
             int written = snprintf(ctx->summary + ctx->sum_used,
                                    ctx->sum_size - ctx->sum_used,
                                    ", %s", name);
-            ASSERT_MSG(written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used,
-                       "chat_client: summary truncated");
-            if (written > 0)
+            if (written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used) {
                 ctx->sum_used += (size_t)written;
+            }
+            /* else: truncated — stop appending, summary is already NUL-terminated */
         } else if (ctx->sum_used == 0) {
             /* First entry — just store the name, prefix added later */
             int written = snprintf(ctx->summary + ctx->sum_used,
                                    ctx->sum_size - ctx->sum_used,
                                    "%s", name);
-            ASSERT_MSG(written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used,
-                       "chat_client: summary truncated");
-            if (written > 0)
+            if (written >= 0 && (size_t)written < ctx->sum_size - ctx->sum_used) {
                 ctx->sum_used += (size_t)written;
+            }
+            /* else: truncated — stop appending, summary is already NUL-terminated */
         }
     }
 
@@ -310,6 +312,8 @@ struct sidecar_only_ctx {
 static int extract_handle_from_decoded(const char *decoded, size_t decoded_len,
                                        char *out_handle, size_t handle_size)
 {
+    ASSERT_MSG(handle_size > 0, "extract_handle_from_decoded: handle_size is 0");
+
     /* Find first ": " — this separates handle (possibly with |epoch) from content */
     const char *colon_space = NULL;
     for (size_t i = 0; i + 1 < decoded_len; i++) {
@@ -446,7 +450,9 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
         .found_non_sidecar = 0,
     };
 
-    registry_for_each(registry_path, "chat", sidecar_only_cb, &ctx);
+    int rc = registry_for_each(registry_path, "chat", sidecar_only_cb, &ctx);
+    if (rc < 0)
+        return 0; /* Error — conservatively treat as non-sidecar */
 
     /* All unread are sidecar-only: has_unread && !found_non_sidecar */
     if (ctx.has_unread && !ctx.found_non_sidecar)

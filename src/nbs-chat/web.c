@@ -105,7 +105,7 @@ typedef struct {
  *
  * Escapes: " \ \b \f \n \r \t and control chars 0x00-0x1F as \uXXXX
  */
-int json_escape(const char *input, char *output, size_t output_size) {
+static int json_escape(const char *input, char *output, size_t output_size) {
     ASSERT_MSG(input != NULL, "json_escape: input is NULL");
     ASSERT_MSG(output != NULL, "json_escape: output is NULL");
     ASSERT_MSG(output_size > 0, "json_escape: output_size is 0");
@@ -190,8 +190,8 @@ int json_message(const chat_message_t *msg, int index,
     if (clen < 0) goto done;
 
     int written = snprintf(buf, buf_size,
-        "{\"index\":%d,\"handle\":\"%s\",\"content\":\"%s\",\"timestamp\":%ld}",
-        index, handle_esc, content_esc, (long)msg->timestamp);
+        "{\"index\":%d,\"handle\":\"%s\",\"content\":\"%s\",\"timestamp\":%lld}",
+        index, handle_esc, content_esc, (long long)msg->timestamp);
 
     if (written < 0 || (size_t)written >= buf_size) {
         result = -1;
@@ -222,7 +222,10 @@ static int parse_query_int(const char *query, const char *key, int default_val) 
 
     while (*p) {
         if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
-            long val = strtol(p + klen + 1, NULL, 10);
+            char *endptr;
+            errno = 0;
+            long val = strtol(p + klen + 1, &endptr, 10);
+            if (errno != 0 || endptr == p + klen + 1) return default_val;
             if (val > INT32_MAX) val = INT32_MAX;
             if (val < 0) val = 0;
             return (int)val;
@@ -310,7 +313,10 @@ static int parse_request(int fd, http_request_t *req) {
     if (found && found < buf + total) {
         found += strlen(hdr);
         while (*found == ' ') found++;
-        req->last_event_id = (int)strtol(found, NULL, 10);
+        char *endptr;
+        errno = 0;
+        long val = strtol(found, &endptr, 10);
+        if (errno == 0 && endptr != found) req->last_event_id = (int)val;
     }
 
     /* Scan for Content-Length header */
@@ -319,7 +325,10 @@ static int parse_request(int fd, http_request_t *req) {
     if (cl_found && cl_found < buf + total) {
         cl_found += strlen(cl_hdr);
         while (*cl_found == ' ') cl_found++;
-        req->content_length = (int)strtol(cl_found, NULL, 10);
+        char *endptr;
+        errno = 0;
+        long val = strtol(cl_found, &endptr, 10);
+        if (errno == 0 && endptr != cl_found) req->content_length = (int)val;
         if (req->content_length < 0) req->content_length = 0;
         if (req->content_length > MAX_REQUEST_SIZE) req->content_length = MAX_REQUEST_SIZE;
     }
@@ -368,7 +377,7 @@ static int parse_request(int fd, http_request_t *req) {
 static void send_response(int fd, int status, const char *status_text,
                           const char *content_type,
                           const char *body, size_t body_len) {
-    dprintf(fd,
+    int hdr_n = dprintf(fd,
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
@@ -376,6 +385,8 @@ static void send_response(int fd, int status, const char *status_text,
         "Connection: close\r\n"
         "\r\n",
         status, status_text, content_type, body_len);
+
+    if (hdr_n < 0) return;
 
     if (body && body_len > 0) {
         /* Write in chunks to handle partial writes */
@@ -470,8 +481,9 @@ static void serve_json(int fd, const http_request_t *req) {
 
     for (int i = 0; i < state.participant_count; i++) {
         char handle_esc[MAX_HANDLE_LEN * 6 + 1];
-        json_escape(state.participants[i].handle,
+        int esc_rc = json_escape(state.participants[i].handle,
                     handle_esc, sizeof(handle_esc));
+        if (esc_rc < 0) continue; /* skip participant with too-long handle */
         pos += snprintf(json + pos, MAX_JSON_BUF - (size_t)pos,
                         "%s{\"handle\":\"%s\",\"count\":%d}",
                         i > 0 ? "," : "",
@@ -857,7 +869,14 @@ int main(int argc, char **argv) {
             print_usage(argv[0]);
             return 0;
         } else if (strncmp(argv[i], "--port=", 7) == 0) {
-            port = (int)strtol(argv[i] + 7, NULL, 10);
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 7, &endptr, 10);
+            if (errno != 0 || *endptr != '\0') {
+                fprintf(stderr, "Invalid --port value: %s\n", argv[i] + 7);
+                return 4;
+            }
+            port = (int)val;
             if (port < 0 || port > 65535) {
                 fprintf(stderr, "Invalid port: %s\n", argv[i] + 7);
                 return 4;
@@ -865,7 +884,14 @@ int main(int argc, char **argv) {
         } else if (strncmp(argv[i], "--bind=", 7) == 0) {
             bind_addr = argv[i] + 7;
         } else if (strncmp(argv[i], "--last=", 7) == 0) {
-            g_initial_last = (int)strtol(argv[i] + 7, NULL, 10);
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 7, &endptr, 10);
+            if (errno != 0 || *endptr != '\0') {
+                fprintf(stderr, "Invalid --last value: %s\n", argv[i] + 7);
+                return 4;
+            }
+            g_initial_last = (int)val;
             if (g_initial_last < 0) g_initial_last = -1;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
@@ -898,8 +924,12 @@ int main(int argc, char **argv) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    if (sigaction(SIGINT, &sa, NULL) != 0) {
+        fprintf(stderr, "warning: sigaction(SIGINT) failed: %s\n", strerror(errno));
+    }
+    if (sigaction(SIGTERM, &sa, NULL) != 0) {
+        fprintf(stderr, "warning: sigaction(SIGTERM) failed: %s\n", strerror(errno));
+    }
 
     /* Ignore SIGPIPE (broken SSE connections) */
     signal(SIGPIPE, SIG_IGN);
@@ -918,9 +948,13 @@ int main(int argc, char **argv) {
         listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
         if (listen_fd >= 0) {
             int opt = 1;
-            setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+            if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0) {
+                fprintf(stderr, "warning: setsockopt(SO_REUSEADDR) failed: %s\n", strerror(errno));
+            }
             /* IPV6_V6ONLY=1: only accept IPv6 connections (match bind address) */
-            setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt));
+            if (setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt)) != 0) {
+                fprintf(stderr, "warning: setsockopt(IPV6_V6ONLY) failed: %s\n", strerror(errno));
+            }
 
             if (bind(listen_fd, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
                 close(listen_fd);
@@ -950,7 +984,9 @@ int main(int argc, char **argv) {
         }
 
         int opt = 1;
-        setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0) {
+            fprintf(stderr, "warning: setsockopt(SO_REUSEADDR) failed: %s\n", strerror(errno));
+        }
 
         if (bind(listen_fd, (struct sockaddr *)&addr4, sizeof(addr4)) < 0) {
             fprintf(stderr, "bind(%s:%d): %s\n", bind_addr, port,
@@ -967,16 +1003,22 @@ int main(int argc, char **argv) {
     }
 
     /* Get actual port (for port=0 case) */
-    int actual_port;
+    int actual_port = port;
     if (is_ipv6) {
         socklen_t addrlen = sizeof(addr6);
-        getsockname(listen_fd, (struct sockaddr *)&addr6, &addrlen);
-        actual_port = ntohs(addr6.sin6_port);
+        if (getsockname(listen_fd, (struct sockaddr *)&addr6, &addrlen) != 0) {
+            fprintf(stderr, "warning: getsockname failed: %s\n", strerror(errno));
+        } else {
+            actual_port = ntohs(addr6.sin6_port);
+        }
     } else {
         struct sockaddr_in addr4;
         socklen_t addrlen = sizeof(addr4);
-        getsockname(listen_fd, (struct sockaddr *)&addr4, &addrlen);
-        actual_port = ntohs(addr4.sin_port);
+        if (getsockname(listen_fd, (struct sockaddr *)&addr4, &addrlen) != 0) {
+            fprintf(stderr, "warning: getsockname failed: %s\n", strerror(errno));
+        } else {
+            actual_port = ntohs(addr4.sin_port);
+        }
     }
 
     /* Print URL with appropriate address format */

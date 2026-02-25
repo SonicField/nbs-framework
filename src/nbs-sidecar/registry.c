@@ -109,7 +109,9 @@ static int registry_remove(const char *registry_path, const char *entry)
         return (errno == ENOENT) ? 0 : -1;
 
     char tmp_path[MAX_FPATH];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", registry_path);
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", registry_path);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(tmp_path),
+               "registry_remove: tmp_path truncated for '%s'", registry_path);
 
     FILE *tmp = fopen(tmp_path, "w");
     if (!tmp) {
@@ -261,6 +263,10 @@ static int process_control_command(const char *line, const char *registry_path)
     char verb[256];
     char path[MAX_PATH];
 
+    /* sscanf format widths must match buffer sizes (one less for NUL) */
+    _Static_assert(sizeof(verb) == 256, "sscanf format width must match verb buffer");
+    _Static_assert(sizeof(path) == 4096, "sscanf format width must match path buffer");
+
     /* Extract verb and path */
     int matched = sscanf(line, "%255s %4095s", verb, path);
     if (matched < 2)
@@ -303,7 +309,9 @@ int registry_seed(const char *nbs_root, const char *registry_path)
 
     /* Scan <nbs_root>/.nbs/chat/ for .chat files */
     char chat_dir[MAX_PATH];
-    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", nbs_root);
+    int n = snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", nbs_root);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(chat_dir),
+               "registry_seed: chat_dir path truncated");
 
     DIR *dir = opendir(chat_dir);
     if (dir) {
@@ -340,7 +348,9 @@ int registry_seed(const char *nbs_root, const char *registry_path)
 
     /* Check <nbs_root>/.nbs/events directory */
     char events_dir[MAX_PATH];
-    snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", nbs_root);
+    n = snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", nbs_root);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(events_dir),
+               "registry_seed: events_dir path truncated");
 
     struct stat st;
     if (stat(events_dir, &st) == 0 && S_ISDIR(st.st_mode)) {

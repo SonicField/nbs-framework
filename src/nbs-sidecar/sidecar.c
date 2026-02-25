@@ -43,8 +43,10 @@ static void build_registry_path(const sidecar_config_t *cfg,
     ASSERT_MSG(out != NULL, "build_registry_path: out is NULL");
     ASSERT_MSG(out_size > 0, "build_registry_path: out_size is 0");
 
-    snprintf(out, out_size, "%s/.nbs/control-registry-%s",
+    int n = snprintf(out, out_size, "%s/.nbs/control-registry-%s",
              cfg->nbs_root, cfg->handle);
+    ASSERT_MSG(n >= 0 && (size_t)n < out_size,
+               "build_registry_path: path truncated (need %d, have %zu)", n, out_size);
 }
 
 static void build_inbox_path(const sidecar_config_t *cfg,
@@ -53,8 +55,10 @@ static void build_inbox_path(const sidecar_config_t *cfg,
     ASSERT_MSG(out != NULL, "build_inbox_path: out is NULL");
     ASSERT_MSG(out_size > 0, "build_inbox_path: out_size is 0");
 
-    snprintf(out, out_size, "%s/.nbs/control-inbox-%s",
+    int n = snprintf(out, out_size, "%s/.nbs/control-inbox-%s",
              cfg->nbs_root, cfg->handle);
+    ASSERT_MSG(n >= 0 && (size_t)n < out_size,
+               "build_inbox_path: path truncated (need %d, have %zu)", n, out_size);
 }
 
 /* --- Recovery prompt builder --- */
@@ -120,7 +124,9 @@ static void handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
         if (elapsed >= 60) break;
 
         /* Send Escape */
-        tp->send_key(tp, "Escape");
+        if (tp->send_key(tp, "Escape") != 0) {
+            fprintf(stderr, "handle_interrupt: send_key Escape failed\n");
+        }
 
         /* Wait up to 10s, checking for prompt every 1s */
         for (int w = 0; w < 10; w++) {
@@ -131,9 +137,13 @@ static void handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
 
             if (detect_prompt_visible(content)) {
                 /* Inject /nbs-notify interrupt */
-                tp->send_text(tp, "/nbs-notify interrupt from chat");
+                if (tp->send_text(tp, "/nbs-notify interrupt from chat") != 0) {
+                    fprintf(stderr, "handle_interrupt: send_text failed\n");
+                }
                 usleep(300000);
-                tp->send_key(tp, "Enter");
+                if (tp->send_key(tp, "Enter") != 0) {
+                    fprintf(stderr, "handle_interrupt: send_key Enter failed\n");
+                }
                 succeeded = 1;
                 free(content);
                 goto done;
@@ -333,13 +343,8 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         }
         (void)off; /* suppress unused warning */
 
-        /* Cap at message limit */
-        if (strlen(parts) > SIDECAR_MAX_MESSAGE - 1) {
-            parts[SIDECAR_MAX_MESSAGE - 4] = '.';
-            parts[SIDECAR_MAX_MESSAGE - 3] = '.';
-            parts[SIDECAR_MAX_MESSAGE - 2] = '.';
-            parts[SIDECAR_MAX_MESSAGE - 1] = '\0';
-        }
+        /* snprintf into parts (sizeof SIDECAR_MAX_MESSAGE) already guarantees
+         * the buffer is within bounds — no additional truncation guard needed */
 
         snprintf(state->notify_message, sizeof(state->notify_message),
                  "%s", parts);
@@ -397,7 +402,10 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     memset(&state, 0, sizeof(state));
 
     /* Seed registry */
-    registry_seed(cfg->nbs_root, registry_path);
+    int seed_rc = registry_seed(cfg->nbs_root, registry_path);
+    if (seed_rc != 0) {
+        fprintf(stderr, "sidecar_run: registry_seed failed\n");
+    }
 
     /* Wait for prompt and inject initial prompt */
     int init_wait = 0;
@@ -433,8 +441,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         sleep(1);
 
         /* Check control inbox */
-        registry_process_inbox(inbox_path, registry_path,
+        int inbox_rc = registry_process_inbox(inbox_path, registry_path,
                                 &state.control_inbox_line);
+        if (inbox_rc < 0) {
+            fprintf(stderr, "sidecar_run: registry_process_inbox failed\n");
+        }
 
         /* --- Out-of-band interrupt check (every tick) --- */
         {

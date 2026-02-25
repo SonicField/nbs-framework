@@ -90,12 +90,13 @@ int transport_tmux_init(transport_t *tp, const char *pane_id) {
 
     memset(tp, 0, sizeof(*tp));
 
+    ASSERT_MSG(strlen(pane_id) < sizeof(((tmux_ctx_t*)0)->pane_id),
+               "transport_tmux_init: pane_id too long (%zu >= %zu)",
+               strlen(pane_id), sizeof(((tmux_ctx_t*)0)->pane_id));
+
     tmux_ctx_t *ctx = calloc(1, sizeof(tmux_ctx_t));
     if (!ctx) return -1;
 
-    ASSERT_MSG(strlen(pane_id) < sizeof(ctx->pane_id),
-               "transport_tmux_init: pane_id too long (%zu >= %zu)",
-               strlen(pane_id), sizeof(ctx->pane_id));
     snprintf(ctx->pane_id, sizeof(ctx->pane_id), "%s", pane_id);
 
     tp->capture = tmux_capture;

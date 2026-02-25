@@ -22,6 +22,9 @@
 
 static void print_usage(void)
 {
+    /* V18: fprintf return unchecked — deliberate choice.
+     * This is a usage message printed on error paths. If stderr is
+     * unavailable, there is no useful recovery action. */
     fprintf(stderr,
         "Usage: nbs-bus <command> [args...]\n"
         "\n"
@@ -164,6 +167,7 @@ static int verify_events_dir(const char *dir)
  * Returns 0 if valid, -1 if invalid. */
 static int validate_non_empty_no_whitespace(const char *s, const char *label)
 {
+    ASSERT_MSG(label != NULL, "validate_non_empty_no_whitespace: label is NULL");
     if (s == NULL || s[0] == '\0') {
         fprintf(stderr, "Error: %s must not be empty\n", label);
         return -1;
@@ -278,9 +282,11 @@ static int cmd_read(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    if (bus_read(dir, event_file) != 0) {
-        /* Distinguish "not found" from I/O errors */
-        if (errno == ENOENT)
+    int rc2 = bus_read(dir, event_file);
+    if (rc2 != 0) {
+        /* Distinguish "not found" from I/O errors via distinct return codes:
+         * bus_read returns -2 for not-found, -1 for other errors */
+        if (rc2 == -2)
             return BUS_EXIT_NOT_FOUND;
         return BUS_EXIT_ERROR;
     }
@@ -302,9 +308,11 @@ static int cmd_ack(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    if (bus_ack(dir, event_file) != 0) {
-        /* Distinguish "not found" from I/O errors */
-        if (errno == ENOENT)
+    int rc2 = bus_ack(dir, event_file);
+    if (rc2 != 0) {
+        /* Distinguish "not found" from I/O errors via distinct return codes:
+         * bus_ack returns -2 for not-found, -1 for other errors */
+        if (rc2 == -2)
             return BUS_EXIT_NOT_FOUND;
         return BUS_EXIT_ERROR;
     }

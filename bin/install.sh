@@ -62,7 +62,7 @@ validate_home() {
 PREFIX=""
 EXPLICIT_PREFIX=false
 for arg in "$@"; do
-    case $arg in
+    case "$arg" in
         --prefix=*)
             PREFIX="${arg#--prefix=}"
             EXPLICIT_PREFIX=true
@@ -90,8 +90,12 @@ if [[ -z "$PREFIX" ]]; then
     PREFIX="$HOME/.nbs"
 fi
 
-# Resolve to absolute path
-PREFIX="$(cd "$(dirname "$PREFIX")" 2>/dev/null && pwd)/$(basename "$PREFIX")" || PREFIX="$PREFIX"
+# V7.1: Fail explicitly if PREFIX parent directory does not exist
+PREFIX_DIR="$(cd "$(dirname "$PREFIX")" 2>/dev/null && pwd)" || {
+    echo "ERROR: Parent directory of PREFIX does not exist: $(dirname "$PREFIX")" >&2
+    exit 1
+}
+PREFIX="${PREFIX_DIR}/$(basename "$PREFIX")"
 
 CLAUDE_COMMANDS_DIR="$HOME/.claude/commands"
 
@@ -114,6 +118,11 @@ echo "  Source: $PROJECT_ROOT"
 mkdir -p "$PREFIX/commands"
 
 # 2. Process command templates
+# V7.2: Check claude_tools directory exists before globbing
+if [[ ! -d "$PROJECT_ROOT/claude_tools" ]]; then
+    echo "ERROR: claude_tools directory not found at $PROJECT_ROOT/claude_tools" >&2
+    exit 1
+fi
 echo "Processing command templates..."
 for template in "$PROJECT_ROOT/claude_tools"/*.md; do
     if [[ -f "$template" ]]; then
@@ -128,8 +137,16 @@ done
 echo "Creating symlinks to supporting directories..."
 for dir in concepts docs templates bin terminal-weathering; do
     target="$PREFIX/$dir"
-    if [[ -e "$target" || -L "$target" ]]; then
+    # V7.3: Guard rm -rf — only remove if symlink or directory (defence-in-depth)
+    if [[ -L "$target" || -d "$target" ]]; then
         rm -rf "$target"
+    elif [[ -e "$target" ]]; then
+        rm -rf "$target"
+    fi
+    # V7.4: Verify source directory exists before creating symlink
+    if [[ ! -d "$PROJECT_ROOT/$dir" ]]; then
+        echo "WARNING: Source directory not found, skipping symlink: $PROJECT_ROOT/$dir" >&2
+        continue
     fi
     ln -s "$PROJECT_ROOT/$dir" "$target"
     echo "  Linked: $dir/"

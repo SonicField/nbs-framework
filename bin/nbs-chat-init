@@ -65,10 +65,11 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-info()  { echo -e "${BLUE}[nbs-chat-init]${NC} $*"; }
-ok()    { echo -e "${GREEN}[nbs-chat-init]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[nbs-chat-init]${NC} $*"; }
-error() { echo -e "${RED}[nbs-chat-init]${NC} $*" >&2; }
+# V5.1: Use printf instead of echo -e to avoid mangling backslash sequences
+info()  { printf '%b %s\n' "${BLUE}[nbs-chat-init]${NC}" "$*"; }
+ok()    { printf '%b %s\n' "${GREEN}[nbs-chat-init]${NC}" "$*"; }
+warn()  { printf '%b %s\n' "${YELLOW}[nbs-chat-init]${NC}" "$*"; }
+error() { printf '%b %s\n' "${RED}[nbs-chat-init]${NC}" "$*" >&2; }
 
 # --- CHAT_NAME validation ---
 # Violation 3 (SECURITY): CHAT_NAME used unsanitised in tmux session names.
@@ -321,7 +322,8 @@ echo ""
 if [[ "$SPAWN_ONLY" != "true" ]]; then
 
 # Check for existing .nbs/
-if [[ -d ".nbs" ]]; then
+# V5.2: Use absolute path for .nbs directory check
+if [[ -d "$PROJECT_ROOT/.nbs" ]]; then
     warn "Existing .nbs/ directory found."
     if ! confirm "Re-initialise? (existing data will be preserved)"; then
         info "Cancelled."
@@ -336,17 +338,19 @@ fi
 info "Phase 1: Event bus..."
 
 # 1.1 Create bus directories
-run mkdir -p .nbs/events/processed
+# V5.3: Use absolute path for bus directory
+run mkdir -p "${PROJECT_ROOT}/.nbs/events/processed"
 
 # 1.2 Write config (only if missing)
-if [[ ! -f ".nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
+# V5.4: Use absolute paths for config.yaml
+if [[ ! -f "${PROJECT_ROOT}/.nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
         echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/events/config.yaml (defaults)"
     else
         # Violation 7 (BUG): cat heredoc bypasses run(). This is intentional:
         # the enclosing DRY_RUN guard prevents execution in dry-run mode,
         # and cat heredocs cannot be meaningfully routed through run().
-        cat > .nbs/events/config.yaml << 'CONFIGEOF'
+        cat > "${PROJECT_ROOT}/.nbs/events/config.yaml" << 'CONFIGEOF'
 # NBS Event Bus Configuration
 #
 # dedup-window:  Seconds to suppress duplicate events (default: 0 = disabled)
@@ -377,22 +381,23 @@ else
 
     # Publish a test event
     # Violation 4 (BUG): Check nbs-bus publish return value.
-    if ! nbs-bus publish .nbs/events/ nbs-chat-init "$SELF_TEST_TYPE" low "nbs-chat-init self-test" >/dev/null 2>&1; then
+    # V5.6: Use absolute paths for all bus self-test operations
+    if ! nbs-bus publish "${PROJECT_ROOT}/.nbs/events/" nbs-chat-init "$SELF_TEST_TYPE" low "nbs-chat-init self-test" >/dev/null 2>&1; then
         warn "  nbs-bus publish failed during self-test (exit $?)"
     fi
 
     # Find and acknowledge it
     # Violation 1 (SECURITY): Use find with -print0 instead of unquoted glob + ls + xargs.
-    SELF_TEST_EVENT=$(find .nbs/events/ -maxdepth 1 -name "*nbs-chat-init*self-test*.event" -print0 2>/dev/null \
+    SELF_TEST_EVENT=$(find "${PROJECT_ROOT}/.nbs/events/" -maxdepth 1 -name "*nbs-chat-init*self-test*.event" -print0 2>/dev/null \
         | xargs -0 -r -n1 basename 2>/dev/null | head -1)
     if [[ -n "$SELF_TEST_EVENT" ]]; then
         # Violation 13 (HARDENING): Check nbs-bus ack return value, log warning on failure.
-        if ! nbs-bus ack .nbs/events/ "$SELF_TEST_EVENT" >/dev/null 2>&1; then
+        if ! nbs-bus ack "${PROJECT_ROOT}/.nbs/events/" "$SELF_TEST_EVENT" >/dev/null 2>&1; then
             warn "  nbs-bus ack failed for self-test event '$SELF_TEST_EVENT'"
         fi
 
         # Verify it reached processed/
-        if [[ -f ".nbs/events/processed/$SELF_TEST_EVENT" ]]; then
+        if [[ -f "${PROJECT_ROOT}/.nbs/events/processed/$SELF_TEST_EVENT" ]]; then
             ok "  Bus self-test passed"
         else
             error "  Bus self-test: event not found in processed/"
@@ -401,7 +406,7 @@ else
     else
         # If no event was created, the bus binary may have deduped it or failed.
         # Fall back to checking bus status — if status works, the bus is operational.
-        if nbs-bus status .nbs/events/ >/dev/null 2>&1; then
+        if nbs-bus status "${PROJECT_ROOT}/.nbs/events/" >/dev/null 2>&1; then
             ok "  Bus self-test passed (via status check)"
         else
             error "  Bus self-test: no event file created and status check failed"
@@ -416,16 +421,17 @@ fi
 
 info "Phase 2: Chat..."
 
-run mkdir -p .nbs/chat/archive
+# V5.3: Use absolute path for chat archive directory
+run mkdir -p "${PROJECT_ROOT}/.nbs/chat/archive"
 
 # 2.1 Archive existing chat (if present)
 if [[ -f "$CHAT_FILE" ]]; then
     ARCHIVE_TS=$(date +%Y%m%d_%H%M%S)
     ARCHIVE_NAME="${CHAT_NAME}-${ARCHIVE_TS}.chat"
     info "  Archiving existing ${CHAT_NAME}.chat → archive/$ARCHIVE_NAME"
-    run mv "$CHAT_FILE" ".nbs/chat/archive/$ARCHIVE_NAME"
+    run mv "$CHAT_FILE" "${PROJECT_ROOT}/.nbs/chat/archive/$ARCHIVE_NAME"
     if [[ -f "$CHAT_CURSORS" ]]; then
-        run mv "$CHAT_CURSORS" ".nbs/chat/archive/${ARCHIVE_NAME}.cursors"
+        run mv "$CHAT_CURSORS" "${PROJECT_ROOT}/.nbs/chat/archive/${ARCHIVE_NAME}.cursors"
     fi
     if [[ -f "$CHAT_LOCK" ]]; then
         run rm -f "$CHAT_LOCK"
@@ -464,7 +470,8 @@ fi
 
 info "Phase 3: Scribe log..."
 
-run mkdir -p .nbs/scribe
+# V5.3: Use absolute path for scribe directory
+run mkdir -p "${PROJECT_ROOT}/.nbs/scribe"
 
 if [[ ! -f "$SCRIBE_LOG" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -513,7 +520,7 @@ compact_decision_log() {
 
     local archive_ts
     archive_ts=$(date +%Y%m%d-%H%M%S)
-    local archive_file=".nbs/scribe/${CHAT_NAME}-log-archive-${archive_ts}.md"
+    local archive_file="${PROJECT_ROOT}/.nbs/scribe/${CHAT_NAME}-log-archive-${archive_ts}.md"
 
     if [[ "$DRY_RUN" == "true" ]]; then
         echo -e "  ${YELLOW}[DRY-RUN]${NC} Archive $log_file ($entry_count entries) → $archive_file"
@@ -574,7 +581,8 @@ if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/project-id ($PROJECT_ID)"
 else
     # Violation 7 (BUG): echo redirect bypasses run(). Intentional — guarded by DRY_RUN check above.
-    echo "$PROJECT_ID" > .nbs/project-id
+    # V5.5: Use absolute path for project-id
+    echo "$PROJECT_ID" > "${PROJECT_ROOT}/.nbs/project-id"
     ok "  project-id: $PROJECT_ID"
 fi
 
@@ -593,8 +601,8 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
     HEALTH_PASS=true
 
-    # Bus
-    if nbs-bus status .nbs/events/ >/dev/null 2>&1; then
+    # V5.7: Use absolute paths for bus status check
+    if nbs-bus status "${PROJECT_ROOT}/.nbs/events/" >/dev/null 2>&1; then
         ok "  Bus: operational"
     else
         error "  Bus: FAILED"
@@ -788,7 +796,7 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
     # Publish spawn event
     # Violation 6 (BUG): Replace || true with proper error handling — log warning but continue.
     if [[ "$DRY_RUN" != "true" ]]; then
-        if ! nbs-bus publish .nbs/events/ nbs-chat-init ai-spawned normal \
+        if ! nbs-bus publish "${PROJECT_ROOT}/.nbs/events/" nbs-chat-init ai-spawned normal \
             "AI instances spawned by nbs-chat-init" >/dev/null 2>&1; then
             warn "nbs-bus publish failed for ai-spawned event (non-fatal, continuing)"
         fi

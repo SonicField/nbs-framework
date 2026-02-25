@@ -81,6 +81,9 @@ static int64_t compute_file_length(const char *content_without_length) {
 }
 
 static int parse_participants(const char *line, participant_t *parts, int max_parts) {
+    ASSERT_MSG(line != NULL, "parse_participants: line is NULL");
+    ASSERT_MSG(parts != NULL, "parse_participants: parts is NULL");
+    ASSERT_MSG(max_parts > 0, "parse_participants: max_parts must be positive");
     int count = 0;
     const char *p = line;
 
@@ -127,21 +130,33 @@ static int parse_participants(const char *line, participant_t *parts, int max_pa
 
 static void format_participants(const participant_t *parts, int count,
                                  char *buf, size_t buf_size) {
+    ASSERT_MSG(buf != NULL && buf_size > 0,
+               "format_participants: invalid output buffer");
+    buf[0] = '\0';
     size_t offset = 0;
     for (int i = 0; i < count; i++) {
         int written;
         if (i > 0) {
             written = snprintf(buf + offset, buf_size - offset, ", ");
-            if (written > 0) offset += written;
+            if (written > 0 && (size_t)written < buf_size - offset)
+                offset += (size_t)written;
+            else if (written > 0)
+                offset = buf_size - 1;  /* truncated */
         }
         written = snprintf(buf + offset, buf_size - offset,
                            "%s(%d)", parts[i].handle, parts[i].count);
-        if (written > 0) offset += written;
+        if (written > 0 && (size_t)written < buf_size - offset)
+            offset += (size_t)written;
+        else if (written > 0)
+            offset = buf_size - 1;  /* truncated */
     }
 }
 
 static int update_participants(participant_t *parts, int count,
                                 const char *handle, int max_parts) {
+    ASSERT_MSG(parts != NULL, "update_participants: parts is NULL");
+    ASSERT_MSG(handle != NULL, "update_participants: handle is NULL");
+    ASSERT_MSG(max_parts > 0, "update_participants: max_parts must be positive, got %d", max_parts);
     /* Find existing participant */
     for (int i = 0; i < count; i++) {
         if (strcmp(parts[i].handle, handle) == 0) {
@@ -461,7 +476,11 @@ static int chat_auto_archive(const char *path, char **all_lines,
                     }
                 }
                 if (fclose(cwf) == 0) {
-                    rename(cursor_tmp, cpath);
+                    if (rename(cursor_tmp, cpath) != 0) {
+                        fprintf(stderr, "warning: chat_auto_archive: cursor rename failed: %s\n",
+                                strerror(errno));
+                        unlink(cursor_tmp);
+                    }
                 } else {
                     unlink(cursor_tmp);
                 }
@@ -511,12 +530,18 @@ int chat_create(const char *path) {
     FILE *f = fdopen(fd, "w");
     if (!f) { close(fd); return -2; }
 
-    fprintf(f, "=== nbs-chat ===\n");
-    fprintf(f, "last-writer: system\n");
-    fprintf(f, "last-write: %s\n", timestamp);
-    fprintf(f, "file-length: %" PRId64 "\n", file_len);
-    fprintf(f, "participants: \n");
-    fprintf(f, "---\n");
+    int write_err = 0;
+    if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
+    if (fprintf(f, "last-writer: system\n") < 0) write_err = 1;
+    if (fprintf(f, "last-write: %s\n", timestamp) < 0) write_err = 1;
+    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (fprintf(f, "participants: \n") < 0) write_err = 1;
+    if (fprintf(f, "---\n") < 0) write_err = 1;
+    if (write_err) {
+        fclose(f);
+        unlink(path);
+        return -2;
+    }
     if (fclose(f) != 0) {
         fprintf(stderr, "warning: chat_create: fclose failed: %s\n", strerror(errno));
         return -2;
@@ -1448,12 +1473,13 @@ int chat_cursor_write(const char *chat_path, const char *handle, int index) {
         return -1;
     }
 
-    fprintf(f, "# Read cursors — last-read message index per handle\n");
+    int write_err = 0;
+    if (fprintf(f, "# Read cursors — last-read message index per handle\n") < 0) write_err = 1;
     for (int i = 0; i < count; i++) {
-        fprintf(f, "%s=%d\n", handles[i], indices[i]);
+        if (fprintf(f, "%s=%d\n", handles[i], indices[i]) < 0) write_err = 1;
     }
-    if (fclose(f) != 0) {
-        fprintf(stderr, "warning: chat_cursor_write: fclose failed: %s\n", strerror(errno));
+    if (write_err || fclose(f) != 0) {
+        fprintf(stderr, "warning: chat_cursor_write: write failed: %s\n", strerror(errno));
         unlink(tmp_path);
         chat_lock_release(lock_fd);
         return -1;

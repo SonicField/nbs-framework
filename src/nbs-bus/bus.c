@@ -71,16 +71,11 @@ static void format_iso8601(char *buf, size_t len)
     ASSERT_MSG(len >= 24, "format_iso8601: buf too small: %zu", len);
 
     time_t now = time(NULL);
-    if (now == (time_t)-1) {
-        snprintf(buf, len, "1970-01-01T00:00:00Z");
-        return;
-    }
+    ASSERT_MSG(now != (time_t)-1, "format_iso8601: time() failed: %s", strerror(errno));
     struct tm tm;
     gmtime_r(&now, &tm);
     size_t rc = strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", &tm);
-    if (rc == 0) {
-        snprintf(buf, len, "1970-01-01T00:00:00Z");
-    }
+    ASSERT_MSG(rc != 0, "format_iso8601: strftime failed (buffer size %zu)", len);
 }
 
 /* Check if a string contains whitespace */
@@ -262,6 +257,8 @@ static void format_age(long long delta_us, char *buf, size_t len)
 /* Comparison function for sorting events: by priority (asc), then timestamp (asc) */
 static int event_compare(const void *a, const void *b)
 {
+    ASSERT_MSG(a != NULL, "event_compare: a is NULL");
+    ASSERT_MSG(b != NULL, "event_compare: b is NULL");
     const bus_event_t *ea = (const bus_event_t *)a;
     const bus_event_t *eb = (const bus_event_t *)b;
 
@@ -314,7 +311,9 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
                               ev->type, sizeof(ev->type)) != 0)
             continue; /* skip events whose file cannot be read */
 
-        snprintf(ev->filename, sizeof(ev->filename), "%s", name);
+        int n_fn = snprintf(ev->filename, sizeof(ev->filename), "%s", name);
+        ASSERT_MSG(n_fn >= 0 && (size_t)n_fn < sizeof(ev->filename),
+                   "scan_events: filename truncated for %s", name);
         ev->timestamp_us = ts_us;
         count++;
     }
@@ -411,6 +410,8 @@ typedef struct {
 
 static int prune_compare(const void *a, const void *b)
 {
+    ASSERT_MSG(a != NULL, "prune_compare: a is NULL");
+    ASSERT_MSG(b != NULL, "prune_compare: b is NULL");
     const prune_entry_t *ea = (const prune_entry_t *)a;
     const prune_entry_t *eb = (const prune_entry_t *)b;
     if (ea->timestamp_us < eb->timestamp_us) return -1;
@@ -470,8 +471,10 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
      * publishing the same source+type within the same microsecond.
      */
     char filename[BUS_MAX_FILENAME];
-    snprintf(filename, sizeof(filename), "%lld-%s-%s-%d.event",
+    int n_fn = snprintf(filename, sizeof(filename), "%lld-%s-%s-%d.event",
              ts_us, source, type, (int)getpid());
+    ASSERT_MSG(n_fn >= 0 && (size_t)n_fn < sizeof(filename),
+               "bus_publish: event filename truncated (source=%s, type=%s)", source, type);
 
     /* Build temp and final paths */
     char tmp_path[BUS_MAX_FULLPATH];
@@ -547,7 +550,10 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
     }
 
     /* Print the filename to stdout */
-    printf("%s\n", filename);
+    if (printf("%s\n", filename) < 0) {
+        fprintf(stderr, "Error: failed to write filename to stdout\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -567,8 +573,7 @@ int bus_check(const char *events_dir, const char *handle)
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {
-        fprintf(stderr, "Error: cannot scan events directory: %s\n",
-                strerror(errno));
+        fprintf(stderr, "Error: cannot scan events directory: %s\n", events_dir);
         return -1;
     }
 
@@ -586,10 +591,13 @@ int bus_check(const char *events_dir, const char *handle)
             continue;
         char age[32];
         format_age(current_us - events[i].timestamp_us, age, sizeof(age));
-        printf("[%s] %s (%s)\n",
+        if (printf("[%s] %s (%s)\n",
                bus_priority_to_str(events[i].priority),
                events[i].filename,
-               age);
+               age) < 0) {
+            fprintf(stderr, "Error: failed to write event listing to stdout\n");
+            return -1;
+        }
     }
 
     return 0;
@@ -608,6 +616,14 @@ int bus_read(const char *events_dir, const char *event_file)
         return -1;
     }
 
+    /* Validate .event suffix */
+    size_t elen = strlen(event_file);
+    if (elen < 7 || strcmp(event_file + elen - 6, ".event") != 0) {
+        fprintf(stderr, "Error: invalid event filename (must end in .event): %s\n",
+                event_file);
+        return -1;
+    }
+
     char filepath[BUS_MAX_FULLPATH];
     int n_filepath = snprintf(filepath, sizeof(filepath), "%s/%s", events_dir, event_file);
     ASSERT_MSG(n_filepath >= 0 && (size_t)n_filepath < sizeof(filepath),
@@ -616,7 +632,7 @@ int bus_read(const char *events_dir, const char *event_file)
     FILE *fp = fopen(filepath, "r");
     if (!fp) {
         fprintf(stderr, "Error: event not found: %s\n", event_file);
-        return -1;
+        return -2;
     }
 
     char buf[4096];
@@ -642,6 +658,14 @@ int bus_ack(const char *events_dir, const char *event_file)
     if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
         strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
         fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
+                event_file);
+        return -1;
+    }
+
+    /* Validate .event suffix */
+    size_t elen = strlen(event_file);
+    if (elen < 7 || strcmp(event_file + elen - 6, ".event") != 0) {
+        fprintf(stderr, "Error: invalid event filename (must end in .event): %s\n",
                 event_file);
         return -1;
     }
@@ -673,7 +697,7 @@ int bus_ack(const char *events_dir, const char *event_file)
     /* Check source exists */
     if (stat(src_path, &st) != 0) {
         fprintf(stderr, "Error: event not found: %s\n", event_file);
-        return -1;
+        return -2;
     }
 
     if (rename(src_path, dst_path) != 0) {
@@ -766,7 +790,9 @@ int bus_prune(const char *events_dir, long long max_bytes)
             continue;
 
         prune_entry_t *pe = &entries[count];
-        snprintf(pe->filename, sizeof(pe->filename), "%s", name);
+        int n_pefn = snprintf(pe->filename, sizeof(pe->filename), "%s", name);
+        ASSERT_MSG(n_pefn >= 0 && (size_t)n_pefn < sizeof(pe->filename),
+                   "bus_prune: filename truncated for %s", name);
         pe->timestamp_us = ts_us;
         pe->size = st.st_size;
         total_size += st.st_size;
@@ -870,13 +896,22 @@ int bus_status(const char *events_dir)
         closedir(dir);
     }
 
-    printf("Pending: %d total", count);
-    if (count > 0) {
-        printf(" (critical=%d, high=%d, normal=%d, low=%d)",
-               priority_counts[0], priority_counts[1],
-               priority_counts[2], priority_counts[3]);
+    if (printf("Pending: %d total", count) < 0) {
+        fprintf(stderr, "Error: failed to write status to stdout\n");
+        return -1;
     }
-    printf("\n");
+    if (count > 0) {
+        if (printf(" (critical=%d, high=%d, normal=%d, low=%d)",
+               priority_counts[0], priority_counts[1],
+               priority_counts[2], priority_counts[3]) < 0) {
+            fprintf(stderr, "Error: failed to write status to stdout\n");
+            return -1;
+        }
+    }
+    if (printf("\n") < 0) {
+        fprintf(stderr, "Error: failed to write status to stdout\n");
+        return -1;
+    }
 
     if (oldest_ts > 0) {
         time_t oldest_sec = (time_t)(oldest_ts / 1000000);
@@ -884,15 +919,22 @@ int bus_status(const char *events_dir)
         char oldest_str[32];
         gmtime_r(&oldest_sec, &tm);
         strftime(oldest_str, sizeof(oldest_str), "%Y-%m-%dT%H:%M:%SZ", &tm);
-        printf("Oldest pending: %s\n", oldest_str);
+        if (printf("Oldest pending: %s\n", oldest_str) < 0) {
+            fprintf(stderr, "Error: failed to write status to stdout\n");
+            return -1;
+        }
     }
 
-    printf("Processed: %d events (%.1f KB)\n",
-           processed_count, (double)processed_size / 1024.0);
+    if (printf("Processed: %d events (%.1f KB)\n",
+           processed_count, (double)processed_size / 1024.0) < 0) {
+        fprintf(stderr, "Error: failed to write status to stdout\n");
+        return -1;
+    }
 
     /* Check for stale events if ack-timeout is configured */
     bus_config_t cfg;
-    bus_load_config(events_dir, &cfg);
+    int cfg_rc = bus_load_config(events_dir, &cfg);
+    ASSERT_MSG(cfg_rc == 0, "bus_status: bus_load_config failed for %s", events_dir);
     if (cfg.ack_timeout_s > 0 && count > 0) {
         long long current_us = now_us();
         long long timeout_us = cfg.ack_timeout_s * 1000000LL;
@@ -902,8 +944,11 @@ int bus_status(const char *events_dir)
                 stale++;
         }
         if (stale > 0) {
-            printf("WARNING: %d stale event%s (unacked > %llds)\n",
-                   stale, stale == 1 ? "" : "s", cfg.ack_timeout_s);
+            if (printf("WARNING: %d stale event%s (unacked > %llds)\n",
+                   stale, stale == 1 ? "" : "s", cfg.ack_timeout_s) < 0) {
+                fprintf(stderr, "Error: failed to write status to stdout\n");
+                return -1;
+            }
         }
     }
 
@@ -922,7 +967,9 @@ int bus_publish_dedup(const char *events_dir, const char *source,
 
     /* Build the dedup key for this proposed event */
     char proposed_key[BUS_MAX_HANDLE + BUS_MAX_TYPE + 2];
-    snprintf(proposed_key, sizeof(proposed_key), "%s:%s", source, type);
+    int n_key = snprintf(proposed_key, sizeof(proposed_key), "%s:%s", source, type);
+    ASSERT_MSG(n_key >= 0 && (size_t)n_key < sizeof(proposed_key),
+               "bus_publish_dedup: dedup key truncated for %s:%s", source, type);
 
     long long current_us = now_us();
     long long cutoff_us = current_us - dedup_window_us;

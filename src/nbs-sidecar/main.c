@@ -113,13 +113,8 @@ int main(int argc, char **argv) {
     cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
     cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
 
-    /* After all env_int calls, before config validation */
-    ASSERT_MSG(cfg.bus_check_interval > 0 && cfg.bus_check_interval < cfg.notify_cooldown,
-               "bus_check_interval (%d) must be in (0, notify_cooldown=%d)",
-               cfg.bus_check_interval, cfg.notify_cooldown);
-    ASSERT_MSG(cfg.startup_grace == 0 || cfg.startup_grace >= cfg.bus_check_interval,
-               "startup_grace (%d) must be 0 (disabled) or >= bus_check_interval (%d)",
-               cfg.startup_grace, cfg.bus_check_interval);
+    /* After all env_int calls, timing assertions are deferred until after
+     * command-line parsing so that argv overrides are applied first. */
 
     cfg.is_remote = (cfg.remote_host[0] != '\0') ? 1 : 0;
     cfg.transport_mode = TRANSPORT_TMUX; /* default */
@@ -127,9 +122,19 @@ int main(int argc, char **argv) {
     /* Parse command-line arguments (override env) */
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "--handle=", 9) == 0) {
-            snprintf(cfg.handle, sizeof(cfg.handle), "%s", argv[i] + 9);
+            int n = snprintf(cfg.handle, sizeof(cfg.handle), "%s", argv[i] + 9);
+            if (n < 0 || (size_t)n >= sizeof(cfg.handle)) {
+                fprintf(stderr, "Error: --handle value too long (max %zu)\n",
+                        sizeof(cfg.handle) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--root=", 7) == 0) {
-            snprintf(cfg.nbs_root, sizeof(cfg.nbs_root), "%s", argv[i] + 7);
+            int n = snprintf(cfg.nbs_root, sizeof(cfg.nbs_root), "%s", argv[i] + 7);
+            if (n < 0 || (size_t)n >= sizeof(cfg.nbs_root)) {
+                fprintf(stderr, "Error: --root value too long (max %zu)\n",
+                        sizeof(cfg.nbs_root) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--transport=", 12) == 0) {
             const char *t = argv[i] + 12;
             if (strcmp(t, "tmux") == 0) {
@@ -142,18 +147,43 @@ int main(int argc, char **argv) {
                 return SIDECAR_EXIT_BAD_ARGS;
             }
         } else if (strncmp(argv[i], "--pane-id=", 10) == 0) {
-            snprintf(cfg.pane_id, sizeof(cfg.pane_id), "%s", argv[i] + 10);
+            int n = snprintf(cfg.pane_id, sizeof(cfg.pane_id), "%s", argv[i] + 10);
+            if (n < 0 || (size_t)n >= sizeof(cfg.pane_id)) {
+                fprintf(stderr, "Error: --pane-id value too long (max %zu)\n",
+                        sizeof(cfg.pane_id) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--pty-path=", 11) == 0) {
-            snprintf(cfg.pty_session_path, sizeof(cfg.pty_session_path),
+            int n = snprintf(cfg.pty_session_path, sizeof(cfg.pty_session_path),
                      "%s", argv[i] + 11);
+            if (n < 0 || (size_t)n >= sizeof(cfg.pty_session_path)) {
+                fprintf(stderr, "Error: --pty-path value too long (max %zu)\n",
+                        sizeof(cfg.pty_session_path) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--session=", 10) == 0) {
-            snprintf(cfg.session_name, sizeof(cfg.session_name),
+            int n = snprintf(cfg.session_name, sizeof(cfg.session_name),
                      "%s", argv[i] + 10);
+            if (n < 0 || (size_t)n >= sizeof(cfg.session_name)) {
+                fprintf(stderr, "Error: --session value too long (max %zu)\n",
+                        sizeof(cfg.session_name) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--initial-prompt=", 17) == 0) {
-            snprintf(cfg.initial_prompt, sizeof(cfg.initial_prompt),
+            int n = snprintf(cfg.initial_prompt, sizeof(cfg.initial_prompt),
                      "%s", argv[i] + 17);
+            if (n < 0 || (size_t)n >= sizeof(cfg.initial_prompt)) {
+                fprintf(stderr, "Error: --initial-prompt value too long (max %zu)\n",
+                        sizeof(cfg.initial_prompt) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strncmp(argv[i], "--log=", 6) == 0) {
-            snprintf(cfg.log_file, sizeof(cfg.log_file), "%s", argv[i] + 6);
+            int n = snprintf(cfg.log_file, sizeof(cfg.log_file), "%s", argv[i] + 6);
+            if (n < 0 || (size_t)n >= sizeof(cfg.log_file)) {
+                fprintf(stderr, "Error: --log value too long (max %zu)\n",
+                        sizeof(cfg.log_file) - 1);
+                return SIDECAR_EXIT_BAD_ARGS;
+            }
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage();
             return SIDECAR_EXIT_OK;
@@ -163,6 +193,14 @@ int main(int argc, char **argv) {
             return SIDECAR_EXIT_BAD_ARGS;
         }
     }
+
+    /* Config timing assertions — after arg parsing so overrides are applied */
+    ASSERT_MSG(cfg.bus_check_interval > 0 && cfg.bus_check_interval < cfg.notify_cooldown,
+               "bus_check_interval (%d) must be in (0, notify_cooldown=%d)",
+               cfg.bus_check_interval, cfg.notify_cooldown);
+    ASSERT_MSG(cfg.startup_grace == 0 || cfg.startup_grace >= cfg.bus_check_interval,
+               "startup_grace (%d) must be 0 (disabled) or >= bus_check_interval (%d)",
+               cfg.startup_grace, cfg.bus_check_interval);
 
     /* Validate required fields */
     if (cfg.handle[0] == '\0') {

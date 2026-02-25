@@ -73,6 +73,9 @@ static const char *resolve_nbs_workers(void)
  * count_dir_by_type — Count files containing type_substr in name.
  */
 static int count_dir_by_type(const char *dir_path, const char *type_substr) {
+    ASSERT_MSG(dir_path != NULL, "count_dir_by_type: dir_path is NULL");
+    ASSERT_MSG(type_substr != NULL, "count_dir_by_type: type_substr is NULL");
+
     DIR *d = opendir(dir_path);
     if (!d) return 0;
 
@@ -195,9 +198,17 @@ static void write_shared_pythia_bucket(const char *nbs_root, int bucket) {
 
     FILE *f = fopen(tmp_path, "w");
     if (f) {
-        fprintf(f, "%d\n", bucket);
+        if (fprintf(f, "%d\n", bucket) < 0) {
+            fclose(f);
+            unlink(tmp_path);
+            return;
+        }
         if (fclose(f) == 0) {
-            rename(tmp_path, path);
+            if (rename(tmp_path, path) != 0) {
+                fprintf(stderr, "write_shared_pythia_bucket: rename failed: %s\n",
+                        strerror(errno));
+                unlink(tmp_path);
+            }
         } else {
             unlink(tmp_path);
         }
@@ -343,7 +354,8 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
         unsigned int rand_val;
         int ufd = open("/dev/urandom", O_RDONLY);
         if (ufd >= 0) {
-            if (read(ufd, &rand_val, sizeof(rand_val)) < 0) {
+            ssize_t rn = read(ufd, &rand_val, sizeof(rand_val));
+            if (rn != (ssize_t)sizeof(rand_val)) {
                 rand_val = (unsigned int)now;
             }
             close(ufd);
@@ -386,9 +398,15 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
     snprintf(ts_tmp, sizeof(ts_tmp), "%s.tmp", ts_file);
     FILE *wtf = fopen(ts_tmp, "w");
     if (wtf) {
-        fprintf(wtf, "%ld\n", (long)now);
-        if (fclose(wtf) == 0) {
-            rename(ts_tmp, ts_file);
+        if (fprintf(wtf, "%ld\n", (long)now) < 0) {
+            fclose(wtf);
+            unlink(ts_tmp);
+        } else if (fclose(wtf) == 0) {
+            if (rename(ts_tmp, ts_file) != 0) {
+                fprintf(stderr, "trigger_standup_check: rename failed: %s\n",
+                        strerror(errno));
+                unlink(ts_tmp);
+            }
         } else {
             unlink(ts_tmp);
         }
@@ -487,7 +505,10 @@ int trigger_pythia_spawn(const char *nbs_root) {
         .l_start = 0,
         .l_len = 0,
     };
-    fcntl(fd, F_SETLK, &unlock);
+    if (fcntl(fd, F_SETLK, &unlock) < 0) {
+        fprintf(stderr, "trigger_pythia_spawn: unlock failed: %s\n",
+                strerror(errno));
+    }
     close(fd);
 
     return (rc == 0) ? 0 : -1;
@@ -558,9 +579,17 @@ static void write_shared_shepard_bucket(const char *nbs_root, int bucket) {
 
     FILE *f = fopen(tmp_path, "w");
     if (f) {
-        fprintf(f, "%d\n", bucket);
+        if (fprintf(f, "%d\n", bucket) < 0) {
+            fclose(f);
+            unlink(tmp_path);
+            return;
+        }
         if (fclose(f) == 0) {
-            rename(tmp_path, path);
+            if (rename(tmp_path, path) != 0) {
+                fprintf(stderr, "write_shared_shepard_bucket: rename failed: %s\n",
+                        strerror(errno));
+                unlink(tmp_path);
+            }
         } else {
             unlink(tmp_path);
         }
@@ -660,7 +689,10 @@ int trigger_shepard_spawn(const char *nbs_root) {
         .l_start = 0,
         .l_len = 0,
     };
-    fcntl(fd, F_SETLK, &unlock);
+    if (fcntl(fd, F_SETLK, &unlock) < 0) {
+        fprintf(stderr, "trigger_shepard_spawn: unlock failed: %s\n",
+                strerror(errno));
+    }
     close(fd);
 
     return (rc == 0) ? 0 : -1;
@@ -700,9 +732,17 @@ static void write_fixup_last_run(const char *nbs_root, time_t when) {
 
     FILE *f = fopen(tmp_path, "w");
     if (f) {
-        fprintf(f, "%lld\n", (long long)when);
+        if (fprintf(f, "%lld\n", (long long)when) < 0) {
+            fclose(f);
+            unlink(tmp_path);
+            return;
+        }
         if (fclose(f) == 0) {
-            rename(tmp_path, path);
+            if (rename(tmp_path, path) != 0) {
+                fprintf(stderr, "write_fixup_last_run: rename failed: %s\n",
+                        strerror(errno));
+                unlink(tmp_path);
+            }
         } else {
             unlink(tmp_path);
         }
@@ -776,7 +816,10 @@ int trigger_fixup_spawn(const char *nbs_root) {
         .l_start = 0,
         .l_len = 0,
     };
-    fcntl(fd, F_SETLK, &unlock);
+    if (fcntl(fd, F_SETLK, &unlock) < 0) {
+        fprintf(stderr, "trigger_fixup_spawn: unlock failed: %s\n",
+                strerror(errno));
+    }
     close(fd);
 
     return (rc == 0) ? 0 : -1;

@@ -34,9 +34,12 @@
 
 set -euo pipefail
 
-STAGING_DIR="${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}"
+STAGING_DIR="$(cd "${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}" 2>/dev/null && pwd || echo "$(pwd)/.nbs/remote-edit")"
 SSH_KEY="${NBS_REMOTE_EDIT_KEY:-}"
 SSH_PORT="${NBS_REMOTE_EDIT_PORT:-22}"
+
+# Validate SSH_PORT as numeric
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] || { echo "Error: NBS_REMOTE_EDIT_PORT must be numeric, got '$SSH_PORT'" >&2; exit 1; }
 
 usage() {
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
@@ -45,7 +48,7 @@ usage() {
 ssh_cmd() {
     local host="$1"
     shift
-    local opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p $SSH_PORT"
+    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p $SSH_PORT"
     if [[ -n "$SSH_KEY" ]]; then
         opts="$opts -i $SSH_KEY"
     fi
@@ -56,6 +59,8 @@ ssh_cmd() {
 local_path() {
     local host="$1"
     local remote_path="$2"
+    # Prevent directory traversal via host value
+    [[ "$host" =~ [/] ]] && { echo "Error: host must not contain '/'" >&2; return 4; }
     echo "${STAGING_DIR}/${host}${remote_path}"
 }
 
@@ -76,22 +81,23 @@ cmd_pull() {
 
     mkdir -p "$ldir"
 
+    # Check file existence first (avoids TOCTOU with empty file detection)
+    local _exist_rc=0
+    ssh_cmd "$host" "test -f $(printf '%q' "$remote_path")" 2>/dev/null || _exist_rc=$?
+    if (( _exist_rc == 255 )); then
+        echo "Error: SSH connection failed to ${host}" >&2
+        return 3
+    elif (( _exist_rc != 0 )); then
+        echo "Error: Remote file not found: ${host}:${remote_path}" >&2
+        return 2
+    fi
+
     # Download via ssh cat (avoids scp/sftp which BpfJailer may block)
     if ! ssh_cmd "$host" "cat $(printf '%q' "$remote_path")" > "$lpath" 2>/dev/null; then
         rm -f "$lpath"
         echo "Error: Failed to download ${host}:${remote_path}" >&2
         echo "Check: SSH connectivity, file exists, permissions" >&2
         return 3
-    fi
-
-    # Verify we got content (ssh cat of nonexistent file may succeed with empty output)
-    if [[ ! -s "$lpath" ]]; then
-        # Check if remote file exists
-        if ! ssh_cmd "$host" "test -f $(printf '%q' "$remote_path")" 2>/dev/null; then
-            rm -f "$lpath"
-            echo "Error: Remote file not found: ${host}:${remote_path}" >&2
-            return 2
-        fi
     fi
 
     echo "$lpath"
@@ -144,7 +150,7 @@ cmd_diff() {
 
     local tmp
     tmp=$(mktemp)
-    trap "rm -f '$tmp'" RETURN
+    trap "rm -f $(printf '%q' "$tmp")" RETURN
 
     if ! ssh_cmd "$host" "cat $(printf '%q' "$remote_path")" > "$tmp" 2>/dev/null; then
         echo "Error: Failed to download ${host}:${remote_path} for diff" >&2

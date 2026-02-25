@@ -21,7 +21,7 @@ size_t strip_ansi(char *text) {
             if (*rd == '[') {
                 /* CSI sequence: ESC [ ... final_byte (0x40-0x7E) */
                 rd++;
-                while (*rd != '\0' && (*rd < 0x40 || *rd > 0x7E)) {
+                while (*rd != '\0' && ((unsigned char)*rd < 0x40 || (unsigned char)*rd > 0x7E)) {
                     rd++;
                 }
                 if (*rd != '\0') rd++; /* Skip final byte */
