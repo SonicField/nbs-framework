@@ -29,6 +29,26 @@
  *   trigger_pythia_spawn:
  *   15. Lock acquired, spawn attempted
  *   16. Lock busy
+ *
+ *   trigger_shepard_check:
+ *   20. Below threshold, no action
+ *   21. Crosses threshold, fires
+ *   22. First run syncs without firing
+ *   23. Cross-sidecar dedup via shared file
+ *
+ *   trigger_shepard_spawn:
+ *   24. Lock acquired
+ *   25. Lock busy
+ *
+ *   trigger_fixup_check:
+ *   26. Disabled (interval_secs <= 0)
+ *   27. First run initialises timestamp
+ *   28. Interval not elapsed
+ *   29. Interval elapsed, fires
+ *
+ *   trigger_fixup_spawn:
+ *   30. Lock acquired
+ *   31. Lock busy
  */
 
 #include "../src/nbs-sidecar/triggers.h"
@@ -724,6 +744,440 @@ int main(void)
             }
             fclose(f);
             CHECK("T19: shared file contains bucket 1", stored_bucket == 1);
+        }
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_shepard_check tests
+     *
+     * Structurally identical to trigger_pythia_check but counts
+     * "chat-message" events with default interval 100.
+     * ================================================================= */
+    printf("\n-- trigger_shepard_check --\n");
+
+    /* Test 20: Below threshold, no action */
+    {
+        char sub[] = "/tmp/nbs_trig_t20_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        /* Reuse create_pythia_env but name events "chat-message-*" */
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
+        char processed[L3];
+        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
+        mkdirs(processed);
+
+        /* Create 10 chat-message events (default interval=100) */
+        for (int i = 0; i < 10; i++) {
+            char fpath[L4];
+            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
+                     processed, i);
+            touch(fpath);
+        }
+
+        snprintf(registry, sizeof(registry), "%s/registry", sub);
+        char entry[L4];
+        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
+        write_file(registry, entry);
+
+        int last = 0;
+        int rc = trigger_shepard_check(registry, nbs_root, &last);
+        CHECK("T20: below threshold returns 1", rc == 1);
+        /* First run syncs: last should be set to 10 */
+        rc = trigger_shepard_check(registry, nbs_root, &last);
+        CHECK("T20: second call still returns 1", rc == 1);
+        CHECK("T20: last_trigger_count is 10", last == 10);
+
+        rmrf(sub);
+    }
+
+    /* Test 21: Crosses threshold, fires */
+    {
+        char sub[] = "/tmp/nbs_trig_t21_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
+        char processed[L3];
+        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
+        mkdirs(processed);
+
+        /* Create 100 chat-message events — crosses bucket 0→1 */
+        for (int i = 0; i < 100; i++) {
+            char fpath[L4];
+            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
+                     processed, i);
+            touch(fpath);
+        }
+
+        snprintf(registry, sizeof(registry), "%s/registry", sub);
+        char entry[L4];
+        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
+        write_file(registry, entry);
+
+        int last = 1;  /* bucket 0 for interval 100 */
+        int rc = trigger_shepard_check(registry, nbs_root, &last);
+        CHECK("T21: crosses threshold returns 0", rc == 0);
+        CHECK("T21: last_trigger_count updated to 100", last == 100);
+
+        rmrf(sub);
+    }
+
+    /* Test 22: First run syncs without firing */
+    {
+        char sub[] = "/tmp/nbs_trig_t22_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
+        char processed[L3];
+        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
+        mkdirs(processed);
+
+        for (int i = 0; i < 50; i++) {
+            char fpath[L4];
+            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
+                     processed, i);
+            touch(fpath);
+        }
+
+        snprintf(registry, sizeof(registry), "%s/registry", sub);
+        char entry[L4];
+        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
+        write_file(registry, entry);
+
+        int last = 0;
+        int rc = trigger_shepard_check(registry, nbs_root, &last);
+        CHECK("T22: first run returns 1 (sync only)", rc == 1);
+        CHECK("T22: last_trigger_count synced to 50", last == 50);
+
+        rmrf(sub);
+    }
+
+    /* Test 23: Cross-sidecar dedup via shared file */
+    {
+        char sub[] = "/tmp/nbs_trig_t23_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
+        char processed[L3];
+        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
+        mkdirs(processed);
+
+        for (int i = 0; i < 100; i++) {
+            char fpath[L4];
+            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
+                     processed, i);
+            touch(fpath);
+        }
+
+        snprintf(registry, sizeof(registry), "%s/registry", sub);
+        char entry[L4];
+        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
+        write_file(registry, entry);
+
+        /* Simulate another sidecar having already triggered bucket 1 */
+        char shared_path[L3];
+        snprintf(shared_path, sizeof(shared_path),
+                 "%s/.nbs/shepard-last-bucket", nbs_root);
+        write_file(shared_path, "1\n");
+
+        int last = 1;  /* bucket 0 */
+        int rc = trigger_shepard_check(registry, nbs_root, &last);
+        CHECK("T23: shared file suppresses duplicate, returns 1", rc == 1);
+        CHECK("T23: last_trigger_count still updated to 100", last == 100);
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_shepard_spawn tests
+     * ================================================================= */
+    printf("\n-- trigger_shepard_spawn --\n");
+
+    /* Test 24: Lock acquired */
+    {
+        char sub[] = "/tmp/nbs_trig_t24_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        int rc = trigger_shepard_spawn(nbs_root);
+        CHECK("T24: lock acquired (not busy)", rc != 1);
+
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path), "%s/shepard.lock", nbs_dir);
+        struct stat st;
+        CHECK("T24: lock file created", stat(lock_path, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 25: Lock busy — parent holds lock, child gets busy */
+    {
+        char sub[] = "/tmp/nbs_trig_t25_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path),
+                 "%s/.nbs/shepard.lock", nbs_root);
+
+        int fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            CHECK("T25: open lock file", 0);
+        } else {
+            struct flock fl = {
+                .l_type = F_WRLCK,
+                .l_whence = SEEK_SET,
+                .l_start = 0,
+                .l_len = 0,
+            };
+            int lrc = fcntl(fd, F_SETLK, &fl);
+            CHECK("T25: parent acquires lock", lrc == 0);
+
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(fd);
+                int rc = trigger_shepard_spawn(nbs_root);
+                _exit(rc);
+            } else if (pid > 0) {
+                int status;
+                waitpid(pid, &status, 0);
+                int child_rc = -99;
+                if (WIFEXITED(status))
+                    child_rc = WEXITSTATUS(status);
+                CHECK("T25: child gets lock busy (returns 1)",
+                      child_rc == 1);
+            } else {
+                CHECK("T25: fork failed", 0);
+            }
+
+            struct flock unlock = {
+                .l_type = F_UNLCK,
+                .l_whence = SEEK_SET,
+                .l_start = 0,
+                .l_len = 0,
+            };
+            fcntl(fd, F_SETLK, &unlock);
+            close(fd);
+        }
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_fixup_check tests
+     * ================================================================= */
+    printf("\n-- trigger_fixup_check --\n");
+
+    /* Test 26: Disabled (interval_secs <= 0) */
+    {
+        char sub[] = "/tmp/nbs_trig_t26_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        int rc = trigger_fixup_check(nbs_root, 0);
+        CHECK("T26: interval=0 returns 1", rc == 1);
+        rc = trigger_fixup_check(nbs_root, -1);
+        CHECK("T26: interval=-1 returns 1", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 27: First run initialises timestamp without firing */
+    {
+        char sub[] = "/tmp/nbs_trig_t27_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* Ensure no fixup-last-run file exists */
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/fixup-last-run", nbs_root);
+        unlink(ts_path);
+
+        int rc = trigger_fixup_check(nbs_root, 3600);
+        CHECK("T27: first run returns 1 (no fire)", rc == 1);
+
+        /* Verify timestamp file was created */
+        struct stat st;
+        CHECK("T27: fixup-last-run file created",
+              stat(ts_path, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 28: Interval not elapsed, no action */
+    {
+        char sub[] = "/tmp/nbs_trig_t28_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* Write recent timestamp (10 seconds ago) */
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/fixup-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 10));
+        write_file(ts_path, ts_buf);
+
+        int rc = trigger_fixup_check(nbs_root, 3600);
+        CHECK("T28: interval not elapsed returns 1", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 29: Interval elapsed, fires */
+    {
+        char sub[] = "/tmp/nbs_trig_t29_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* Write old timestamp (2 hours ago, interval=3600) */
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/fixup-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 7200));
+        write_file(ts_path, ts_buf);
+
+        int rc = trigger_fixup_check(nbs_root, 3600);
+        CHECK("T29: interval elapsed, fires (returns 0)", rc == 0);
+
+        /* Verify timestamp was updated */
+        FILE *f = fopen(ts_path, "r");
+        time_t updated_ts = 0;
+        if (f) {
+            char buf[32];
+            if (fgets(buf, sizeof(buf), f))
+                updated_ts = (time_t)atol(buf);
+            fclose(f);
+        }
+        CHECK("T29: fixup-last-run updated to ~now",
+              updated_ts >= now && updated_ts <= now + 2);
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_fixup_spawn tests
+     * ================================================================= */
+    printf("\n-- trigger_fixup_spawn --\n");
+
+    /* Test 30: Lock acquired */
+    {
+        char sub[] = "/tmp/nbs_trig_t30_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        int rc = trigger_fixup_spawn(nbs_root);
+        CHECK("T30: lock acquired (not busy)", rc != 1);
+
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path), "%s/fixup.lock", nbs_dir);
+        struct stat st;
+        CHECK("T30: lock file created", stat(lock_path, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 31: Lock busy — contention */
+    {
+        char sub[] = "/tmp/nbs_trig_t31_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path),
+                 "%s/.nbs/fixup.lock", nbs_root);
+
+        int fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            CHECK("T31: open lock file", 0);
+        } else {
+            struct flock fl = {
+                .l_type = F_WRLCK,
+                .l_whence = SEEK_SET,
+                .l_start = 0,
+                .l_len = 0,
+            };
+            int lrc = fcntl(fd, F_SETLK, &fl);
+            CHECK("T31: parent acquires lock", lrc == 0);
+
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(fd);
+                int rc = trigger_fixup_spawn(nbs_root);
+                _exit(rc);
+            } else if (pid > 0) {
+                int status;
+                waitpid(pid, &status, 0);
+                int child_rc = -99;
+                if (WIFEXITED(status))
+                    child_rc = WEXITSTATUS(status);
+                CHECK("T31: child gets lock busy (returns 1)",
+                      child_rc == 1);
+            } else {
+                CHECK("T31: fork failed", 0);
+            }
+
+            struct flock unlock = {
+                .l_type = F_UNLCK,
+                .l_whence = SEEK_SET,
+                .l_start = 0,
+                .l_len = 0,
+            };
+            fcntl(fd, F_SETLK, &unlock);
+            close(fd);
         }
 
         rmrf(sub);

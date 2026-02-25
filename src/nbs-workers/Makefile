@@ -15,7 +15,7 @@ TARGET = nbs-workers
 # NDEBUG verification
 ASSERT_CHECK = assert_check
 
-.PHONY: all clean install debug test
+.PHONY: all clean install debug test test-unit
 
 all: $(TARGET) $(ASSERT_CHECK)
 
@@ -34,6 +34,10 @@ install: all
 
 test: all install
 	./$(ASSERT_CHECK)
+
+test-unit: all
+	$(CC) $(CFLAGS) -I. -I../nbs-common -o ../../tests/test_workers_unit ../../tests/test_workers_unit.c worker.c
+	../../tests/test_workers_unit
 
 debug: CFLAGS = $(COMMON_CFLAGS) -O0 -g
 debug: clean all
