@@ -96,8 +96,8 @@ Recover agents in this order — each role unblocks the next:
 1. **Scribe first** — decision logging must be active before other agents make decisions. Without scribe, institutional memory is lost.
 2. **Gatekeeper second** — if commits are pending, gatekeeper unblocks the pipeline. Today's data: gatekeeper zombie blocked T18 + CSMA/CD + T19 commits.
 3. **Testkeeper third** — reviews require testkeeper. Recovering testkeeper before workers ensures reviews are not bottlenecked.
-4. **Workers/generalist last** — workers depend on all of the above.
-5. **Theologian/Pythia** — can be recovered at any point since their role is assessment, not execution.
+4. **Theologian fourth** — architectural guidance should be available before workers start implementation.
+5. **Workers/generalist last** — workers depend on all of the above.
 
 **Exception:** If a human (Alex) has an urgent task, recover the most relevant agent first regardless of this order.
 
@@ -187,8 +187,8 @@ When spawning agents with `NBS_INITIAL_PROMPT`, use the correct skill for each r
 | `scribe` | `/nbs-scribe` | `NBS_INITIAL_PROMPT="/nbs-scribe"` |
 | `gatekeeper` | `/nbs-gatekeeper` | `NBS_INITIAL_PROMPT="/nbs-gatekeeper"` |
 | `testkeeper` | `/nbs-testkeeper` | `NBS_INITIAL_PROMPT="/nbs-testkeeper"` |
+| `theologian` | `/nbs-theologian` | `NBS_INITIAL_PROMPT="/nbs-theologian"` |
 | Named workers (e.g. `helper`, `generalist`, `hypergrep`) | `/nbs-worker` | `NBS_INITIAL_PROMPT="/nbs-worker"` |
-| `theologian` | `/nbs-worker` | Worker role with architecture focus |
 
 For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts.
 
