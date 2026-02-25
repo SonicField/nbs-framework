@@ -167,140 +167,23 @@ done:
 }
 
 /*
- * handle_query — Capture own pane content, filter to useful lines, post to chat.
+ * handle_query — Capture pane snapshot and post to chat.
  *
- * Triggered by @handle? in chat. The target agent's sidecar captures
- * its own pane, strips ANSI escapes and Claude Code UI chrome, and posts
- * a compact summary to chat.
- *
- * WHY THIS FILTER EXISTS:
- *
- * Claude Code's terminal output has two kinds of lines:
- *
- *   1. Substantive content (KEEP):
- *      - Spinner/status:  "✶ Sublimating… (8m 10s · ↑ 5k tokens)"
- *      - Tool calls:      "● Bash(nbs-chat send ...)"
- *      - Agent reasoning:  "● 243 tests passed from the CinderX test suite"
- *      - Tool results:    "  ⎿  Acknowledged 2 events"
- *
- *   2. UI chrome (STRIP):
- *      - Horizontal rules: "────────────────────────────────"
- *      - Input prompt:     "❯ "
- *      - Permission hint:  "  ⏵⏵ bypass permissions on (shift+tab to cycle)"
- *      - Key hints:        "esc to interrupt · ctrl+o to expand"
- *      - pty-session banner: "┌─ pty-session: consider higher-level tools"
- *        and its contents:   "│ Edit files:  nbs-remote-edit-pty ..."
- *                            "│ Build:       nbs-remote-build ..."
- *
- * Without filtering, @handle? dumps 32 lines of mostly chrome. With it,
- * the response is 3-8 lines of what the agent is actually doing.
- *
- * IF CLAUDE CODE CHANGES ITS OUTPUT FORMAT:
- *   - New spinner characters: check they don't start with 0xE2 0x94 (─)
- *     or 0xE2 0x9D (❯). Current spinners ●✶✻ start with 0xE2 0x97/0x9C.
- *   - New prompt character: update the 0xE2 0x9D 0xAF check (and the
- *     prompt detection in the idle message at the end of this function).
- *   - New tool output prefix: the ⎿ character is NOT stripped — it carries
- *     real output. Only the pty-session banner content inside ⎿ is stripped
- *     via string matching ("pty-session:", "Edit files:", etc.).
- *   - New permission/hint text: add to the strstr checks below.
+ * Triggered by @handle? in chat. Posts the bottom 8 lines of the
+ * agent's terminal after stripping ANSI escapes. No content filtering
+ * — 8 lines is short enough to read directly and shows the spinner,
+ * prompt, context level, and recent tool output without truncation.
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
-    /* Capture bottom 15 lines — enough for recent context without noise.
-     * Previously 32, reduced because most were chrome. */
-    char *content = tp->capture(tp, 15);
+    char *content = tp->capture(tp, 8);
     if (!content) return;
 
     strip_ansi(content);
 
-    /* Filter: scan each line, classify as chrome or content.
-     *
-     * Chrome detection uses two methods:
-     *   - UTF-8 byte prefix: for characters like ─ (0xE2 0x94) and ❯ (0xE2 0x9D 0xAF)
-     *   - String matching: for English text like "bypass permissions"
-     *
-     * The byte prefix approach is fragile to Claude Code changing its
-     * Unicode characters. The string matching approach is fragile to
-     * Claude Code changing its UI text. Both are documented above. */
-    char filtered[SIDECAR_MAX_CONTENT];
-    filtered[0] = '\0';
-    size_t foff = 0;
-    int kept = 0;
-
-    char *line = content;
-    while (line && *line && kept < 8) {
-        char *nl = strchr(line, '\n');
-        size_t llen = nl ? (size_t)(nl - line) : strlen(line);
-
-        int is_chrome = 0;
-        if (llen == 0) is_chrome = 1;
-
-        /* ── Horizontal rules ──
-         * ─ is UTF-8 0xE2 0x94 0x80. Matching on first two bytes catches
-         * all box-drawing characters in the U+2500 block (─│┌┐└┘├┤┬┴┼).
-         * Claude Code uses these only for decorative separators. */
-        else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
-                 (unsigned char)line[1] == 0x94) is_chrome = 1;
-
-        /* ── Input prompt ──
-         * ❯ is UTF-8 0xE2 0x9D 0xAF. This is Claude Code's input prompt.
-         * Must not match spinners ● (0xE2 0x97 0x8F) or ✶ (0xE2 0x9C 0xB6). */
-        else if (llen >= 3 && (unsigned char)line[0] == 0xE2 &&
-                 (unsigned char)line[1] == 0x9D &&
-                 (unsigned char)line[2] == 0xAF) is_chrome = 1;
-
-        /* ── Claude Code UI text ──
-         * These are the English strings Claude Code prints below the prompt.
-         * If Claude Code renames these, the filter will pass them through
-         * (safe failure — extra lines, not missing lines). */
-        else if (strstr(line, "bypass permissions") != NULL) is_chrome = 1;
-        else if (strstr(line, "esc to interrupt") != NULL) is_chrome = 1;
-        else if (strstr(line, "ctrl+o to expand") != NULL) is_chrome = 1;
-        else if (strstr(line, "shift+tab") != NULL) is_chrome = 1;
-
-        /* ── pty-session tool suggestion banner ──
-         * When pty-session runs, it prints a box suggesting higher-level
-         * tools. This appears inside Claude's tool output (after ⎿) and
-         * is pure noise for status queries. */
-        else if (strstr(line, "pty-session:") != NULL) is_chrome = 1;
-        else if (strstr(line, "Edit files:") != NULL) is_chrome = 1;
-        else if (strstr(line, "nbs-remote-") != NULL) is_chrome = 1;
-        else if (strstr(line, "Git diff:") != NULL) is_chrome = 1;
-        else if (strstr(line, "Git status:") != NULL) is_chrome = 1;
-        else if (strstr(line, "Lock:") != NULL &&
-                 strstr(line, "pty-session-lock") != NULL) is_chrome = 1;
-
-        if (!is_chrome && llen > 0) {
-            size_t space = sizeof(filtered) - foff - 2;
-            if (llen > space) llen = space;
-            memcpy(filtered + foff, line, llen);
-            foff += llen;
-            filtered[foff++] = '\n';
-            filtered[foff] = '\0';
-            kept++;
-        }
-
-        if (!nl) break;
-        line = nl + 1;
-    }
-
-    if (foff == 0) {
-        /* No substantive content after filtering. Check if the prompt
-         * is visible — if so, the agent is alive and waiting normally.
-         * Prompt is ❯ (UTF-8: 0xE2 0x9D 0xAF). */
-        if (strstr(content, "\xe2\x9d\xaf") != NULL) {
-            snprintf(filtered, sizeof(filtered),
-                     "(at prompt, waiting for chat notification)");
-        } else {
-            snprintf(filtered, sizeof(filtered),
-                     "(no visible output — may be processing)");
-        }
-    }
-
     /* Escape @ signs to prevent mention feedback loops */
-    sanitise_at_signs(filtered);
-    char *escaped = escape_mentions(filtered);
+    sanitise_at_signs(content);
+    char *escaped = escape_mentions(content);
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
