@@ -64,11 +64,18 @@ Use your assigned handle consistently for all `nbs-chat send` and `--unread=` / 
 
 ## Commands
 
-```bash
-# Create a chat channel
-nbs-chat create .nbs/chat/coordination.chat
+All arguments are **positional**. There are no `--from=` or `--message=` flags.
 
-# Send a message
+| Command | Syntax |
+|---------|--------|
+| Send | `nbs-chat send <file> <handle> "<message>"` |
+| Read | `nbs-chat read <file> [--last=N] [--unread=<handle>]` |
+| Search | `nbs-chat search <file> "<pattern>"` |
+| Create | `nbs-chat create <file>` |
+| Delete | `nbs-chat delete <file> --after=<time> [--dry-run]` |
+
+```bash
+# Send a message (three positional args: file, handle, message)
 nbs-chat send .nbs/chat/coordination.chat parser-worker "Found 3 failing tests in test_parse_int"
 
 # Read all messages

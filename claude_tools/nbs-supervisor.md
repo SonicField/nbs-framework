@@ -125,6 +125,8 @@ Use chat for all coordination. Chat is the record; Scribe captures decisions; Py
 
 ### Sending
 
+All arguments are positional. No `--from=` or `--message=` flags exist.
+
 ```bash
 nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
 ```

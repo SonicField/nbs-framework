@@ -107,7 +107,7 @@ TESTKEEPER REPORT — <context>
 ### Chat
 
 ```bash
-# Send a message
+# Send a message (positional args — no --from= or --message= flags)
 nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
 
 # Read last 10 messages (for context)

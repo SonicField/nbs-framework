@@ -45,6 +45,8 @@ These define the principles you operate under. Do not skip any.
 
 ### Sending
 
+All arguments are positional. No `--from=` or `--message=` flags exist.
+
 ```bash
 nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
 ```
