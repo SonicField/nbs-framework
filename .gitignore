@@ -11,6 +11,9 @@ tests/automated/scenarios/*/test_verdict_*.json
 tests/automated/*_verdict.json
 tests/automated/*_test_verdict.json
 
+# Python bytecache
+__pycache__/
+
 # Compiled test binaries
 tests/test_*_unit
 
