@@ -9,7 +9,7 @@ You are performing a **cold start** — bootstrapping a project from nothing to 
 
 **This is a one-time setup command.** If `.nbs/` already exists, confirm before overwriting.
 
-**Core principle:** Verify after every step. A cold start that skips verification produces silent failures that compound overnight.
+**Core principle:** Verify after every step. A cold start that skips verification produces silent failures that compound.
 
 ## Process
 
@@ -136,7 +136,7 @@ NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" \
 | `NBS_STARTUP_GRACE` | `30` | Seconds after init before allowing notifications |
 | `NBS_INITIAL_PROMPT` | handle + chat skill | Custom initial prompt for specialised roles |
 
-**Standup architecture:** The sidecar posts periodic CSMA/CD standups to chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.` This replaces bare `/nbs-poll` injection. The primary benefit is replacing unconditional polling with conditional event notification — `/nbs-notify` only fires when events or unreads exist. Note: overnight with no work, standups may produce repetitive content ('idle, no blockers'). The compaction benefit is secondary; the real win is eliminating the 96 empty poll cycles per agent per night that cause context rot.
+**Standup architecture:** The sidecar posts periodic CSMA/CD standups to chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.` This replaces bare `/nbs-poll` injection. The benefit is replacing unconditional polling with conditional event notification — `/nbs-notify` only fires when events or unreads exist. Overnight with no work, standups may produce repetitive content. The real win is eliminating empty poll cycles that cause context rot.
 
 ### Step 9: Verify Agents Are Alive
 

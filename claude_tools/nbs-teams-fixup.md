@@ -241,15 +241,15 @@ nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete: @<handle> re
 
 ## Known Failure Patterns
 
-### Context bleed from idle polling
+**Context bleed from idle polling**
 **Symptom:** Idle agents gradually lose context overnight, hitting zombie state by morning.
-**Cause:** Each `/nbs-notify` or `/nbs-poll` cycle injects a prompt + response that consumes context tokens. When the agent finds nothing to do, the response is empty but the context cost is real. Active agents survive because substantive work triggers compaction; idle agents accumulate non-compactable noise.
-**Prevention:** CSMA/CD standups replace bare polling. Standups produce substantive context (agent reflects on state, checks peers) which compacts well. The sidecar should not inject `/nbs-notify` when there are no events and no unread messages.
+**Cause:** Each `/nbs-notify` or `/nbs-poll` cycle consumes context tokens even when there is nothing to do. Active agents survive because substantive work triggers compaction; idle agents accumulate non-compactable noise.
+**Prevention:** CSMA/CD standups replace bare polling. The sidecar should not inject `/nbs-notify` when there are no events and no unread messages.
 
 ### Poll exhaustion
 **Symptom:** Agent runs 10+ consecutive `/nbs-poll` cycles returning nothing.
-**Cause:** The sidecar triggers `/nbs-notify` on timer, agent processes it, finds nothing, repeat.
-**Fix:** Level 2 (compact) to recover context, then warn the new/compacted instance to avoid empty polling.
+**Cause:** Sidecar triggers `/nbs-notify` on timer, agent processes it, finds nothing, repeat.
+**Fix:** Level 2 (compact) to recover context, then address the trigger.
 
 ### Notification race
 **Symptom:** Role prompt sits at `bypass permissions on` modal, never processed.
@@ -263,8 +263,8 @@ nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete: @<handle> re
 
 ### Compaction floor trap
 **Symptom:** Agent at 10-15% context after `/compact`. Further compacts do not reduce it. `--resume` reloads the same percentage.
-**Cause:** The summarised session history + loaded skills + system context fill the window. There is nothing left to compact.
-**Fix:** Level 4 only. `--resume` is a trap — it reloads the same bloated state.
+**Cause:** The summarised session + loaded skills + system context fill the window. Nothing left to compact.
+**Fix:** Level 4 only. `--resume` reloads the same bloated state.
 
 ## Rules
 

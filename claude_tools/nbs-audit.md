@@ -7,7 +7,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task, AskUserQuestion
 
 This tool audits an entire codebase against the engineering standards, then produces a parallel fix plan with adversarial TDD.
 
-**This is a large task.** A typical codebase produces 50-100+ violations. The audit phase launches one sub-agent per source file in parallel. The fix phase launches parallel sub-agents per file to write tests and apply fixes. Budget accordingly.
+**Budget:** A typical codebase produces 50–100+ violations. The audit phase launches one sub-agent per source file in parallel. The fix phase launches parallel sub-agents per file to write tests and apply fixes.
 
 ---
 
@@ -248,7 +248,7 @@ This tool is designed for maximum parallelism:
 - **Typical run**: 20 source files → 20 audit agents + 20 fix agents = 40 agent invocations
 - **Large codebase**: 50+ files → ask user before launching, consider batching
 
-The audit agents are read-only. The fix agents each write to their own source and test files, so parallel execution is safe during the fix phase. However, adding assertions can change exception types across module boundaries — this is why the full test suite run after all fixes is mandatory.
+The audit agents are read-only. The fix agents each write to their own source and test files, so parallel execution is safe. However, adding assertions can change exception types across module boundaries — the full test suite run after all fixes is mandatory.
 
 ## When to Use
 
