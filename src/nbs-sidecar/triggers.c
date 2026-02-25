@@ -119,6 +119,33 @@ static int count_bus_events_by_type(const char *bus_dir,
 }
 
 /*
+ * count_scribe_decisions — Count decision entries in the scribe log.
+ *
+ * Counts lines matching "^### D-" in .nbs/scribe/live-log.md.
+ * This is the ground truth for decisions — the scribe always writes
+ * to the log, even when it forgets to publish a bus event.
+ * Falls back to 0 if the file does not exist.
+ */
+static int count_scribe_decisions(const char *nbs_root) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/scribe/live-log.md", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    int count = 0;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "### D-", 6) == 0)
+            count++;
+    }
+    fclose(f);
+    return count;
+}
+
+/*
  * read_pythia_interval — Read pythia-interval from config.yaml.
  */
 static int read_pythia_interval(const char *bus_dir) {
@@ -228,7 +255,14 @@ int trigger_pythia_check(const char *registry_path, const char *nbs_root,
     }
 
     int interval = read_pythia_interval(bus_dir);
-    int decision_count = count_bus_events_by_type(bus_dir, "decision-logged");
+
+    /* Count decisions from the scribe log (ground truth).
+     * The scribe always writes to the log; bus events are a secondary
+     * signal that the scribe sometimes forgets to publish.
+     * Fall back to bus event count if scribe log is empty/missing. */
+    int decision_count = count_scribe_decisions(nbs_root);
+    if (decision_count == 0)
+        decision_count = count_bus_events_by_type(bus_dir, "decision-logged");
 
     /* Check if we've crossed a new threshold */
     int current_bucket = decision_count / interval;
