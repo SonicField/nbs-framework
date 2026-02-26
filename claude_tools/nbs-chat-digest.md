@@ -28,22 +28,18 @@ Count the total messages. This determines whether to read directly or split into
 
 **Under 200 messages:** Read the full file directly using the Read tool.
 
-**Over 200 messages:** Split into chunks and launch parallel sub-agents. Each sub-agent reads a window and summarises it.
+**Over 200 messages:** Split into chunks using `--last` and `--offset`:
 
 ```bash
-# Get total message count from participants output
-TOTAL=<sum of all participant message counts>
-
-# Calculate chunk size (aim for 4-6 sub-agents, ~200 messages each)
-CHUNK=$((TOTAL / 5))
-
-# Launch sub-agents in parallel using the Task tool
-# Sub-agent 1: nbs-chat read <file> --last=CHUNK
-# Sub-agent 2: messages CHUNK+1 to 2*CHUNK (use --after/--before with timestamps)
-# etc.
+# 5 chunks of 100 messages each from the last 500
+nbs-chat read <file> --last=100                # newest 100
+nbs-chat read <file> --last=100 --offset=100   # 100-200 from end
+nbs-chat read <file> --last=100 --offset=200   # 200-300 from end
+nbs-chat read <file> --last=100 --offset=300   # 300-400 from end
+nbs-chat read <file> --last=100 --offset=400   # oldest 100 of the 500
 ```
 
-Each sub-agent should summarise:
+Launch one sub-agent per chunk in parallel using the Task tool. Each sub-agent summarises:
 - **Decisions made** in its window
 - **Blockers** encountered and how they were resolved
 - **3Ws** observations (what worked, what didn't, what to improve)
@@ -109,11 +105,17 @@ Messages: <count>
 - <observation>
 ```
 
-### 6. Post to Chat (if requested)
+### 6. Post to Chat
+
+Post the full digest to chat. This is the primary output — restarted agents read it on startup.
 
 ```bash
-nbs-chat send <chat-file> <handle> "DIGEST COMPLETE — <TL;DR summary>. Full digest: <absolute-path>"
+nbs-chat send <chat-file> <handle> "CHAT DIGEST:
+
+<full digest content>"
 ```
+
+Also write to `.nbs/digests/<date>-<topic>.md` as a permanent record.
 
 ### 7. Verify
 

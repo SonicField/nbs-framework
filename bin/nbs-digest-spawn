@@ -41,7 +41,7 @@ if [[ ! -f "$CHAT_FILE" ]]; then
 fi
 
 # Spawn ephemeral digest worker
-TASK_DESC="Your handle is 'shepard'. Load /nbs-chat-digest. Digest ${CHAT_FILE}. The digest must be thorough — at least 200 lines covering all decisions, 3Ws, and key technical outcomes. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send using handle 'shepard' when done. Exit after posting."
+TASK_DESC="Your handle is 'shepard'. Load /nbs-chat-digest. Digest the last 500 messages of ${CHAT_FILE} by launching 5 parallel sub-agents (use --last=100 --offset=0/100/200/300/400). Each sub-agent summarises decisions, blockers, 3Ws, and outcomes. Synthesise into a single digest of at least 200 lines. Post the FULL digest text to ${CHAT_FILE} via nbs-chat send using handle 'shepard'. Also write to .nbs/digests/. Exit after posting."
 
 WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
 
@@ -55,7 +55,7 @@ echo "Digest worker spawned: $WORKER_NAME"
 if [[ "$WAIT" == true ]]; then
     # Poll for completion (check task file status)
     TASK_FILE="${PROJECT_ROOT}/.nbs/workers/${WORKER_NAME}.md"
-    TIMEOUT=300
+    TIMEOUT=600
     ELAPSED=0
 
     while (( ELAPSED < TIMEOUT )); do

@@ -210,6 +210,7 @@ static int cmd_read(int argc, char **argv) {
     path = abs_path;
 
     int last_n = -1;
+    int offset_n = 0;
     const char *since_handle = NULL;
     const char *unread_handle = NULL;
     time_t after_time = 0;
@@ -227,6 +228,15 @@ static int cmd_read(int argc, char **argv) {
             }
             last_n = (int)val;
             /* Note: --last=0 is valid and means "show zero messages" */
+        } else if (strncmp(argv[i], "--offset=", 9) == 0) {
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 9, &endptr, 10);
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > INT_MAX) {
+                fprintf(stderr, "Error: Invalid --offset value: %s\n", argv[i] + 9);
+                return 4;
+            }
+            offset_n = (int)val;
         } else if (strncmp(argv[i], "--since=", 8) == 0) {
             since_handle = argv[i] + 8;
             if (since_handle[0] == '\0') {
@@ -317,6 +327,11 @@ static int cmd_read(int argc, char **argv) {
         while (end > start && state.messages[end - 1].timestamp > before_time) {
             end--;
         }
+    }
+
+    /* Apply --offset filter (skip N messages from the end) */
+    if (offset_n > 0 && end - start > offset_n) {
+        end -= offset_n;
     }
 
     /* Apply --last filter */
