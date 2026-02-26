@@ -49,8 +49,6 @@ Each sub-agent should summarise:
 - **3Ws** observations (what worked, what didn't, what to improve)
 - **Key outcomes** (commits, test results, benchmarks)
 
-Synthesise the sub-agent summaries into the final digest.
-
 ### 3. Analyse
 
 Extract four categories:
@@ -113,15 +111,13 @@ Messages: <count>
 
 ### 6. Post to Chat (if requested)
 
-If the digest was triggered by `nbs-digest-spawn` or a chat request, post the TL;DR and digest file path to chat:
-
 ```bash
 nbs-chat send <chat-file> <handle> "DIGEST COMPLETE — <TL;DR summary>. Full digest: <absolute-path>"
 ```
 
 ### 7. Verify
 
-Spot-check at least 3 claims against the source chat. Confirm decisions are accurately represented and no sensitive data leaked through.
+Spot-check at least 3 claims against the source chat. No sensitive data, no misattributed decisions.
 
 ## Arguments
 
