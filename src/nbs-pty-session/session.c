@@ -782,6 +782,36 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     }
 
     while (elapsed_ms < timeout_ms) {
+        /* Check if session is still alive */
+        if (!session_exists(session)) {
+            /* Session exited — check persistent log for the pattern */
+            free(buf);
+            char log_path[MAX_PATH_LEN];
+            if (resolve_home_path(log_path, sizeof(log_path),
+                                   ".pty-session/logs") == 0) {
+                char full_log[MAX_PATH_LEN];
+                int n = snprintf(full_log, sizeof(full_log),
+                                 "%s/%s.log", log_path, name);
+                if (n > 0 && (size_t)n < sizeof(full_log)) {
+                    FILE *f = fopen(full_log, "r");
+                    if (f) {
+                        char line[4096];
+                        while (fgets(line, sizeof(line), f)) {
+                            if (strstr(line, pattern) != NULL) {
+                                fclose(f);
+                                printf("Pattern found in log after session exit\n");
+                                return EXIT_SUCCESS_CODE;
+                            }
+                        }
+                        fclose(f);
+                    }
+                }
+            }
+            fprintf(stderr, "Session '%s' exited without producing pattern '%s'\n",
+                    name, pattern);
+            return EXIT_NOT_FOUND;
+        }
+
         if (capture_pane(session, DEFAULT_SCROLLBACK, buf, CAPTURE_BUF_SIZE) == 0) {
             if (strstr(buf, pattern) != NULL) {
                 printf("Pattern found after %ld.%lds\n",
