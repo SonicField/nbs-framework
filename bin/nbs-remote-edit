@@ -1,12 +1,8 @@
 #!/bin/bash
-# nbs-remote-edit: Edit files on remote machines via SSH
+# nbs-remote-edit: Edit files on remote machines via scp
 #
-# Enables Claude agents to use their normal Edit/Read tools on remote files
-# by syncing them via SSH. Eliminates the need for sed/heredoc editing
-# through pty-session.
-#
-# Uses 'ssh cat' for file transfer (not scp/sftp) to work in environments
-# where BpfJailer blocks the SFTP subsystem.
+# Pull a remote file locally, edit it with Claude's normal Edit tool,
+# then push it back. Uses pty-session for scp to bypass BpfJailer.
 #
 # Usage:
 #   nbs-remote-edit pull <host> <remote-path>   Download file for local editing
@@ -16,52 +12,67 @@
 #
 # Environment:
 #   NBS_REMOTE_EDIT_DIR   Local staging directory (default: .nbs/remote-edit)
-#   NBS_REMOTE_EDIT_KEY   SSH identity file (optional)
-#   NBS_REMOTE_EDIT_PORT  SSH port (default: 22)
 #
 # Examples:
-#   nbs-remote-edit pull devserver.example.com /data/users/dev/project/src/main.cpp
-#   # Now edit .nbs/remote-edit/devserver.example.com/data/users/dev/project/src/main.cpp
-#   # using the normal Edit tool
-#   nbs-remote-edit push devserver.example.com /data/users/dev/project/src/main.cpp
+#   nbs-remote-edit pull build-host /data/users/dev/project/src/main.cpp
+#   # Edit .nbs/remote-edit/build-host
+#   nbs-remote-edit push build-host /data/users/dev/project/src/main.cpp
 #
 # Exit codes:
 #   0 - Success
 #   1 - General error
 #   2 - File not found (remote or local)
-#   3 - SSH connection failed
+#   3 - Transfer failed
 #   4 - Invalid arguments
 
 set -euo pipefail
 
+PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 STAGING_DIR="$(cd "${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}" 2>/dev/null && pwd || echo "$(pwd)/.nbs/remote-edit")"
-SSH_KEY="${NBS_REMOTE_EDIT_KEY:-}"
-SSH_PORT="${NBS_REMOTE_EDIT_PORT:-22}"
 
-# Validate SSH_PORT as numeric
-[[ "$SSH_PORT" =~ ^[0-9]+$ ]] || { echo "Error: NBS_REMOTE_EDIT_PORT must be numeric, got '$SSH_PORT'" >&2; exit 1; }
+# Suppress pty-session tool banner
+export NBS_PTY_QUIET=1
+
+[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
 
 usage() {
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
 }
 
-ssh_cmd() {
-    local host="$1"
-    shift
-    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p $SSH_PORT"
-    if [[ -n "$SSH_KEY" ]]; then
-        opts="$opts -i $SSH_KEY"
-    fi
-    # shellcheck disable=SC2086
-    ssh $opts "$host" "$@"
-}
-
 local_path() {
     local host="$1"
     local remote_path="$2"
-    # Prevent directory traversal via host value
     [[ "$host" =~ [/] ]] && { echo "Error: host must not contain '/'" >&2; return 4; }
     echo "${STAGING_DIR}/${host}${remote_path}"
+}
+
+# Run scp via a short-lived pty-session (gets user's credentials)
+run_scp() {
+    local session_name="nbs-edit-$$"
+    "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1
+    sleep 1
+
+    "$PTY_SESSION" send "$session_name" "$1; echo EDIT_RC=\$?" >/dev/null 2>&1
+
+    # Wait for completion
+    local elapsed=0
+    local timeout=30
+    while (( elapsed < timeout )); do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        local output
+        output=$("$PTY_SESSION" read "$session_name" 2>/dev/null) || true
+        if echo "$output" | grep -q "EDIT_RC="; then
+            local rc
+            rc=$(echo "$output" | grep -oP 'EDIT_RC=\K[0-9]+' | tail -1)
+            "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+            return "${rc:-1}"
+        fi
+    done
+
+    "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+    echo "Error: scp timed out after ${timeout}s" >&2
+    return 3
 }
 
 cmd_pull() {
@@ -70,37 +81,25 @@ cmd_pull() {
 
     if [[ -z "$host" ]] || [[ -z "$remote_path" ]]; then
         echo "Error: pull requires <host> and <remote-path>" >&2
-        echo "Usage: nbs-remote-edit pull <host> <remote-path>" >&2
-        return 4
+        exit 4
     fi
 
     local lpath
     lpath=$(local_path "$host" "$remote_path")
-    local ldir
-    ldir=$(dirname "$lpath")
+    mkdir -p "$(dirname "$lpath")"
 
-    mkdir -p "$ldir"
-
-    # Check file existence first (avoids TOCTOU with empty file detection)
-    local _exist_rc=0
-    ssh_cmd "$host" "test -f $(printf '%q' "$remote_path")" 2>/dev/null || _exist_rc=$?
-    if (( _exist_rc == 255 )); then
-        echo "Error: SSH connection failed to ${host}" >&2
-        return 3
-    elif (( _exist_rc != 0 )); then
-        echo "Error: Remote file not found: ${host}:${remote_path}" >&2
-        return 2
-    fi
-
-    # Download via ssh cat (avoids scp/sftp which BpfJailer may block)
-    if ! ssh_cmd "$host" "cat $(printf '%q' "$remote_path")" > "$lpath" 2>/dev/null; then
+    if run_scp "scp $(printf '%q' "${host}:${remote_path}") $(printf '%q' "$lpath")"; then
+        if [[ -f "$lpath" ]]; then
+            echo "$lpath"
+        else
+            echo "Error: scp succeeded but file not found at $lpath" >&2
+            return 1
+        fi
+    else
         rm -f "$lpath"
         echo "Error: Failed to download ${host}:${remote_path}" >&2
-        echo "Check: SSH connectivity, file exists, permissions" >&2
         return 3
     fi
-
-    echo "$lpath"
 }
 
 cmd_push() {
@@ -109,8 +108,7 @@ cmd_push() {
 
     if [[ -z "$host" ]] || [[ -z "$remote_path" ]]; then
         echo "Error: push requires <host> and <remote-path>" >&2
-        echo "Usage: nbs-remote-edit push <host> <remote-path>" >&2
-        return 4
+        exit 4
     fi
 
     local lpath
@@ -122,13 +120,12 @@ cmd_push() {
         return 2
     fi
 
-    # Upload via ssh cat (pipe local file to remote cat > file)
-    if ! ssh_cmd "$host" "cat > $(printf '%q' "$remote_path")" < "$lpath" 2>/dev/null; then
+    if run_scp "scp $(printf '%q' "$lpath") $(printf '%q' "${host}:${remote_path}")"; then
+        echo "Pushed: ${remote_path} -> ${host}"
+    else
         echo "Error: Failed to upload to ${host}:${remote_path}" >&2
         return 3
     fi
-
-    echo "Pushed: ${remote_path} -> ${host}"
 }
 
 cmd_diff() {
@@ -152,31 +149,20 @@ cmd_diff() {
     tmp=$(mktemp)
     trap "rm -f $(printf '%q' "$tmp")" RETURN
 
-    if ! ssh_cmd "$host" "cat $(printf '%q' "$remote_path")" > "$tmp" 2>/dev/null; then
+    if run_scp "scp $(printf '%q' "${host}:${remote_path}") $(printf '%q' "$tmp")"; then
+        diff -u "$tmp" "$lpath" --label "remote:${remote_path}" --label "local:${lpath}" || true
+    else
         echo "Error: Failed to download ${host}:${remote_path} for diff" >&2
         return 3
     fi
-
-    diff -u "$tmp" "$lpath" --label "remote:${remote_path}" --label "local:${lpath}" || true
 }
 
 # Main dispatch
 case "${1:-}" in
-    pull)
-        shift
-        cmd_pull "$@"
-        ;;
-    push)
-        shift
-        cmd_push "$@"
-        ;;
-    diff)
-        shift
-        cmd_diff "$@"
-        ;;
-    help|--help|-h|"")
-        usage
-        ;;
+    pull)  shift; cmd_pull "$@" ;;
+    push)  shift; cmd_push "$@" ;;
+    diff)  shift; cmd_diff "$@" ;;
+    help|--help|-h|"") usage ;;
     *)
         echo "Unknown command: $1" >&2
         echo "Run 'nbs-remote-edit help' for usage" >&2

@@ -108,23 +108,36 @@ nbs-chat-remote send /project/.nbs/chat/coordination.chat my-handle "Message"
 
 ## BpfJailer Constraint
 
-On 3pai pods, BpfJailer may block all outbound SSH (Enforcer: FS, FILE_ACCESS). When this happens:
+On 3pai pods, BpfJailer blocks direct SSH from the Bash tool (Enforcer: FS, FILE_ACCESS). All remote tools use pty-session internally to bypass this:
 
-- **nbs-remote-edit will not work** (requires SSH)
-- **nbs-remote-edit-pty WILL work** (wraps pty-session, not SSH) — **use this instead**
-- **nbs-chat-remote will not work** (requires SSH)
-- **nbs-remote-build WILL work** (wraps pty-session, not SSH)
-- **nbs-remote-diff WILL work** (wraps pty-session, not SSH)
-- **nbs-remote-status WILL work** (wraps pty-session, not SSH)
+- **nbs-remote-edit** — uses pty-session for scp
+- **nbs-remote-build** — uses pty-session
+- **nbs-remote-diff** — uses pty-session
+- **nbs-remote-status** — uses pty-session
+- **nbs-chat-remote will not work** (requires direct SSH)
 - **pty-session is the only path** to the remote machine
 
-### Preferred: nbs-remote-edit-pty (BpfJailer-proof editing)
+### File Editing: nbs-remote-edit
 
-Use `nbs-remote-edit-pty` instead of Python str.replace scripts. It provides the same safe pull/edit/push workflow as nbs-remote-edit but transfers files via base64 through pty-session. See the tool section above for usage.
+Use `nbs-remote-edit` for editing remote files. It uses scp via pty-session internally.
+
+```bash
+# 1. Download the file
+nbs-remote-edit pull build-host /data/users/dev/project/Jit/inliner.cpp
+# Returns: .nbs/remote-edit/build-host
+
+# 2. Edit locally using the normal Edit tool
+
+# 3. Verify your changes
+nbs-remote-edit diff build-host /data/users/dev/project/Jit/inliner.cpp
+
+# 4. Push back
+nbs-remote-edit push build-host /data/users/dev/project/Jit/inliner.cpp
+```
 
 ### Fallback: Python String Replacement via pty-session
 
-If nbs-remote-edit-pty is unavailable, use Python `str.replace()` instead of sed. This is safer because it does exact string matching (no regex surprises) and can verify the replacement was unique.
+If nbs-remote-edit is unavailable, use Python `str.replace()` instead of sed. This is safer because it does exact string matching (no regex surprises) and can verify the replacement was unique.
 
 ```bash
 # Write a Python edit script
@@ -354,32 +367,9 @@ Then re-apply edits using Python str.replace (not sed).
 
 ---
 
-### nbs-remote-edit-pty — BpfJailer-Proof File Editing
+### nbs-remote-edit — Remote File Editing
 
-Drop-in replacement for `nbs-remote-edit` that transfers files through `pty-session` instead of SSH. Uses base64 encoding to prevent any character corruption during transport.
-
-```bash
-# 1. Download the file (via pty-session, not SSH)
-nbs-remote-edit-pty pull build-host /data/users/dev/project/Jit/inliner.cpp
-# Returns: .nbs/remote-edit/build-host
-
-# 2. Edit locally using the Edit tool — same as nbs-remote-edit
-
-# 3. Verify your changes
-nbs-remote-edit-pty diff build-host /data/users/dev/project/Jit/inliner.cpp
-
-# 4. Push back (with automatic md5 verification)
-nbs-remote-edit-pty push build-host /data/users/dev/project/Jit/inliner.cpp
-```
-
-**Key differences from nbs-remote-edit:**
-
-| Feature | nbs-remote-edit | nbs-remote-edit-pty |
-|---------|----------------|---------------------|
-| Transport | SSH (ssh cat) | pty-session + base64 |
-| BpfJailer | Blocked | Works |
-| First argument | hostname | pty-session name |
-| Push verification | None | md5 checksum |
+Uses scp via pty-session to transfer files. See "File Editing" section above for usage.
 | Large files | Streaming | Chunked (400-char chunks) |
 
 **Exit codes:** 0=success, 2=file not found, 3=pty-session error, 4=bad arguments, 5=verification failed.
@@ -446,7 +436,6 @@ Diff stat:
 
 Tools are at:
 - `bin/nbs-remote-edit` or `~/.nbs/bin/nbs-remote-edit`
-- `bin/nbs-remote-edit-pty` or `~/.nbs/bin/nbs-remote-edit-pty` **(BpfJailer-proof)**
 - `bin/nbs-remote-build` or `~/.nbs/bin/nbs-remote-build`
 - `bin/nbs-remote-diff` or `~/.nbs/bin/nbs-remote-diff`
 - `bin/nbs-remote-status` or `~/.nbs/bin/nbs-remote-status`
