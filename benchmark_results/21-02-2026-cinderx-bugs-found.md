@@ -211,3 +211,127 @@ main → Py_RunMain → Py_FinalizeEx → PyGC_Collect → gc_collect_main
 - `context.cpp:296` — new `clearTypeDeoptPatchers()` implementation
 - `_cinderx-lib.cpp:1060` — new `clear_type_deopt_patchers()` C function
 - `_cinderx-lib.cpp:1451` — atexit registration
+
+---
+
+## Bug 7: setup.py os.makedirs Creates .so Path as Directory (FIXED)
+
+**Severity:** Was causing SIGSEGV on import for all `build_ext --inplace` builds. Latent until `pip install -e .` (editable install) created the conditions for it to manifest. Now fixed.
+
+**Symptom:** `Segmentation fault (core dumped)` on `import cinderx` after `build_ext --inplace`.
+
+**Minimal reproducer:**
+```bash
+cd /data/users/alexturner/cinderx_dev/cinderx
+python3 setup.py build_ext --inplace
+python3 -c "import cinderx"  # SIGSEGV
+```
+
+**Root cause:** `setup.py` line 378 calls `os.makedirs(extension_dir, exist_ok=True)` where `extension_dir` is the full path to the `.so` file (e.g. `cinderx/PythonLib/_cinderx.cpython-312-aarch64-linux-gnu.so`). This creates a DIRECTORY with the `.so` suffix instead of a file. Python's import machinery finds this directory via ABI-tagged suffix priority (`*.cpython-312-aarch64-linux-gnu.so` > `*.so`), passes it to `dlopen()`, which segfaults on a directory.
+
+**Proof:** `ls -la cinderx/PythonLib/_cinderx.cpython-312-aarch64-linux-gnu.so` shows `d` (directory) instead of `-` (file). Removing the corrupt directory and rebuilding restores correct behaviour.
+
+**Fix:** Applied by supervisor on build-host — changed line 378 from:
+```python
+os.makedirs(extension_dir, exist_ok=True)
+```
+to:
+```python
+os.makedirs(os.path.dirname(extension_dir), exist_ok=True)
+```
+
+**Verification:** `build_ext --inplace` no longer creates corrupt `.so` directory. `import cinderx; cinderx.init()` succeeds. Identified by testkeeper (22:48:26Z), fix applied by supervisor.
+
+**Note:** This bug was latent — it only manifests when the parent directory doesn't already exist, which is the case after `pip install -e .` deletes `PythonLib/` (Bug 7 companion failure mode). Three `pip install -e .` failure modes were discovered during this session and `pip install -e .` is now BANNED on the CinderX project (gatekeeper gate rule, 22:58:02Z).
+
+**Key code locations:**
+- `setup.py:378` — the `os.makedirs` call (fixed)
+
+---
+
+## Bug 8: cinderx.init() Crashes on aarch64 (OPEN)
+
+**Severity:** Blocks all cinderx.init()-dependent functionality on aarch64. JIT compilation works via `cinderjit.auto()` without init(), so benchmarking is not blocked. 25/26 benchmarks work without init(); decorator_chain is the 1 that requires it (see Bug 9, merged into this bug).
+
+**Symptom:** `Segmentation fault (core dumped)` when calling `cinderx.init()` on aarch64, regardless of call context (module-scope import, top-level call, or function body).
+
+**Minimal reproducer:**
+```python
+import sys
+sys.path.insert(0, "/data/users/alexturner/cinderx_dev/cinderx")
+sys.path.insert(0, "/data/users/alexturner/cinderx_dev/cinderx/cinderx/PythonLib")
+import cinderx
+cinderx.init()  # SIGSEGV
+```
+
+**Root cause:** Unknown. `cinderx.init()` installs type watchers, frame evaluators (PEP 523), and other runtime hooks. The crash occurs inside `init()` during `os.environ.get()` or nearby code. Not specific to import context — crashes from any call site.
+
+**Workaround:** Do not call `cinderx.init()`. Use `cinderjit.auto()` or `cinderjit.force_compile()` directly — JIT compilation works without init(). The `__init__.py` module-level `init()` call was removed (Option B, team consensus 23:11Z).
+
+**Status:** OPEN — deferred per Alex's directive (23:24:59Z): "no one ever claimed cinderx.init() did work on ARM64. This is just more code which needs fixing." Proper debugging requires stepping through with GDB.
+
+---
+
+## Bug 9: decorator_chain SEGFAULT — MERGED INTO BUG 8
+
+**Status:** CLOSED — merged into Bug 8.
+
+**Falsification result (supervisor 23:52:24Z):** Tested decorator_chain on
+BASELINE (no backoff patches — `git checkout -- compiled_function.h pyjit.cpp`,
+clean rebuild). Result: SEGFAULT (exit 139). The crash is NOT caused by the
+backoff patch or struct layout change. It is a pre-existing CinderX bug when
+running WITHOUT `cinderx.init()` on aarch64. The original baseline benchmark
+(26-02-2026-deopt-classification.md, 50K deopts, no crash) used a build where
+`cinderx.init()` worked.
+
+**Conclusion:** decorator_chain depends on something `cinderx.init()` sets up
+(likely type watchers or frame evaluators). 25/26 benchmarks work without
+init(); decorator_chain is the 1 that doesn't. This is the same class of
+issue as Bug 8.
+
+---
+
+## Bug 10: Deopt Backoff Code Never Executes (OPEN)
+
+**Severity:** The deopt backoff patch is completely inert. All deopt counts are byte-for-byte identical to baseline across all 26 benchmarks.
+
+**Symptom:** After applying the backoff patch (compiled_function.h +35 lines, pyjit.cpp +23 lines), clean rebuild, and running full 26-benchmark deopt_stats_measure.py:
+- deep_class_super: 1,100,000 deopts (baseline: 1.1M) — IDENTICAL
+- pytorch_cm: 50,000 deopts (baseline: 50K) — IDENTICAL
+- nn_module_forward: 40,000 deopts (baseline: 40K) — IDENTICAL
+- All 22 structural: 0 deopts — unchanged (expected)
+
+**Root cause (confirmed, supervisor 23:44:13Z):** The backoff code was placed in
+the WRONG code path. CinderX has two distinct deopt mechanisms:
+
+1. **Explicit deoptimisation** (`deoptFunc`/`reoptFunc` in pyjit.cpp): triggered
+   by type invalidation or code object changes. These are ONE-TIME events. The
+   backoff code was placed here.
+
+2. **Runtime guard failures** (`Context::recordDeopt` in context.cpp, called from
+   gen_asm.cpp deopt stub): triggered when JIT-compiled guard checks fail at
+   runtime. These are the PER-CALL events that produce 1.1M deopts. The backoff
+   code was NOT placed here.
+
+The deopt/reopt loop goes: JIT code → guard fails → gen_asm.cpp deopt stub →
+`Context::recordDeopt()` → interpreter fallback → next call re-enters JIT →
+guard fails again. None of this touches `deoptFunc()`/`reoptFunc()`.
+
+The earlier 5.7x deep_class_super result (22:44:43Z) was an artefact of ODR
+violation — memory corruption from struct layout mismatch accidentally triggered
+unrelated code paths.
+
+**Correct fix site:** `Context::recordDeopt()` in `cinderx/Jit/context.cpp`
+(line ~211). After incrementing `stat.count`, check if count exceeds a threshold
+and suppress JIT via `CI_CO_SUPPRESS_JIT` on the associated code object.
+Challenge: `recordDeopt` receives `CodeRuntime*` + `deopt_idx`, not
+`PyFunctionObject*` — need a path from `CodeRuntime` to `PyCodeObject`.
+
+**Status:** ROOT CAUSE CONFIRMED. Patch needs redesign to target
+`Context::recordDeopt()` instead of `deoptFunc()`/`reoptFunc()`.
+
+**Key code locations:**
+- `context.cpp:211` — `Context::recordDeopt()` (correct fix site)
+- `gen_asm.cpp:230-246` — runtime deopt stub (calls recordDeopt)
+- `pyjit.cpp:deoptFunc()` — explicit deopt handler (WRONG — not called during guard failures)
+- `pyjit.cpp:reoptFunc()` — reopt handler (WRONG — called once at startup, not per-call)
