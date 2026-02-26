@@ -99,7 +99,7 @@ Recover agents in this order — each role unblocks the next:
 4. **Theologian fourth** — architectural guidance should be available before workers start implementation.
 5. **Workers/generalist last** — workers depend on all of the above.
 
-**Exception:** If a human (Alex) has an urgent task, recover the most relevant agent first regardless of this order.
+**Exception:** If the human has an urgent task, recover the most relevant agent first regardless of this order.
 
 ### Step 4: Recover Each Agent
 
@@ -302,7 +302,7 @@ Only after the digest is posted and cursors are reset, spawn agents in recovery 
 Only needed for information not in the chat:
 
 - Pipeline state (approved but uncommitted changes)
-- Urgent requests from Alex via a different channel
+- Urgent requests from the human via a different channel
 - External dependencies that changed during downtime
 
 ## Morning Checklist (Quick Reference)

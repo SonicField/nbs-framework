@@ -48,7 +48,7 @@ Classify each agent:
 | **Zombie** | Context <15%, no meaningful output | Recommend `/nbs-teams-fixup` |
 | **Dead** | Session exited, bash prompt visible, or session missing | Recommend `/nbs-teams-fixup` immediately |
 
-If ANY agent is dead or zombie, this MUST appear as the **first item** in the posted assessment, marked `ACTION REQUIRED`. Do not bury it under other findings. The supervisor and Alex need to see it immediately.
+If ANY agent is dead or zombie, this MUST appear as the **first item** in the posted assessment, marked `ACTION REQUIRED`. Do not bury it under other findings. The supervisor and the human need to see it immediately.
 
 ### Step 1: Read chat context
 
