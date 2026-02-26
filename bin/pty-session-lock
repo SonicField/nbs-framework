@@ -14,7 +14,7 @@
 #   pty-session-lock help
 #
 # Arguments:
-#   <session>   Name of the pty-session (e.g. build-host
+#   <session>   Name of the pty-session (e.g. my-server)
 #   <handle>    Your agent handle (e.g. claude, generalist)
 #
 # Options:
@@ -24,18 +24,18 @@
 #
 # Examples:
 #   # Acquire exclusive access
-#   pty-session-lock acquire build-host claude
-#   pty-session send build-host 'make -j8'
-#   nbs-remote-build build-host 'make -j8' ...
-#   pty-session-lock release build-host claude
+#   pty-session-lock acquire my-server claude
+#   pty-session send my-server 'make -j8'
+#   nbs-remote-build my-server 'make -j8' ...
+#   pty-session-lock release my-server claude
 #
 #   # Check who holds the lock
-#   pty-session-lock check build-host
-#   # Output: build-host locked by claude (since 2026-02-20T15:30:00Z)
-#   # or:    build-host unlocked
+#   pty-session-lock check my-server
+#   # Output: my-server: locked by claude (since 2026-02-20T15:30:00Z)
+#   # or:    my-server: unlocked
 #
 #   # Wait up to 60s for lock to become available
-#   pty-session-lock acquire build-host generalist --timeout=60
+#   pty-session-lock acquire my-server generalist --timeout=60
 #
 # Exit codes:
 #   0 - Success (acquired, released, or unlocked)

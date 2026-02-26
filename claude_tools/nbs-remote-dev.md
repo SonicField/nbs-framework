@@ -65,11 +65,11 @@ Run a build command on a remote pty-session while staying responsive to chat. Po
 nbs-remote-build <session> '<build-command>'
 
 # Chat-aware: check chat while building
-nbs-remote-build build-host 'make -j8' \
+nbs-remote-build my-server 'make -j8' \
     --chat=.nbs/chat/live.chat --handle=claude
 
 # Custom prompt pattern (e.g. venv prompt)
-nbs-remote-build build-host 'make -j8' --prompt='(venv)'
+nbs-remote-build my-server 'make -j8' --prompt='(venv)'
 ```
 
 **Options:**
@@ -123,16 +123,16 @@ Use `nbs-remote-edit` for editing remote files. It uses scp via pty-session inte
 
 ```bash
 # 1. Download the file
-nbs-remote-edit pull build-host /data/users/dev/project/Jit/inliner.cpp
-# Returns: .nbs/remote-edit/build-host
+nbs-remote-edit pull buildserver.example.com /home/user/project/Jit/inliner.cpp
+# Returns: .nbs/remote-edit/buildserver.example.com/home/user/project/Jit/inliner.cpp
 
 # 2. Edit locally using the normal Edit tool
 
 # 3. Verify your changes
-nbs-remote-edit diff build-host /data/users/dev/project/Jit/inliner.cpp
+nbs-remote-edit diff buildserver.example.com /home/user/project/Jit/inliner.cpp
 
 # 4. Push back
-nbs-remote-edit push build-host /data/users/dev/project/Jit/inliner.cpp
+nbs-remote-edit push buildserver.example.com /home/user/project/Jit/inliner.cpp
 ```
 
 ### Fallback: Python String Replacement via pty-session
@@ -141,9 +141,9 @@ If nbs-remote-edit is unavailable, use Python `str.replace()` instead of sed. Th
 
 ```bash
 # Write a Python edit script
-pty-session send build-host "python3 -c \"
+pty-session send my-server "python3 -c \"
 import pathlib
-p = pathlib.Path('/data/users/dev/project/Jit/inliner.cpp')
+p = pathlib.Path('/home/user/project/Jit/inliner.cpp')
 src = p.read_text()
 old = '''exact old text here'''
 new = '''exact new text here'''
@@ -167,10 +167,10 @@ Never use `sleep N` to wait for a build. Use `pty-session wait`:
 
 ```bash
 # Wait for shell prompt to reappear (build done)
-pty-session wait build-host '\$' --timeout=300
+pty-session wait my-server '\$' --timeout=300
 
 # Wait for specific build output
-pty-session wait build-host 'Built target' --timeout=600
+pty-session wait my-server 'Built target' --timeout=600
 ```
 
 ---
@@ -185,38 +185,38 @@ The standard cycle for modifying code on a remote machine.
 
 ```bash
 # Pull all files you need to edit
-nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
-nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/inliner.cpp
+nbs-remote-edit pull devserver.example.com /home/user/project/Jit/pyjit.cpp
+nbs-remote-edit pull devserver.example.com /home/user/project/Jit/inliner.cpp
 
 # Edit locally with the Edit tool (safe, reversible, syntax-aware)
 
 # Diff to verify
-nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
-nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/inliner.cpp
+nbs-remote-edit diff devserver.example.com /home/user/project/Jit/pyjit.cpp
+nbs-remote-edit diff devserver.example.com /home/user/project/Jit/inliner.cpp
 
 # Push back
-nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
-nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/inliner.cpp
+nbs-remote-edit push devserver.example.com /home/user/project/Jit/pyjit.cpp
+nbs-remote-edit push devserver.example.com /home/user/project/Jit/inliner.cpp
 
 # Build with chat awareness
-nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
+nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
 ```
 
 **With pty-session fallback (when SSH is blocked):**
 
 ```bash
 # Read the file
-pty-session send build-host 'cat /data/users/dev/project/Jit/pyjit.cpp'
+pty-session send my-server 'cat /home/user/project/Jit/pyjit.cpp'
 sleep 3
-pty-session read build-host --last=500
+pty-session read my-server --last=500
 
 # Edit via Python str.replace (see above)
 
 # Verify the edit
-pty-session send build-host 'cat /data/users/dev/project/Jit/pyjit.cpp | head -220 | tail -20'
+pty-session send my-server 'cat /home/user/project/Jit/pyjit.cpp | head -220 | tail -20'
 
 # Build with chat awareness
-nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
+nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
 ```
 
 ### Pattern 2: Clean State Before Edits
@@ -224,17 +224,17 @@ nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claud
 Always verify the working tree is clean before starting edits. Stale changes from previous sessions cause cascading build failures.
 
 ```bash
-pty-session send build-host 'cd /data/users/dev/project && git status && git diff --stat'
+pty-session send my-server 'cd /home/user/project && git status && git diff --stat'
 sleep 2
-pty-session read build-host --last=30
+pty-session read my-server --last=30
 ```
 
 If dirty:
 ```bash
 # Revert to clean state
-pty-session send build-host 'git checkout -- .'
+pty-session send my-server 'git checkout -- .'
 # Or reset to a known commit
-pty-session send build-host 'git checkout 0ca33338'
+pty-session send my-server 'git checkout 0ca33338'
 ```
 
 ### Pattern 3: Exclusive Session Access
@@ -242,33 +242,33 @@ pty-session send build-host 'git checkout 0ca33338'
 **Never share a pty-session between agents.** If two agents need remote access simultaneously, create separate sessions:
 
 ```bash
-# Agent 1 uses build-host (already exists)
-pty-session send build-host 'make -j8'
+# Agent 1 uses my-server (already exists)
+pty-session send my-server 'make -j8'
 
 # Agent 2 creates their own session
-pty-session create build-host 'ssh devserver.example.com'
-pty-session wait build-host '\$' --timeout=30
-pty-session send build-host 'cd /data/users/dev/project && source venv/bin/activate'
+pty-session create remote-session 'ssh devserver.example.com'
+pty-session wait remote-session '\$' --timeout=30
+pty-session send remote-session 'cd /home/user/project && source venv/bin/activate'
 ```
 
 **Announce session ownership in chat:**
 ```
-@team — I am using pty-session build-host for the build. No one else should send commands to it until I report back.
+@team — I am using pty-session my-server for the build. No one else should send commands to it until I report back.
 ```
 
 **Or use pty-session-lock (preferred):**
 ```bash
 # Acquire exclusive access before using a session
-pty-session-lock acquire build-host claude
+pty-session-lock acquire my-server claude
 # ... do your work ...
-pty-session-lock release build-host claude
+pty-session-lock release my-server claude
 
 # Check who holds a session
-pty-session-lock check build-host
-# Output: build-host locked by claude (since 2026-02-20T15:30:00Z)
+pty-session-lock check my-server
+# Output: my-server: locked by claude (since 2026-02-20T15:30:00Z)
 
 # With chat notification
-pty-session-lock acquire build-host claude \
+pty-session-lock acquire my-server claude \
     --chat=.nbs/chat/live.chat --chat-handle=claude
 ```
 
@@ -280,11 +280,11 @@ Use debug builds for correctness iteration, optimised builds for benchmarks only
 
 ```bash
 # Debug build (fast compile, for development)
-nbs-remote-build build-host './configure --with-pydebug --disable-gil && make -j8' \
+nbs-remote-build my-server './configure --with-pydebug --disable-gil && make -j8' \
     --chat=.nbs/chat/live.chat --handle=claude --timeout=600
 
 # Optimised build (slow compile, for benchmarks)
-nbs-remote-build build-host './configure --disable-gil --enable-optimizations --with-lto && make -j8' \
+nbs-remote-build my-server './configure --disable-gil --enable-optimizations --with-lto && make -j8' \
     --chat=.nbs/chat/live.chat --handle=claude --timeout=1200
 ```
 
@@ -300,10 +300,10 @@ Sed through pty-session corrupts files. Every session that used sed extensively 
 
 ```bash
 # BAD — will corrupt the file eventually
-pty-session send build-host "sed -i '414,453d' inliner.cpp"
+pty-session send my-server "sed -i '414,453d' inliner.cpp"
 
 # GOOD — exact string replacement with verification
-pty-session send build-host "python3 -c \"...str.replace()...\""
+pty-session send my-server "python3 -c \"...str.replace()...\""
 ```
 
 ### 2. Do not use sleep to wait for builds
@@ -312,12 +312,12 @@ Sleep wastes time (too long) or misses completion (too short). Use `nbs-remote-b
 
 ```bash
 # BAD — blind guess, no chat access
-pty-session send build-host 'make -j8'
+pty-session send my-server 'make -j8'
 sleep 120
-pty-session read build-host
+pty-session read my-server
 
 # GOOD — polls for completion, checks chat
-nbs-remote-build build-host 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
+nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
 ```
 
 ### 3. Do not share pty-sessions between agents
@@ -333,7 +333,7 @@ Stale changes from previous sessions cause build failures that look like your ed
 Post a status update before starting any operation that takes more than 30 seconds:
 
 ```
-@team — Starting build on build-host Using nbs-remote-build, will stay chat-responsive. ETA: build typically takes 2-3 minutes.
+@team — Starting build on my-server. Using nbs-remote-build, will stay chat-responsive. ETA: build typically takes 2-3 minutes.
 ```
 
 ---
@@ -354,13 +354,13 @@ The default prompt pattern matches `$ ` at end of line. If the remote shell has 
 
 ### pty-session read returns stale output
 
-Use `--last=N` to get the most recent N lines: `pty-session read build-host --last=50`. The default scrollback (100 lines) may include old output from previous commands.
+Use `--last=N` to get the most recent N lines: `pty-session read my-server --last=50`. The default scrollback (100 lines) may include old output from previous commands.
 
 ### File appears corrupted after edit
 
 Revert to a known-good state immediately:
 ```bash
-pty-session send build-host 'cd /data/users/dev/project && git checkout -- Jit/inliner.cpp'
+pty-session send my-server 'cd /home/user/project && git checkout -- Jit/inliner.cpp'
 ```
 
 Then re-apply edits using Python str.replace (not sed).
@@ -384,17 +384,17 @@ Fetches `git diff` output from a remote pty-session. Optionally posts the diff t
 
 ```bash
 # Show unstaged changes
-nbs-remote-diff build-host --cwd=/data/users/dev/project
+nbs-remote-diff my-server --cwd=/home/user/project
 
 # Show diff for a specific file
-nbs-remote-diff build-host --path=Jit/inliner.cpp --cwd=/data/users/dev/project
+nbs-remote-diff my-server --path=Jit/inliner.cpp --cwd=/home/user/project
 
 # Show diff against base commit and post to chat
-nbs-remote-diff build-host --commit=0ca33338 --cwd=/data/users/dev/project \
+nbs-remote-diff my-server --commit=0ca33338 --cwd=/home/user/project \
     --chat=.nbs/chat/live.chat --handle=claude
 
 # Just the diffstat
-nbs-remote-diff build-host --stat --cwd=/data/users/dev/project
+nbs-remote-diff my-server --stat --cwd=/home/user/project
 ```
 
 **Options:** `--path=PATH`, `--stat`, `--staged`, `--commit=REF`, `--chat=FILE`, `--handle=NAME`, `--cwd=DIR`.
@@ -409,16 +409,16 @@ One-command state check: HEAD commit, branch, modified files, and diffstat.
 
 ```bash
 # Quick state check
-nbs-remote-status build-host --cwd=/data/users/dev/project
+nbs-remote-status my-server --cwd=/home/user/project
 
 # Post state to chat
-nbs-remote-status build-host --cwd=/data/users/dev/project \
+nbs-remote-status my-server --cwd=/home/user/project \
     --chat=.nbs/chat/live.chat --handle=helper
 ```
 
 Output:
 ```
-=== Remote Status: build-host ===
+=== Remote Status: my-server ===
 HEAD: 0ca33338 Initial commit
 Branch: main
 Working tree: 3 files changed

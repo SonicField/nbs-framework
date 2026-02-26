@@ -223,14 +223,14 @@ When building on a remote machine via pty-session, use `nbs-remote-build` to sta
 
 ```bash
 # Basic: run build, wait for prompt to reappear
-nbs-remote-build build-host 'cmake --build build -j8'
+nbs-remote-build my-server 'cmake --build build -j8'
 
 # Chat-aware: check chat while building
-nbs-remote-build build-host 'cmake --build build -j8' \
+nbs-remote-build my-server 'cmake --build build -j8' \
     --chat=.nbs/chat/live.chat --handle=claude
 
 # Custom prompt pattern (e.g. venv prompt)
-nbs-remote-build build-host 'make -j8' --prompt='(venv)'
+nbs-remote-build my-server 'make -j8' --prompt='(venv)'
 ```
 
 ### Options
