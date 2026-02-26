@@ -137,9 +137,10 @@ done
 
 # 3. Build binaries from source
 echo "Building from source..."
-if ! make -C "$PROJECT_ROOT" clean install 2>&1; then
-    echo "ERROR: Build failed. Ensure gcc and make are installed." >&2
-    exit 1
+if ! make -C "$PROJECT_ROOT" install 2>&1; then
+    echo "WARNING: Build failed (binaries may be in use by running agents)." >&2
+    echo "  Skills and symlinks will still be updated." >&2
+    echo "  Run 'make install' manually when agents are stopped." >&2
 fi
 
 # 4. Symlink supporting directories
