@@ -502,7 +502,7 @@ static void show_tool_header(void)
         "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
         "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
         "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n"
-        "\xe2\x94\x82 Edit files:  nbs-remote-edit-pty pull/push/diff <ses> <path>    \xe2\x94\x82\n"
+        "\xe2\x94\x82 Edit files:  nbs-remote-edit pull/push/diff <host> <path>       \xe2\x94\x82\n"
         "\xe2\x94\x82 Build:       nbs-remote-build <ses> '<cmd>' --chat=... --handle \xe2\x94\x82\n"
         "\xe2\x94\x82 Git diff:    nbs-remote-diff <ses> --cwd=<dir> --commit=<ref>   \xe2\x94\x82\n"
         "\xe2\x94\x82 Git status:  nbs-remote-status <ses> --cwd=<dir>                \xe2\x94\x82\n"
