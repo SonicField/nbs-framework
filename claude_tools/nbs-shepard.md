@@ -107,6 +107,13 @@ Then apply the full NBS review framework (as defined in `/nbs`) to the team's re
 8. **Blocked agents** — who is waiting on something? Can it be unblocked?
 9. **Coordination failures** — agents duplicating work? Talking past each other? Supervisor echoing rather than coordinating?
 10. **Missing roles** — is there work nobody is doing?
+11. **Role compliance** — are specialists staying in role? Check:
+    - Scribe: using `nbs-scribe-log` (not prose notes)? Every message a tool call?
+    - Gatekeeper: reviewing only, not writing code?
+    - Testkeeper: owning tests, not doing architecture?
+    - Theologian: advising, not implementing?
+    - Supervisor: delegating, not doing tactical work?
+    If any agent has drifted from role, call it out by name.
 
 ### Step 3: Post recommendations to chat
 
@@ -127,6 +134,7 @@ nbs-chat send .nbs/chat/live.chat shepard "SHEPARD CHECKPOINT
 **Idle agents:** [who is idle, specific task each should pick up]
 **Blocked agents:** [who is blocked, what's blocking them, suggested resolution]
 **Coordination:** [specific issues observed, suggested fixes]
+**Role compliance:** [which agents are in role, which have drifted — e.g. scribe posting prose instead of using nbs-scribe-log]
 
 **Recommended assignments:**
 - @agent1 → [specific task]
