@@ -23,6 +23,7 @@ bin/nbs-chat
 bin/nbs-chat-remote
 bin/nbs-chat-terminal
 bin/nbs-chat-web
+bin/nbs-scribe-log
 bin/nbs-sidecar
 bin/nbs-workers
 bin/pty-session
@@ -79,3 +80,7 @@ edit_*.py
 # Prevent plan/progress docs in repo root (use plans/ directory)
 # Pattern: dd-mm-yyyy-*.md
 [0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]-*.md
+# Build artefacts for nbs-scribe-log
+src/nbs-scribe-log/nbs-scribe-log
+src/nbs-scribe-log/assert_check
+src/nbs-scribe-log/*.o
