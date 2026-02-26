@@ -82,7 +82,6 @@ for pid in $PIDS; do
             continue
             ;;
     esac
-    fi
 
     # Reconstruct args, stripping --initial-prompt and resolving binary path
     NEW_ARGS=()
