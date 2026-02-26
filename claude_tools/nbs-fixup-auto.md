@@ -54,7 +54,8 @@ Exit immediately after posting. Do not engage in conversation.
 
 - **Do NOT fix infrastructure agents.** Skip sidecar, pythia, shepard — they are managed by the sidecar process, not by fixup.
 - **Do NOT kill agents that are actively working.** A spinner means the agent is processing. Leave it alone.
-- **Respect the escalation ladder.** Level 1 before Level 2, Level 2 before Level 4. Skip levels only when the triage clearly indicates (e.g. context 0% → skip to Level 4).
-- **Post everything to chat.** The summary is institutional memory. Other agents and Alex can see what happened.
+- **Always hard-restart the scribe.** Scribe state lives in the log file, not in her session. A fresh scribe re-loads the skill and prevents role drift (prose commentary instead of tool usage). Kill and respawn her every fixup cycle regardless of health.
+- **Respect the escalation ladder** for all other agents. Level 1 before Level 2, Level 2 before Level 4.
+- **Post everything to chat.** The summary is institutional memory.
 - **Be brief.** One line per agent. Total summary under 20 lines.
 - **Exit after posting.** You are ephemeral. Do not stay running.
