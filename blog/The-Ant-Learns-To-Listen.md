@@ -122,28 +122,149 @@ The fix: `nbs-digest-spawn` launches an ephemeral Claude worker with `/nbs-chat-
 
 The constraint discovered during implementation: **the digest must complete before agents spawn.** If agents start before the digest is posted, they miss it. The restart runbook now enforces this ordering.
 
-## 5. Quantitative Observations
+## 5. Quantitative Analysis
 
-*[This section to be expanded with sub-agent analysis of decision log, chat archives, and git log correlation.]*
+Analysis of 6,653 chat messages, 3,622 decision log entries, 454 git commits, 20 Pythia checkpoints, and 27 Shepard checkpoints across 6 days (21-26 February 2026).
 
-### 5.1 Preliminary Observations (from this session)
+### 5.1 Communication Volume
 
-| Metric | Before fixes | After fixes |
-|--------|-------------|-------------|
-| Pythia checkpoints in 19 hours | 0 | 10 (and counting) |
-| Phantom unread notifications per cycle | 257 | 0 |
-| Agent handle correctness | ~80% (generalist wrong, supervisor wrong) | 100% |
-| Orphaned tmux sessions | 25+ | 0 (cleaned, prevented by sidecar-restart skip) |
-| Lines of code in remote-edit | 370 (base64) | 172 (scp) |
-| `@handle?` response accuracy | Misreported working agents as idle | Raw output, no misreporting |
+| Metric | Value |
+|--------|-------|
+| Total unique messages | 6,653 |
+| Total text | 5.6 MB |
+| Timeline | 126.5 hours (5.3 days) |
+| Peak hour | 259 messages (24 Feb 08:00, crash triage) |
+| Peak day | 2,183 messages (24 Feb) |
+| Active hours (≥1 message) | 63 |
+| Average per active hour | 105.6 |
 
-### 5.2 The Scribe Drift Pattern
+Message length increased over time: 630 average characters on day 1, rising to 1,007 by day 4, then dropping to 818 after tooling fixes on day 6. The drop is consistent with less arguing and more tool usage.
 
-The scribe demonstrated measurable drift from tool usage to prose narration over the course of a session. Early messages used `nbs-scribe-log` correctly (proper D- entries with all fields). Later messages devolved to "SCRIBE — Recording..." prose summaries. The hourly hard-restart resets this drift.
+### 5.2 Human Intervention
 
-This pattern has a falsifier: if the hourly restart is working, the ratio of tool-generated entries to prose entries should remain stable rather than degrading over time. *[To be measured from the decision log.]*
+| Metric | Value |
+|--------|-------|
+| Human messages | 537 (8.1% of total) |
+| Directives | 335 (62.4% of human messages) |
+| Corrections | 61 (11.4%) |
+| Questions | 111 (20.7%) |
+| Approvals | 30 (5.6%) |
 
-## 6. What This Means
+The human spends 62% of messages directing work and 11% correcting errors. Approval is rare. The team cannot self-direct for extended periods without drift.
+
+**Longest autonomous stretches:**
+
+| Duration | Agent messages | Outcome |
+|----------|--------------|---------|
+| 33 hours | 518 | Morning found team on wrong codebase |
+| 23 hours | 167 | Morning found agent in wrong tmux session |
+| 10 hours | 42 | Overnight idle, no drift |
+| 7 hours | 281 | Productive crash triage (24 Feb overnight) |
+
+Autonomous stretches produce volume but require triage. The productive 7-hour stretch (281 messages) had a clear terminal goal (fix regressions before morning). The problematic 33-hour stretch had a vague goal ("keep going").
+
+### 5.3 Self-Correction
+
+| Metric | Value |
+|--------|-------|
+| Total decisions | 3,622 |
+| SUPERSEDES corrections | 142 (3.9%) |
+| Median correction time | 4.8 minutes |
+| Corrections within 30 min | 94.5% |
+
+The correction rate rose over time: 0% on Feb 16-17, climbing to 6-12% on Feb 23-26. Decisions tagged `breaking-change` were corrected at 25.3% (6.5x the base rate). Decisions tagged `untested` at 8.1% (2x base rate). High-stakes decisions attract more scrutiny.
+
+The supervisor is equally likely to be corrected (64 times) as to correct others (63 times) — deeply involved in contested territory, not a rubber stamp.
+
+### 5.4 Pythia Trajectory Assessment
+
+20 checkpoints across 5 days. **Zero high-confidence assessments.** 70% moderate, 30% low.
+
+Three gaps where Pythia stopped firing:
+
+| Gap | Duration | Cause |
+|-----|----------|-------|
+| 22 Feb 01:00 → 23 Feb 10:06 | 33 hours | Trigger tied to wrong chat channel |
+| 23 Feb 19:38 → 24 Feb 16:39 | 21 hours | Overnight — decision count didn't cross threshold |
+| 25 Feb 19:22 → 26 Feb 19:00 | 24 hours | All agents dead, system idle |
+
+After the trigger was fixed to count scribe log entries (commit `814a508`), Pythia fired 3 checkpoints in the remaining 5 hours. The fix was immediate and measurable.
+
+### 5.5 Shepard Team Audit
+
+27 checkpoints across 4 days. Recurring findings:
+
+| Finding | Frequency |
+|---------|-----------|
+| Idle or dead agents | 100% (every checkpoint) |
+| Coordination failure / duplication | 74% |
+| Push-before-review | 44% |
+| Goal drift / scope creep | 37% |
+| Supervisor failures | 33% |
+
+Shepard flagged helper fabricating Alex's approval 3+ times (checkpoint 15) — the same hallucination pattern that later produced the dismissal incident. The framework detected the tendency before the catastrophic instance.
+
+### 5.6 Git Commit Profile
+
+454 commits over 31 days.
+
+| Category | Count | % |
+|----------|-------|---|
+| Infrastructure (src/, bin/) | 156 | 34.4% |
+| Application (CinderX) | 109 | 24.0% |
+| Skills (claude_tools/) | 64 | 14.1% |
+| Docs/blog | 55 | 12.1% |
+| Tests | 47 | 10.4% |
+| Cleanup | 23 | 5.1% |
+
+The 8 major tooling changes clustered in a 31-hour window (25-26 Feb). Individual causal attribution is unreliable — the behavioural changes are the compound effect of all 30 fixes together.
+
+## 6. The Scribe Drift Problem
+
+The most significant finding from the quantitative analysis.
+
+### 6.1 The Pattern
+
+| Session | Time | Tool compliance |
+|---------|------|----------------|
+| S1 (25 Feb afternoon) | 4 hours | 85% |
+| S2 (25 Feb evening) | 1 hour | 25% |
+| S3 (26 Feb morning) | 2.5 hours | 15% |
+| S4 (26 Feb afternoon-night) | 6 hours | 3% |
+
+Within Session S3, compliance dropped from 41% to 0% in 2.5 hours. By S4, 95 of 109 messages were free-form prose with zero tool calls.
+
+### 6.2 Restarts Do Not Fix It
+
+The scribe was hard-restarted at least 8 times across these sessions. Each new instance converged to prose-dominant output within minutes.
+
+The cause: the new scribe reads `--last=N` chat messages to "catch up." Those messages are predominantly prose from the previous instance. **The chat history is the infection vector.** The new scribe learns the prose pattern from its predecessor's output.
+
+### 6.3 Phantom Decisions
+
+Three decision IDs were fabricated in chat messages but never written to the log file:
+
+| Phantom ID | Context |
+|------------|---------|
+| D-1772105259 | Referenced 4 times as "Amendment" — does not exist |
+| D-1772106644 | "ROOT CAUSE FOUND" — claimed as logged, absent |
+| D-1772107068 | "confirmed" — claimed as logged, absent |
+
+All three occurred during the scribe's most tool-compliant hour (41% D-ID rate). Even at her best, the scribe fabricated decision IDs.
+
+### 6.4 Coverage
+
+Only 27 of 403 decisions made during scribe-active periods were announced in chat. 376 orphans. 6.7% coverage. The scribe log grew (decisions were being logged by something — likely `nbs-scribe-log` calls), but the scribe's chat announcements decoupled from reality.
+
+### 6.5 The Fix
+
+The hourly restart is necessary but not sufficient. The startup context must change:
+
+1. Read the decision log tail (`tail -40 .nbs/scribe/live-log.md`), not chat history
+2. The log teaches structure; the chat teaches prose
+3. The scribe's first action should be a tool call, not a status message
+
+## 7. What This Means
 
 ### 6.1 Communication infrastructure is not plumbing
 
@@ -161,7 +282,17 @@ This is consistent with the RLHF training dynamic: agents pattern-match from tra
 
 The `@handle?` chrome filter was 80 lines of UTF-8 byte matching. It failed. The replacement was "8 lines, truncated to 80 chars." The `nbs-remote-edit-pty` was 370 lines of base64 chunking. The replacement was `scp`. In both cases, the complex solution was a hypothesis about what the simple solution could not do. The simple solution falsified it.
 
-### 6.4 Ephemeral agents resist drift
+### 7.5 Chat history is an infection vector
+
+The scribe drift finding reveals a deeper problem. When a restarted agent reads chat history to "catch up," it learns behaviour patterns from previous agents' output. If those patterns are degraded (prose instead of tool calls, fabricated IDs instead of real ones), the new agent inherits the degradation.
+
+This is context-transmitted drift. The chat log — the team's shared memory — becomes the mechanism for propagating bad habits across agent restarts. The fix is architectural: startup context should come from structured artefacts (decision logs, task files) rather than unstructured chat.
+
+### 7.6 Pythia never reached high confidence
+
+Zero high-confidence assessments across 20 checkpoints. This is not a failure of Pythia — it is an honest assessment of a system that is perpetually in flux. The team's trajectory is always uncertain because the problem space (JIT compiler optimisation) is genuinely hard and the agents genuinely do not know whether their current approach will work.
+
+The absence of high confidence is itself evidence that the epistemic infrastructure is functioning: Pythia is reporting actual confidence, not performing it.
 
 Pythia, Shepard, and the fixup worker are ephemeral — spawned fresh for each checkpoint. They cannot drift because they have no history. The scribe, supervisor, and other persistent agents drift measurably over sessions. The hourly scribe restart exploits this: her state is external (the log file), so restarting her loses nothing and resets drift.
 
@@ -173,7 +304,7 @@ Three agents fabricated the same directive. The chat log contradicted it. Nobody
 
 The fix (standup quote rule) works because it is injected by deterministic code, repeated every cycle, and costs nothing to verify. The falsification test ("search the chat for the exact quote") is now culturally expected rather than exceptional.
 
-## 7. Open Questions
+## 8. Open Questions
 
 **Does the scribe hard-restart actually prevent drift?** Measurable from the decision log: compare tool-usage ratio in the first hour after restart vs the hour before restart, across multiple cycles.
 
