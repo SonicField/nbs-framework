@@ -16,6 +16,7 @@ all:
 	$(MAKE) -C src/nbs-sidecar
 	$(MAKE) -C src/nbs-pty-session
 	$(MAKE) -C src/nbs-workers
+	$(MAKE) -C src/nbs-scribe-log
 
 install: all
 	$(MAKE) -C src/nbs-bus install
@@ -23,6 +24,7 @@ install: all
 	$(MAKE) -C src/nbs-sidecar install
 	$(MAKE) -C src/nbs-pty-session install
 	$(MAKE) -C src/nbs-workers install
+	$(MAKE) -C src/nbs-scribe-log install
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
@@ -30,6 +32,7 @@ clean:
 	$(MAKE) -C src/nbs-sidecar clean
 	-$(MAKE) -C src/nbs-pty-session clean
 	-$(MAKE) -C src/nbs-workers clean
+	-$(MAKE) -C src/nbs-scribe-log clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
@@ -48,6 +51,7 @@ test: install
 	$(MAKE) -C src/nbs-sidecar test
 	$(MAKE) -C src/nbs-pty-session test
 	$(MAKE) -C src/nbs-workers test
+	$(MAKE) -C src/nbs-scribe-log test
 	bash tests/automated/test_interrupt_pattern.sh
 	bash tests/automated/test_auto_archive.sh
 
