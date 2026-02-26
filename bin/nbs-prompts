@@ -103,4 +103,6 @@ if [[ -z "$raw" ]]; then
     exit 1
 fi
 index=$(( raw % ${#prompts[@]} ))
-echo "${prompts[$index]}"
+# Append anti-hallucination rule (English, always — the rule must be
+# unambiguous regardless of which language the prompt is in)
+echo "${prompts[$index]} Rule: if you claim the human said something, quote it with timestamp. No quote = no evidence."
