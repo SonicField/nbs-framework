@@ -2,9 +2,7 @@
 
 ## The Claim
 
-Any meritocracy built on shared reputation will converge to groupthink. This is not a risk to be mitigated. It is a structural inevitability.
-
-We have evidence from AI agent systems where the dynamics play out in hours rather than years, and we have a mechanism that explains why human organisations exhibit the same failure mode over decades.
+Any meritocracy built on shared reputation — without an objective function — will converge to groupthink. We postulate this from direct experience with AI agent systems, where the dynamics play out in hours. We have not yet attempted to falsify it (falsification criteria are given at the end). We further posit that the same mechanism applies to any high-intelligence agents operating under reputation-based evaluation: humans, AI, or mixtures of both.
 
 ## The Evidence
 
