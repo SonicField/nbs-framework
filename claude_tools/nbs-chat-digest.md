@@ -129,6 +129,7 @@ If no argument is given, prompt the user for which chat file to digest.
 
 ## Important
 
+- The digest must be **thorough** — at least 200 lines. Cover every decision, every 3W, every key technical outcome. This is institutional memory; brevity here means lost context.
 - The digest must be **self-contained** — readable without the original chat.
 - The digest must be **safe to commit** — no sensitive data.
 - Be honest about what didn't work. The value is in the learnings.

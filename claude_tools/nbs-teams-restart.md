@@ -275,13 +275,27 @@ Infrastructure: chat OK, bus OK, scribe log OK"
 
 ### Step 8b: Automated Digest
 
-Before spawning agents, digest the prior session:
+**This step MUST complete before Step 8c (spawning agents).** Agents read the digest on startup. If it's not there, they miss it.
 
 ```bash
 nbs-digest-spawn .nbs/chat/live.chat --wait
 ```
 
-Posts a structured summary (decisions, 3Ws, key outcomes) to chat, followed by a restart banner. Restarted agents read it on startup.
+Wait for the digest worker to post its summary to chat. Then reset cursors again (the digest added messages):
+
+```bash
+# Reset cursors to current end so agents see the digest + banner
+HEADER_LINES=6
+total_lines=$(wc -l < .nbs/chat/live.chat)
+cursor_value=$((total_lines - HEADER_LINES - 1))
+for handle in <all agent handles>; do
+    sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" .nbs/chat/live.chat.cursors
+done
+```
+
+### Step 8c: Spawn Agents
+
+Only after the digest is posted and cursors are reset, spawn agents in recovery order (Step 3). Stagger starts by 5 seconds.
 
 ### Step 9: Brief Recovered Agents (optional)
 
@@ -305,8 +319,10 @@ For the common case of morning recovery after overnight idle:
 7. Hard-restart zombies and dead agents (Level 4)
 8. Wait 30s, verify chat participants
 9. Post recovery report
-10. nbs-digest-spawn .nbs/chat/live.chat --wait
-11. Brief recovered agents (only for info not in chat)
+10. nbs-digest-spawn .nbs/chat/live.chat --wait  # MUST complete before step 11
+11. Reset cursors to current end of chat
+12. Spawn agents (staggered, recovery order)
+13. Brief recovered agents (only for info not in chat)
 ```
 
 ## Remote Agent Recovery
