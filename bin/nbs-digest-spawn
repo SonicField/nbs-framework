@@ -41,7 +41,7 @@ if [[ ! -f "$CHAT_FILE" ]]; then
 fi
 
 # Spawn ephemeral digest worker
-TASK_DESC="Load /nbs-chat-digest. Digest ${CHAT_FILE}. The digest must be thorough — at least 200 lines covering all decisions, 3Ws, and key technical outcomes. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send when done. Exit after posting."
+TASK_DESC="Your handle is 'shepard'. Load /nbs-chat-digest. Digest ${CHAT_FILE}. The digest must be thorough — at least 200 lines covering all decisions, 3Ws, and key technical outcomes. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send using handle 'shepard' when done. Exit after posting."
 
 WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
 
@@ -77,7 +77,7 @@ if [[ "$WAIT" == true ]]; then
 fi
 
 # Post restart banner
-"$NBS_CHAT" send "$CHAT_FILE" system \
+"$NBS_CHAT" send "$CHAT_FILE" shepard \
     "=== TEAM RESTART — Digest above summarises prior session ===" 2>/dev/null || true
 
 echo "Restart banner posted to $CHAT_FILE"
