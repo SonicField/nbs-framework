@@ -321,6 +321,9 @@ int registry_seed(const char *nbs_root, const char *registry_path)
                 continue;
             if (!str_ends_with(ent->d_name, ".chat"))
                 continue;
+            /* Skip archive files — historical, not for active monitoring */
+            if (strstr(ent->d_name, "-archive.") != NULL)
+                continue;
 
             /* chat_dir (<=4095) + "/" + d_name (<=255) fits in MAX_FPATH */
             char full_path[MAX_FPATH];
