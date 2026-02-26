@@ -270,27 +270,28 @@ nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete:
 - @<handle1>: <recovery method> — now at <N%> context
 - @<handle2>: <recovery method> — now at <N%> context
 ...
-Pending work from before downtime: [summarise from chat history]
 Infrastructure: chat OK, bus OK, scribe log OK"
 ```
 
-### Step 9: Brief Recovered Agents
+### Step 8b: Automated Digest
 
-Freshly restarted agents (Level 4) have no memory of previous work. They will read chat history on startup, but may need explicit direction on:
-
-- Pending tasks that were in progress before the downtime
-- Review approvals that need to be re-acknowledged
-- Any pipeline state (e.g., "commit X is approved and ready to push")
-
-Post a brief to chat that recovered agents can read:
+Before spawning agents, run the digest to produce a structured briefing from the prior session:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat <your-handle> "Briefing for recovered agents:
-1. [Most recent committed state — last git hash]
-2. [Pending work — tasks in progress before downtime]
-3. [Pipeline state — approved but uncommitted changes]
-4. [Any urgent requests from Alex]"
+nbs-digest-spawn .nbs/chat/live.chat --wait
 ```
+
+This spawns an ephemeral Claude worker that reads the chat, produces a digest (decisions, 3Ws, key outcomes), posts the summary to chat, and exits. A restart banner is posted after the digest.
+
+Restarted agents will read this on their first `--last=N` and get structured context without manual briefing.
+
+### Step 9: Brief Recovered Agents (optional)
+
+The automated digest covers most context. Manual briefing is only needed for information not in the chat:
+
+- Pipeline state (approved but uncommitted changes)
+- Urgent requests from Alex via a different channel
+- External dependencies that changed during downtime
 
 ## Morning Checklist (Quick Reference)
 
@@ -302,11 +303,12 @@ For the common case of morning recovery after overnight idle:
 3. Triage: healthy / stressed / zombie / dead
 4. Post triage to chat
 5. Clean stale pidfiles and cursors for dead/zombie agents
-6. Compact stressed agents (Level 2). If compact does not reduce context, escalate to Level 4 (compaction floor — see fixup runbook zombie classification)
+6. Compact stressed agents (Level 2). If compact does not reduce context, escalate to Level 4
 7. Hard-restart zombies and dead agents (Level 4)
 8. Wait 30s, verify chat participants
 9. Post recovery report
-10. Brief recovered agents on pending work
+10. nbs-digest-spawn .nbs/chat/live.chat --wait
+11. Brief recovered agents (only for info not in chat)
 ```
 
 ## Remote Agent Recovery

@@ -1,72 +1,77 @@
 ---
 description: "NBS Chat Digest: Extract learnings from chat files"
-allowed-tools: Bash, Read, Write
+allowed-tools: Bash, Read, Write, Task
 ---
 
 # NBS Chat Digest
 
-Extract structured learnings from `.chat` files. Produces a sanitised summary safe to commit or share — no sensitive data in the output.
+Extract structured learnings from `.chat` files. Produces a sanitised summary safe to commit or share.
 
 ## When to Use
 
 - At project milestones (phase gates, releases)
 - After a significant multi-participant chat session
 - When archiving chat files before cleanup
-- When the supervisor wants to capture process learnings
+- Automatically during team restart (via `nbs-digest-spawn`)
 
 ## Instructions
 
-### 1. Read the Chat
+### 1. Measure the Chat
 
-Read the full chat file directly using the Read tool (not `--last=999` which may truncate). For very large files, read in chunks using offset/limit parameters.
+```bash
+nbs-chat participants <file>
+```
 
-### 2. Analyse
+Count the total messages. This determines whether to read directly or split into parallel sub-agents.
 
-Extract four categories of information:
+### 2. Read the Chat
 
-**Decisions** — Architectural or process choices made during the chat.
-For each decision, capture:
-- What was decided
-- Why (the rationale, including alternatives considered)
-- Who was involved (roles, not handles — described by function)
-- **Status**: active, or superseded (if a later decision reversed it)
+**Under 200 messages:** Read the full file directly using the Read tool.
 
-If a decision was later overturned, mark it as **Superseded by:** and reference the replacing decision. This is important — omitting reversed decisions hides the reasoning process.
+**Over 200 messages:** Split into chunks and launch parallel sub-agents. Each sub-agent reads a window and summarises it.
 
-**3Ws — What Went Well**
-- Effective coordination patterns
-- Tools or processes that worked
-- Good decisions that paid off
+```bash
+# Get total message count from participants output
+TOTAL=<sum of all participant message counts>
 
-**3Ws — What Didn't Work**
-- Bugs discovered through live use (not design review)
-- Miscommunication or coordination failures
-- Tool limitations that caused friction
+# Calculate chunk size (aim for 4-6 sub-agents, ~200 messages each)
+CHUNK=$((TOTAL / 5))
 
-**3Ws — What We Can Do Better**
-- Process improvements identified
-- Tool changes needed
-- Patterns to adopt or avoid
+# Launch sub-agents in parallel using the Task tool
+# Sub-agent 1: nbs-chat read <file> --last=CHUNK
+# Sub-agent 2: messages CHUNK+1 to 2*CHUNK (use --after/--before with timestamps)
+# etc.
+```
 
-### 3. Sanitise
+Each sub-agent should summarise:
+- **Decisions made** in its window
+- **Blockers** encountered and how they were resolved
+- **3Ws** observations (what worked, what didn't, what to improve)
+- **Key outcomes** (commits, test results, benchmarks)
 
-Remove from the output:
-- Absolute file paths (generalise to relative or descriptive)
-- User handles and names (use roles that describe function — e.g. "supervisor", "documentation lead", "benchmark lead", "human". Roles are not a fixed list; use whatever describes the participant's function in the conversation)
-- Project-specific identifiers (task IDs, diff numbers, internal URLs)
-- Any credentials, tokens, or secrets
+Synthesise the sub-agent summaries into the final digest.
 
-Keep:
-- Technical patterns and architectural reasoning
-- Process observations
-- Tool behaviour and limitations
-- Reusable learnings
+### 3. Analyse
 
-### 4. Write the Digest
+Extract four categories:
 
-Write the output to a file. Default location: `.nbs/digests/<date>-<topic>.md`
+**Decisions** — What was decided, why, who was involved (roles, not handles), status (active or superseded).
 
-For long conversations that span multiple phases or topics, split into sections by phase. Each phase gets its own Decisions and 3Ws blocks.
+**What Went Well** — Effective patterns, good decisions, tools that worked.
+
+**What Didn't Work** — Bugs, miscommunication, tool limitations.
+
+**What We Can Do Better** — Process improvements, tool changes, patterns to adopt or avoid.
+
+### 4. Sanitise
+
+Remove: absolute file paths, user handles (use roles), project-specific IDs, credentials.
+
+Keep: technical patterns, architectural reasoning, process observations, reusable learnings.
+
+### 5. Write the Digest
+
+Default location: `.nbs/digests/<date>-<topic>.md`
 
 Format:
 
@@ -75,15 +80,15 @@ Format:
 
 Date: <YYYY-MM-DD>
 Participants: <N> (roles: <list of functional roles>)
-Messages: <count> (message sends, not lines)
+Messages: <count>
 
 ## TL;DR
 
-<2-3 sentence summary of what this chat session was about and the key outcomes. A reader with no context should understand the significance after reading this.>
+<2-3 sentences. A reader with no context should understand the significance.>
 
 ## Context
 
-<Brief description of the project, what stage it was at, and why this conversation happened. Assume the reader has no familiarity with the subject. Include enough background that the decisions and learnings make sense on their own.>
+<Brief background. Assume no familiarity with the subject.>
 
 ## Decisions
 
@@ -106,20 +111,19 @@ Messages: <count> (message sends, not lines)
 - <observation>
 ```
 
-### 5. Verify
+### 6. Post to Chat (if requested)
 
-Spot-check at least 3 claims in the digest against the source chat. Confirm:
-- Decisions are accurately represented (not misattributed or mischaracterised)
-- Reversed decisions are marked as superseded
-- No sensitive data leaked through
+If the digest was triggered by `nbs-digest-spawn` or a chat request, post the TL;DR and digest file path to chat:
 
-### 6. Report
+```bash
+nbs-chat send <chat-file> <handle> "DIGEST COMPLETE — <TL;DR summary>. Full digest: <absolute-path>"
+```
 
-Tell the user where the digest was written using the **absolute path** (not relative — humans need the full path to find the file). Summarise the key findings in 2-3 sentences. If the request came via a chat channel, post the absolute file path back to the chat so the requester can open it (e.g. with `/edit` in nbs-chat-terminal).
+### 7. Verify
+
+Spot-check at least 3 claims against the source chat. Confirm decisions are accurately represented and no sensitive data leaked through.
 
 ## Arguments
-
-The skill accepts an optional argument: the path to the chat file to digest.
 
 ```
 /nbs-chat-digest .nbs/chat/live.chat
@@ -129,8 +133,7 @@ If no argument is given, prompt the user for which chat file to digest.
 
 ## Important
 
-- The digest must be **self-contained** — readable without access to the original chat.
+- The digest must be **self-contained** — readable without the original chat.
 - The digest must be **safe to commit** — no sensitive data.
 - Be honest about what didn't work. The value is in the learnings.
-- If the chat contains no substantive decisions or learnings, say so.
 - Message count means number of message sends, not lines of text.
