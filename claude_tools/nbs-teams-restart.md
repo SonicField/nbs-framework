@@ -275,19 +275,17 @@ Infrastructure: chat OK, bus OK, scribe log OK"
 
 ### Step 8b: Automated Digest
 
-Before spawning agents, run the digest to produce a structured briefing from the prior session:
+Before spawning agents, digest the prior session:
 
 ```bash
 nbs-digest-spawn .nbs/chat/live.chat --wait
 ```
 
-This spawns an ephemeral Claude worker that reads the chat, produces a digest (decisions, 3Ws, key outcomes), posts the summary to chat, and exits. A restart banner is posted after the digest.
-
-Restarted agents will read this on their first `--last=N` and get structured context without manual briefing.
+Posts a structured summary (decisions, 3Ws, key outcomes) to chat, followed by a restart banner. Restarted agents read it on startup.
 
 ### Step 9: Brief Recovered Agents (optional)
 
-The automated digest covers most context. Manual briefing is only needed for information not in the chat:
+Only needed for information not in the chat:
 
 - Pipeline state (approved but uncommitted changes)
 - Urgent requests from Alex via a different channel
