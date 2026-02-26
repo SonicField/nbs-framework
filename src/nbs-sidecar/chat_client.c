@@ -186,6 +186,11 @@ static int check_unread_cb(const char *path, void *user_data)
 {
     struct check_unread_ctx *ctx = user_data;
 
+    /* Skip archive files — historical, should not generate unread counts.
+     * Archive filenames contain "-archive." (e.g. live-20260224-archive.chat). */
+    if (strstr(path, "-archive.") != NULL)
+        return 0;
+
     int total = chat_client_count_messages(path);
     if (total < 0)
         return 0; /* File missing or unreadable — skip, matching bash */
