@@ -35,6 +35,7 @@ Use this table to select the right tool for each situation. Do not use raw comma
 | Wait for a reply | Do nothing — you will be notified | `sleep N && nbs-chat read`, polling loops |
 | Ack all bus events | `nbs-bus ack-all .nbs/events/` | Manual file operations on events/ |
 | Edit a remote file | `nbs-remote-edit pull/push <host> <path>` | `sed`, heredocs, Python str.replace via pty-session |
+| Read a remote file | `nbs-remote-read <host> <path> [--head=N]` | `pty-session send <ses> 'cat file' && sleep && pty-session read` |
 | Run a remote build | `nbs-remote-build <ses> '<cmd>' --chat=...` | `pty-session send <ses> 'make' && sleep 120` |
 | Check remote git state | `nbs-remote-status <ses> --cwd=<dir>` | `pty-session send <ses> 'git status' && sleep 2 && pty-session read` |
 | Get remote diff | `nbs-remote-diff <ses> --cwd=<dir>` | `pty-session send <ses> 'git diff' && sleep 5 && pty-session read` |
