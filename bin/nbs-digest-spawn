@@ -1,0 +1,83 @@
+#!/bin/bash
+# nbs-digest-spawn: Spawn ephemeral worker to digest a chat file
+#
+# Produces a structured digest of the chat session and posts the
+# summary to chat. Used by nbs-teams-restart to brief recovered
+# agents automatically.
+#
+# Usage:
+#   nbs-digest-spawn <chat-file> [--wait]
+#
+# Options:
+#   --wait    Block until the digest worker completes (default: fire and forget)
+#
+# Exit codes:
+#   0 - Success (worker spawned, or completed if --wait)
+#   1 - Error
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+NBS_WORKERS="${SCRIPT_DIR}/nbs-workers"
+NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: nbs-digest-spawn <chat-file> [--wait]" >&2
+    exit 4
+fi
+
+CHAT_FILE="$1"
+WAIT=false
+
+if [[ "${2:-}" == "--wait" ]]; then
+    WAIT=true
+fi
+
+if [[ ! -f "$CHAT_FILE" ]]; then
+    echo "Error: chat file not found: $CHAT_FILE" >&2
+    exit 1
+fi
+
+# Spawn ephemeral digest worker
+TASK_DESC="Load /nbs-chat-digest. Digest ${CHAT_FILE}. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send when done. Exit after posting."
+
+WORKER_NAME=$("$NBS_WORKERS" spawn chat-digest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
+
+if [[ -z "$WORKER_NAME" ]]; then
+    echo "Error: failed to spawn digest worker" >&2
+    exit 1
+fi
+
+echo "Digest worker spawned: $WORKER_NAME"
+
+if [[ "$WAIT" == true ]]; then
+    # Poll for completion (check task file status)
+    TASK_FILE="${PROJECT_ROOT}/.nbs/workers/${WORKER_NAME}.md"
+    TIMEOUT=300
+    ELAPSED=0
+
+    while (( ELAPSED < TIMEOUT )); do
+        sleep 5
+        ELAPSED=$((ELAPSED + 5))
+
+        if [[ -f "$TASK_FILE" ]]; then
+            STATE=$(grep '^State:' "$TASK_FILE" 2>/dev/null | awk '{print $2}' || true)
+            if [[ "$STATE" == "completed" || "$STATE" == "failed" || "$STATE" == "escalated" ]]; then
+                echo "Digest worker finished: $STATE"
+                break
+            fi
+        fi
+    done
+
+    if (( ELAPSED >= TIMEOUT )); then
+        echo "Warning: digest worker timed out after ${TIMEOUT}s" >&2
+    fi
+fi
+
+# Post restart banner
+"$NBS_CHAT" send "$CHAT_FILE" system \
+    "=== TEAM RESTART — Digest above summarises prior session ===" 2>/dev/null || true
+
+echo "Restart banner posted to $CHAT_FILE"
