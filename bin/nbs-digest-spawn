@@ -41,9 +41,9 @@ if [[ ! -f "$CHAT_FILE" ]]; then
 fi
 
 # Spawn ephemeral digest worker
-TASK_DESC="Load /nbs-chat-digest. Digest ${CHAT_FILE}. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send when done. Exit after posting."
+TASK_DESC="Load /nbs-chat-digest. Digest ${CHAT_FILE}. The digest must be thorough — at least 200 lines covering all decisions, 3Ws, and key technical outcomes. Post the TL;DR and digest file path to ${CHAT_FILE} via nbs-chat send when done. Exit after posting."
 
-WORKER_NAME=$("$NBS_WORKERS" spawn chat-digest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
+WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
 
 if [[ -z "$WORKER_NAME" ]]; then
     echo "Error: failed to spawn digest worker" >&2
