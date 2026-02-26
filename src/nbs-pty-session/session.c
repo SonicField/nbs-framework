@@ -768,7 +768,32 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     }
 
     if (!session_exists(session)) {
-        fprintf(stderr, "Error: Session '%s' not found\n", name);
+        /* Session already gone — check persistent log for the pattern.
+         * This handles the race where the session completes before
+         * wait starts polling. */
+        char log_path[MAX_PATH_LEN];
+        if (resolve_home_path(log_path, sizeof(log_path),
+                               ".pty-session/logs") == 0) {
+            char full_log[MAX_PATH_LEN];
+            int n = snprintf(full_log, sizeof(full_log),
+                             "%s/%s.log", log_path, name);
+            if (n > 0 && (size_t)n < sizeof(full_log)) {
+                FILE *f = fopen(full_log, "r");
+                if (f) {
+                    char line[4096];
+                    while (fgets(line, sizeof(line), f)) {
+                        if (strstr(line, pattern) != NULL) {
+                            fclose(f);
+                            printf("Pattern found in log after session exit\n");
+                            return EXIT_SUCCESS_CODE;
+                        }
+                    }
+                    fclose(f);
+                }
+            }
+        }
+        fprintf(stderr, "Session '%s' exited without producing pattern '%s'\n",
+                name, pattern);
         return EXIT_NOT_FOUND;
     }
 
