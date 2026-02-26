@@ -14,8 +14,8 @@
 #   --last=N           Lines of scrollback to capture (default: 100)
 #
 # Examples:
-#   nbs-remote-status devgpu-p3b --cwd=/data/users/dev/project
-#   nbs-remote-status devgpu-p3b --cwd=/data/users/dev/project \
+#   nbs-remote-status my-server --cwd=/home/user/project
+#   nbs-remote-status my-server --cwd=/home/user/project \
 #       --chat=.nbs/chat/live.chat --handle=helper
 #
 # Output:

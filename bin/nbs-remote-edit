@@ -14,9 +14,9 @@
 #   NBS_REMOTE_EDIT_DIR   Local staging directory (default: .nbs/remote-edit)
 #
 # Examples:
-#   nbs-remote-edit pull devgpu004.kcm2.facebook.com /data/users/dev/project/src/main.cpp
-#   # Edit .nbs/remote-edit/devgpu004.kcm2.facebook.com/data/users/dev/project/src/main.cpp
-#   nbs-remote-edit push devgpu004.kcm2.facebook.com /data/users/dev/project/src/main.cpp
+#   nbs-remote-edit pull buildserver.example.com /home/user/project/src/main.cpp
+#   # Edit .nbs/remote-edit/buildserver.example.com/home/user/project/src/main.cpp
+#   nbs-remote-edit push buildserver.example.com /home/user/project/src/main.cpp
 #
 # Exit codes:
 #   0 - Success

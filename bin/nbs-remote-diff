@@ -19,17 +19,17 @@
 #
 # Examples:
 #   # Show unstaged changes
-#   nbs-remote-diff devgpu-p3b --cwd=/data/users/dev/project
+#   nbs-remote-diff my-server --cwd=/home/user/project
 #
 #   # Show diff for a specific file
-#   nbs-remote-diff devgpu-p3b --path=Jit/inliner.cpp --cwd=/data/users/dev/project
+#   nbs-remote-diff my-server --path=Jit/inliner.cpp --cwd=/home/user/project
 #
 #   # Show diff against base commit and post to chat
-#   nbs-remote-diff devgpu-p3b --commit=0ca33338 --cwd=/data/users/dev/project \
+#   nbs-remote-diff my-server --commit=0ca33338 --cwd=/home/user/project \
 #       --chat=.nbs/chat/live.chat --handle=claude
 #
 #   # Just the diffstat
-#   nbs-remote-diff devgpu-p3b --stat --cwd=/data/users/dev/project
+#   nbs-remote-diff my-server --stat --cwd=/home/user/project
 #
 # Exit codes:
 #   0 - Success

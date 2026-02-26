@@ -20,14 +20,14 @@
 #
 # Examples:
 #   # Basic: run build, wait for completion
-#   nbs-remote-build devgpu-p3b 'cmake --build build -j8'
+#   nbs-remote-build my-server 'cmake --build build -j8'
 #
 #   # Chat-aware: check chat while building
-#   nbs-remote-build devgpu-p3b 'cmake --build build -j8' \
+#   nbs-remote-build my-server 'cmake --build build -j8' \
 #       --chat=.nbs/chat/live.chat --handle=claude
 #
 #   # Custom prompt pattern (venv prompt)
-#   nbs-remote-build devgpu-p3b 'make -j8' --prompt='(venv)'
+#   nbs-remote-build my-server 'make -j8' --prompt='(venv)'
 #
 # Output:
 #   Prints any unread chat messages as they arrive during the build.
