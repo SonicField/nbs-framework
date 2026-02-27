@@ -16,7 +16,7 @@ You are performing a **fixup** — diagnosing stalled agents and recovering them
 | 1 | **Ping** | Agent appears stalled, no spinner | Session + context |
 | 2 | **Compact** | Agent responsive but context low (10-25%) | Session (compacted) |
 | 3 | **Restart with --resume** | Agent unresponsive but session file intact and context was >15% before stalling | Conversation history (summarised) |
-| 4 | **Hard restart** | All else failed, or context at compaction floor, or agent fully unresponsive below 10% | Nothing — fresh session, briefed from chat log |
+| 4 | **Hard restart** | Process dead, frozen, or compact failed at any context level | Nothing — fresh session, briefed from chat log |
 
 ## Process
 
@@ -47,25 +47,25 @@ Classify the state using these heuristics:
 | `bypass permissions on` at bottom, no spinner | **Stalled on modal** | Normal | Level 1 (Enter) |
 | `Context left until auto-compact: 15-25%` | **Context low** | Moderate | Level 2 (Compact) |
 | `Context left until auto-compact: 10-15%` | **Context critical** | High | Level 2 (Compact), then assess |
-| `Context left until auto-compact: <10%` | **Zombie** | Terminal | Level 2 first (try compact), then Level 4 if no response |
-| Input accepted but no output for >30s | **Zombie (silent)** | Terminal | Check context %, follow zombie rules |
+| `Context left until auto-compact: <10%` | **Low-context** | Critical | Level 2 first (try compact), then Level 4 if no response |
+| Input accepted but no output for >30s | **Unresponsive** | Critical | Check context %, follow decision tree |
 | Repeated empty `/nbs-poll` or `/nbs-notify` responses | **Poll-burning** | High | Level 2 (Compact) |
 | Process exited / bash prompt visible | **Dead** | N/A | Level 4 (Hard restart) |
-| Commands concatenated on prompt line, no processing | **Frozen** | Terminal | Level 4 (Hard restart) |
+| Commands concatenated on prompt line, no processing | **Frozen** | Critical | Level 4 (Hard restart) |
 
-### Zombie State Classification (Empirical)
+### State Classification
 
-Three distinct zombie failure modes, each requiring different treatment:
+Three distinct low-context failure modes, each requiring different treatment:
 
-**(a) Recoverable zombie (10-15% context):** Agent accepts input, may produce partial output or none. Ctrl-C clears any stuck request. `/compact` can free enough context to restore function. Try Level 2.
+**(a) Recoverable (10-15% context):** Agent accepts input, may produce partial output or none. Ctrl-C clears any stuck request. `/compact` can free enough context to restore function. Try Level 2.
 
-**(b) Low-context zombie (<10% context):** Agent may or may not process commands. Always try Level 2 first — `/compact` costs seconds and may succeed. If compact does not respond within 30 seconds or context does not improve, escalate to Level 4.
+**(b) Low-context (<10% context):** Agent may or may not process commands. Always try Level 2 first — `/compact` costs seconds and may succeed. If compact does not respond within 30 seconds or context does not improve, escalate to Level 4.
 
-**(c) Compaction floor zombie (10-15% context, compact does not reduce):** Agent at her compaction floor — the summarised session + skills + system context fill ~85-90% of the window. `/compact` runs but context percentage does not decrease. `--resume` will reload the same bloated session. Escalate to Level 4.
+**(c) Compaction floor (10-15% context, compact does not reduce):** The summarised session + skills + system context fill the window. `/compact` runs but context does not decrease. `--resume` will reload the same state. Escalate to Level 4.
 
-**Note on thresholds:** The context percentages above (10%, 15%) are empirical observations from 16-17 Feb 2026, not guaranteed boundaries. They may vary by model, session complexity, and loaded skills. Treat them as heuristics and adjust based on observed behaviour.
+**Thresholds are heuristics.** The 10%/15% boundaries are empirical (Feb 2026). Adjust based on observed behaviour.
 
-**Decision tree for zombie states:**
+**Decision tree for low-context states:**
 
 ```
 Is the process dead (bash prompt, session exited)?
@@ -244,7 +244,7 @@ nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete: @<handle> re
 ## Known Failure Patterns
 
 **Context bleed from idle polling**
-**Symptom:** Idle agents gradually lose context overnight, hitting zombie state by morning.
+**Symptom:** Idle agents gradually lose context overnight, hitting low-context state by morning.
 **Cause:** Each `/nbs-notify` or `/nbs-poll` cycle consumes context tokens even when there is nothing to do. Active agents survive because substantive work triggers compaction; idle agents accumulate non-compactable noise.
 **Prevention:** CSMA/CD standups replace bare polling. The sidecar should not inject `/nbs-notify` when there are no events and no unread messages.
 
@@ -271,11 +271,11 @@ nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete: @<handle> re
 ## Rules
 
 - **Never use AskUserQuestion.** This blocks the terminal. Post questions to chat instead.
-- **Escalate, do not skip.** Try Level 1 before Level 2 before Level 3 before Level 4, unless the zombie classification rules above indicate skipping is safe.
+- **Escalate, do not skip.** Try Level 1 before Level 2 before Level 3 before Level 4, unless the state classification rules above indicate skipping is safe.
 - **Diagnose before acting.** Understand the state and context level before choosing a recovery action.
 - **Never kill a working agent.** Only recover agents that are genuinely stalled.
 - **Preserve the diagnosis.** Post root causes to chat so Scribe can log them.
 - **Warn new instances.** If a pattern caused the stall, tell the new instance to avoid it.
 - **One fixup at a time.** Do not run fixup while another fixup is in progress.
 - **Check context after compact.** If compact did not help, do not retry — escalate.
-- **`--resume` is only useful when the session has room.** If context is at the compaction floor, `--resume` will reload the same state and immediately re-enter zombie territory.
+- **`--resume` is only useful when the session has room.** If context is at the compaction floor, `--resume` will reload the same state and stall again.
