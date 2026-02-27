@@ -8,6 +8,8 @@
  *   Arrow keys, Home, End, Delete for line editing.
  *   Backspace to delete backwards.
  *   Type /edit to compose in $EDITOR (for multi-line messages).
+ *   Type /filter <handle> to show only one participant's messages.
+ *   Type /unfilter to return to showing all messages.
  *   Type /help for all commands.
  *   Type /exit or Ctrl-C to exit.
  *
@@ -115,6 +117,7 @@ static const char *g_chat_file = NULL;
 static const char *g_handle = NULL;
 static int g_msg_count = 0;
 static volatile sig_atomic_t g_quit = 0;
+static char g_filter_handle[256] = {0};  /* empty = show all, non-empty = show only this handle */
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
@@ -223,10 +226,12 @@ static void print_prompt(const char *handle) {
 static void print_help(void) {
     printf("\n");
     printf("%sCommands:%s\n", BOLD, RESET);
-    printf("  %s/edit%s     Open $EDITOR to compose a multi-line message\n", DIM, RESET);
-    printf("  %s/search%s   Search message history (e.g. /search parser)\n", DIM, RESET);
-    printf("  %s/help%s     Show this help\n", DIM, RESET);
-    printf("  %s/exit%s     Leave the chat\n", DIM, RESET);
+    printf("  %s/edit%s       Open $EDITOR to compose a multi-line message\n", DIM, RESET);
+    printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
+    printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
+    printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
+    printf("  %s/help%s       Show this help\n", DIM, RESET);
+    printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
     printf("\n");
     printf("%sInput:%s\n", BOLD, RESET);
     printf("  %sEnter%s        Send the message\n", DIM, RESET);
@@ -598,16 +603,17 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
         return;
     }
 
-    /* Check if any new messages are from others */
-    int has_new_from_others = 0;
+    /* Check if any new messages should be displayed */
+    int has_displayable = 0;
     for (int i = g_msg_count; i < state.message_count; i++) {
-        if (strcmp(state.messages[i].handle, g_handle) != 0) {
-            has_new_from_others = 1;
-            break;
-        }
+        if (strcmp(state.messages[i].handle, g_handle) == 0) continue;
+        if (g_filter_handle[0] != '\0' &&
+            strcmp(state.messages[i].handle, g_filter_handle) != 0) continue;
+        has_displayable = 1;
+        break;
     }
 
-    if (!has_new_from_others) {
+    if (!has_displayable) {
         g_msg_count = state.message_count;
         chat_state_free(&state);
         return;
@@ -619,9 +625,11 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
     }
     printf("\r\033[J");
 
-    /* Display new messages from others */
+    /* Display new messages (filtered if g_filter_handle is set) */
     for (int i = g_msg_count; i < state.message_count; i++) {
         if (strcmp(state.messages[i].handle, g_handle) == 0) continue;
+        if (g_filter_handle[0] != '\0' &&
+            strcmp(state.messages[i].handle, g_filter_handle) != 0) continue;
         format_message(state.messages[i].handle,
                       state.messages[i].content, g_handle,
                       state.messages[i].timestamp);
@@ -1108,6 +1116,67 @@ int main(int argc, char **argv) {
 
             if (strcmp(edit.buf, "/search") == 0) {
                 printf("  %sUsage: /search <pattern>%s\n", DIM, RESET);
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /filter <handle> — show only messages from one participant */
+            if (strncmp(edit.buf, "/filter ", 8) == 0) {
+                const char *target = edit.buf + 8;
+                while (*target == ' ') target++;
+                if (*target == '\0') {
+                    printf("  %sUsage: /filter <handle>%s\n", DIM, RESET);
+                } else {
+                    snprintf(g_filter_handle, sizeof(g_filter_handle), "%s", target);
+                    printf("  %sFiltering: showing only messages from %s%s\n",
+                           DIM, g_filter_handle, RESET);
+                    /* Redisplay filtered history */
+                    chat_state_t fstate;
+                    if (chat_read(g_chat_file, &fstate) == 0) {
+                        int shown = 0;
+                        for (int i = 0; i < fstate.message_count && shown < 50; i++) {
+                            if (strcmp(fstate.messages[i].handle, g_filter_handle) == 0) {
+                                format_message(fstate.messages[i].handle,
+                                              fstate.messages[i].content, g_handle,
+                                              fstate.messages[i].timestamp);
+                                shown++;
+                            }
+                        }
+                        if (shown == 0) {
+                            printf("  %sNo messages from '%s'%s\n",
+                                   DIM, g_filter_handle, RESET);
+                        }
+                        chat_state_free(&fstate);
+                    }
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            if (strcmp(edit.buf, "/filter") == 0) {
+                if (g_filter_handle[0] != '\0') {
+                    printf("  %sCurrently filtering: %s%s\n",
+                           DIM, g_filter_handle, RESET);
+                } else {
+                    printf("  %sNo filter active. Usage: /filter <handle>%s\n",
+                           DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /unfilter — return to showing all messages */
+            if (strcmp(edit.buf, "/unfilter") == 0) {
+                if (g_filter_handle[0] != '\0') {
+                    printf("  %sFilter cleared — showing all messages%s\n",
+                           DIM, RESET);
+                    g_filter_handle[0] = '\0';
+                } else {
+                    printf("  %sNo filter active%s\n", DIM, RESET);
+                }
                 line_state_reset(&edit);
                 print_prompt(g_handle);
                 continue;
