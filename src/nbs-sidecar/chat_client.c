@@ -23,12 +23,12 @@
 #include "../nbs-chat/base64.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <libgen.h>
 #include <unistd.h>
 
-#define MAX_LINE 4096
-#define MAX_DECODED 8192
+#define MAX_PATH_BUF 4096
 
 /*
  * Cached absolute path to the nbs-chat binary.
@@ -81,46 +81,29 @@ int chat_client_count_messages(const char *chat_path)
     if (!f)
         return -1;
 
-    char line[MAX_LINE];
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t line_len;
     int found_separator = 0;
     int count = 0;
-    int in_continuation = 0; /* non-zero when previous fgets was a partial read */
 
-    while (fgets(line, sizeof(line), f)) {
-        size_t len = strlen(line);
-        int has_newline = (len > 0 && line[len - 1] == '\n');
-
-        if (in_continuation) {
-            /* Consuming remainder of a long line — skip until newline */
-            if (has_newline)
-                in_continuation = 0;
-            continue;
-        }
-
+    while ((line_len = getline(&line, &line_cap, f)) != -1) {
         /* Strip trailing newline */
-        if (has_newline)
-            line[len - 1] = '\0';
-        len = has_newline ? len - 1 : len;
+        if (line_len > 0 && line[line_len - 1] == '\n')
+            line[--line_len] = '\0';
 
         if (!found_separator) {
             if (strcmp(line, "---") == 0)
                 found_separator = 1;
-            if (!has_newline)
-                in_continuation = 1;
             continue;
         }
 
         /* After separator: count non-empty lines (one per message) */
-        if (len > 0)
+        if (line_len > 0)
             count++;
-
-        /* If fgets didn't find a newline, buffer was too small for this
-         * line. The next fgets call(s) will return the remainder —
-         * skip them so we don't double-count. */
-        if (!has_newline)
-            in_continuation = 1;
     }
 
+    free(line);
     fclose(f);
     return count;
 }
@@ -133,7 +116,7 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
     ASSERT_MSG(handle != NULL, "chat_client_read_cursor: handle is NULL");
     ASSERT_MSG(handle[0] != '\0', "chat_client_read_cursor: handle is empty");
 
-    char cursor_path[MAX_LINE];
+    char cursor_path[MAX_PATH_BUF];
     int n = snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(cursor_path),
                "chat_client: cursor path truncated");
@@ -142,7 +125,7 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
     if (!f)
         return -1;
 
-    char line[MAX_LINE];
+    char line[MAX_PATH_BUF];
     int result = -1;
 
     while (fgets(line, sizeof(line), f)) {
@@ -226,7 +209,7 @@ static int check_unread_cb(const char *path, void *user_data)
 
         /* Extract basename for summary.
          * basename() may modify its argument, so work on a copy. */
-        char path_copy[MAX_LINE];
+        char path_copy[MAX_PATH_BUF];
         int n = snprintf(path_copy, sizeof(path_copy), "%s", path);
         ASSERT_MSG(n >= 0 && (size_t)n < sizeof(path_copy),
                    "chat_client: path copy truncated");
@@ -294,7 +277,7 @@ int chat_client_check_unread(const char *registry_path, const char *handle,
     if (ctx.unread_count > 0) {
         /* summary currently holds "file1, file2" — prepend count.
          * Copy current content aside, then rebuild. */
-        char chat_names[MAX_LINE];
+        char chat_names[MAX_PATH_BUF];
         int n = snprintf(chat_names, sizeof(chat_names), "%s", summary);
         ASSERT_MSG(n >= 0 && (size_t)n < sizeof(chat_names),
                    "chat_client: chat names truncated");
@@ -400,77 +383,69 @@ static int sidecar_only_cb(const char *path, void *user_data)
     if (!f)
         return 0;
 
-    char line[MAX_LINE];
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t line_len;
     int found_separator = 0;
     int msg_index = 0;          /* 0-based index of messages after --- */
     int skip_count = cursor + 1; /* messages 0..cursor have been read */
-    int in_continuation = 0;    /* non-zero when consuming a long line */
 
-    while (fgets(line, sizeof(line), f)) {
-        size_t len = strlen(line);
-        int has_newline = (len > 0 && line[len - 1] == '\n');
-
-        if (in_continuation) {
-            if (has_newline)
-                in_continuation = 0;
-            continue;
-        }
-
+    while ((line_len = getline(&line, &line_cap, f)) != -1) {
         /* Strip trailing newline */
-        if (has_newline)
-            line[len - 1] = '\0';
-        len = has_newline ? len - 1 : len;
+        if (line_len > 0 && line[line_len - 1] == '\n')
+            line[--line_len] = '\0';
 
         if (!found_separator) {
             if (strcmp(line, "---") == 0)
                 found_separator = 1;
-            if (!has_newline)
-                in_continuation = 1;
             continue;
         }
 
         /* Skip empty lines (they don't count as messages) */
-        if (len == 0)
+        if (line_len == 0)
             continue;
 
         msg_index++;
-
-        /* If line was truncated, skip continuations and don't try to
-         * decode — the base64 is incomplete anyway. */
-        if (!has_newline) {
-            in_continuation = 1;
-            continue;
-        }
 
         /* Skip already-read messages */
         if (msg_index <= skip_count)
             continue;
 
         /* Decode base64 message line */
-        unsigned char decoded[MAX_DECODED];
-        int decoded_len = base64_decode(line, len, decoded, sizeof(decoded));
-        if (decoded_len < 0)
+        size_t decoded_max = base64_decoded_size((size_t)line_len);
+        unsigned char *decoded = malloc(decoded_max + 1);
+        if (!decoded)
+            continue; /* Allocation failure — skip */
+
+        int decoded_len = base64_decode(line, (size_t)line_len,
+                                         decoded, decoded_max);
+        if (decoded_len < 0) {
+            free(decoded);
             continue; /* Decode failure — skip */
+        }
 
         /* NUL-terminate for string operations */
-        if ((size_t)decoded_len < sizeof(decoded))
-            decoded[decoded_len] = '\0';
-        else
-            decoded[sizeof(decoded) - 1] = '\0';
+        decoded[decoded_len] = '\0';
 
         /* Extract handle */
-        char msg_handle[MAX_LINE];
-        if (extract_handle_from_decoded((const char *)decoded, (size_t)decoded_len,
-                                        msg_handle, sizeof(msg_handle)) != 0)
+        char msg_handle[256];
+        int rc = extract_handle_from_decoded((const char *)decoded,
+                                              (size_t)decoded_len,
+                                              msg_handle, sizeof(msg_handle));
+        free(decoded);
+
+        if (rc != 0)
             continue; /* Can't parse handle — skip */
 
         if (strcmp(msg_handle, "sidecar") != 0) {
             ctx->found_non_sidecar = 1;
+            free(line);
             fclose(f);
             return 1; /* Stop iteration — found non-sidecar message */
         }
     }
 
+    free(line);
     fclose(f);
     return 0;
 }

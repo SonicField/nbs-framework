@@ -19,6 +19,7 @@
  *  15.  are_unread_sidecar_only: timestamped format → handle extracted, returns 1
  *  16.  send: successful send → returns 0
  *  17.  count_messages: long lines (>4095 chars) not double-counted
+ *  18.  are_unread_sidecar_only: non-sidecar in long line → returns 0
  */
 
 #include "../src/nbs-sidecar/chat_client.h"
@@ -563,6 +564,71 @@ int main(void)
         int count = chat_client_count_messages(chat_path);
         CHECK("count_messages: long line not double-counted, returns 3",
               count == 3);
+    }
+
+    /* ============================================================
+     * 18. are_unread_sidecar_only: non-sidecar in long line → 0
+     *
+     * A non-sidecar message whose base64 exceeds the old 4096-byte
+     * buffer must still be decoded and identified as non-sidecar.
+     * Previously, long lines were skipped (undecodable), causing
+     * the function to incorrectly return 1 (sidecar-only).
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t18", tmpdir);
+        mkdirs(sub);
+
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/live.chat", sub);
+
+        /* Build a long non-sidecar message (>6000 chars raw → >8000 chars b64) */
+        char long_raw[8192];
+        memset(long_raw, 0, sizeof(long_raw));
+        snprintf(long_raw, sizeof(long_raw), "generalist|1234567890: ");
+        size_t prefix_len = strlen(long_raw);
+        memset(long_raw + prefix_len, 'X', 6000 - prefix_len);
+        long_raw[6000] = '\0';
+
+        char long_b64[16384];
+        int b64_len = base64_encode((const unsigned char *)long_raw,
+                                     strlen(long_raw), long_b64,
+                                     sizeof(long_b64));
+        CHECK("t18: base64 encode succeeds", b64_len > 0);
+        CHECK("t18: base64 length > 4096",
+              b64_len > 0 && (size_t)b64_len > 4096);
+
+        /* Chat: 1 sidecar msg (read) + 1 sidecar + 1 long non-sidecar (unread) */
+        FILE *f = fopen(chat_path, "w");
+        if (f) {
+            fprintf(f,
+                "=== nbs-chat ===\n"
+                "last-writer: system\n"
+                "last-write: 2026-02-22T00:00:00+0000\n"
+                "file-length: 0\n"
+                "participants: \n"
+                "---\n"
+                "%s\n"
+                "%s\n"
+                "%s\n",
+                b64_sc1, b64_sc2, long_b64);
+            fclose(f);
+        }
+
+        /* Cursor at 0 → messages 1,2 are unread (sidecar + generalist) */
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=0\n");
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3];
+        snprintf(entry, sizeof(entry), "chat:%s\n", chat_path);
+        write_file(registry_path, entry);
+
+        int rc = chat_client_are_unread_sidecar_only(registry_path, "agent");
+        CHECK("are_unread_sidecar_only: long non-sidecar returns 0", rc == 0);
     }
 
     /* ============================================================
