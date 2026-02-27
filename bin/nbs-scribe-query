@@ -27,8 +27,14 @@
 
 set -euo pipefail
 
+# Help check before log file validation
+if [[ $# -ge 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+    sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
+    exit 0
+fi
+
 if [[ $# -lt 1 ]]; then
-    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+    sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
     exit 4
 fi
 
@@ -62,7 +68,7 @@ fi
 
 case "${1:---help}" in
     --help|-h)
-        grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+        sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
         exit 0
         ;;
     --count)
@@ -89,18 +95,26 @@ case "${1:---help}" in
         ;;
     --by=*)
         HANDLE="${1#--by=}"
-        grep -B1 -A7 $GREP_MODE "Participants:.*${HANDLE}" "$LOG" | grep -A8 '^### D-' || {
-            # Fallback: -F mode can't match .* so use exact field search
-            grep -B1 -A7 "Participants:" "$LOG" | grep -F "$HANDLE" -A7 -B2 | grep -A8 '^### D-'
-        }
-        exit $?
+        # Find lines containing "Participants:" AND the handle, show the decision block
+        grep -n "Participants:" "$LOG" | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
+            HEADER_LINE=$(head -"$pline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
+            if [[ -n "$HEADER_LINE" ]]; then
+                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
+                echo ""
+            fi
+        done | awk '!seen[$0]++'
+        exit 0
         ;;
     --tag=*)
         TAG="${1#--tag=}"
-        grep -B3 -A5 $GREP_MODE "Risk tags:.*${TAG}" "$LOG" | grep -A8 '^### D-' || {
-            grep -B3 -A5 "Risk tags:" "$LOG" | grep -F "$TAG" -A5 -B4 | grep -A8 '^### D-'
-        }
-        exit $?
+        grep -n "Risk tags:" "$LOG" | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
+            HEADER_LINE=$(head -"$tline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
+            if [[ -n "$HEADER_LINE" ]]; then
+                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
+                echo ""
+            fi
+        done | awk '!seen[$0]++'
+        exit 0
         ;;
     --superseded)
         grep -A8 '\[SUPERSEDES' "$LOG"
@@ -114,7 +128,8 @@ case "${1:---help}" in
         # Free-text search — show matching decision blocks
         PATTERN="$1"
         grep -n $GREP_MODE "$PATTERN" "$LOG" | while IFS=: read -r line_num _rest; do
-            HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1)
+            # Find the decision header above this match (may be empty if match is in preamble)
+            HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
                 echo ""
