@@ -5,11 +5,14 @@
 # logs, or verifying changes — without staging files locally.
 #
 # Usage:
-#   nbs-remote-read <host> <remote-path>              Read entire file
-#   nbs-remote-read <host> <remote-path> --head=N     First N lines
-#   nbs-remote-read <host> <remote-path> --tail=N     Last N lines
-#   nbs-remote-read <host> <remote-path> --lines=M-N  Lines M through N
-#   nbs-remote-read <host> <remote-path> --grep=PAT   Lines matching pattern
+#   nbs-remote-read <server> <remote-path>              Read entire file
+#   nbs-remote-read <server> <remote-path> --head=N     First N lines
+#   nbs-remote-read <server> <remote-path> --tail=N     Last N lines
+#   nbs-remote-read <server> <remote-path> --lines=M-N  Lines M through N
+#   nbs-remote-read <server> <remote-path> --grep=PAT   Lines matching pattern
+#
+# <server> is an SSH hostname or user@hostname — NOT a pty-session name.
+# A pty-session is created internally for scp. You never manage it.
 #
 # Exit codes:
 #   0 - Success
@@ -23,11 +26,19 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 export NBS_PTY_QUIET=1
 
-[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
-
 usage() {
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
 }
+
+die() {
+    local rc="$1"; shift
+    echo "Error: $*" >&2
+    echo "" >&2
+    usage >&2
+    exit "$rc"
+}
+
+[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
 
 # scp via short-lived pty-session (bypasses BpfJailer)
 fetch_file() {
@@ -68,8 +79,7 @@ case "${1:-}" in
 esac
 
 if [[ $# -lt 2 ]]; then
-    echo "Error: requires <host> and <remote-path>" >&2
-    exit 4
+    die 4 "requires <server> <remote-path>. <server> is an SSH hostname, not a pty-session name."
 fi
 
 HOST="$1"
@@ -87,7 +97,7 @@ while [[ $# -gt 0 ]]; do
         --lines=*) MODE="lines"; MODE_ARG="${1#--lines=}"; shift ;;
         --grep=*)  MODE="grep"; MODE_ARG="${1#--grep=}"; shift ;;
         --help|-h) usage; exit 0 ;;
-        *) echo "Error: unknown option: $1" >&2; exit 4 ;;
+        *) die 4 "unknown option: $1" ;;
     esac
 done
 

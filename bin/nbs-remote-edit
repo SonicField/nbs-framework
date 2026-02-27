@@ -1,22 +1,22 @@
 #!/bin/bash
 # nbs-remote-edit: Edit files on remote machines via scp
 #
-# Pull a remote file locally, edit it with Claude's normal Edit tool,
-# then push it back. Uses pty-session for scp to bypass BpfJailer.
-#
 # Usage:
-#   nbs-remote-edit pull <host> <remote-path>   Download file for local editing
-#   nbs-remote-edit push <host> <remote-path>   Upload edited file back
-#   nbs-remote-edit diff <host> <remote-path>   Show diff between local and remote
-#   nbs-remote-edit help                         Show this help
+#   nbs-remote-edit pull <server> <remote-path>   Download file for local editing
+#   nbs-remote-edit push <server> <remote-path>   Upload edited file back
+#   nbs-remote-edit diff <server> <remote-path>   Show diff between local and remote
+#   nbs-remote-edit help                          Show this help
+#
+# <server> is an SSH hostname or user@hostname — NOT a pty-session name.
+# A pty-session is created internally for scp. You never manage it.
 #
 # Environment:
 #   NBS_REMOTE_EDIT_DIR   Local staging directory (default: .nbs/remote-edit)
 #
 # Examples:
-#   nbs-remote-edit pull buildserver.example.com /home/user/project/src/main.cpp
-#   # Edit .nbs/remote-edit/buildserver.example.com/home/user/project/src/main.cpp
-#   nbs-remote-edit push buildserver.example.com /home/user/project/src/main.cpp
+#   nbs-remote-edit pull build-host /home/user/project/src/main.cpp
+#   # Edit .nbs/remote-edit/build-host
+#   nbs-remote-edit push build-host /home/user/project/src/main.cpp
 #
 # Exit codes:
 #   0 - Success
@@ -33,16 +33,24 @@ STAGING_DIR="$(cd "${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}" 2>/dev/null && pwd 
 # Suppress pty-session tool banner
 export NBS_PTY_QUIET=1
 
-[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
-
 usage() {
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
 }
 
+die() {
+    local rc="$1"; shift
+    echo "Error: $*" >&2
+    echo "" >&2
+    usage >&2
+    exit "$rc"
+}
+
+[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
+
 local_path() {
     local host="$1"
     local remote_path="$2"
-    [[ "$host" =~ [/] ]] && { echo "Error: host must not contain '/'" >&2; return 4; }
+    [[ "$host" =~ [/] ]] && die 4 "<server> must be an SSH hostname (e.g. build-host not a path"
     echo "${STAGING_DIR}/${host}${remote_path}"
 }
 
@@ -80,8 +88,7 @@ cmd_pull() {
     local remote_path="${2:-}"
 
     if [[ -z "$host" ]] || [[ -z "$remote_path" ]]; then
-        echo "Error: pull requires <host> and <remote-path>" >&2
-        exit 4
+        die 4 "pull requires <server> <remote-path>. <server> is an SSH hostname, not a pty-session name."
     fi
 
     local lpath
@@ -107,17 +114,14 @@ cmd_push() {
     local remote_path="${2:-}"
 
     if [[ -z "$host" ]] || [[ -z "$remote_path" ]]; then
-        echo "Error: push requires <host> and <remote-path>" >&2
-        exit 4
+        die 4 "push requires <server> <remote-path>. <server> is an SSH hostname, not a pty-session name."
     fi
 
     local lpath
     lpath=$(local_path "$host" "$remote_path")
 
     if [[ ! -f "$lpath" ]]; then
-        echo "Error: Local file not found: $lpath" >&2
-        echo "Did you run 'nbs-remote-edit pull' first?" >&2
-        return 2
+        die 2 "Local file not found: $lpath — did you run 'nbs-remote-edit pull' first?"
     fi
 
     if run_scp "scp $(printf '%q' "$lpath") $(printf '%q' "${host}:${remote_path}")"; then
@@ -133,16 +137,14 @@ cmd_diff() {
     local remote_path="${2:-}"
 
     if [[ -z "$host" ]] || [[ -z "$remote_path" ]]; then
-        echo "Error: diff requires <host> and <remote-path>" >&2
-        return 4
+        die 4 "diff requires <server> <remote-path>. <server> is an SSH hostname, not a pty-session name."
     fi
 
     local lpath
     lpath=$(local_path "$host" "$remote_path")
 
     if [[ ! -f "$lpath" ]]; then
-        echo "Error: Local file not found: $lpath" >&2
-        return 2
+        die 2 "Local file not found: $lpath"
     fi
 
     local tmp
@@ -164,8 +166,6 @@ case "${1:-}" in
     diff)  shift; cmd_diff "$@" ;;
     help|--help|-h|"") usage ;;
     *)
-        echo "Unknown command: $1" >&2
-        echo "Run 'nbs-remote-edit help' for usage" >&2
-        exit 4
+        die 4 "Unknown command: $1"
         ;;
 esac

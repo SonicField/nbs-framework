@@ -171,6 +171,44 @@ RC=0
 "$QUERY" --chat="$CHAT" --bogus 2>/dev/null || RC=$?
 check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
 
+# Archive chat derivation
+next_test "19. Archive chat file derives correct scribe log"
+ARCHIVE_CHAT="$TEST_DIR/.nbs/chat/test-20260227-121804-archive.chat"
+touch "$ARCHIVE_CHAT"
+COUNT=$("$QUERY" --chat="$ARCHIVE_CHAT" --count)
+check "Archive derives to same log (count=3)" "$( [[ "$COUNT" -eq 3 ]] && echo pass || echo fail )"
+rm -f "$ARCHIVE_CHAT"
+
+next_test "20. Second archive generation also derives correctly"
+ARCHIVE_CHAT2="$TEST_DIR/.nbs/chat/test-20260226-095058-archive.chat"
+touch "$ARCHIVE_CHAT2"
+COUNT=$("$QUERY" --chat="$ARCHIVE_CHAT2" --count)
+check "Older archive same log (count=3)" "$( [[ "$COUNT" -eq 3 ]] && echo pass || echo fail )"
+rm -f "$ARCHIVE_CHAT2"
+
+next_test "21. Archive chat queries return same results as main chat"
+ARCHIVE_CHAT3="$TEST_DIR/.nbs/chat/test-20260227-143000-archive.chat"
+touch "$ARCHIVE_CHAT3"
+OUTPUT=$("$QUERY" --chat="$ARCHIVE_CHAT3" --id=D-1000000002)
+check "Archive --id finds Pratt" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
+rm -f "$ARCHIVE_CHAT3"
+
+next_test "22. Non-archive hyphenated chat name not stripped"
+# A chat named "my-project.chat" should derive "my-project-log.md", not "my-log.md"
+mkdir -p "$TEST_DIR/.nbs/scribe"
+HYPH_CHAT="$TEST_DIR/.nbs/chat/my-project.chat"
+HYPH_LOG="$TEST_DIR/.nbs/scribe/my-project-log.md"
+touch "$HYPH_CHAT"
+cp "$LOG" "$HYPH_LOG"
+COUNT=$("$QUERY" --chat="$HYPH_CHAT" --count)
+check "Hyphenated name preserved (count=3)" "$( [[ "$COUNT" -eq 3 ]] && echo pass || echo fail )"
+rm -f "$HYPH_CHAT" "$HYPH_LOG"
+
+next_test "23. Path derivation: chat dir → scribe dir"
+# Verify the ../scribe relative path works
+OUTPUT=$("$QUERY" --chat="$CHAT" --last=1)
+check "Derivation found log" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
+
 echo ""
 echo "=== Result: $PASS passed, $FAIL failed ==="
 if [[ $FAIL -eq 0 ]]; then

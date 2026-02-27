@@ -14,6 +14,7 @@
 # The log file is derived from the chat file name:
 #   .nbs/chat/live.chat → .nbs/scribe/live-log.md
 #   .nbs/chat/work.chat → .nbs/scribe/work-log.md
+#   .nbs/chat/live-20260227-121804-archive.chat → .nbs/scribe/live-log.md
 #
 # Search is literal (fixed string) by default. Use --regex for grep
 # extended regex (ERE). Perl regex (\s, \d, lookahead) is not supported.
@@ -59,8 +60,11 @@ fi
 
 # Derive log path from chat file name
 # .nbs/chat/live.chat → .nbs/scribe/live-log.md
+# .nbs/chat/live-20260227-121804-archive.chat → .nbs/scribe/live-log.md
 CHAT_DIR=$(dirname "$CHAT_FILE")
 CHAT_BASE=$(basename "$CHAT_FILE" .chat)
+# Strip archive suffix: name-YYYYMMDD-HHMMSS-archive → name
+CHAT_BASE=$(echo "$CHAT_BASE" | sed 's/-[0-9]\{8\}-[0-9]\{6\}-archive$//')
 SCRIBE_DIR="${CHAT_DIR}/../scribe"
 LOG="${SCRIBE_DIR}/${CHAT_BASE}-log.md"
 

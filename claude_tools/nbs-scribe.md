@@ -130,17 +130,23 @@ Use these common tags (or create new ones as needed):
 
 ## Decision Log Access
 
-The decision log at `.nbs/scribe/<chat-name>-log.md` is readable by any agent. Any participant can query past decisions directly:
+The decision log at `.nbs/scribe/<chat-name>-log.md` is readable by any agent. Use `nbs-scribe-query` to query past decisions — it derives the log path from the chat file:
 
 ```bash
 # Search for decisions about a topic
-grep -A 6 "parse" .nbs/scribe/live-log.md
+nbs-scribe-query --chat=.nbs/chat/live.chat parse
 
-# List all decision IDs
-grep "^### D-" .nbs/scribe/live-log.md
+# Look up a specific decision
+nbs-scribe-query --chat=.nbs/chat/live.chat --id=D-1772195818
 
 # Find decisions by participant
-grep -B 1 -A 6 "Participants:.*claude" .nbs/scribe/live-log.md
+nbs-scribe-query --chat=.nbs/chat/live.chat --by=claude
+
+# Last 5 decisions
+nbs-scribe-query --chat=.nbs/chat/live.chat --last=5
+
+# Count total decisions
+nbs-scribe-query --chat=.nbs/chat/live.chat --count
 ```
 
 ## Session Continuity
