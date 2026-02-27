@@ -52,6 +52,9 @@
 | Total Vanilla | 10197.96 ms |
 | Total CinderX | 6743.04 ms |
 | Total Speedup | 1.51x |
+| Geomean Speedup | ~0.95x |
+
+**Note:** Total Speedup is sum(vanilla)/sum(cinderx) — dominated by fibonacci which accounts for 65% of total vanilla time. The geometric mean of individual benchmark speedups is ~0.95x, meaning the JIT is ~5% slower for a randomly chosen benchmark. The JIT is a clear win for compute-heavy, type-stable code and a net loss for dispatch-heavy workloads.
 
 ## Comparison: Baseline (41c82288) vs Bench-3 (0730c07e)
 
