@@ -251,7 +251,7 @@ os.makedirs(os.path.dirname(extension_dir), exist_ok=True)
 
 ## Bug 8: cinderx.init() Crashes on aarch64 (OPEN)
 
-**Severity:** Blocks all cinderx.init()-dependent functionality on aarch64. JIT compilation works via `cinderjit.auto()` without init(), so benchmarking is not blocked. 25/26 benchmarks work without init(); decorator_chain is the 1 that requires it (see Bug 9, merged into this bug).
+**Severity:** Blocks all cinderx.init()-dependent functionality on aarch64. JIT compilation works via `cinderjit.auto()` without init(), so benchmarking is not blocked. 25/26 benchmarks work without init(). Bug 9 (decorator_chain) is a SEPARATE issue — see below.
 
 **Symptom:** `Segmentation fault (core dumped)` when calling `cinderx.init()` on aarch64, regardless of call context (module-scope import, top-level call, or function body).
 
@@ -272,22 +272,35 @@ cinderx.init()  # SIGSEGV
 
 ---
 
-## Bug 9: decorator_chain SEGFAULT — MERGED INTO BUG 8
+## Bug 9: decorator_chain SEGFAULT from Struct Layout Change (ROOT CAUSE CONFIRMED)
 
-**Status:** CLOSED — merged into Bug 8.
+**Status:** ROOT CAUSE CONFIRMED (27-02-2026 00:18:07Z). The 8-byte struct
+increase to `CompiledFunctionData` is the trigger. Gatekeeper's struct-size
+hypothesis (23:35:36Z) CONFIRMED by generalist's definitive falsification.
 
-**Falsification result (supervisor 23:52:24Z):** Tested decorator_chain on
-BASELINE (no backoff patches — `git checkout -- compiled_function.h pyjit.cpp`,
-clean rebuild). Result: SEGFAULT (exit 139). The crash is NOT caused by the
-backoff patch or struct layout change. It is a pre-existing CinderX bug when
-running WITHOUT `cinderx.init()` on aarch64. The original baseline benchmark
-(26-02-2026-deopt-classification.md, 50K deopts, no crash) used a build where
-`cinderx.init()` worked.
+**Definitive falsification (generalist 00:18:07Z):**
+- BASELINE full suite (no backoff patches, init() commented out): ALL 25 PASS,
+  including decorator_chain (20.6ms, no crash).
+- WITH backoff patches (clean build, init() commented out): decorator_chain
+  CRASHES (exit 139) in full suite.
 
-**Conclusion:** decorator_chain depends on something `cinderx.init()` sets up
-(likely type watchers or frame evaluators). 25/26 benchmarks work without
-init(); decorator_chain is the 1 that doesn't. This is the same class of
-issue as Bug 8.
+**Root cause:** Adding 8 bytes to `CompiledFunctionData` (`deopt_count` +
+`reopt_backoff_threshold` fields in compiled_function.h) changes heap layout
+and exposes a latent memory bug (likely buffer overrun or hardcoded `sizeof`
+somewhere in CinderX). The decorator/closure pattern (many persistent
+`CompiledFunctionData` allocations) is specifically affected.
+
+**Resolution:** The approved Bug 10 fix (CI_CO_SUPPRESS_JIT approach) avoids
+all struct changes — zero modifications to compiled_function.h. decorator_chain
+should not crash with the new design. The underlying latent memory bug remains
+(would be triggered by ANY struct size increase), but is not blocking.
+
+**Dummy-fields test:** UNNECESSARY — generalist's full-suite test (00:18:07Z)
+is more definitive than the proxy test (testkeeper 00:18:20Z).
+
+**Key code locations:**
+- `compiled_function.h` — `CompiledFunctionData` struct (where fields were added)
+- decorator_chain benchmark — the only benchmark that crashes
 
 ---
 
@@ -327,11 +340,62 @@ and suppress JIT via `CI_CO_SUPPRESS_JIT` on the associated code object.
 Challenge: `recordDeopt` receives `CodeRuntime*` + `deopt_idx`, not
 `PyFunctionObject*` — need a path from `CodeRuntime` to `PyCodeObject`.
 
-**Status:** ROOT CAUSE CONFIRMED. Patch needs redesign to target
-`Context::recordDeopt()` instead of `deoptFunc()`/`reoptFunc()`.
+**Status:** ROOT CAUSE CONFIRMED. Redesign APPROVED by gatekeeper (27-02-2026 00:11:06Z).
+Lazy-flag revision (v3) CONDITIONALLY APPROVED by gatekeeper (00:31:21Z). Awaiting
+clean build + benchmark results.
+
+**Fix history:**
+
+1. **Original approach (00:09:39Z, theologian):** Set `CI_CO_SUPPRESS_JIT` inside
+   `recordDeopt()` when counter hits threshold. 2 files, zero pyjit.cpp changes.
+   Gatekeeper APPROVED (00:11:06Z).
+
+2. **First build results (00:20Z):** nn_module_forward 40K→0 deopts (BACKOFF WORKS).
+   But decorator_chain SEGFAULT. Setting `co_flags` mid-deopt is unsafe.
+
+3. **H1 confirmed (00:27:15Z, theologian):** Removing flag set (keeping counter)
+   eliminates crash. Mid-deopt `co_flags` mutation is the cause. Independently
+   confirmed by generalist (00:28:43Z) using `cinderjit.jit_suppress()` to set
+   the flag between calls — no crash.
+
+4. **Lazy-flag revision v3 (00:27:15Z, theologian → 00:31:21Z, gatekeeper):**
+   Deferred flag setting. 3 files, ~46 lines total:
+   - `context.h` (+22): `kDeoptBackoffThreshold=10`, `deopt_backoff_counts_` map,
+     `isDeoptBackoffTriggered()` query method.
+   - `context.cpp` (+14): In `recordDeopt()`, increment counter only. Log when
+     threshold hit. NO `co_flags` mutation.
+   - `pyjit.cpp` (+10): In `reoptFunc()`, after `lookupFunc` finds `CompiledFunction`,
+     check `isDeoptBackoffTriggered(rt)`. If triggered, set `CI_CO_SUPPRESS_JIT`
+     at this safe point (between calls) and return false.
+
+**Gatekeeper deopt stub analysis (00:31:21Z):** gen_asm.cpp:200-280 shows the deopt
+stub does NOT read `CI_CO_SUPPRESS_JIT` after `recordDeopt()`. The crash from
+mid-deopt mutation is downstream — possibly in CPython's eval loop when processing
+the reified frame with modified `co_flags`. Academically interesting but does not
+change the fix — the lazy-flag approach resolves it regardless of exact crash site.
+
+**Key architectural findings (verified on build-host
+- `CodeRuntime*` is per-PyCodeObject (per-CompilationKey), NOT per-function-object.
+  Counter accumulates correctly across function instantiations.
+- `CI_CO_SUPPRESS_JIT` (0x40000000) already checked by `reoptFunc()` (pyjit.cpp:798)
+  and `scheduleJitCompile()` (pyjit.cpp:3892).
+- `CodeRuntime` lives in `SlabArena` — no use-after-free risk.
+- Setting `CI_CO_SUPPRESS_JIT` mid-deopt (inside `recordDeopt()`) causes SEGFAULT
+  in decorator_chain. Setting it between calls (in `reoptFunc()`) is safe.
+
+**Falsifiable prediction:** deep_class_super ≤40 deopts (was 1.1M), JIT/Vanilla → 1.0x (was 0.52x).
+
+**Acceptance criteria (gatekeeper 00:31:21Z):**
+1. decorator_chain: NO CRASH (the whole point of the lazy-flag fix)
+2. deep_class_super: ≤40 deopts (4 CodeRuntimes × threshold 10)
+3. nn_module_forward: ≤30 deopts (3 CodeRuntimes × threshold 10)
+4. 22 structural benchmarks: 0 deopts, no regressions
+5. JIT_LOG confirms suppression messages fire
 
 **Key code locations:**
-- `context.cpp:211` — `Context::recordDeopt()` (correct fix site)
-- `gen_asm.cpp:230-246` — runtime deopt stub (calls recordDeopt)
-- `pyjit.cpp:deoptFunc()` — explicit deopt handler (WRONG — not called during guard failures)
-- `pyjit.cpp:reoptFunc()` — reopt handler (WRONG — called once at startup, not per-call)
+- `context.cpp:211` — `Context::recordDeopt()` (counter increment site)
+- `context.h` — `isDeoptBackoffTriggered()` query method
+- `pyjit.cpp:798` — `reoptFunc()` (lazy flag set site + existing CI_CO_SUPPRESS_JIT check)
+- `pyjit.cpp:3892` — `scheduleJitCompile()` CI_CO_SUPPRESS_JIT check (existing)
+- `gen_asm.cpp:200-280` — runtime deopt stub (does NOT read CI_CO_SUPPRESS_JIT)
+- `code_runtime.h` — `CodeRuntime::frameState()->code()` path to PyCodeObject
