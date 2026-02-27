@@ -9,6 +9,8 @@ You are performing a **fixup** — diagnosing stalled agents and recovering them
 
 **Core principle:** Try the least destructive recovery action first. Only escalate when the current level fails. Hard restart (Level 4) destroys accumulated context and should be a last resort.
 
+**CRITICAL — Context percentage is not a failure state.** Claude agents autocompact when context runs low. An agent at 3% context with a spinner is *working*, not dying. It will autocompact within a few turns and recover to ~60% context. **Do not escalate based on context percentage alone.** Only escalate if the agent is genuinely unresponsive (no output, no spinner, not processing) for 5+ minutes. Low context + active spinner = leave it alone.
+
 ## Escalation Ladder
 
 | Level | Action | When to use | What it preserves |
@@ -41,43 +43,46 @@ tmux capture-pane -t <session-name> -p -S -40
 
 Classify the state using these heuristics:
 
-| Indicator | State | Context risk | Recommended level |
-|-----------|-------|-------------|-------------------|
-| Spinner active (Waddling/Crunching/etc.) | **Working** | Normal | None — leave alone |
-| `bypass permissions on` at bottom, no spinner | **Stalled on modal** | Normal | Level 1 (Enter) |
-| `Context left until auto-compact: 15-25%` | **Context low** | Moderate | Level 2 (Compact) |
-| `Context left until auto-compact: 10-15%` | **Context critical** | High | Level 2 (Compact), then assess |
-| `Context left until auto-compact: <10%` | **Low-context** | Critical | Level 2 first (try compact), then Level 4 if no response |
-| Input accepted but no output for >30s | **Unresponsive** | Critical | Check context %, follow decision tree |
-| Repeated empty `/nbs-poll` or `/nbs-notify` responses | **Poll-burning** | High | Level 2 (Compact) |
-| Process exited / bash prompt visible | **Dead** | N/A | Level 4 (Hard restart) |
-| Commands concatenated on prompt line, no processing | **Frozen** | Critical | Level 4 (Hard restart) |
+| Indicator | State | Action |
+|-----------|-------|--------|
+| Spinner active (Waddling/Crunching/etc.) | **Working** | None — leave alone regardless of context % |
+| `bypass permissions on` at bottom, no spinner | **Stalled on modal** | Level 1 (Enter) |
+| Spinner active, context <10% | **About to autocompact** | None — autocompaction is automatic, not a failure |
+| No spinner, no output for 5+ minutes | **Unresponsive** | Level 2 (Compact), then Level 4 if no response |
+| Repeated empty `/nbs-poll` or `/nbs-notify` responses | **Poll-burning** | Level 2 (Compact) |
+| Process exited / bash prompt visible | **Dead** | Level 4 (Hard restart) |
+| Commands concatenated on prompt line, no processing | **Frozen** | Level 4 (Hard restart) |
 
 ### State Classification
 
-Three distinct low-context failure modes, each requiring different treatment:
+**Autocompaction is normal.** Claude agents automatically compact their context when it runs low. An agent at 1% context is about to autocompact — it is not dying, crashing, or stuck. After autocompaction, context returns to ~60%. This is an automatic, built-in process that requires no intervention.
 
-**(a) Recoverable (10-15% context):** Agent accepts input, may produce partial output or none. Ctrl-C clears any stuck request. `/compact` can free enough context to restore function. Try Level 2.
+The only states that require fixup action are:
 
-**(b) Low-context (<10% context):** Agent may or may not process commands. Always try Level 2 first — `/compact` costs seconds and may succeed. If compact does not respond within 30 seconds or context does not improve, escalate to Level 4.
+**(a) Unresponsive (no spinner, no output for 5+ minutes):** The agent is not processing. Try Level 2 (Ctrl-C + /compact). If no response in 30 seconds, escalate to Level 4.
 
-**(c) Compaction floor (10-15% context, compact does not reduce):** The summarised session + skills + system context fill the window. `/compact` runs but context does not decrease. `--resume` will reload the same state. Escalate to Level 4.
+**(b) Dead (bash prompt, session exited):** The process has terminated. Level 4.
 
-**Thresholds are heuristics.** The 10%/15% boundaries are empirical (Feb 2026). Adjust based on observed behaviour.
+**(c) Frozen (commands concatenated on prompt line):** The agent accepts input but does not process it. Level 4.
 
-**Decision tree for low-context states:**
+**(d) Poll-burning (repeated empty poll/notify):** The agent is active but consuming context on empty polls. Level 2 (/compact) to reclaim context.
+
+**What is NOT a failure state:**
+- Low context percentage with an active spinner — the agent is working and will autocompact
+- Low context percentage with recent output — the agent is functioning normally
+- Context at 1-5% — autocompaction is imminent, not death
+
+**Decision tree:**
 
 ```
 Is the process dead (bash prompt, session exited)?
-  YES → Level 4 (nothing to compact)
-  NO → Try Level 2 (Ctrl-C + /compact)
-        Wait 30s. Did the agent respond?
-          NO → Level 4 (truly unresponsive)
-          YES → Did compact improve context?
-                  YES → Agent recovered, monitor
-                  NO → Is this the compaction floor?
-                          YES → Level 4 (--resume is a trap)
-                          NO → Try Level 3 (--resume)
+  YES → Level 4 (nothing to recover)
+  NO → Is there an active spinner or recent output (<5 min)?
+        YES → Leave alone (autocompaction will handle context)
+        NO → Try Level 2 (Ctrl-C + /compact)
+              Wait 30s. Did the agent respond?
+                NO → Level 4 (truly unresponsive)
+                YES → Agent recovered, monitor
 ```
 
 ### Step 3: Report
