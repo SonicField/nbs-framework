@@ -84,23 +84,41 @@ int chat_client_count_messages(const char *chat_path)
     char line[MAX_LINE];
     int found_separator = 0;
     int count = 0;
+    int in_continuation = 0; /* non-zero when previous fgets was a partial read */
 
     while (fgets(line, sizeof(line), f)) {
-        /* Strip trailing newline */
         size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
+        int has_newline = (len > 0 && line[len - 1] == '\n');
+
+        if (in_continuation) {
+            /* Consuming remainder of a long line — skip until newline */
+            if (has_newline)
+                in_continuation = 0;
+            continue;
+        }
+
+        /* Strip trailing newline */
+        if (has_newline)
             line[len - 1] = '\0';
-        len = strlen(line);
+        len = has_newline ? len - 1 : len;
 
         if (!found_separator) {
             if (strcmp(line, "---") == 0)
                 found_separator = 1;
+            if (!has_newline)
+                in_continuation = 1;
             continue;
         }
 
-        /* After separator: count non-empty lines */
+        /* After separator: count non-empty lines (one per message) */
         if (len > 0)
             count++;
+
+        /* If fgets didn't find a newline, buffer was too small for this
+         * line. The next fgets call(s) will return the remainder —
+         * skip them so we don't double-count. */
+        if (!has_newline)
+            in_continuation = 1;
     }
 
     fclose(f);
@@ -386,17 +404,28 @@ static int sidecar_only_cb(const char *path, void *user_data)
     int found_separator = 0;
     int msg_index = 0;          /* 0-based index of messages after --- */
     int skip_count = cursor + 1; /* messages 0..cursor have been read */
+    int in_continuation = 0;    /* non-zero when consuming a long line */
 
     while (fgets(line, sizeof(line), f)) {
-        /* Strip trailing newline */
         size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
+        int has_newline = (len > 0 && line[len - 1] == '\n');
+
+        if (in_continuation) {
+            if (has_newline)
+                in_continuation = 0;
+            continue;
+        }
+
+        /* Strip trailing newline */
+        if (has_newline)
             line[len - 1] = '\0';
-        len = strlen(line);
+        len = has_newline ? len - 1 : len;
 
         if (!found_separator) {
             if (strcmp(line, "---") == 0)
                 found_separator = 1;
+            if (!has_newline)
+                in_continuation = 1;
             continue;
         }
 
@@ -405,6 +434,13 @@ static int sidecar_only_cb(const char *path, void *user_data)
             continue;
 
         msg_index++;
+
+        /* If line was truncated, skip continuations and don't try to
+         * decode — the base64 is incomplete anyway. */
+        if (!has_newline) {
+            in_continuation = 1;
+            continue;
+        }
 
         /* Skip already-read messages */
         if (msg_index <= skip_count)

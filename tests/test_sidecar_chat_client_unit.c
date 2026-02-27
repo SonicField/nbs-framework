@@ -18,6 +18,7 @@
  *  14.  are_unread_sidecar_only: mixed handles → 0
  *  15.  are_unread_sidecar_only: timestamped format → handle extracted, returns 1
  *  16.  send: successful send → returns 0
+ *  17.  count_messages: long lines (>4095 chars) not double-counted
  */
 
 #include "../src/nbs-sidecar/chat_client.h"
@@ -512,6 +513,56 @@ int main(void)
         int rc = chat_client_are_unread_sidecar_only(registry_path, "agent");
         CHECK("are_unread_sidecar_only: timestamped sidecar returns 1",
               rc == 1);
+    }
+
+    /* ============================================================
+     * 17. count_messages: long lines (>4095 chars) not double-counted
+     *
+     * A base64 line longer than MAX_LINE (4096) must be counted as
+     * exactly one message, not split across multiple fgets reads.
+     * ============================================================ */
+    {
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/longline.chat", tmpdir);
+
+        /* Build a long raw message (>6000 chars raw → >8000 chars base64) */
+        char long_raw[8192];
+        memset(long_raw, 0, sizeof(long_raw));
+        snprintf(long_raw, sizeof(long_raw), "agent|1234567890: ");
+        size_t prefix_len = strlen(long_raw);
+        /* Fill with 'A' to make total raw length ~6000 */
+        memset(long_raw + prefix_len, 'A', 6000 - prefix_len);
+        long_raw[6000] = '\0';
+
+        /* Base64-encode the long message */
+        char long_b64[16384];
+        int b64_len = base64_encode((const unsigned char *)long_raw,
+                                     strlen(long_raw), long_b64,
+                                     sizeof(long_b64));
+        CHECK("long line: base64 encode succeeds", b64_len > 0);
+        CHECK("long line: base64 length > 4096",
+              b64_len > 0 && (size_t)b64_len > 4096);
+
+        /* Write chat file with 1 short + 1 long + 1 short message */
+        FILE *f = fopen(chat_path, "w");
+        if (f) {
+            fprintf(f,
+                "=== nbs-chat ===\n"
+                "last-writer: system\n"
+                "last-write: 2026-02-22T00:00:00+0000\n"
+                "file-length: 0\n"
+                "participants: \n"
+                "---\n"
+                "%s\n"
+                "%s\n"
+                "%s\n",
+                b64_msg1, long_b64, b64_msg3);
+            fclose(f);
+        }
+
+        int count = chat_client_count_messages(chat_path);
+        CHECK("count_messages: long line not double-counted, returns 3",
+              count == 3);
     }
 
     /* ============================================================
