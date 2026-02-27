@@ -1060,6 +1060,72 @@ static void test_find_events_dir_trailing_slashes(void) {
     TEST_PASS("bus_find_events_dir: standard path works (baseline for slash tests)");
 }
 
+/* --- Backslash-escaped interrupt/query tests --- */
+
+static void test_escaped_interrupt(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@supervisor\\! urgent",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 1, "escaped !: expected 1 mention, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "supervisor") == 0,
+                "escaped !: expected 'supervisor', got '%s'", handles[0]);
+    TEST_ASSERT(flags[0] == 1,
+                "escaped !: expected flag 1 (interrupt), got %d", flags[0]);
+
+    TEST_PASS("@handle\\! treated as interrupt");
+}
+
+static void test_escaped_query(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@worker\\? status please",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 1, "escaped ?: expected 1 mention, got %d", count);
+    TEST_ASSERT(strcmp(handles[0], "worker") == 0,
+                "escaped ?: expected 'worker', got '%s'", handles[0]);
+    TEST_ASSERT(flags[0] == 2,
+                "escaped ?: expected flag 2 (query), got %d", flags[0]);
+
+    TEST_PASS("@handle\\? treated as query");
+}
+
+static void test_escaped_mixed_with_unescaped(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@alice\\! and @bob! and @charlie\\?",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 3, "escaped mixed: expected 3, got %d", count);
+    TEST_ASSERT(flags[0] == 1,
+                "escaped mixed: alice\\! should be interrupt (1), got %d", flags[0]);
+    TEST_ASSERT(flags[1] == 1,
+                "escaped mixed: bob! should be interrupt (1), got %d", flags[1]);
+    TEST_ASSERT(flags[2] == 2,
+                "escaped mixed: charlie\\? should be query (2), got %d", flags[2]);
+
+    TEST_PASS("escaped and unescaped ! and ? both work");
+}
+
+static void test_backslash_alone_not_interrupt(void) {
+    char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+    int flags[MAX_MENTIONS];
+    memset(flags, 0, sizeof(flags));
+    int count = bus_extract_mentions("@worker\\ trailing",
+                                      handles, MAX_MENTIONS, flags);
+
+    TEST_ASSERT(count == 1, "backslash alone: expected 1, got %d", count);
+    TEST_ASSERT(flags[0] == 0,
+                "backslash alone: should be normal (0), got %d", flags[0]);
+
+    TEST_PASS("@handle\\ (backslash without ! or ?) is normal mention");
+}
+
 int main(void) {
     printf("=== bus_bridge unit tests ===\n\n");
 
@@ -1138,6 +1204,12 @@ int main(void) {
     test_mentions_special_chars_only();
     test_flags_always_initialised();
     test_find_events_dir_trailing_slashes();
+
+    /* Backslash-escaped interrupt/query (@handle\! @handle\?) */
+    test_escaped_interrupt();
+    test_escaped_query();
+    test_escaped_mixed_with_unescaped();
+    test_backslash_alone_not_interrupt();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

@@ -260,11 +260,14 @@ int bus_extract_mentions(const char *message,
 
         if (!is_dup) {
             memcpy(out_handles[found], candidate, handle_len + 1);
-            /* Check for suffix: '!' (interrupt) or '?' (query) after handle */
+            /* Check for suffix: '!' (interrupt) or '?' (query) after handle.
+             * Also accept '\!' and '\?' — LLMs frequently backslash-escape
+             * these characters because markdown training primes them to
+             * treat '!' as a special character. */
             if (out_interrupt_flags != NULL) {
-                if (*end == '!') {
+                if (*end == '!' || (*end == '\\' && *(end + 1) == '!')) {
                     out_interrupt_flags[found] = 1;
-                } else if (*end == '?') {
+                } else if (*end == '?' || (*end == '\\' && *(end + 1) == '?')) {
                     out_interrupt_flags[found] = 2;
                 } else {
                     out_interrupt_flags[found] = 0;
