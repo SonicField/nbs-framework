@@ -2,13 +2,23 @@
 # nbs-scribe-query: Search the scribe decision log
 #
 # Usage:
-#   nbs-scribe-query <log-file> <pattern>            Search decisions
+#   nbs-scribe-query <log-file> <pattern>            Search decisions (literal text)
+#   nbs-scribe-query <log-file> <pattern> --regex    Search with regex pattern
 #   nbs-scribe-query <log-file> --id=D-<timestamp>   Look up a specific decision
 #   nbs-scribe-query <log-file> --last=N             Show last N decisions
 #   nbs-scribe-query <log-file> --by=<handle>        Decisions involving handle
 #   nbs-scribe-query <log-file> --tag=<risk-tag>     Decisions with risk tag
 #   nbs-scribe-query <log-file> --count              Count total decisions
 #   nbs-scribe-query <log-file> --superseded         Show all superseded decisions
+#
+# Search is literal (fixed string) by default. Use --regex for regex patterns.
+# This prevents accidental matches from characters like . * + in search terms.
+#
+# Examples:
+#   nbs-scribe-query .nbs/scribe/live-log.md benchmark     Literal search
+#   nbs-scribe-query .nbs/scribe/live-log.md 'deopt.*crash' --regex  Regex
+#   nbs-scribe-query .nbs/scribe/live-log.md --last=5       Last 5 decisions
+#   nbs-scribe-query .nbs/scribe/live-log.md --by=theologian Her decisions
 #
 # Exit codes:
 #   0 - Success (matches found)
@@ -30,6 +40,26 @@ if [[ ! -f "$LOG" ]]; then
     exit 4
 fi
 
+# Check for --regex flag anywhere in remaining args
+USE_REGEX=false
+ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--regex" ]]; then
+        USE_REGEX=true
+    else
+        ARGS+=("$arg")
+    fi
+done
+# Restore positional args without --regex
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# Select grep mode: -F (fixed/literal) or default (regex)
+if [[ "$USE_REGEX" == true ]]; then
+    GREP_MODE=""
+else
+    GREP_MODE="-F"
+fi
+
 case "${1:---help}" in
     --help|-h)
         grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
@@ -41,7 +71,6 @@ case "${1:---help}" in
         ;;
     --last=*)
         N="${1#--last=}"
-        # Extract last N decision blocks (each starts with ### D-)
         grep -n '^### D-' "$LOG" | tail -"$N" | while IFS=: read -r line_num _rest; do
             sed -n "${line_num},/^---$/p" "$LOG" | head -10
             echo ""
@@ -50,7 +79,6 @@ case "${1:---help}" in
         ;;
     --id=*)
         ID="${1#--id=}"
-        # Find the decision and print its full block
         LINE=$(grep -n "^### ${ID}" "$LOG" | head -1 | cut -d: -f1)
         if [[ -z "$LINE" ]]; then
             echo "Decision not found: $ID" >&2
@@ -61,12 +89,17 @@ case "${1:---help}" in
         ;;
     --by=*)
         HANDLE="${1#--by=}"
-        grep -B1 -A7 "Participants:.*${HANDLE}" "$LOG" | grep -A8 '^### D-'
+        grep -B1 -A7 $GREP_MODE "Participants:.*${HANDLE}" "$LOG" | grep -A8 '^### D-' || {
+            # Fallback: -F mode can't match .* so use exact field search
+            grep -B1 -A7 "Participants:" "$LOG" | grep -F "$HANDLE" -A7 -B2 | grep -A8 '^### D-'
+        }
         exit $?
         ;;
     --tag=*)
         TAG="${1#--tag=}"
-        grep -B3 -A5 "Risk tags:.*${TAG}" "$LOG" | grep -A8 '^### D-'
+        grep -B3 -A5 $GREP_MODE "Risk tags:.*${TAG}" "$LOG" | grep -A8 '^### D-' || {
+            grep -B3 -A5 "Risk tags:" "$LOG" | grep -F "$TAG" -A5 -B4 | grep -A8 '^### D-'
+        }
         exit $?
         ;;
     --superseded)
@@ -80,14 +113,13 @@ case "${1:---help}" in
     *)
         # Free-text search — show matching decision blocks
         PATTERN="$1"
-        grep -n "$PATTERN" "$LOG" | while IFS=: read -r line_num _rest; do
-            # Walk backwards to find the decision header
+        grep -n $GREP_MODE "$PATTERN" "$LOG" | while IFS=: read -r line_num _rest; do
             HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
                 echo ""
             fi
-        done | awk '!seen[$0]++' # dedup
+        done | awk '!seen[$0]++'
         exit 0
         ;;
 esac
