@@ -575,6 +575,24 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
     chat_state_t state;
     if (chat_read(g_chat_file, &state) < 0) return;
 
+    /* Auto-archive detection: if message_count dropped, the file was
+     * rewritten with fewer messages (first 1000 moved to archive).
+     * Reset our counter so we don't go permanently deaf. */
+    if (state.message_count < g_msg_count) {
+        /* Clear input line */
+        if (g_cursor_row > 0) {
+            printf("\033[%dA", g_cursor_row);
+        }
+        printf("\r\033[J");
+        printf("  %s--- chat archived, %d messages remaining ---%s\n",
+               DIM, state.message_count, RESET);
+        g_msg_count = state.message_count;
+        g_cursor_row = 0;
+        line_redraw(ls, handle);
+        chat_state_free(&state);
+        return;
+    }
+
     if (state.message_count <= g_msg_count) {
         chat_state_free(&state);
         return;
