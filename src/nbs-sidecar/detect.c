@@ -16,9 +16,12 @@
 /*
  * detect_plan_mode — checks for "Would you like to proceed?"
  * Returns 1 if found, 0 otherwise.
+ *
+ * Precondition: content != NULL (enforced by caller).
  */
 static int detect_plan_mode(const char *content)
 {
+    ASSERT_MSG(content != NULL, "detect_plan_mode: content is NULL");
     return strstr(content, "Would you like to proceed?") != NULL;
 }
 
@@ -26,9 +29,13 @@ static int detect_plan_mode(const char *content)
  * detect_ask_modal — checks for "Type something." AND a numbered option
  * pattern matching ^\s*[?>]?\s*[1-4]\. on any line.
  * Returns 1 if both conditions met, 0 otherwise.
+ *
+ * Precondition: content != NULL (enforced by caller).
  */
 static int detect_ask_modal(const char *content)
 {
+    ASSERT_MSG(content != NULL, "detect_ask_modal: content is NULL");
+
     if (strstr(content, "Type something.") == NULL)
         return 0;
 
@@ -49,8 +56,10 @@ static int detect_ask_modal(const char *content)
         while (*p == ' ' || *p == '\t')
             p++;
 
-        /* Check for [1-4]\. */
-        if (*p >= '1' && *p <= '4' && *(p + 1) == '.')
+        /* Check for [1-4]\. — safe: if *p is in '1'..'4' then p[1] is at
+         * most NUL (loop guard ensures *p != '\0'). NUL != '.' so the
+         * overall expression is false when the digit is the last byte. */
+        if (*p >= '1' && *p <= '4' && p[1] == '.')
             return 1;
 
         /* Advance to next line */
@@ -68,9 +77,12 @@ static int detect_ask_modal(const char *content)
  * detect_permissions — checks for BOTH "Do you want to proceed?" AND
  * "don't ask again".
  * Returns 1 if both found, 0 otherwise.
+ *
+ * Precondition: content != NULL (enforced by caller).
  */
 static int detect_permissions(const char *content)
 {
+    ASSERT_MSG(content != NULL, "detect_permissions: content is NULL");
     return strstr(content, "Do you want to proceed?") != NULL &&
            strstr(content, "don't ask again") != NULL;
 }
@@ -79,9 +91,12 @@ static int detect_permissions(const char *content)
  * detect_proceed — checks for "Do you want to proceed?" but NOT
  * "don't ask again".
  * Returns 1 if proceed without permissions, 0 otherwise.
+ *
+ * Precondition: content != NULL (enforced by caller).
  */
 static int detect_proceed(const char *content)
 {
+    ASSERT_MSG(content != NULL, "detect_proceed: content is NULL");
     return strstr(content, "Do you want to proceed?") != NULL &&
            strstr(content, "don't ask again") == NULL;
 }
@@ -136,19 +151,26 @@ int detect_context_stress(const char *content)
 {
     ASSERT_MSG(content != NULL, "detect_context_stress: content is NULL");
 
-    if (strstr(content, "Compacting conversation") != NULL) return 1;
-    if (strstr(content, "Conversation too long") != NULL) return 1;
-    if (strstr(content, "Prompt is too long") != NULL) return 1;
-    if (strstr(content, "Error compacting conversation") != NULL) return 1;
-    return 0;
+    int result = 0;
+
+    if (strstr(content, "Compacting conversation") != NULL) result = 1;
+    else if (strstr(content, "Conversation too long") != NULL) result = 1;
+    else if (strstr(content, "Prompt is too long") != NULL) result = 1;
+    else if (strstr(content, "Error compacting conversation") != NULL) result = 1;
+
+    /* Postcondition: return value is boolean */
+    ASSERT_MSG(result == 0 || result == 1,
+               "detect_context_stress postcondition: result %d is not 0 or 1", result);
+
+    return result;
 }
 
 int detect_prompt_visible(const char *content)
 {
     ASSERT_MSG(content != NULL, "detect_prompt_visible: content is NULL");
 
-    /* UTF-8 sequence for ❯: 0xe2 0x9d 0xaf */
-    static const char prompt_utf8[] = { (char)0xe2, (char)0x9d, (char)0xaf, '\0' };
+    /* UTF-8 sequence for the prompt character (U+276F): 0xe2 0x9d 0xaf */
+    static const char prompt_utf8[] = "\xe2\x9d\xaf";
 
     size_t len = strlen(content);
     if (len == 0)
@@ -156,38 +178,52 @@ int detect_prompt_visible(const char *content)
 
     /*
      * Find the start of the last 6 lines.
-     * Walk backwards from end, counting newlines.
+     * Walk backwards from end using indices (not pointers) to avoid
+     * undefined behaviour when the scan exhausts the entire string.
      * 6 lines covers: prompt line + separator + bypass permissions +
      * blank line + context percentage + possible extra status line.
      */
     const char *search_start = content;
     int newlines_found = 0;
-    const char *p = content + len - 1;
+    size_t i = len;
 
     /* Skip trailing newlines (tmux pads pane to full height with empty lines) */
-    while (p >= content && *p == '\n')
-        p--;
+    while (i > 0 && content[i - 1] == '\n')
+        i--;
 
-    while (p >= content) {
-        if (*p == '\n') {
+    /* Find the 6th newline from the (non-padded) end */
+    while (i > 0) {
+        i--;
+        if (content[i] == '\n') {
             newlines_found++;
             if (newlines_found == 6) {
-                search_start = p + 1;
+                search_start = content + i + 1;
                 break;
             }
         }
-        p--;
     }
 
     ASSERT_MSG(search_start >= content && search_start <= content + len,
                "detect_prompt_visible: search_start out of bounds");
 
-    return strstr(search_start, prompt_utf8) != NULL;
+    int result = strstr(search_start, prompt_utf8) != NULL;
+
+    /* Postcondition: return value is boolean */
+    ASSERT_MSG(result == 0 || result == 1,
+               "detect_prompt_visible postcondition: result %d is not 0 or 1", result);
+
+    return result;
 }
 
 int detect_skill_failure(const char *content)
 {
     ASSERT_MSG(content != NULL, "detect_skill_failure: content is NULL");
 
-    return strstr(content, "Unknown skill") != NULL;
+    int result = strstr(content, "Unknown skill") != NULL;
+
+    /* Postcondition: return value is boolean */
+    ASSERT_MSG(result == 0 || result == 1,
+               "detect_skill_failure postcondition: result %d is not 0 or 1", result);
+
+    return result;
 }

@@ -9,10 +9,13 @@
  *
  * Invariants:
  *   - All function pointers are non-NULL after initialisation
- *   - capture returns heap-allocated string (caller frees) or NULL on error
- *   - send_text sends literal text without interpretation
+ *     (enforced by postcondition assertions in transport_*_init)
+ *   - capture returns heap-allocated NUL-terminated string (caller frees) or NULL on error
+ *     (enforced by postcondition assertion in capture implementations)
+ *   - send_text sends text via the transport's exec mechanism
  *   - send_key sends a named key ("Enter", "Escape")
- *   - is_alive returns 1 if the session/pane still exists, 0 otherwise
+ *   - is_alive returns 1 if alive, 0 if gone, -1 on exec error
+ *     (three-valued contract enforced by implementation)
  */
 
 #ifndef NBS_TRANSPORT_H

@@ -1,5 +1,5 @@
 /*
- * transport_pty.c — pty-session transport implementation.
+ * transport_pty.c -- pty-session transport implementation.
  *
  * Implements the transport vtable for pty-session managed sessions.
  * Each operation is a fork+exec of the pty-session binary.
@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* Named constant for capture buffer size (Violation 1: HARDENING) */
+#define PTY_CAPTURE_BUF_SIZE 32768
 
 /* Context for pty-session transport */
 typedef struct {
@@ -32,15 +35,21 @@ static char *pty_capture(const transport_t *self, int scrollback) {
         ctx->pty_path, "read", ctx->session_name, scroll_arg, NULL
     };
 
-    char *buf = malloc(32768);
+    char *buf = malloc(PTY_CAPTURE_BUF_SIZE);
     if (!buf) return NULL;
 
-    int rc = exec_capture(argv, buf, 32768);
+    int rc = exec_capture(argv, buf, PTY_CAPTURE_BUF_SIZE);
     if (rc < 0) {
+        /* Violation 2 (BUG): log exec failure instead of silent discard */
+        fprintf(stderr, "pty_capture: exec_capture failed (rc=%d) for session '%s'\n",
+                rc, ctx->session_name);
         free(buf);
         return NULL;
     }
 
+    /* Violation 3 (HARDENING): postcondition -- buffer is NUL-terminated */
+    ASSERT_MSG(buf[strlen(buf)] == '\0',
+               "pty_capture: buffer not NUL-terminated after exec_capture");
     return buf;
 }
 
@@ -54,7 +63,14 @@ static int pty_send_text(const transport_t *self, const char *text) {
         ctx->pty_path, "send", ctx->session_name, text, NULL
     };
 
-    return exec_fire_and_forget(argv) == 0 ? 0 : -1;
+    /* Violation 4 (BUG): log exec failure instead of silent discard */
+    int rc = exec_fire_and_forget(argv);
+    if (rc != 0) {
+        fprintf(stderr, "pty_send_text: exec failed (rc=%d) for session '%s'\n",
+                rc, ctx->session_name);
+        return -1;
+    }
+    return 0;
 }
 
 static int pty_send_key(const transport_t *self, const char *key) {
@@ -63,25 +79,33 @@ static int pty_send_key(const transport_t *self, const char *key) {
     ASSERT_MSG(key != NULL, "pty_send_key: key is NULL");
     const pty_ctx_t *ctx = self->ctx;
 
+    const char *argv_enter[] = {
+        ctx->pty_path, "send", ctx->session_name, "", NULL
+    };
+    const char *argv_escape[] = {
+        ctx->pty_path, "send", ctx->session_name, "--no-enter", "\x1b", NULL
+    };
+    const char *argv_other[] = {
+        ctx->pty_path, "send", ctx->session_name, "--no-enter", key, NULL
+    };
+
+    const char *const *argv;
     if (strcmp(key, "Enter") == 0) {
-        /* pty-session: empty string sends bare Enter */
-        const char *argv[] = {
-            ctx->pty_path, "send", ctx->session_name, "", NULL
-        };
-        return exec_fire_and_forget(argv) == 0 ? 0 : -1;
+        argv = argv_enter;
     } else if (strcmp(key, "Escape") == 0) {
-        /* pty-session: send raw escape byte via --no-enter */
-        const char *argv[] = {
-            ctx->pty_path, "send", ctx->session_name, "--no-enter", "\x1b", NULL
-        };
-        return exec_fire_and_forget(argv) == 0 ? 0 : -1;
+        argv = argv_escape;
     } else {
-        /* Unsupported key — try sending as text */
-        const char *argv[] = {
-            ctx->pty_path, "send", ctx->session_name, "--no-enter", key, NULL
-        };
-        return exec_fire_and_forget(argv) == 0 ? 0 : -1;
+        argv = argv_other;
     }
+
+    /* Violation 5 (BUG): log exec failure instead of silent discard */
+    int rc = exec_fire_and_forget(argv);
+    if (rc != 0) {
+        fprintf(stderr, "pty_send_key: exec failed (rc=%d) for session '%s', key '%s'\n",
+                rc, ctx->session_name, key);
+        return -1;
+    }
+    return 0;
 }
 
 static int pty_is_alive(const transport_t *self) {
@@ -95,15 +119,32 @@ static int pty_is_alive(const transport_t *self) {
     };
 
     int rc = exec_capture(argv, buf, sizeof(buf));
-    if (rc != 0) return 0;
+    /* Violation 6 (BUG): distinguish exec error from "session not found" */
+    if (rc < 0) {
+        fprintf(stderr, "pty_is_alive: exec_capture failed (rc=%d) for session '%s'\n",
+                rc, ctx->session_name);
+        return -1;  /* error, not "dead" */
+    }
+    if (rc != 0) return 0;  /* command ran but session not listed */
+
+    /* Violation 7 (SECURITY): defensive NUL-termination before strtok */
+    buf[sizeof(buf) - 1] = '\0';
 
     /* Check if session_name appears as a complete line in the output */
     char *line = strtok(buf, "\n");
     while (line) {
-        /* Trim leading/trailing whitespace */
+        /* Trim leading whitespace */
         while (*line == ' ' || *line == '\t') line++;
         size_t len = strlen(line);
-        char *end = (len > 0) ? line + len - 1 : line;
+
+        /* Violation 8 (HARDENING): skip empty tokens explicitly */
+        if (len == 0) {
+            line = strtok(NULL, "\n");
+            continue;
+        }
+
+        /* Trim trailing whitespace */
+        char *end = line + len - 1;
         while (end > line && (*end == ' ' || *end == '\t' || *end == '\r')) {
             *end = '\0';
             end--;
@@ -123,16 +164,40 @@ int transport_pty_init(transport_t *tp, const char *pty_path,
     ASSERT_MSG(tp != NULL, "transport_pty_init: tp is NULL");
     ASSERT_MSG(pty_path != NULL, "transport_pty_init: pty_path is NULL");
     ASSERT_MSG(session_name != NULL, "transport_pty_init: session_name is NULL");
-    ASSERT_MSG(session_name[0] != '\0', "transport_pty_init: session_name is empty");
 
     memset(tp, 0, sizeof(*tp));
 
-    ASSERT_MSG(strlen(pty_path) < sizeof(((pty_ctx_t*)0)->pty_path),
-               "transport_pty_init: pty_path too long (%zu >= %zu)",
-               strlen(pty_path), sizeof(((pty_ctx_t*)0)->pty_path));
-    ASSERT_MSG(strlen(session_name) < sizeof(((pty_ctx_t*)0)->session_name),
-               "transport_pty_init: session_name too long (%zu >= %zu)",
-               strlen(session_name), sizeof(((pty_ctx_t*)0)->session_name));
+    /* Violation 9 (SECURITY): external input length checks return -1, not abort.
+     * pty_path and session_name originate from user/environment input. */
+    if (pty_path[0] == '\0') {
+        fprintf(stderr, "transport_pty_init: pty_path is empty\n");
+        return -1;
+    }
+    if (session_name[0] == '\0') {
+        fprintf(stderr, "transport_pty_init: session_name is empty\n");
+        return -1;
+    }
+
+    /* Violation 12 (HARDENING): cache strlen to avoid double evaluation */
+    size_t path_len = strlen(pty_path);
+    size_t name_len = strlen(session_name);
+
+    if (path_len >= sizeof(((pty_ctx_t*)0)->pty_path)) {
+        fprintf(stderr, "transport_pty_init: pty_path too long (%zu >= %zu)\n",
+                path_len, sizeof(((pty_ctx_t*)0)->pty_path));
+        return -1;
+    }
+    if (name_len >= sizeof(((pty_ctx_t*)0)->session_name)) {
+        fprintf(stderr, "transport_pty_init: session_name too long (%zu >= %zu)\n",
+                name_len, sizeof(((pty_ctx_t*)0)->session_name));
+        return -1;
+    }
+
+    /* Belt-and-suspenders: assert after the recoverable checks */
+    ASSERT_MSG(path_len < sizeof(((pty_ctx_t*)0)->pty_path),
+               "transport_pty_init: pty_path length check bypassed");
+    ASSERT_MSG(name_len < sizeof(((pty_ctx_t*)0)->session_name),
+               "transport_pty_init: session_name length check bypassed");
 
     pty_ctx_t *ctx = calloc(1, sizeof(pty_ctx_t));
     if (!ctx) return -1;
@@ -155,6 +220,19 @@ int transport_pty_init(transport_t *tp, const char *pty_path,
 
 void transport_free(transport_t *tp) {
     if (!tp) return;
+
+    /* Violation 10 (HARDENING): verify transport is either fully initialised
+     * or fully zeroed -- partial init indicates corruption */
+    int all_null = (tp->capture == NULL && tp->send_text == NULL &&
+                    tp->send_key == NULL && tp->is_alive == NULL);
+    int all_set = (tp->capture != NULL && tp->send_text != NULL &&
+                   tp->send_key != NULL && tp->is_alive != NULL);
+    ASSERT_MSG(all_null || all_set,
+               "transport_free: partially initialised transport "
+               "(capture=%p, send_text=%p, send_key=%p, is_alive=%p) -- corrupt state",
+               (void*)tp->capture, (void*)tp->send_text,
+               (void*)tp->send_key, (void*)tp->is_alive);
+
     free(tp->ctx);
     memset(tp, 0, sizeof(*tp));
 }

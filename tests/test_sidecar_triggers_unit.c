@@ -16,12 +16,12 @@
  *   trigger_standup_check:
  *    6. Interval not elapsed
  *    7. First run initialises timer
- *    8. Interval disabled (0)
+ *    8. Minimum valid interval (1 minute) — interval=0 now asserts
  *    9. CSMA/CD: recent global standup suppresses
  *   10. Posts after interval
  *
  *   trigger_heartbeat:
- *   11. Disabled (interval=0)
+ *   11. Disabled (interval=0) — 0 is documented disable signal
  *   12. First run initialises
  *   13. Not elapsed
  *   14. Elapsed, posts
@@ -41,7 +41,7 @@
  *   25. Lock busy
  *
  *   trigger_fixup_check:
- *   26. Disabled (interval_secs <= 0)
+ *   26. Minimum valid interval (1s) — interval<=0 now asserts
  *   27. First run initialises timestamp
  *   28. Interval not elapsed
  *   29. Interval elapsed, fires
@@ -49,6 +49,13 @@
  *   trigger_fixup_spawn:
  *   30. Lock acquired
  *   31. Lock busy
+ *
+ *   Adversarial tests (audit violations):
+ *   32. BUG #5/#6: snprintf truncation assertions (build-time verified)
+ *   33. HARDENING #9: count_dir_by_type postcondition (non-negative)
+ *   34. HARDENING #3: heartbeat interval=0 returns 1 (disable signal)
+ *   35. Pythia scribe-log fallback to bus events
+ *   36. Fixup double-fire detection (timestamp updated after first fire)
  */
 
 #include "../src/nbs-sidecar/triggers.h"
@@ -370,7 +377,12 @@ int main(void)
         rmrf(sub);
     }
 
-    /* Test 8: Interval disabled (0) */
+    /* Test 8: Minimum valid interval (1 minute)
+     *
+     * interval_minutes=0 now triggers ASSERT (per HARDENING #2 fix —
+     * non-positive is a caller bug, not a disable signal). Instead,
+     * test that interval=1 works and doesn't fire when elapsed time
+     * is well under 60 seconds. */
     {
         char sub[] = "/tmp/nbs_trig_t8_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
@@ -380,10 +392,11 @@ int main(void)
                            registry, sizeof(registry),
                            chat_path, sizeof(chat_path));
 
-        time_t last_standup = 1;  /* non-zero so it's not first run */
+        time_t now = time(NULL);
+        time_t last_standup = now - 10;  /* 10s ago, interval=1 min */
         int rc = trigger_standup_check(registry, nbs_root, "test-handle",
-                                       0, &last_standup);
-        CHECK("T8: interval disabled returns 1", rc == 1);
+                                       1, &last_standup);
+        CHECK("T8: interval=1, not elapsed, returns 1", rc == 1);
 
         rmrf(sub);
     }
@@ -987,7 +1000,11 @@ int main(void)
      * ================================================================= */
     printf("\n-- trigger_fixup_check --\n");
 
-    /* Test 26: Disabled (interval_secs <= 0) */
+    /* Test 26: Minimum valid interval (1 second)
+     *
+     * interval_secs <= 0 now triggers ASSERT (per HARDENING #4 fix —
+     * non-positive is a caller bug). Test that interval=1 works
+     * correctly on first run (initialises without firing). */
     {
         char sub[] = "/tmp/nbs_trig_t26_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
@@ -998,10 +1015,14 @@ int main(void)
         snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
         mkdirs(nbs_dir);
 
-        int rc = trigger_fixup_check(nbs_root, 0);
-        CHECK("T26: interval=0 returns 1", rc == 1);
-        rc = trigger_fixup_check(nbs_root, -1);
-        CHECK("T26: interval=-1 returns 1", rc == 1);
+        /* Ensure no fixup-last-run file exists */
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/fixup-last-run", nbs_root);
+        unlink(ts_path);
+
+        int rc = trigger_fixup_check(nbs_root, 1);
+        CHECK("T26: interval=1 first run returns 1", rc == 1);
 
         rmrf(sub);
     }
@@ -1179,6 +1200,155 @@ int main(void)
             fcntl(fd, F_SETLK, &unlock);
             close(fd);
         }
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * Adversarial tests (audit violation fixes)
+     * ================================================================= */
+    printf("\n-- Adversarial tests (audit fixes) --\n");
+
+    /* Test 32: snprintf truncation assertions verified at compile time.
+     *
+     * BUG #5/#6 fix added ASSERT_MSG after snprintf for ts_file and
+     * ts_tmp. This test verifies the normal path works — the assert
+     * fires only if truncation occurs, which requires paths > 4096 chars
+     * (not constructible in this test environment without hitting OS
+     * PATH_MAX limits). The assertion is the falsifier — if it ever
+     * fires, we know the buffer sizing assumptions are wrong.
+     *
+     * Here we verify normal operation with a realistic path. */
+    {
+        char sub[] = "/tmp/nbs_trig_t32_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], chat_path[L2];
+        create_standup_env(sub, nbs_root, sizeof(nbs_root),
+                           registry, sizeof(registry),
+                           chat_path, sizeof(chat_path));
+
+        /* Ensure no global standup timestamp */
+        char ts_file[L3];
+        snprintf(ts_file, sizeof(ts_file), "%s.standup-ts", chat_path);
+        unlink(ts_file);
+
+        time_t now = time(NULL);
+        time_t last_standup = now - 901;
+        int rc = trigger_standup_check(registry, nbs_root, "test-handle",
+                                       15, &last_standup);
+        CHECK("T32: standup with snprintf assertions succeeds", rc == 0);
+
+        /* Verify the .standup-ts file was created (ts_file path works) */
+        struct stat st;
+        CHECK("T32: standup-ts file created", stat(ts_file, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 33: HARDENING #9 — count_dir_by_type returns non-negative.
+     *
+     * Verify count is correct for an empty directory and a populated one.
+     * The postcondition assert in count_dir_by_type fires if count < 0. */
+    {
+        char sub[] = "/tmp/nbs_trig_t33_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        /* Create env with 0 events — count should be 0, not negative */
+        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
+                          registry, sizeof(registry),
+                          bus_dir, sizeof(bus_dir), 0);
+
+        int last = 0;
+        int rc = trigger_pythia_check(registry, nbs_root, &last);
+        /* No events, no bus events, no scribe decisions — should be clean */
+        CHECK("T33: zero events, no action", rc == 1);
+        CHECK("T33: last_trigger_count stays 0", last == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 34: HARDENING #3 — heartbeat interval=0 returns 1 (disable).
+     *
+     * Verify that interval=0 is still the documented disable signal
+     * and does not trigger the assert (which is interval >= 0). */
+    {
+        char sub[] = "/tmp/nbs_trig_t34_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], chat_path[L2];
+        create_standup_env(sub, nbs_root, sizeof(nbs_root),
+                           registry, sizeof(registry),
+                           chat_path, sizeof(chat_path));
+
+        time_t last_hb = 1;
+        int rc = trigger_heartbeat(registry, "test-handle", 0, &last_hb);
+        CHECK("T34: heartbeat interval=0 returns 1 (disabled)", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 35: Pythia falls back to bus events when scribe log is empty.
+     *
+     * count_scribe_decisions returns 0 when the log doesn't exist,
+     * so the code falls back to counting decision-logged bus events.
+     * Verify this fallback path works. */
+    {
+        char sub[] = "/tmp/nbs_trig_t35_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1], registry[L1], bus_dir[L2];
+        /* Create 20 decision-logged events (crosses bucket 0→1) */
+        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
+                          registry, sizeof(registry),
+                          bus_dir, sizeof(bus_dir), 20);
+
+        /* Ensure no scribe log exists — forces fallback to bus events */
+        char scribe_log[L3];
+        snprintf(scribe_log, sizeof(scribe_log),
+                 "%s/.nbs/scribe/live-log.md", nbs_root);
+        unlink(scribe_log);
+
+        int last = 1;  /* bucket 0 */
+        int rc = trigger_pythia_check(registry, nbs_root, &last);
+        CHECK("T35: pythia fires on bus events (scribe fallback)", rc == 0);
+        CHECK("T35: last_trigger_count updated to 20", last == 20);
+
+        rmrf(sub);
+    }
+
+    /* Test 36: Fixup double-fire detection — timestamp updated after fire.
+     *
+     * After trigger_fixup_check fires (returns 0), the timestamp file
+     * should be updated to ~now. A second call immediately after should
+     * return 1 (not enough time elapsed). */
+    {
+        char sub[] = "/tmp/nbs_trig_t36_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* Write old timestamp */
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/fixup-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 7200));
+        write_file(ts_path, ts_buf);
+
+        /* First call should fire */
+        int rc1 = trigger_fixup_check(nbs_root, 3600);
+        CHECK("T36: first call fires (returns 0)", rc1 == 0);
+
+        /* Second call immediately after: timestamp was just updated */
+        int rc2 = trigger_fixup_check(nbs_root, 3600);
+        CHECK("T36: second call suppressed (returns 1)", rc2 == 1);
 
         rmrf(sub);
     }

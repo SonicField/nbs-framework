@@ -19,7 +19,9 @@
  */
 
 /* strcasestr requires _GNU_SOURCE on Linux */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 #include "chat_file.h"
 #include "bus_bridge.h"
@@ -164,8 +166,8 @@ static int json_escape(const char *input, char *output, size_t output_size) {
  *
  * Returns bytes written (excluding NUL), or -1 on truncation.
  */
-int json_message(const chat_message_t *msg, int index,
-                 char *buf, size_t buf_size) {
+static int json_message(const chat_message_t *msg, int index,
+                        char *buf, size_t buf_size) {
     ASSERT_MSG(msg != NULL, "json_message: msg is NULL");
     ASSERT_MSG(buf != NULL, "json_message: buf is NULL");
     ASSERT_MSG(buf_size > 0, "json_message: buf_size is 0");
@@ -191,7 +193,7 @@ int json_message(const chat_message_t *msg, int index,
 
     int written = snprintf(buf, buf_size,
         "{\"index\":%d,\"handle\":\"%s\",\"content\":\"%s\",\"timestamp\":%lld}",
-        index, handle_esc, content_esc, (long long)msg->timestamp);
+        index, handle_esc, content_esc, (long long)(int64_t)msg->timestamp);
 
     if (written < 0 || (size_t)written >= buf_size) {
         result = -1;
@@ -310,27 +312,43 @@ static int parse_request(int fd, http_request_t *req) {
     /* Scan for Last-Event-ID header */
     const char *hdr = "Last-Event-ID:";
     char *found = strcasestr(buf, hdr);
+    /* Verify match is at line start, not embedded in another header value */
+    while (found && found < buf + total) {
+        if (found == buf || found[-1] == '\n') break;
+        found = strcasestr(found + 1, hdr);
+    }
     if (found && found < buf + total) {
         found += strlen(hdr);
         while (*found == ' ') found++;
         char *endptr;
         errno = 0;
         long val = strtol(found, &endptr, 10);
-        if (errno == 0 && endptr != found) req->last_event_id = (int)val;
+        if (errno == 0 && endptr != found) {
+            if (val < -1) val = -1;
+            if (val > INT32_MAX) val = INT32_MAX;
+            req->last_event_id = (int)val;
+        }
     }
 
     /* Scan for Content-Length header */
     const char *cl_hdr = "Content-Length:";
     char *cl_found = strcasestr(buf, cl_hdr);
+    /* Verify match is at line start */
+    while (cl_found && cl_found < buf + total) {
+        if (cl_found == buf || cl_found[-1] == '\n') break;
+        cl_found = strcasestr(cl_found + 1, cl_hdr);
+    }
     if (cl_found && cl_found < buf + total) {
         cl_found += strlen(cl_hdr);
         while (*cl_found == ' ') cl_found++;
         char *endptr;
         errno = 0;
         long val = strtol(cl_found, &endptr, 10);
-        if (errno == 0 && endptr != cl_found) req->content_length = (int)val;
-        if (req->content_length < 0) req->content_length = 0;
-        if (req->content_length > MAX_REQUEST_SIZE) req->content_length = MAX_REQUEST_SIZE;
+        if (errno == 0 && endptr != cl_found) {
+            if (val > MAX_REQUEST_SIZE) val = MAX_REQUEST_SIZE;
+            if (val < 0) val = 0;
+            req->content_length = (int)val;
+        }
     }
 
     /* Extract body (data after \r\n\r\n) */
@@ -377,6 +395,12 @@ static int parse_request(int fd, http_request_t *req) {
 static void send_response(int fd, int status, const char *status_text,
                           const char *content_type,
                           const char *body, size_t body_len) {
+    ASSERT_MSG(fd >= 0, "send_response: invalid fd %d", fd);
+    ASSERT_MSG(status_text != NULL, "send_response: status_text is NULL");
+    ASSERT_MSG(content_type != NULL, "send_response: content_type is NULL");
+    ASSERT_MSG(body != NULL || body_len == 0,
+               "send_response: body is NULL but body_len is %zu", body_len);
+
     int hdr_n = dprintf(fd,
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
@@ -416,6 +440,8 @@ static void send_503(int fd) {
  * ================================================================ */
 
 static void serve_html(int fd) {
+    ASSERT_MSG(fd >= 0, "serve_html: invalid fd %d", fd);
+
     send_response(fd, 200, "OK", "text/html; charset=utf-8",
                   asset_index_html, strlen(asset_index_html));
 }
@@ -425,6 +451,9 @@ static void serve_html(int fd) {
  * ================================================================ */
 
 static void serve_json(int fd, const http_request_t *req) {
+    ASSERT_MSG(fd >= 0, "serve_json: invalid fd %d", fd);
+    ASSERT_MSG(req != NULL, "serve_json: req is NULL");
+
     int since = parse_query_int(req->query, "since", -1);
     int last = parse_query_int(req->query, "last", -1);
 
@@ -455,44 +484,58 @@ static void serve_json(int fd, const http_request_t *req) {
         return;
     }
 
-    int pos = 0;
-    pos += snprintf(json + pos, MAX_JSON_BUF - (size_t)pos,
-                    "{\"messages\":[");
+    size_t pos = 0;
+    {
+        int n = snprintf(json + pos, MAX_JSON_BUF - pos, "{\"messages\":[");
+        if (n < 0) n = 0;
+        if ((size_t)n >= MAX_JSON_BUF - pos) { pos = MAX_JSON_BUF - 1; } else { pos += (size_t)n; }
+    }
 
     int first = 1;
-    for (int i = start; i < state.message_count; i++) {
+    for (int i = start; i < state.message_count && pos < MAX_JSON_BUF - 1; i++) {
         if (!first) {
             if (pos < MAX_JSON_BUF - 1) json[pos++] = ',';
         }
         first = 0;
 
         /* Write directly into remaining space in json buffer */
-        size_t remaining = MAX_JSON_BUF - (size_t)pos - 1;
+        size_t remaining = MAX_JSON_BUF - pos - 1;
+        if (remaining == 0) break;
         int mlen = json_message(&state.messages[i], i,
                                 json + pos, remaining);
         if (mlen > 0) {
-            pos += mlen;
+            pos += (size_t)mlen;
         }
     }
 
-    pos += snprintf(json + pos, MAX_JSON_BUF - (size_t)pos,
-                    "],\"total_count\":%d,\"participants\":[",
-                    state.message_count);
+    {
+        int n = snprintf(json + pos, MAX_JSON_BUF - pos,
+                         "],\"total_count\":%d,\"participants\":[",
+                         state.message_count);
+        if (n < 0) n = 0;
+        if ((size_t)n >= MAX_JSON_BUF - pos) { pos = MAX_JSON_BUF - 1; } else { pos += (size_t)n; }
+    }
 
-    for (int i = 0; i < state.participant_count; i++) {
+    for (int i = 0; i < state.participant_count && pos < MAX_JSON_BUF - 1; i++) {
         char handle_esc[MAX_HANDLE_LEN * 6 + 1];
         int esc_rc = json_escape(state.participants[i].handle,
                     handle_esc, sizeof(handle_esc));
         if (esc_rc < 0) continue; /* skip participant with too-long handle */
-        pos += snprintf(json + pos, MAX_JSON_BUF - (size_t)pos,
-                        "%s{\"handle\":\"%s\",\"count\":%d}",
-                        i > 0 ? "," : "",
-                        handle_esc, state.participants[i].count);
+        int n = snprintf(json + pos, MAX_JSON_BUF - pos,
+                         "%s{\"handle\":\"%s\",\"count\":%d}",
+                         i > 0 ? "," : "",
+                         handle_esc, state.participants[i].count);
+        if (n < 0) n = 0;
+        if ((size_t)n >= MAX_JSON_BUF - pos) { pos = MAX_JSON_BUF - 1; } else { pos += (size_t)n; }
     }
 
-    pos += snprintf(json + pos, MAX_JSON_BUF - (size_t)pos, "]}");
+    {
+        int n = snprintf(json + pos, MAX_JSON_BUF - pos, "]}");
+        if (n < 0) n = 0;
+        if ((size_t)n >= MAX_JSON_BUF - pos) { pos = MAX_JSON_BUF - 1; } else { pos += (size_t)n; }
+    }
 
-    send_response(fd, 200, "OK", "application/json", json, (size_t)pos);
+    send_response(fd, 200, "OK", "application/json", json, pos);
 
     free(json);
     chat_state_free(&state);
@@ -511,6 +554,11 @@ static void serve_json(int fd, const http_request_t *req) {
  */
 static int json_extract_string(const char *json, const char *key,
                                 char *out_buf, size_t out_size) {
+    ASSERT_MSG(json != NULL, "json_extract_string: json is NULL");
+    ASSERT_MSG(key != NULL, "json_extract_string: key is NULL");
+    ASSERT_MSG(out_buf != NULL, "json_extract_string: out_buf is NULL");
+    ASSERT_MSG(out_size > 0, "json_extract_string: out_size is 0");
+
     /* Build search pattern: "key":" */
     char pattern[128];
     int plen = snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
@@ -548,6 +596,9 @@ static int json_extract_string(const char *json, const char *key,
 }
 
 static void serve_send(int fd, const http_request_t *req) {
+    ASSERT_MSG(fd >= 0, "serve_send: invalid fd %d", fd);
+    ASSERT_MSG(req != NULL, "serve_send: req is NULL");
+
     if (req->body_len <= 0) {
         const char *err = "{\"error\":\"Empty request body\"}";
         send_response(fd, 400, "Bad Request", "application/json",
@@ -609,6 +660,10 @@ static void serve_send(int fd, const http_request_t *req) {
 
 static int send_sse_event(int fd, const char *event, int id,
                           const char *data) {
+    ASSERT_MSG(fd >= 0, "send_sse_event: invalid fd %d", fd);
+    ASSERT_MSG(event != NULL, "send_sse_event: event is NULL");
+    ASSERT_MSG(data != NULL, "send_sse_event: data is NULL");
+
     int n = dprintf(fd, "id: %d\nevent: %s\ndata: %s\n\n", id, event, data);
     return (n > 0) ? 0 : -1;
 }
@@ -641,6 +696,8 @@ static int send_sse_message_event(int fd, int index,
  * ================================================================ */
 
 static void server_loop(int listen_fd) {
+    ASSERT_MSG(listen_fd >= 0, "server_loop: invalid listen_fd %d", listen_fd);
+
     sse_client_t sse_clients[MAX_SSE_CLIENTS];
     int sse_count = 0;
     int last_known_count = 0;
@@ -687,7 +744,7 @@ static void server_loop(int listen_fd) {
 
         /* Handle new connections */
         if (fds[0].revents & POLLIN) {
-            struct sockaddr_in addr;
+            struct sockaddr_storage addr;
             socklen_t addrlen = sizeof(addr);
             int client_fd = accept(listen_fd, (struct sockaddr *)&addr,
                                    &addrlen);
@@ -872,15 +929,11 @@ int main(int argc, char **argv) {
             char *endptr;
             errno = 0;
             long val = strtol(argv[i] + 7, &endptr, 10);
-            if (errno != 0 || *endptr != '\0') {
-                fprintf(stderr, "Invalid --port value: %s\n", argv[i] + 7);
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > 65535) {
+                fprintf(stderr, "Invalid --port value: %s (must be 0-65535)\n", argv[i] + 7);
                 return 4;
             }
             port = (int)val;
-            if (port < 0 || port > 65535) {
-                fprintf(stderr, "Invalid port: %s\n", argv[i] + 7);
-                return 4;
-            }
         } else if (strncmp(argv[i], "--bind=", 7) == 0) {
             bind_addr = argv[i] + 7;
         } else if (strncmp(argv[i], "--last=", 7) == 0) {
@@ -891,8 +944,9 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Invalid --last value: %s\n", argv[i] + 7);
                 return 4;
             }
+            if (val > INT32_MAX) val = INT32_MAX;
+            if (val < -1) val = -1;
             g_initial_last = (int)val;
-            if (g_initial_last < 0) g_initial_last = -1;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             return 4;
@@ -931,8 +985,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "warning: sigaction(SIGTERM) failed: %s\n", strerror(errno));
     }
 
-    /* Ignore SIGPIPE (broken SSE connections) */
-    signal(SIGPIPE, SIG_IGN);
+    /* Ignore SIGPIPE (broken SSE connections) — use sigaction for consistency */
+    sa.sa_handler = SIG_IGN;
+    if (sigaction(SIGPIPE, &sa, NULL) != 0) {
+        fprintf(stderr, "warning: sigaction(SIGPIPE) failed: %s\n", strerror(errno));
+    }
 
     /* Create server socket — try IPv6 dual-stack first, fall back to IPv4 */
     int listen_fd = -1;

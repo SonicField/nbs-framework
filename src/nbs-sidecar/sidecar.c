@@ -26,6 +26,7 @@
 #include "mention_escape.h"
 #include "../nbs-common/nbs_assert.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,33 +80,49 @@ static void build_recovery_prompt(const sidecar_config_t *cfg,
     int has_chat = (registry_find_first(registry_path, "chat",
                                          chat_path, sizeof(chat_path)) == 0);
 
-    /* Build in pieces to avoid format-truncation warnings */
+    /* Build in pieces to avoid format-truncation warnings.
+     * Guard against snprintf returning negative (encoding error). */
     size_t off = 0;
-    off += (size_t)snprintf(out + off, out_size - off,
+    int sn;
+    sn = snprintf(out + off, out_size - off,
         "Your skills were lost after compaction. Please read these files "
         "to restore them: ");
-    if (off < out_size)
-        off += (size_t)snprintf(out + off, out_size - off,
+    if (sn > 0) off += (size_t)sn;
+    if (off < out_size) {
+        sn = snprintf(out + off, out_size - off,
             "%s/claude_tools/nbs-notify.md, ", cfg->nbs_root);
-    if (off < out_size)
-        off += (size_t)snprintf(out + off, out_size - off,
+        if (sn > 0) off += (size_t)sn;
+    }
+    if (off < out_size) {
+        sn = snprintf(out + off, out_size - off,
             "%s/claude_tools/nbs-teams-chat.md, ", cfg->nbs_root);
-    if (off < out_size)
-        off += (size_t)snprintf(out + off, out_size - off,
+        if (sn > 0) off += (size_t)sn;
+    }
+    if (off < out_size) {
+        sn = snprintf(out + off, out_size - off,
             "%s/claude_tools/nbs-poll.md. ", cfg->nbs_root);
-    if (off < out_size)
-        off += (size_t)snprintf(out + off, out_size - off,
+        if (sn > 0) off += (size_t)sn;
+    }
+    if (off < out_size) {
+        sn = snprintf(out + off, out_size - off,
             "Your handle is '%s'.", cfg->handle);
+        if (sn > 0) off += (size_t)sn;
+    }
     if (has_chat && off < out_size) {
         /* Truncation is intentional — chat_path may be long */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
-        off += (size_t)snprintf(out + off, out_size - off,
+        sn = snprintf(out + off, out_size - off,
             " Then send a message to %s confirming skills restored.",
             chat_path);
+        if (sn > 0) off += (size_t)sn;
 #pragma GCC diagnostic pop
     }
     (void)off;
+
+    /* Postcondition: output must be non-empty */
+    ASSERT_MSG(out[0] != '\0',
+               "build_recovery_prompt: output is empty");
 }
 
 /* --- Interrupt handler --- */
@@ -116,6 +133,10 @@ static void build_recovery_prompt(const sidecar_config_t *cfg,
  */
 static void handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
                               const char *registry_path) {
+    ASSERT_MSG(tp != NULL, "handle_interrupt: tp is NULL");
+    ASSERT_MSG(cfg != NULL, "handle_interrupt: cfg is NULL");
+    ASSERT_MSG(registry_path != NULL, "handle_interrupt: registry_path is NULL");
+
     time_t start = time(NULL);
     int succeeded = 0;
 
@@ -176,6 +197,10 @@ done:
  */
 static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
                            const char *registry_path) {
+    ASSERT_MSG(tp != NULL, "handle_query: tp is NULL");
+    ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
+    ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
+
     char *content = tp->capture(tp, 8);
     if (!content) return;
 
@@ -190,6 +215,9 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
         char *nl = strchr(line, '\n');
         size_t llen = nl ? (size_t)(nl - line) : strlen(line);
         size_t capped = llen > 80 ? 80 : llen;
+        /* Guard against size_t underflow: if toff is within 2 bytes of
+         * the buffer end, the subtraction would wrap unsigned. */
+        if (toff + 2 >= sizeof(truncated)) break;
         size_t space = sizeof(truncated) - toff - 2;
         if (capped > space) break;
         memcpy(truncated + toff, line, capped);
@@ -203,6 +231,11 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
     /* Escape @ signs to prevent mention feedback loops */
     sanitise_at_signs(truncated);
     char *escaped = escape_mentions(truncated);
+    if (!escaped) {
+        fprintf(stderr, "handle_query: escape_mentions returned NULL\n");
+        free(content);
+        return;
+    }
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
@@ -228,9 +261,16 @@ static void respond_dialogue(transport_t *tp,
 
     char option_str[4];
     snprintf(option_str, sizeof(option_str), "%d", resp->option);
-    tp->send_text(tp, option_str);
+    if (tp->send_text(tp, option_str) != 0) {
+        fprintf(stderr, "respond_dialogue: send_text failed for option %d\n",
+                resp->option);
+        return;
+    }
     usleep(500000);
-    tp->send_key(tp, "Enter");
+    if (tp->send_key(tp, "Enter") != 0) {
+        fprintf(stderr, "respond_dialogue: send_key Enter failed\n");
+        return;
+    }
     sleep(resp->settle_secs);
 }
 
@@ -316,9 +356,11 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         }
     }
 
-    /* Apply cooldown (critical and mentions bypass) */
+    /* Apply cooldown (critical and mentions bypass).
+     * Use time_t for elapsed to avoid int overflow when last_notify_time
+     * is 0 (memset-initialised) — (now - 0) overflows int on 64-bit. */
     now = time(NULL);
-    int elapsed = (int)(now - state->last_notify_time);
+    time_t elapsed = now - state->last_notify_time;
 
     if (strcmp(state->bus_max_priority, "critical") != 0 &&
         state->mention_detected != 1 &&
@@ -382,9 +424,21 @@ int sidecar_config_validate(const sidecar_config_t *cfg) {
     if (cfg->handle[0] == '\0') {
         fprintf(stderr, "config error: handle is empty\n");
         ok = 0;
+    } else {
+        /* Validate handle format: ^[a-zA-Z0-9_-]+$ (sidecar.h invariant) */
+        for (const char *p = cfg->handle; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') {
+                fprintf(stderr, "config error: handle contains invalid char '%c'\n", *p);
+                ok = 0;
+                break;
+            }
+        }
     }
     if (cfg->nbs_root[0] == '\0') {
         fprintf(stderr, "config error: nbs_root is empty\n");
+        ok = 0;
+    } else if (cfg->nbs_root[0] != '/') {
+        fprintf(stderr, "config error: nbs_root must be an absolute path\n");
         ok = 0;
     }
     if (cfg->bus_check_interval <= 0) {
@@ -393,6 +447,14 @@ int sidecar_config_validate(const sidecar_config_t *cfg) {
     }
     if (cfg->notify_fail_threshold <= 0) {
         fprintf(stderr, "config error: notify_fail_threshold must be > 0\n");
+        ok = 0;
+    }
+    if (cfg->notify_cooldown < 0) {
+        fprintf(stderr, "config error: notify_cooldown must be >= 0\n");
+        ok = 0;
+    }
+    if (cfg->startup_grace < 0) {
+        fprintf(stderr, "config error: startup_grace must be >= 0\n");
         ok = 0;
     }
 
@@ -432,9 +494,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (!content) continue;
 
         if (detect_prompt_visible(content)) {
-            tp->send_text(tp, cfg->initial_prompt);
+            if (tp->send_text(tp, cfg->initial_prompt) != 0) {
+                fprintf(stderr, "sidecar_run: initial prompt send_text failed\n");
+            }
             usleep(300000);
-            tp->send_key(tp, "Enter");
+            if (tp->send_key(tp, "Enter") != 0) {
+                fprintf(stderr, "sidecar_run: initial prompt send_key Enter failed\n");
+            }
             /* Wait for initial prompt to be consumed.
              * Cap at startup_grace — with grace=0 we want fast start. */
             int init_settle = (cfg->startup_grace < 5)
@@ -451,9 +517,35 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         free(content);
     }
 
+    /* Enforce sidecar_start_time invariant (sidecar.h line 83):
+     * must be > 0 after the init-wait phase. If the prompt was never found
+     * (init-wait timed out), set it now so startup_grace works correctly. */
+    if (state.sidecar_start_time == 0) {
+        fprintf(stderr, "sidecar_run: init-wait timed out without finding prompt, "
+                "setting start_time now\n");
+        state.sidecar_start_time = time(NULL);
+        state.last_flush_time = state.sidecar_start_time;
+        state.last_poll_time = state.sidecar_start_time;
+        state.last_fixup_check = state.sidecar_start_time;
+    }
+    ASSERT_MSG(state.sidecar_start_time > 0,
+               "sidecar_run: sidecar_start_time invariant violated after init");
+
     /* Main loop */
     while (1) {
         sleep(1);
+
+        /* Periodic state invariant verification (sidecar.h lines 80-84).
+         * Detects corruption from integer overflow or logic errors. */
+        ASSERT_MSG(state.idle_seconds >= 0,
+                   "invariant: idle_seconds went negative: %d",
+                   state.idle_seconds);
+        ASSERT_MSG(state.bus_check_counter >= 0,
+                   "invariant: bus_check_counter went negative: %d",
+                   state.bus_check_counter);
+        ASSERT_MSG(state.notify_fail_count >= 0,
+                   "invariant: notify_fail_count went negative: %d",
+                   state.notify_fail_count);
 
         /* Check control inbox */
         int inbox_rc = registry_process_inbox(inbox_path, registry_path,

@@ -8,6 +8,7 @@ OBJS = $(SRCS:.c=.o)
 TARGET = nbs-pty-session
 
 ASSERT_CHECK = assert_check
+TEST_TARGET = test_pty_session
 
 .PHONY: all clean install test
 
@@ -19,6 +20,9 @@ $(TARGET): $(OBJS)
 $(ASSERT_CHECK): assert_check.c
 	$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_TARGET): test_pty_session.c main.c session.c session.h
+	$(CC) $(COMMON_CFLAGS) -O2 -DTEST_BUILD -I../nbs-common -o $@ test_pty_session.c main.c session.c
+
 %.o: %.c
 	$(CC) $(CFLAGS) -I../nbs-common -c -o $@ $<
 
@@ -26,8 +30,9 @@ install: all
 	mkdir -p $(BIN_DIR)
 	cp $(TARGET) $(BIN_DIR)/pty-session
 
-test: all install
+test: all install $(TEST_TARGET)
 	./$(ASSERT_CHECK)
+	./$(TEST_TARGET)
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(ASSERT_CHECK)
+	rm -f $(OBJS) $(TARGET) $(ASSERT_CHECK) $(TEST_TARGET)

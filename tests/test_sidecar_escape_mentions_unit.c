@@ -17,9 +17,22 @@
  *  11. Integration: escaped output yields 0 mentions from bus_extract_mentions
  *
  * sanitise_at_signs:
- *  12. All @ replaced with \xc0
+ *  12. All @ replaced with '#'
  *  13. String with no @ is unchanged
  *  14. Empty string is unchanged
+ *
+ * Sync check:
+ *  15. escape_mentions and bus_extract_mentions agree on all 256 bytes
+ *
+ * Adversarial tests (SECURITY fix for \xc0 → '#'):
+ *  16. Replacement char '#' is valid printable ASCII
+ *  17. sanitise_at_signs output is valid UTF-8 (no invalid lead bytes)
+ *  18. sanitise_at_signs preserves string length exactly
+ *  19. Integration: sanitised output yields 0 mentions from bus_extract_mentions
+ *
+ * Postcondition assertion tests:
+ *  20. sanitise_at_signs postcondition: no '@' in output (all-@ string)
+ *  21. escape_mentions postcondition: output length matches expected
  */
 
 #include "../src/nbs-sidecar/mention_escape.h"
@@ -141,12 +154,13 @@ int main(void) {
 
     /* --- sanitise_at_signs tests --- */
 
-    /* 12. All @ replaced with \xc0 */
+    /* 12. All @ replaced with '#' (was \xc0 — changed to valid ASCII
+     * to fix SECURITY violation: \xc0 is an invalid UTF-8 lead byte) */
     {
         char buf[] = "@alice and @bob";
         sanitise_at_signs(buf);
-        CHECK("sanitise replaces all @",
-              buf[0] == '\xc0' && buf[11] == '\xc0');
+        CHECK("sanitise replaces all @ with #",
+              buf[0] == '#' && buf[11] == '#');
         /* Verify no @ remain */
         int found_at = 0;
         for (size_t i = 0; i < strlen(buf); i++) {
@@ -183,7 +197,7 @@ int main(void) {
             char input[8];
             input[0] = '@';
             input[1] = (char)c;
-            input[2] = 'x';  /* Need ≥1 more handle char so extraction proceeds */
+            input[2] = 'x';  /* Need >=1 more handle char so extraction proceeds */
             input[3] = '\0';
 
             /* Does escape_mentions escape the @ ? */
@@ -214,6 +228,88 @@ int main(void) {
         }
         CHECK("sync: escape_mentions matches bus_extract_mentions for all 256 bytes",
               sync_failures == 0);
+    }
+
+    /* --- Adversarial tests for SECURITY fix (\xc0 → '#') --- */
+
+    /* 16. Replacement character '#' is valid printable ASCII.
+     * This test falsifies the claim that the replacement is encoding-safe
+     * by checking every replaced byte is in the printable ASCII range. */
+    {
+        char buf[] = "@test @more @data";
+        sanitise_at_signs(buf);
+        int all_valid = 1;
+        for (size_t i = 0; buf[i] != '\0'; i++) {
+            unsigned char b = (unsigned char)buf[i];
+            /* Every byte must be valid printable ASCII or whitespace */
+            if (b < 0x20 && b != '\n' && b != '\t') {
+                all_valid = 0;
+            }
+            /* No byte should be an invalid UTF-8 lead byte */
+            if (b == 0xC0 || b == 0xC1) {
+                all_valid = 0;
+            }
+        }
+        CHECK("replacement char is valid printable ASCII", all_valid);
+    }
+
+    /* 17. Replacement character is not a handle char.
+     * If the replacement were a handle char, sanitise_at_signs followed by
+     * escape_mentions would not be a no-op — escape_mentions would find
+     * patterns to escape. */
+    {
+        char buf[] = "@alice";
+        sanitise_at_signs(buf);
+        /* After sanitisation, escape_mentions should be a no-op */
+        char *escaped = escape_mentions(buf);
+        CHECK("sanitised output is no-op for escape_mentions",
+              strcmp(buf, escaped) == 0);
+        free(escaped);
+    }
+
+    /* 18. sanitise_at_signs preserves string length exactly */
+    {
+        char buf[] = "@@@@@@@@@@";  /* 10 @ signs */
+        size_t orig_len = strlen(buf);
+        sanitise_at_signs(buf);
+        CHECK("sanitise preserves length", strlen(buf) == orig_len);
+        /* Verify all became '#' */
+        int all_hash = 1;
+        for (size_t i = 0; i < orig_len; i++) {
+            if (buf[i] != '#') all_hash = 0;
+        }
+        CHECK("all @ became #", all_hash);
+    }
+
+    /* 19. Integration: sanitised output yields 0 mentions */
+    {
+        char buf[] = "@worker? @tester! @scribe hello";
+        sanitise_at_signs(buf);
+        char handles[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
+        int flags[MAX_MENTIONS];
+        int count = bus_extract_mentions(buf, handles, MAX_MENTIONS, flags);
+        CHECK("integration: sanitised yields 0 mentions", count == 0);
+    }
+
+    /* 20. sanitise_at_signs postcondition: all-@ string has no @ left */
+    {
+        char buf[] = "@@@@@";
+        sanitise_at_signs(buf);
+        int found_at = 0;
+        for (size_t i = 0; buf[i] != '\0'; i++) {
+            if (buf[i] == '@') found_at = 1;
+        }
+        CHECK("postcondition: all-@ string has no @ left", !found_at);
+    }
+
+    /* 21. escape_mentions postcondition: output length for many @mentions */
+    {
+        /* Each @ before a handle char adds exactly 1 byte (\) */
+        char *out = escape_mentions("@a @b @c @d @e");
+        size_t expected_len = strlen("@a @b @c @d @e") + 5;  /* 5 @-before-handle */
+        CHECK("postcondition: escape output length matches",
+              strlen(out) == expected_len);
+        free(out);
     }
 
     printf("%d/%d passed\n", tests - fails, tests);

@@ -1,36 +1,45 @@
 #!/bin/bash
 # Test: bin/nbs-chat-init audit violation fixes
 #
-# Integration tests for the 14 violations fixed in bin/nbs-chat-init:
+# Integration tests for all audit violations fixed in bin/nbs-chat-init.
 #
-# SECURITY (3):
-#   1. Unquoted glob + ls + xargs replaced with find -print0
-#   2. --dangerously-skip-permissions documented (code inspection only)
-#   3. CHAT_NAME validated against ^[a-zA-Z0-9_-]+$
+# SECURITY:
+#   - Unquoted glob + ls + xargs replaced with find -print0
+#   - --dangerously-skip-permissions documented (code inspection only)
+#   - CHAT_NAME validated against ^[a-zA-Z0-9_-]+$
+#   - PROJECT_NAME validated against ^[a-zA-Z0-9_. -]+$
 #
-# BUG (4):
-#   4. nbs-bus publish return value checked
-#   5. nbs-chat create/send return values checked
-#   6. || true replaced with proper error handling
-#   7. mv/cat bypass of run() documented or routed through run()
+# BUG:
+#   - nbs-bus publish return value checked
+#   - nbs-chat create/send return values checked
+#   - || true replaced with proper error handling
+#   - mv/cat bypass of run() documented or routed through run()
+#   - echo -e in run() replaced with printf (portability)
+#   - Corrupt archive headers now warn instead of silently masking
+#   - tmux new-session return values checked
+#   - Main Claude spawned with NBS_HANDLE=claude
 #
-# HARDENING (7):
-#   8.  PROJECT_ROOT validated as directory
-#   9.  $* already quoted inside double-quoted echo (no-op — verified by inspection)
-#   10. sha256sum failure checked
-#   11. Derived paths resolved to absolute
-#   12. Arithmetic vars use ${var:-0} defaults
-#   13. nbs-bus ack failure logged as warning
-#   14. assert_tool_exists added for sha256sum, date, grep, sed, basename
-#
-# Some violations (2, 7, 9, 12) are structural/code-inspection only. These
-# tests verify the externally observable fixes.
+# HARDENING:
+#   - PROJECT_ROOT validated as directory
+#   - sha256sum failure checked
+#   - Derived paths resolved to absolute
+#   - Arithmetic vars use ${var:-0} defaults
+#   - nbs-bus ack failure logged as warning
+#   - assert_tool_exists added for sha256sum, date, grep, sed, basename
+#   - All echo -e replaced with printf throughout
+#   - date +%s return value checked
+#   - tmux send-keys return values checked
+#   - Main Claude has readiness wait loop
+#   - Summary uses absolute paths
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 NBS_CHAT_INIT="${PROJECT_ROOT}/bin/nbs-chat-init"
+
+# Add bin/ to PATH so tools are found for dry-run mode
+export PATH="${PROJECT_ROOT}/bin:$PATH"
 
 # Verify script exists
 if [[ ! -x "$NBS_CHAT_INIT" ]]; then
@@ -69,7 +78,7 @@ echo "1. CHAT_NAME validation (Violation 3: SECURITY)..."
 set +e
 
 # Valid names should be accepted (dry-run to avoid needing real tools)
-VALID_OUT=$("$NBS_CHAT_INIT" --name=valid-name_123 --dry-run 2>&1)
+VALID_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name=valid-name_123 --dry-run --force 2>&1)
 VALID_RC=$?
 check "Valid CHAT_NAME accepted (alphanumeric, hyphen, underscore)" \
     "$( [[ "$VALID_RC" -eq 0 ]] && echo pass || echo fail )"
@@ -113,23 +122,53 @@ set -e
 echo ""
 
 # ============================================================
-# Test 2: PROJECT_ROOT validation (Violation 8: HARDENING)
+# Test 2: PROJECT_NAME validation (Audit SECURITY)
 # ============================================================
-echo "2. PROJECT_ROOT validation (Violation 8: HARDENING)..."
+echo "2. PROJECT_NAME validation (Audit SECURITY)..."
 
-# The script resolves PROJECT_ROOT from pwd. We verify the validation
-# exists by checking the source for assert_directory_exists.
+# Source inspection: validate_project_name function exists
+check "validate_project_name function exists" \
+    "$( grep -q 'validate_project_name()' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+check "validate_project_name called after PROJECT_NAME resolution" \
+    "$( grep -q 'validate_project_name "\$PROJECT_NAME"' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+
+set +e
+
+# PROJECT_NAME with shell metacharacters should be rejected
+PROJNAME_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name=test --project-name='$(whoami)' --dry-run --force 2>&1)
+PROJNAME_RC=$?
+check "PROJECT_NAME with \$(whoami) rejected" \
+    "$( [[ "$PROJNAME_RC" -eq 4 ]] && echo pass || echo fail )"
+
+PROJNAME2_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name=test --project-name='test;evil' --dry-run --force 2>&1)
+PROJNAME2_RC=$?
+check "PROJECT_NAME with semicolon rejected" \
+    "$( [[ "$PROJNAME2_RC" -eq 4 ]] && echo pass || echo fail )"
+
+# Valid PROJECT_NAMEs (with dots, spaces, hyphens, underscores) should be accepted
+PROJNAME3_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name=test --project-name='My Project v2.1' --dry-run --force 2>&1)
+PROJNAME3_RC=$?
+check "PROJECT_NAME with spaces and dots accepted" \
+    "$( [[ "$PROJNAME3_RC" -eq 0 ]] && echo pass || echo fail )"
+
+set -e
+echo ""
+
+# ============================================================
+# Test 3: PROJECT_ROOT validation (Violation 8: HARDENING)
+# ============================================================
+echo "3. PROJECT_ROOT validation (Violation 8: HARDENING)..."
+
 check "Source contains PROJECT_ROOT validation" \
     "$( grep -q 'assert_directory_exists.*PROJECT_ROOT' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 3: Derived paths are absolute (Violation 11: HARDENING)
+# Test 4: Derived paths are absolute (Violation 11: HARDENING)
 # ============================================================
-echo "3. Derived paths are absolute (Violation 11: HARDENING)..."
+echo "4. Derived paths are absolute (Violation 11: HARDENING)..."
 
-# Check that CHAT_FILE and SCRIBE_LOG use PROJECT_ROOT prefix
 check "CHAT_FILE uses absolute path" \
     "$( grep -q 'CHAT_FILE="\${PROJECT_ROOT}/' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 check "SCRIBE_LOG uses absolute path" \
@@ -140,9 +179,9 @@ check "PROJECT_ROOT resolved via pwd -P" \
 echo ""
 
 # ============================================================
-# Test 4: assert_tool_exists for all required binaries (Violation 14: HARDENING)
+# Test 5: assert_tool_exists for all required binaries (Violation 14: HARDENING)
 # ============================================================
-echo "4. assert_tool_exists for required binaries (Violation 14: HARDENING)..."
+echo "5. assert_tool_exists for required binaries (Violation 14: HARDENING)..."
 
 for tool in nbs-chat nbs-bus sha256sum date grep sed basename; do
     check "assert_tool_exists for $tool" \
@@ -158,9 +197,9 @@ check "assert_tool_exists for nbs-claude (conditional)" \
 echo ""
 
 # ============================================================
-# Test 5: sha256sum failure checked (Violation 10: HARDENING)
+# Test 6: sha256sum failure checked (Violation 10: HARDENING)
 # ============================================================
-echo "5. sha256sum failure checked (Violation 10: HARDENING)..."
+echo "6. sha256sum failure checked (Violation 10: HARDENING)..."
 
 check "generate_project_id checks sha256sum return" \
     "$( grep -A5 'generate_project_id' "$NBS_CHAT_INIT" | grep -q 'sha256sum.*||' && echo pass || echo fail )"
@@ -168,28 +207,25 @@ check "generate_project_id checks sha256sum return" \
 echo ""
 
 # ============================================================
-# Test 6: nbs-bus publish failure handling (Violations 4, 6: BUG)
+# Test 7: nbs-bus publish failure handling (Violations 4, 6: BUG)
 # ============================================================
-echo "6. nbs-bus publish failure handling (Violations 4, 6: BUG)..."
+echo "7. nbs-bus publish failure handling (Violations 4, 6: BUG)..."
 
-# Self-test publish should check return value
 check "Self-test publish checks return value" \
     "$( grep -q 'if ! nbs-bus publish.*self-test' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
-# || true should be removed
 check "No || true after nbs-bus publish" \
     "$( grep 'nbs-bus publish' "$NBS_CHAT_INIT" | grep -q '|| true' && echo fail || echo pass )"
 
-# ai-spawned publish should check return value
 check "ai-spawned publish checks return value" \
     "$( grep -q 'if ! nbs-bus publish.*ai-spawned' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 7: nbs-chat create/send failure handling (Violation 5: BUG)
+# Test 8: nbs-chat create/send failure handling (Violation 5: BUG)
 # ============================================================
-echo "7. nbs-chat create/send failure handling (Violation 5: BUG)..."
+echo "8. nbs-chat create/send failure handling (Violation 5: BUG)..."
 
 check "nbs-chat create checks return value" \
     "$( grep -q 'if ! nbs-chat create' "$NBS_CHAT_INIT" && echo pass || echo fail )"
@@ -199,9 +235,9 @@ check "nbs-chat send checks return value" \
 echo ""
 
 # ============================================================
-# Test 8: nbs-bus ack failure logged (Violation 13: HARDENING)
+# Test 9: nbs-bus ack failure logged (Violation 13: HARDENING)
 # ============================================================
-echo "8. nbs-bus ack failure logged (Violation 13: HARDENING)..."
+echo "9. nbs-bus ack failure logged (Violation 13: HARDENING)..."
 
 check "nbs-bus ack checks return value" \
     "$( grep -q 'if ! nbs-bus ack' "$NBS_CHAT_INIT" && echo pass || echo fail )"
@@ -211,23 +247,24 @@ check "nbs-bus ack failure produces warning" \
 echo ""
 
 # ============================================================
-# Test 9: find -print0 replaces ls + xargs (Violation 1: SECURITY)
+# Test 10: find -print0 replaces ls + xargs (Violation 1: SECURITY)
 # ============================================================
-echo "9. find -print0 replaces ls + xargs (Violation 1: SECURITY)..."
+echo "10. find -print0 replaces ls + xargs (Violation 1: SECURITY)..."
 
 check "No unquoted ls glob for event files" \
     "$( grep 'ls .nbs/events/\*' "$NBS_CHAT_INIT" && echo fail || echo pass )"
-check "find -print0 used instead" \
-    "$( grep -q 'find .nbs/events/.*-print0' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+# The find command uses absolute path ${PROJECT_ROOT}/.nbs/events/
+check "find -print0 used for event file search" \
+    "$( grep -q 'find.*\.nbs/events/.*-print0' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 check "xargs -0 used with find" \
     "$( grep -q 'xargs -0' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 10: --dangerously-skip-permissions documented (Violation 2: SECURITY)
+# Test 11: --dangerously-skip-permissions documented (Violation 2: SECURITY)
 # ============================================================
-echo "10. --dangerously-skip-permissions documented (Violation 2: SECURITY)..."
+echo "11. --dangerously-skip-permissions documented (Violation 2: SECURITY)..."
 
 check "Security risk comment present" \
     "$( grep -q 'SECURITY RISK' "$NBS_CHAT_INIT" && echo pass || echo fail )"
@@ -239,29 +276,26 @@ check "Comment references architectural decision" \
 echo ""
 
 # ============================================================
-# Test 11: mv/cat bypass documented or routed through run() (Violation 7: BUG)
+# Test 12: mv/cat bypass documented or routed through run() (Violation 7: BUG)
 # ============================================================
-echo "11. mv/cat bypass of run() documented or fixed (Violation 7: BUG)..."
+echo "12. mv/cat bypass of run() documented or fixed (Violation 7: BUG)..."
 
-# The mv in compact_decision_log should go through run()
 check "Compaction mv routed through run()" \
     "$( grep -q 'run mv.*log_file.*archive_file' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
-# cat heredocs should have documentation comments
 BYPASS_COMMENTS=$(grep -c 'cat heredoc bypasses run()' "$NBS_CHAT_INIT")
 check "cat heredoc bypass comments present (>= 3)" \
     "$( [[ "$BYPASS_COMMENTS" -ge 3 ]] && echo pass || echo fail )"
 
-# echo redirect should be documented
 check "echo redirect bypass documented" \
     "$( grep -q 'echo redirect bypasses run()' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 12: Arithmetic defaults (Violation 12: HARDENING)
+# Test 13: Arithmetic defaults (Violation 12: HARDENING)
 # ============================================================
-echo "12. Arithmetic defaults (Violation 12: HARDENING)..."
+echo "13. Arithmetic defaults (Violation 12: HARDENING)..."
 
 check "wait_count uses \${var:-0} form" \
     "$( grep -q '\${wait_count:-0}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
@@ -273,9 +307,106 @@ check "entry_count uses \${var:-0} form" \
 echo ""
 
 # ============================================================
-# Test 13: Dry-run mode still works (regression)
+# Test 14: echo -e portability fix (Audit BUG + HARDENING)
 # ============================================================
-echo "13. Dry-run mode regression..."
+echo "14. echo -e portability fix (Audit BUG + HARDENING)..."
+
+# No echo -e should remain in the script (except in comments)
+ECHO_E_COUNT=$(grep -c '^[^#]*echo -e' "$NBS_CHAT_INIT" || true)
+check "No echo -e in executable code (found $ECHO_E_COUNT)" \
+    "$( [[ "$ECHO_E_COUNT" -eq 0 ]] && echo pass || echo fail )"
+
+# run() should use printf, not echo -e
+check "run() uses printf for dry-run output" \
+    "$( grep -A5 '^run()' "$NBS_CHAT_INIT" | grep -q 'printf' && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 15: Corrupt archive header warning (Audit BUG)
+# ============================================================
+echo "15. Corrupt archive header warning (Audit BUG)..."
+
+check "compact_decision_log warns on missing Project: header" \
+    "$( grep -A3 'project_name=.*grep' "$NBS_CHAT_INIT" | grep -q 'warn.*missing.*Project' && echo pass || echo fail )"
+check "compact_decision_log warns on missing Chat: header" \
+    "$( grep -A3 'chat_ref=.*grep' "$NBS_CHAT_INIT" | grep -q 'warn.*missing.*Chat' && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 16: tmux new-session return values checked (Audit BUG)
+# ============================================================
+echo "16. tmux new-session return values checked (Audit BUG)..."
+
+# All three spawn paths should check tmux new-session
+TMUX_NEW_CHECKS=$(grep -c 'if ! tmux new-session' "$NBS_CHAT_INIT" || true)
+check "tmux new-session checked in all spawn paths (found $TMUX_NEW_CHECKS, expect 3)" \
+    "$( [[ "$TMUX_NEW_CHECKS" -ge 3 ]] && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 17: Main Claude spawned with NBS_HANDLE (Audit BUG)
+# ============================================================
+echo "17. Main Claude spawned with NBS_HANDLE (Audit BUG)..."
+
+check "Main Claude spawn includes NBS_HANDLE=claude" \
+    "$( grep -q 'NBS_HANDLE=claude nbs-claude' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 18: tmux send-keys return values checked (Audit HARDENING)
+# ============================================================
+echo "18. tmux send-keys return values checked (Audit HARDENING)..."
+
+# Check that send-keys for launch commands and prompts are guarded
+SENDKEYS_CHECKS=$(grep -c 'if ! tmux send-keys' "$NBS_CHAT_INIT" || true)
+check "tmux send-keys checked (found $SENDKEYS_CHECKS, expect >= 4)" \
+    "$( [[ "$SENDKEYS_CHECKS" -ge 4 ]] && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 19: Main Claude has readiness wait loop (Audit HARDENING)
+# ============================================================
+echo "19. Main Claude has readiness wait loop (Audit HARDENING)..."
+
+# After the Claude spawn section, there should be a wait loop with 'handle is' check
+# We look for 'Claude CLI did not become ready' which is the timeout message
+check "Claude spawn has readiness wait loop" \
+    "$( grep -q 'Claude CLI did not become ready' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 20: Summary uses absolute paths (Audit HARDENING)
+# ============================================================
+echo "20. Summary uses absolute paths (Audit HARDENING)..."
+
+# Bus and Config lines in summary should not use bare relative paths
+check "Bus summary uses absolute path" \
+    "$( grep 'Bus:' "$NBS_CHAT_INIT" | grep -q 'PROJECT_ROOT' && echo pass || echo fail )"
+check "Config summary uses absolute path" \
+    "$( grep 'Config:' "$NBS_CHAT_INIT" | grep -q 'PROJECT_ROOT' && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 21: date +%s return value checked (Audit HARDENING)
+# ============================================================
+echo "21. date +%s return value checked (Audit HARDENING)..."
+
+check "date +%s checked in self-test" \
+    "$( grep -A3 'self_test_ts' "$NBS_CHAT_INIT" | grep -q 'date +%s.*||' && echo pass || echo fail )"
+
+echo ""
+
+# ============================================================
+# Test 22: Dry-run mode still works (regression)
+# ============================================================
+echo "22. Dry-run mode regression..."
 
 # Run with dry-run — should produce output without error
 # (This exercises most code paths without needing nbs-bus/nbs-chat)
@@ -296,9 +427,9 @@ check "Dry-run shows absolute chat path" \
 echo ""
 
 # ============================================================
-# Test 14: Unknown argument rejection (regression)
+# Test 23: Unknown argument rejection (regression)
 # ============================================================
-echo "14. Unknown argument rejection (regression)..."
+echo "23. Unknown argument rejection (regression)..."
 
 set +e
 UNKNOWN_OUT=$("$NBS_CHAT_INIT" --name=test --bogus-arg 2>&1)
@@ -313,9 +444,9 @@ check "Unknown argument mentioned in error" \
 echo ""
 
 # ============================================================
-# Test 15: Help still works (regression)
+# Test 24: Help still works (regression)
 # ============================================================
-echo "15. Help output (regression)..."
+echo "24. Help output (regression)..."
 
 set +e
 HELP_OUT=$("$NBS_CHAT_INIT" --help 2>&1)
@@ -330,9 +461,9 @@ check "Help shows usage" \
 echo ""
 
 # ============================================================
-# Test 16: Adversarial CHAT_NAME edge cases
+# Test 25: Adversarial CHAT_NAME edge cases
 # ============================================================
-echo "16. Adversarial CHAT_NAME edge cases..."
+echo "25. Adversarial CHAT_NAME edge cases..."
 
 set +e
 
@@ -342,15 +473,16 @@ NL_RC=$?
 check "CHAT_NAME with newline rejected" \
     "$( [[ "$NL_RC" -eq 4 ]] && echo pass || echo fail )"
 
-# Null bytes (shell will typically strip these, but verify no crash)
-NULL_OUT=$("$NBS_CHAT_INIT" --name=$'test\x00name' --dry-run 2>&1)
+# Null bytes — bash strips null bytes, so $'test\x00name' becomes 'testname'
+# which is alphanumeric-only and should be accepted. The test verifies no crash.
+NULL_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name=$'test\x00name' --dry-run --force 2>&1)
 NULL_RC=$?
-check "CHAT_NAME with null byte does not crash" \
+check "CHAT_NAME with null byte does not crash (exits 0 or 4)" \
     "$( [[ "$NULL_RC" -eq 4 || "$NULL_RC" -eq 0 ]] && echo pass || echo fail )"
 
 # Very long name (100 chars — should be accepted)
 LONG_NAME=$(printf 'a%.0s' {1..100})
-LONG_OUT=$("$NBS_CHAT_INIT" --name="$LONG_NAME" --dry-run --force 2>&1)
+LONG_OUT=$(cd "$TEST_DIR" && "$NBS_CHAT_INIT" --name="$LONG_NAME" --dry-run --force 2>&1)
 LONG_RC=$?
 check "100-char alphanumeric CHAT_NAME accepted" \
     "$( [[ "$LONG_RC" -eq 0 ]] && echo pass || echo fail )"

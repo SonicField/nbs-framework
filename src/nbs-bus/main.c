@@ -71,16 +71,23 @@ static void print_usage(void)
     );
 }
 
-/* Parse --handle=<name> from argv. Returns handle string or NULL. */
-static const char *parse_handle_opt(int argc, char **argv, int start)
+/* Parse --handle=<name> from argv. Returns handle string, NULL if not
+ * specified, or sets *error = 1 if --handle= is empty. */
+static const char *parse_handle_opt(int argc, char **argv, int start, int *error)
 {
     ASSERT_MSG(argv != NULL, "parse_handle_opt: argv is NULL");
     ASSERT_MSG(start >= 0 && start <= argc,
                "parse_handle_opt: start %d out of range [0, %d]", start, argc);
+    ASSERT_MSG(error != NULL, "parse_handle_opt: error is NULL");
+    *error = 0;
     for (int i = start; i < argc; i++) {
         if (strncmp(argv[i], "--handle=", 9) == 0) {
             const char *h = argv[i] + 9;
-            if (h[0] == '\0') return NULL;
+            if (h[0] == '\0') {
+                fprintf(stderr, "Error: --handle value must not be empty\n");
+                *error = 1;
+                return NULL;
+            }
             return h;
         }
     }
@@ -140,13 +147,15 @@ static long long parse_dedup_window_opt(int argc, char **argv, int start,
     return cfg_default_us;
 }
 
-/* Verify events directory exists, print appropriate error if not. */
+/* Verify events directory exists, print appropriate error if not.
+ * HARDENING #8: stores strlen(dir) in a local to avoid double evaluation. */
 static int verify_events_dir(const char *dir)
 {
     ASSERT_MSG(dir != NULL, "verify_events_dir: dir is NULL");
-    if (strlen(dir) >= BUS_MAX_PATH) {
+    size_t dir_len = strlen(dir);
+    if (dir_len >= BUS_MAX_PATH) {
         fprintf(stderr, "Error: directory path too long (%zu >= %d): %s\n",
-                strlen(dir), BUS_MAX_PATH, dir);
+                dir_len, BUS_MAX_PATH, dir);
         return BUS_EXIT_BAD_ARGS;
     }
     struct stat st;
@@ -182,12 +191,59 @@ static int validate_non_empty_no_whitespace(const char *s, const char *label)
     return 0;
 }
 
+/* Validate that a handle (from --handle=) is safe: non-empty, no whitespace,
+ * no path separators. Returns 0 if valid, -1 if invalid. */
+static int validate_handle(const char *handle)
+{
+    if (handle == NULL) return 0; /* NULL = no filter, acceptable */
+    if (validate_non_empty_no_whitespace(handle, "handle") != 0)
+        return -1;
+    if (strchr(handle, '/') != NULL) {
+        fprintf(stderr, "Error: handle must not contain '/': '%s'\n", handle);
+        return -1;
+    }
+    return 0;
+}
+
+/* Validate that an event filename is safe: no path separators,
+ * no ".." prefix, within length limits. Returns 0 if valid, -1 if invalid. */
+static int validate_event_filename(const char *event_file)
+{
+    ASSERT_MSG(event_file != NULL, "validate_event_filename: event_file is NULL");
+    if (event_file[0] == '\0') {
+        fprintf(stderr, "Error: event-file must not be empty\n");
+        return -1;
+    }
+    if (strchr(event_file, '/') != NULL) {
+        fprintf(stderr, "Error: event-file must be a plain filename, not a path: '%s'\n",
+                event_file);
+        return -1;
+    }
+    if (strncmp(event_file, "..", 2) == 0) {
+        fprintf(stderr, "Error: event-file must not start with '..': '%s'\n",
+                event_file);
+        return -1;
+    }
+    if (strlen(event_file) >= BUS_MAX_FILENAME) {
+        fprintf(stderr, "Error: event-file name too long (%zu >= %d): '%s'\n",
+                strlen(event_file), BUS_MAX_FILENAME, event_file);
+        return -1;
+    }
+    return 0;
+}
+
 static int cmd_publish(int argc, char **argv)
 {
     /* nbs-bus publish <dir> <source> <type> <priority> [payload] [--dedup-window=N] */
     if (argc < 6) {
         fprintf(stderr, "Usage: nbs-bus publish <dir> <source> <type> <priority> [payload] [--dedup-window=N]\n");
         return BUS_EXIT_BAD_ARGS;
+    }
+
+    /* HARDENING #7: assert argv elements are non-NULL */
+    for (int i = 2; i <= 5; i++) {
+        ASSERT_MSG(argv[i] != NULL,
+                   "cmd_publish: argv[%d] is NULL (argc=%d)", i, argc);
     }
 
     const char *dir = argv[2];
@@ -201,10 +257,28 @@ static int cmd_publish(int argc, char **argv)
     if (validate_non_empty_no_whitespace(type, "type") != 0)
         return BUS_EXIT_BAD_ARGS;
 
+    /* BUG #3: validate source, type, and payload length against bus limits */
+    if (strlen(source) >= BUS_MAX_HANDLE) {
+        fprintf(stderr, "Error: source too long (%zu >= %d)\n",
+                strlen(source), BUS_MAX_HANDLE);
+        return BUS_EXIT_BAD_ARGS;
+    }
+    if (strlen(type) >= BUS_MAX_TYPE) {
+        fprintf(stderr, "Error: type too long (%zu >= %d)\n",
+                strlen(type), BUS_MAX_TYPE);
+        return BUS_EXIT_BAD_ARGS;
+    }
+
     /* Payload is the first positional arg after priority that doesn't start with -- */
     const char *payload = NULL;
     if (argc > 6 && strncmp(argv[6], "--", 2) != 0)
         payload = argv[6];
+
+    if (payload != NULL && strlen(payload) >= BUS_MAX_PAYLOAD) {
+        fprintf(stderr, "Error: payload too long (%zu >= %d)\n",
+                strlen(payload), BUS_MAX_PAYLOAD);
+        return BUS_EXIT_BAD_ARGS;
+    }
 
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
@@ -234,6 +308,9 @@ static int cmd_publish(int argc, char **argv)
         return BUS_EXIT_BAD_ARGS;
 
     if (dedup_window_us > 0) {
+        ASSERT_MSG(dedup_window_us > 0,
+                   "cmd_publish: dedup_window_us must be positive when calling "
+                   "bus_publish_dedup, got %lld", dedup_window_us);
         rc = bus_publish_dedup(dir, source, type, priority, payload, dedup_window_us);
         if (rc == BUS_EXIT_DEDUP)
             return BUS_EXIT_DEDUP;
@@ -260,7 +337,12 @@ static int cmd_check(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    const char *handle = parse_handle_opt(argc, argv, 3);
+    int handle_err = 0;
+    const char *handle = parse_handle_opt(argc, argv, 3, &handle_err);
+    if (handle_err)
+        return BUS_EXIT_BAD_ARGS;
+    if (validate_handle(handle) != 0)
+        return BUS_EXIT_BAD_ARGS;
 
     if (bus_check(dir, handle) != 0)
         return BUS_EXIT_ERROR;
@@ -278,6 +360,10 @@ static int cmd_read(int argc, char **argv)
 
     const char *dir = argv[2];
     const char *event_file = argv[3];
+
+    /* SECURITY #4 + HARDENING #11: validate event_file at entry point */
+    if (validate_event_filename(event_file) != 0)
+        return BUS_EXIT_BAD_ARGS;
 
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
@@ -304,6 +390,10 @@ static int cmd_ack(int argc, char **argv)
 
     const char *dir = argv[2];
     const char *event_file = argv[3];
+
+    /* SECURITY #4 + HARDENING #11: validate event_file at entry point */
+    if (validate_event_filename(event_file) != 0)
+        return BUS_EXIT_BAD_ARGS;
 
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
@@ -332,7 +422,12 @@ static int cmd_ack_all(int argc, char **argv)
     int rc = verify_events_dir(dir);
     if (rc != 0) return rc;
 
-    const char *handle = parse_handle_opt(argc, argv, 3);
+    int handle_err = 0;
+    const char *handle = parse_handle_opt(argc, argv, 3, &handle_err);
+    if (handle_err)
+        return BUS_EXIT_BAD_ARGS;
+    if (validate_handle(handle) != 0)
+        return BUS_EXIT_BAD_ARGS;
 
     if (bus_ack_all(dir, handle) != 0)
         return BUS_EXIT_ERROR;
@@ -363,6 +458,15 @@ static int cmd_prune(int argc, char **argv)
                                               cfg.retention_max_bytes);
     if (max_bytes < 0)
         return BUS_EXIT_BAD_ARGS;
+
+    /* BUG #2 + HARDENING #9: reject max_bytes == 0 (bus_prune requires > 0) */
+    if (max_bytes == 0) {
+        fprintf(stderr, "Error: max-bytes must be positive (got 0 from config)\n");
+        return BUS_EXIT_BAD_ARGS;
+    }
+
+    ASSERT_MSG(max_bytes > 0,
+               "cmd_prune: max_bytes must be positive, got %lld", max_bytes);
 
     if (bus_prune(dir, max_bytes) != 0)
         return BUS_EXIT_ERROR;

@@ -38,6 +38,8 @@ test: all install
 test-unit: all
 	$(CC) $(CFLAGS) -I. -I../nbs-common -o ../../tests/test_workers_unit ../../tests/test_workers_unit.c worker.c
 	../../tests/test_workers_unit
+	$(CC) $(CFLAGS) -I. -I../nbs-common -o ../../tests/test_workers_adversarial ../../tests/test_workers_adversarial.c worker.c
+	../../tests/test_workers_adversarial
 
 debug: CFLAGS = $(COMMON_CFLAGS) -O0 -g
 debug: clean all

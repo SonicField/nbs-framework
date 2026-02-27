@@ -11,8 +11,12 @@
  *
  * Invariants:
  *   - All string construction uses snprintf with bounded buffers
- *   - bus_client_check_typed acks every matching event before returning
+ *   - bus_client_check_typed acks the first matching event before returning
  *   - Priority extraction handles malformed output gracefully (defaults to "none")
+ *
+ * Threading:
+ *   - resolve_nbs_bus() uses pthread_once for thread-safe one-time initialisation.
+ *   - All other functions are stateless and safe to call from any thread.
  */
 
 #include "bus_client.h"
@@ -22,49 +26,51 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define CMD_BUF_SIZE 8192
 
 /*
  * Cached absolute path to the nbs-bus binary.
- * Resolved once on first use via /proc/self/exe — the binary is expected
+ * Resolved once via pthread_once — the binary is expected
  * to be in the same directory as nbs-sidecar (sibling binary).
  * If resolution fails, falls back to "nbs-bus" (PATH search via execvp).
  */
 #define BUS_PATH_LEN 4096
 static char nbs_bus_path[BUS_PATH_LEN] = "";
-static int nbs_bus_path_resolved = 0;
+static pthread_once_t nbs_bus_once = PTHREAD_ONCE_INIT;
 
-static const char *resolve_nbs_bus(void)
+static void resolve_nbs_bus_once(void)
 {
-    if (nbs_bus_path_resolved)
-        return nbs_bus_path[0] ? nbs_bus_path : "nbs-bus";
-
-    nbs_bus_path_resolved = 1;
-
     char self[BUS_PATH_LEN];
     ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (len <= 0)
-        return "nbs-bus";
+        return;
     self[len] = '\0';
 
     char *slash = strrchr(self, '/');
     if (!slash)
-        return "nbs-bus";
+        return;
 
     size_t dir_len = (size_t)(slash - self);
     if (dir_len + sizeof("/nbs-bus") > sizeof(nbs_bus_path))
-        return "nbs-bus";
+        return;
 
     memcpy(nbs_bus_path, self, dir_len);
     memcpy(nbs_bus_path + dir_len, "/nbs-bus", sizeof("/nbs-bus"));
 
     if (access(nbs_bus_path, X_OK) != 0) {
         nbs_bus_path[0] = '\0';
-        return "nbs-bus";
+        return;
     }
+}
 
-    return nbs_bus_path;
+static const char *resolve_nbs_bus(void)
+{
+    pthread_once(&nbs_bus_once, resolve_nbs_bus_once);
+    if (nbs_bus_path[0] != '\0')
+        return nbs_bus_path;
+    return "nbs-bus";
 }
 
 int bus_client_check(const char *bus_dir, int *event_count,
@@ -83,11 +89,26 @@ int bus_client_check(const char *bus_dir, int *event_count,
     char buf[CMD_BUF_SIZE];
 
     int rc = exec_capture(argv, buf, sizeof(buf));
+    if (rc < 0) {
+        /* exec failure (binary not found, fork failed, etc.) */
+        fprintf(stderr, "bus_client_check: exec_capture failed for '%s'\n",
+                argv[0]);
+        *event_count = 0;
+        snprintf(max_priority, mp_size, "none");
+        summary[0] = '\0';
+        return -1;
+    }
     if (rc != 0 || buf[0] == '\0') {
         *event_count = 0;
         snprintf(max_priority, mp_size, "none");
         summary[0] = '\0';
         return 1; /* empty */
+    }
+
+    /* Warn if output may have been truncated */
+    if (strlen(buf) >= sizeof(buf) - 1) {
+        fprintf(stderr, "bus_client_check: output may be truncated "
+                "(%zu bytes, buffer %zu)\n", strlen(buf), sizeof(buf));
     }
 
     /* Count lines in buf */
@@ -123,6 +144,15 @@ int bus_client_check(const char *bus_dir, int *event_count,
     /* Build summary */
     snprintf(summary, sum_size, "%d event(s) in %s", count, bus_dir);
 
+    /* Postconditions: when returning 0 (events found), outputs must be valid */
+    ASSERT_MSG(*event_count > 0,
+               "bus_client_check: returning 0 but event_count is %d",
+               *event_count);
+    ASSERT_MSG(max_priority[0] != '\0',
+               "bus_client_check: returning 0 but max_priority is empty");
+    ASSERT_MSG(summary[0] != '\0',
+               "bus_client_check: returning 0 but summary is empty");
+
     return 0;
 }
 
@@ -141,6 +171,11 @@ int bus_client_read(const char *bus_dir, const char *event_file,
     int rc = exec_capture(argv, payload, payload_size);
     if (rc < 0)
         return -1;
+
+    /* Postcondition: on success, payload is NUL-terminated and non-empty */
+    ASSERT_MSG(payload[0] != '\0',
+               "bus_client_read: exec succeeded but payload is empty "
+               "for event '%s'", event_file);
 
     return 0;
 }
@@ -174,6 +209,7 @@ int bus_client_publish(const char *bus_dir, const char *source,
     ASSERT_MSG(priority != NULL, "bus_client_publish: priority is NULL");
     ASSERT_MSG(priority[0] != '\0', "bus_client_publish: priority is empty");
     ASSERT_MSG(payload != NULL, "bus_client_publish: payload is NULL");
+    /* Empty payload is permitted — nbs-bus accepts zero-length payloads */
 
     const char *argv[] = {resolve_nbs_bus(), "publish", bus_dir,
                           source, type, priority, payload, NULL};
@@ -195,6 +231,10 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
     ASSERT_MSG(event_type[0] != '\0', "bus_client_check_typed: event_type is empty");
     ASSERT_MSG(target_handle != NULL, "bus_client_check_typed: target_handle is NULL");
     ASSERT_MSG(target_handle[0] != '\0', "bus_client_check_typed: target_handle is empty");
+    ASSERT_MSG(strlen(target_handle) <= 253,
+               "bus_client_check_typed: target_handle too long (%zu bytes, max 253). "
+               "Would truncate @handle in 256-byte buffer.",
+               strlen(target_handle));
     ASSERT_MSG(payload_out != NULL, "bus_client_check_typed: payload_out is NULL");
     ASSERT_MSG(payload_size > 0, "bus_client_check_typed: payload_size is 0");
 
@@ -203,8 +243,20 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
     char buf[CMD_BUF_SIZE];
 
     int rc = exec_capture(argv, buf, sizeof(buf));
+    if (rc < 0) {
+        fprintf(stderr, "bus_client_check_typed: exec_capture failed for '%s'\n",
+                argv[0]);
+        return -1;
+    }
     if (rc != 0 || buf[0] == '\0')
         return 1; /* no events */
+
+    /* Warn if output may have been truncated (events at end silently dropped) */
+    if (strlen(buf) >= sizeof(buf) - 1) {
+        fprintf(stderr, "bus_client_check_typed: output may be truncated "
+                "(%zu bytes, buffer %zu) — some events may be missed\n",
+                strlen(buf), sizeof(buf));
+    }
 
     /* Build the @handle string for matching */
     char at_handle[256];
@@ -250,8 +302,12 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                 }
 
                 char event_file[1024];
-                if (fname_len >= sizeof(event_file))
-                    fname_len = sizeof(event_file) - 1;
+                if (fname_len >= sizeof(event_file)) {
+                    fprintf(stderr, "bus_client_check_typed: event filename "
+                            "truncated (%zu >= %zu), skipping\n",
+                            fname_len, sizeof(event_file));
+                    goto next_line;
+                }
                 memcpy(event_file, fname_start, fname_len);
                 event_file[fname_len] = '\0';
 
@@ -272,10 +328,14 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                         snprintf(payload_out, payload_size, "%s", payload_buf);
                         return 0; /* match found */
                     }
+                } else {
+                    fprintf(stderr, "bus_client_check_typed: failed to read "
+                            "event '%s' from '%s'\n", event_file, bus_dir);
                 }
             }
         }
 
+next_line:
         /* Advance to next line */
         if (line_end != NULL)
             line_start = line_end + 1;

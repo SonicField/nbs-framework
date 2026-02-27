@@ -48,8 +48,29 @@
 set -euo pipefail
 
 LOCK_DIR="${NBS_PTY_LOCK_DIR:-${HOME}/.nbs/pty-locks}"
+if [[ "${LOCK_DIR}" != /* ]]; then
+    echo "Error: LOCK_DIR must be an absolute path, got '${LOCK_DIR}'" >&2
+    exit 1
+fi
 CHAT_FILE=""
 CHAT_HANDLE=""
+
+# Input validation: session and handle names must be safe for use in file paths
+validate_session_name() {
+    local name="$1"
+    if [[ "$name" =~ [^a-zA-Z0-9._-] ]]; then
+        echo "Error: session name contains invalid characters (alphanumeric, dot, underscore, hyphen only), got '${name}'" >&2
+        return 4
+    fi
+}
+
+validate_handle() {
+    local name="$1"
+    if [[ "$name" =~ [^a-zA-Z0-9._-] ]]; then
+        echo "Error: handle contains invalid characters (alphanumeric, dot, underscore, hyphen only), got '${name}'" >&2
+        return 4
+    fi
+}
 
 usage() {
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
@@ -69,18 +90,26 @@ cmd_acquire() {
     local timeout=0
 
     # Parse remaining args for options
-    shift 2 2>/dev/null || true
+    if [[ $# -ge 2 ]]; then shift 2; fi
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --timeout=*) timeout="${1#--timeout=}"; shift ;;
             --chat=*)    CHAT_FILE="${1#--chat=}"; shift ;;
             --chat-handle=*) CHAT_HANDLE="${1#--chat-handle=}"; shift ;;
-            *) echo "Warning: unknown option ignored: $1" >&2; shift ;;
+            *) echo "Error: unknown option: $1" >&2; return 4 ;;
         esac
     done
 
     if [[ -z "$session" ]] || [[ -z "$handle" ]]; then
         echo "Error: acquire requires <session> and <handle>" >&2
+        return 4
+    fi
+
+    validate_session_name "$session" || return 4
+    validate_handle "$handle" || return 4
+
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        echo "Error: --timeout must be a non-negative integer, got '$timeout'" >&2
         return 4
     fi
 
@@ -113,12 +142,12 @@ cmd_acquire() {
                     fi
                 fi
             fi
-            # Write lock info (handle, timestamp, PID)
-            echo "${handle}" > "$inf"
-            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$inf"
-            echo "$$" >> "$inf"
+            # Write lock info atomically (handle, timestamp, PID of caller)
+            local tmp_inf="${inf}.tmp.$$"
+            printf '%s\n%s\n%s\n' "$handle" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PPID" > "$tmp_inf"
+            mv "$tmp_inf" "$inf"
             exit 0
-        ) 200>"$lf" 2>/dev/null; then
+        ) 200>"$lf"; then
             echo "${session}: locked by ${handle}"
 
             # Post to chat if configured
@@ -126,7 +155,7 @@ cmd_acquire() {
                 local NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
                 "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" \
                     "@team — I have acquired exclusive access to pty-session ${session}. No one else should send commands to it until I release." \
-                    2>/dev/null || true
+                    2>&1 || echo "Warning: failed to post lock status to chat" >&2
             fi
 
             return 0
@@ -157,12 +186,12 @@ cmd_release() {
     local handle="${2:-}"
 
     # Parse remaining args for options
-    shift 2 2>/dev/null || true
+    if [[ $# -ge 2 ]]; then shift 2; fi
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --chat=*)    CHAT_FILE="${1#--chat=}"; shift ;;
             --chat-handle=*) CHAT_HANDLE="${1#--chat-handle=}"; shift ;;
-            *) echo "Warning: unknown option ignored: $1" >&2; shift ;;
+            *) echo "Error: unknown option: $1" >&2; return 4 ;;
         esac
     done
 
@@ -170,6 +199,9 @@ cmd_release() {
         echo "Error: release requires <session> and <handle>" >&2
         return 4
     fi
+
+    validate_session_name "$session" || return 4
+    validate_handle "$handle" || return 4
 
     local inf
     inf=$(info_file "$session")
@@ -208,7 +240,7 @@ cmd_release() {
         local NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
         "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" \
             "@team — I have released pty-session ${session}. It is now available." \
-            2>/dev/null || true
+            2>&1 || echo "Warning: failed to post lock status to chat" >&2
     fi
 
     return 0
@@ -222,28 +254,37 @@ cmd_check() {
         return 4
     fi
 
+    validate_session_name "$session" || return 4
+
     local inf
     inf=$(info_file "$session")
+    local lf
+    lf=$(lock_file "$session")
 
-    if [[ ! -f "$inf" ]]; then
-        echo "${session}: unlocked"
-        return 0
-    fi
+    # Hold shared flock during read to prevent torn reads from concurrent writes
+    (
+        flock -s 200
 
-    local holder
-    holder=$(head -1 "$inf" 2>/dev/null || echo "unknown")
-    local since
-    since=$(sed -n '2p' "$inf" 2>/dev/null || echo "unknown")
-    local holder_pid
-    holder_pid=$(sed -n '3p' "$inf" 2>/dev/null || true)
+        if [[ ! -f "$inf" ]]; then
+            echo "${session}: unlocked"
+            exit 0
+        fi
 
-    local stale_msg=""
-    if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
-        stale_msg=" [STALE — PID $holder_pid is dead]"
-    fi
+        local holder
+        holder=$(head -1 "$inf" 2>/dev/null || echo "unknown")
+        local since
+        since=$(sed -n '2p' "$inf" 2>/dev/null || echo "unknown")
+        local holder_pid
+        holder_pid=$(sed -n '3p' "$inf" 2>/dev/null || true)
 
-    echo "${session}: locked by ${holder} (since ${since})${stale_msg}"
-    return 0
+        local stale_msg=""
+        if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+            stale_msg=" [STALE — PID $holder_pid is dead]"
+        fi
+
+        echo "${session}: locked by ${holder} (since ${since})${stale_msg}"
+        exit 0
+    ) 200>"$lf"
 }
 
 # Main dispatch

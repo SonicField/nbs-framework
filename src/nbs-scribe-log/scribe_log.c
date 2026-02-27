@@ -31,6 +31,52 @@
 #include <unistd.h>
 
 /* ------------------------------------------------------------------ */
+/* Directory creation                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * ensure_parent_dirs — Create parent directories for a file path.
+ *
+ * Idempotent: safe to call concurrently or repeatedly. Uses mkdir
+ * and ignores EEXIST.
+ *
+ * Returns SCRIBE_EXIT_OK on success, SCRIBE_EXIT_ERROR on failure.
+ */
+static int ensure_parent_dirs(const char *file_path)
+{
+    ASSERT_MSG(file_path != NULL, "ensure_parent_dirs: file_path is NULL");
+
+    char dir[SCRIBE_MAX_PATH];
+    int n = snprintf(dir, sizeof(dir), "%s", file_path);
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(dir),
+               "ensure_parent_dirs: path too long");
+
+    char *slash = strrchr(dir, '/');
+    if (!slash) return SCRIBE_EXIT_OK; /* No directory component */
+
+    *slash = '\0';
+    for (char *p = dir + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            /* HARDENING: Check mkdir errors beyond EEXIST */
+            if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+                fprintf(stderr, "Error: cannot create directory %s: %s\n",
+                        dir, strerror(errno));
+                return SCRIBE_EXIT_ERROR;
+            }
+            *p = '/';
+        }
+    }
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "Error: cannot create directory %s: %s\n",
+                dir, strerror(errno));
+        return SCRIBE_EXIT_ERROR;
+    }
+
+    return SCRIBE_EXIT_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Locking (adapted from src/nbs-chat/lock.c)                          */
 /* ------------------------------------------------------------------ */
 
@@ -69,7 +115,9 @@ static int lock_acquire(const char *log_path)
 
 static void lock_release(int fd)
 {
-    if (fd < 0) return;
+    /* HARDENING: A negative fd indicates a logic error in the caller —
+     * lock_release should only be called after a successful lock_acquire. */
+    ASSERT_MSG(fd >= 0, "lock_release: called with invalid fd %d", fd);
 
     struct flock fl = {
         .l_type = F_UNLCK,
@@ -91,6 +139,9 @@ static void lock_release(int fd)
 static void bus_publish(const char *bus_dir, const char *payload)
 {
     if (!bus_dir || bus_dir[0] == '\0') return;
+
+    /* BUG: payload must be validated — NULL payload would cause UB in execlp */
+    ASSERT_MSG(payload != NULL, "bus_publish: payload is NULL");
 
     /* Check bus directory exists */
     struct stat st;
@@ -134,49 +185,54 @@ static void bus_publish(const char *bus_dir, const char *payload)
 /* Log initialisation                                                  */
 /* ------------------------------------------------------------------ */
 
-int scribe_log_init(const char *log_path)
+/*
+ * write_log_header — Atomically create a new log file with header.
+ *
+ * Uses O_CREAT|O_EXCL for atomic create-or-fail, eliminating the
+ * TOCTOU race from the original access()+fopen("w") pattern.
+ * Parent directories must already exist (call ensure_parent_dirs first).
+ *
+ * Returns SCRIBE_EXIT_OK (0) on success or if file already exists.
+ * Returns SCRIBE_EXIT_ERROR (1) on error.
+ */
+static int write_log_header(const char *log_path)
 {
-    ASSERT_MSG(log_path != NULL, "scribe_log_init: log_path is NULL");
+    ASSERT_MSG(log_path != NULL, "write_log_header: log_path is NULL");
 
-    /* Check if file already exists */
-    if (access(log_path, F_OK) == 0)
-        return 0;
-
-    /* Create parent directories if needed */
-    char dir[SCRIBE_MAX_PATH];
-    int n = snprintf(dir, sizeof(dir), "%s", log_path);
-    ASSERT_MSG(n > 0 && (size_t)n < sizeof(dir),
-               "scribe_log_init: path too long");
-
-    /* Find last slash to get directory */
-    char *slash = strrchr(dir, '/');
-    if (slash) {
-        *slash = '\0';
-        /* Simple mkdir -p: create each component */
-        for (char *p = dir + 1; *p; p++) {
-            if (*p == '/') {
-                *p = '\0';
-                mkdir(dir, 0755);
-                *p = '/';
-            }
+    /* BUG FIX (TOCTOU): Use O_CREAT|O_EXCL for atomic create-or-fail.
+     * This eliminates the race where two processes both see "file doesn't
+     * exist" and one truncates the other's header. */
+    /* SECURITY: File created with explicit mode 0644 via open(),
+     * not dependent on umask like fopen(). */
+    int fd = open(log_path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0) {
+        if (errno == EEXIST) {
+            /* File already exists — not an error */
+            return SCRIBE_EXIT_OK;
         }
-        mkdir(dir, 0755);
+        fprintf(stderr, "Error: cannot create log file %s: %s\n",
+                log_path, strerror(errno));
+        return SCRIBE_EXIT_ERROR;
+    }
+
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        fprintf(stderr, "Error: fdopen failed for %s: %s\n",
+                log_path, strerror(errno));
+        close(fd);
+        unlink(log_path);
+        return SCRIBE_EXIT_ERROR;
     }
 
     /* Get current ISO 8601 timestamp */
     time_t now = time(NULL);
-    ASSERT_MSG(now != (time_t)-1, "scribe_log_init: time() failed");
+    ASSERT_MSG(now != (time_t)-1, "write_log_header: time() failed");
     struct tm tm;
-    gmtime_r(&now, &tm);
+    /* BUG FIX: gmtime_r return value must be checked */
+    struct tm *tmresult = gmtime_r(&now, &tm);
+    ASSERT_MSG(tmresult != NULL, "write_log_header: gmtime_r failed");
     char ts[32];
     strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-
-    FILE *f = fopen(log_path, "w");
-    if (!f) {
-        fprintf(stderr, "Error: cannot create log file %s: %s\n",
-                log_path, strerror(errno));
-        return -1;
-    }
 
     int write_err = 0;
     if (fprintf(f, "# Decision Log\n\n") < 0) write_err = 1;
@@ -189,10 +245,28 @@ int scribe_log_init(const char *log_path)
     if (write_err) {
         fprintf(stderr, "Error: write failed creating %s\n", log_path);
         unlink(log_path);
-        return -1;
+        return SCRIBE_EXIT_ERROR;
     }
 
-    return 0;
+    return SCRIBE_EXIT_OK;
+}
+
+int scribe_log_init(const char *log_path)
+{
+    ASSERT_MSG(log_path != NULL, "scribe_log_init: log_path is NULL");
+
+    /* Check if file already exists */
+    if (access(log_path, F_OK) == 0)
+        return SCRIBE_EXIT_OK;
+
+    /* Create parent directories (idempotent) */
+    int drc = ensure_parent_dirs(log_path);
+    if (drc != SCRIBE_EXIT_OK)
+        return SCRIBE_EXIT_ERROR;
+
+    /* HARDENING: Consistent return value contract — use SCRIBE_EXIT_ERROR
+     * (1) on error, not -1, matching scribe_log_append's convention. */
+    return write_log_header(log_path);
 }
 
 /* ------------------------------------------------------------------ */
@@ -210,10 +284,56 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
     ASSERT_MSG(entry->rationale[0] != '\0',
                "scribe_log_append: rationale is empty");
 
-    /* Initialise log if it does not exist */
+    /* SECURITY: Reject newlines in all fields written to single Markdown lines.
+     * This prevents injection of fake decision entries into the log. */
+    ASSERT_MSG(strchr(entry->summary, '\n') == NULL,
+               "scribe_log_append: summary contains newline (injection risk)");
+    ASSERT_MSG(strchr(entry->participants, '\n') == NULL,
+               "scribe_log_append: participants contains newline (injection risk)");
+    ASSERT_MSG(strchr(entry->rationale, '\n') == NULL,
+               "scribe_log_append: rationale contains newline (injection risk)");
+    if (entry->chat_ref[0] != '\0') {
+        ASSERT_MSG(strchr(entry->chat_ref, '\n') == NULL,
+                   "scribe_log_append: chat_ref contains newline (injection risk)");
+    }
+    if (entry->artefacts[0] != '\0') {
+        ASSERT_MSG(strchr(entry->artefacts, '\n') == NULL,
+                   "scribe_log_append: artefacts contains newline (injection risk)");
+    }
+    if (entry->risk_tags[0] != '\0') {
+        ASSERT_MSG(strchr(entry->risk_tags, '\n') == NULL,
+                   "scribe_log_append: risk_tags contains newline (injection risk)");
+    }
+    if (entry->supersedes[0] != '\0') {
+        ASSERT_MSG(strchr(entry->supersedes, '\n') == NULL,
+                   "scribe_log_append: supersedes contains newline (injection risk)");
+    }
+
+    /* Create parent directories before acquiring the lock.
+     * Directory creation is idempotent and must happen first because
+     * lock_acquire needs the parent directory to exist for the lock file. */
+    int drc = ensure_parent_dirs(log_path);
+    if (drc != SCRIBE_EXIT_OK)
+        return SCRIBE_EXIT_ERROR;
+
+    /* BUG FIX (TOCTOU): Acquire lock BEFORE checking file existence.
+     * The original code checked access() then acquired the lock, allowing
+     * a race where two processes both see "file doesn't exist" and one
+     * truncates the other's init header. */
+    int lock_fd = lock_acquire(log_path);
+    if (lock_fd < 0)
+        return SCRIBE_EXIT_ERROR;
+
+    /* Initialise log if it does not exist (now under lock).
+     * write_log_header uses O_CREAT|O_EXCL for atomic create-or-fail,
+     * so even if access() has a tiny TOCTOU window with the lock, the
+     * actual file creation is atomic. */
     if (access(log_path, F_OK) != 0) {
-        if (scribe_log_init(log_path) != 0)
+        int init_rc = write_log_header(log_path);
+        if (init_rc != SCRIBE_EXIT_OK) {
+            lock_release(lock_fd);
             return SCRIBE_EXIT_ERROR;
+        }
     }
 
     /* Generate timestamp */
@@ -262,11 +382,6 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
     ASSERT_MSG(n > 0 && (size_t)n < sizeof(entry_text),
                "scribe_log_append: entry too long (%d chars)", n);
 
-    /* Acquire lock */
-    int lock_fd = lock_acquire(log_path);
-    if (lock_fd < 0)
-        return SCRIBE_EXIT_ERROR;
-
     /* Append to log file */
     FILE *f = fopen(log_path, "a");
     if (!f) {
@@ -288,8 +403,15 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
 
     /* Publish bus event (non-fatal if this fails) */
     char bus_payload[SCRIBE_MAX_SUMMARY + 32];
-    snprintf(bus_payload, sizeof(bus_payload), "D-%lld %s", ts, entry->summary);
+    /* HARDENING: Check snprintf return for bus_payload truncation */
+    int bp = snprintf(bus_payload, sizeof(bus_payload),
+                      "D-%lld %s", ts, entry->summary);
+    ASSERT_MSG(bp > 0 && (size_t)bp < sizeof(bus_payload),
+               "scribe_log_append: bus_payload truncated");
 
+    /* NOTE: Default bus directory ".nbs/events/" is relative to cwd.
+     * This is intentional — the tool is designed to be run from within
+     * a project directory where .nbs/ is the project's NBS root. */
     const char *bus_dir = entry->bus_dir[0] ? entry->bus_dir : ".nbs/events/";
     bus_publish(bus_dir, bus_payload);
 

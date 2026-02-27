@@ -52,6 +52,13 @@ for arg in "$@"; do
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
+# [Violation 13] No subcommand after --chat= should be an error, not silent help
+if [[ $# -eq 0 ]]; then
+    echo "Error: no search pattern or command specified" >&2
+    echo "Run with --help for usage" >&2
+    exit 4
+fi
+
 if [[ -z "$CHAT_FILE" ]]; then
     echo "Error: --chat=<chat-file> is required" >&2
     echo "Example: nbs-scribe-query --chat=.nbs/chat/live.chat benchmark" >&2
@@ -65,7 +72,12 @@ CHAT_DIR=$(dirname "$CHAT_FILE")
 CHAT_BASE=$(basename "$CHAT_FILE" .chat)
 # Strip archive suffix: name-YYYYMMDD-HHMMSS-archive → name
 CHAT_BASE=$(echo "$CHAT_BASE" | sed 's/-[0-9]\{8\}-[0-9]\{6\}-archive$//')
-SCRIBE_DIR="${CHAT_DIR}/../scribe"
+
+# [Violation 8/SECURITY] Canonicalise scribe directory to prevent path traversal
+SCRIBE_DIR=$(cd "$CHAT_DIR/../scribe" 2>/dev/null && pwd) || {
+    echo "Error: scribe directory not found relative to $CHAT_DIR" >&2
+    exit 4
+}
 LOG="${SCRIBE_DIR}/${CHAT_BASE}-log.md"
 
 if [[ ! -f "$LOG" ]]; then
@@ -73,25 +85,29 @@ if [[ ! -f "$LOG" ]]; then
     exit 4
 fi
 
-# Select grep mode
-if [[ "$USE_REGEX" == true ]]; then
-    GREP_MODE=""
-else
-    GREP_MODE="-F"
+# [Violation 3] Use array for grep options instead of unquoted variable
+GREP_OPTS=(-n)
+if [[ "$USE_REGEX" != true ]]; then
+    GREP_OPTS+=(-F)
 fi
 
-case "${1:---help}" in
+case "$1" in
     --help|-h)
         sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
         exit 0
         ;;
     --count)
-        c=$(grep -c '^### D-' "$LOG" 2>/dev/null || true)
+        c=$(grep -c '^### D-' "$LOG" || true)
         echo "${c:-0}"
         exit 0
         ;;
     --last=*)
         N="${1#--last=}"
+        # [Violation 1] Validate N is a positive integer
+        [[ "$N" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Error: --last requires a positive integer, got '$N'" >&2
+            exit 4
+        }
         grep -n '^### D-' "$LOG" | tail -"$N" | while IFS=: read -r line_num _rest; do
             sed -n "${line_num},/^---$/p" "$LOG" | head -10
             echo ""
@@ -100,7 +116,12 @@ case "${1:---help}" in
         ;;
     --id=*)
         ID="${1#--id=}"
-        LINE=$(grep -n "^### ${ID}" "$LOG" 2>/dev/null | head -1 | cut -d: -f1 || true)
+        # [Violation 2] Validate ID format and use -F to prevent regex injection
+        [[ "$ID" =~ ^D-[0-9]+$ ]] || {
+            echo "Error: --id must match D-<timestamp>, got '$ID'" >&2
+            exit 4
+        }
+        LINE=$(grep -nF "### ${ID}" "$LOG" | head -1 | cut -d: -f1 || true)
         if [[ -z "$LINE" ]]; then
             echo "Decision not found: $ID" >&2
             exit 1
@@ -110,28 +131,53 @@ case "${1:---help}" in
         ;;
     --by=*)
         HANDLE="${1#--by=}"
-        grep -n "Participants:" "$LOG" 2>/dev/null | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
+        # [Violation 3] Validate handle is non-empty
+        [[ -n "$HANDLE" ]] || {
+            echo "Error: --by requires a non-empty handle" >&2
+            exit 4
+        }
+        # [Violation 5] Exit 1 if no matches found
+        RESULTS=$(grep -n "Participants:" "$LOG" | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
             HEADER_LINE=$(head -"$pline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
                 echo ""
             fi
-        done | awk '!seen[$0]++'
+        done | awk '!seen[$0]++') || true
+        if [[ -z "$RESULTS" ]]; then
+            exit 1
+        fi
+        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     --tag=*)
         TAG="${1#--tag=}"
-        grep -n "Risk tags:" "$LOG" 2>/dev/null | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
+        # [Violation 4] Validate tag is non-empty
+        [[ -n "$TAG" ]] || {
+            echo "Error: --tag requires a non-empty tag" >&2
+            exit 4
+        }
+        # [Violation 6] Exit 1 if no matches found
+        RESULTS=$(grep -n "Risk tags:" "$LOG" | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
             HEADER_LINE=$(head -"$tline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
                 echo ""
             fi
-        done | awk '!seen[$0]++'
+        done | awk '!seen[$0]++') || true
+        if [[ -z "$RESULTS" ]]; then
+            exit 1
+        fi
+        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     --superseded)
-        grep -A8 '\[SUPERSEDES' "$LOG" 2>/dev/null || true
+        # [Violation 7] Exit 1 if no superseded entries found
+        RESULTS=$(grep -A8 '\[SUPERSEDES' "$LOG") || true
+        if [[ -z "$RESULTS" ]]; then
+            exit 1
+        fi
+        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     -*)
@@ -140,13 +186,24 @@ case "${1:---help}" in
         ;;
     *)
         PATTERN="$1"
-        grep -n $GREP_MODE "$PATTERN" "$LOG" 2>/dev/null | while IFS=: read -r line_num _rest; do
+        # [Violation 5] Validate pattern is non-empty
+        [[ -n "$PATTERN" ]] || {
+            echo "Error: search pattern must not be empty" >&2
+            exit 4
+        }
+        # [Violation 3/4] Use array for grep opts; -- prevents pattern-as-flag
+        # [Violation 8] Exit 1 if no matches found
+        RESULTS=$(grep "${GREP_OPTS[@]}" -- "$PATTERN" "$LOG" 2>&1 | while IFS=: read -r line_num _rest; do
             HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
                 echo ""
             fi
-        done | awk '!seen[$0]++'
+        done | awk '!seen[$0]++') || true
+        if [[ -z "$RESULTS" ]]; then
+            exit 1
+        fi
+        printf '%s\n' "$RESULTS"
         exit 0
         ;;
 esac

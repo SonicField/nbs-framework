@@ -1292,6 +1292,262 @@ fi
 
 echo ""
 
+# --- Test 42: Empty --handle= rejected as bad args (BUG #1) ---
+echo "42. Empty --handle= rejected..."
+EVENTS="$TEST_DIR/events42"
+mkdir -p "$EVENTS/processed"
+$NBS_BUS publish "$EVENTS" handle-src handle-type normal "test" > /dev/null
+
+set +e
+$NBS_BUS check "$EVENTS" --handle= > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "check --handle= (empty) rejected with exit 4" "pass"
+else
+    check "check --handle= (empty) rejected with exit 4 (got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS ack-all "$EVENTS" --handle= > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "ack-all --handle= (empty) rejected with exit 4" "pass"
+else
+    check "ack-all --handle= (empty) rejected with exit 4 (got: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 43: Prune max_bytes zero rejection (BUG #2 + HARDENING #9) ---
+echo "43. Prune rejects zero max_bytes..."
+
+# BUG #2: defence-in-depth ensures max_bytes > 0 before calling bus_prune.
+# bus_load_config always sets a valid default (16MB), so the config-based scenario
+# from the audit can only trigger if bus_load_config is bypassed. We test via CLI.
+EVENTS="$TEST_DIR/events43"
+mkdir -p "$EVENTS/processed"
+
+# --max-bytes=0 should be rejected by parse_max_bytes_opt (val <= 0)
+set +e
+$NBS_BUS prune "$EVENTS" --max-bytes=0 > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Prune --max-bytes=0 rejected from CLI (exit 4)" "pass"
+else
+    check "Prune --max-bytes=0 rejected from CLI (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+# Verify bus_prune's own assertion guards max_bytes > 0 (defence-in-depth from bus.c)
+# Note: use grep -c to avoid SIGPIPE with pipefail when grep -q exits early
+if [[ $(strings "$NBS_BUS" | grep -c "bus_prune: max_bytes" || true) -gt 0 ]]; then
+    check "bus_prune assertion for max_bytes > 0 present in binary" "pass"
+else
+    check "bus_prune assertion for max_bytes > 0 present in binary" "fail"
+fi
+
+# Verify the error message for the runtime check is in the binary
+if [[ $(strings "$NBS_BUS" | grep -c "max-bytes must be positive" || true) -gt 0 ]]; then
+    check "max-bytes=0 error message present in binary" "pass"
+else
+    check "max-bytes=0 error message present in binary" "fail"
+fi
+
+echo ""
+
+# --- Test 44: Source/type length validation (BUG #3) ---
+echo "44. Source and type length limits enforced..."
+EVENTS="$TEST_DIR/events44"
+mkdir -p "$EVENTS/processed"
+
+# BUS_MAX_HANDLE is 128, generate a source of 128+ chars
+LONG_SOURCE=$(python3 -c "print('x' * 128)")
+set +e
+$NBS_BUS publish "$EVENTS" "$LONG_SOURCE" test-type normal "payload" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Source >= BUS_MAX_HANDLE rejected (exit 4)" "pass"
+else
+    check "Source >= BUS_MAX_HANDLE rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+# BUS_MAX_TYPE is 128, generate a type of 128+ chars
+LONG_TYPE=$(python3 -c "print('y' * 128)")
+set +e
+$NBS_BUS publish "$EVENTS" test-src "$LONG_TYPE" normal "payload" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Type >= BUS_MAX_TYPE rejected (exit 4)" "pass"
+else
+    check "Type >= BUS_MAX_TYPE rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+# BUS_MAX_PAYLOAD is 16384, generate a payload of 16384+ chars
+LONG_PAYLOAD=$(python3 -c "print('z' * 16384)")
+set +e
+$NBS_BUS publish "$EVENTS" test-src test-type normal "$LONG_PAYLOAD" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "Payload >= BUS_MAX_PAYLOAD rejected (exit 4)" "pass"
+else
+    check "Payload >= BUS_MAX_PAYLOAD rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+# Just below limits should work (use shorter values to fit NAME_MAX=255)
+SHORT_SRC=$(python3 -c "print('a' * 100)")
+SHORT_TYPE=$(python3 -c "print('b' * 100)")
+set +e
+E=$($NBS_BUS publish "$EVENTS" "$SHORT_SRC" "$SHORT_TYPE" normal "short payload" 2>&1)
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 0 ]]; then
+    check "Source/type at 100 chars accepted" "pass"
+else
+    check "Source/type at 100 chars accepted (exit: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 45: Path traversal in event_file rejected at entry point (SECURITY #4) ---
+echo "45. Path traversal in event-file rejected at entry point..."
+EVENTS="$TEST_DIR/events45"
+mkdir -p "$EVENTS/processed"
+
+# Slash in event_file
+set +e
+$NBS_BUS read "$EVENTS" "../../../etc/passwd" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "read: path traversal (../) rejected with exit 4" "pass"
+else
+    check "read: path traversal (../) rejected with exit 4 (got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS ack "$EVENTS" "../../etc/shadow" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "ack: path traversal (../) rejected with exit 4" "pass"
+else
+    check "ack: path traversal (../) rejected with exit 4 (got: $EXIT_CODE)" "fail"
+fi
+
+# Subdirectory traversal
+set +e
+$NBS_BUS read "$EVENTS" "processed/something.event" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "read: subdirectory path rejected with exit 4" "pass"
+else
+    check "read: subdirectory path rejected with exit 4 (got: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 46: Handle with path traversal chars rejected (SECURITY #5, #6) ---
+echo "46. Handle with path traversal chars rejected..."
+EVENTS="$TEST_DIR/events46"
+mkdir -p "$EVENTS/processed"
+$NBS_BUS publish "$EVENTS" clean-src clean-type normal "test" > /dev/null
+
+# Handle containing /
+set +e
+$NBS_BUS check "$EVENTS" --handle=../evil > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "check: handle with / rejected (exit 4)" "pass"
+else
+    check "check: handle with / rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS ack-all "$EVENTS" --handle=../evil > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "ack-all: handle with / rejected (exit 4)" "pass"
+else
+    check "ack-all: handle with / rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+# Handle with whitespace (also a validation failure)
+set +e
+$NBS_BUS check "$EVENTS" "--handle=hello world" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "check: handle with whitespace rejected (exit 4)" "pass"
+else
+    check "check: handle with whitespace rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 47: Event file length validation (HARDENING #11) ---
+echo "47. Event file length exceeding BUS_MAX_FILENAME rejected..."
+EVENTS="$TEST_DIR/events47"
+mkdir -p "$EVENTS/processed"
+
+# BUS_MAX_FILENAME is 512, generate a filename of 512+ chars
+LONG_FILENAME=$(python3 -c "print('f' * 512 + '.event')")
+set +e
+$NBS_BUS read "$EVENTS" "$LONG_FILENAME" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "read: overlength event filename rejected (exit 4)" "pass"
+else
+    check "read: overlength event filename rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+set +e
+$NBS_BUS ack "$EVENTS" "$LONG_FILENAME" > /dev/null 2>&1
+EXIT_CODE=$?
+set -e
+if [[ "$EXIT_CODE" -eq 4 ]]; then
+    check "ack: overlength event filename rejected (exit 4)" "pass"
+else
+    check "ack: overlength event filename rejected (exit 4, got: $EXIT_CODE)" "fail"
+fi
+
+echo ""
+
+# --- Test 48: Binary contains new assertion strings (HARDENING #7, #9, #10) ---
+echo "48. Binary contains new hardening assertion strings..."
+# Note: use grep -c || true to avoid SIGPIPE failures with pipefail
+
+# Check for argv NULL assertions (HARDENING #7)
+if [[ $(strings "$NBS_BUS" | grep -c "cmd_publish: argv" || true) -gt 0 ]]; then
+    check "ASSERT_MSG for argv elements present in binary" "pass"
+else
+    check "ASSERT_MSG for argv elements present in binary" "fail"
+fi
+
+# Check for max_bytes assertion in bus_prune (HARDENING #9, from bus.c)
+if [[ $(strings "$NBS_BUS" | grep -c "bus_prune: max_bytes" || true) -gt 0 ]]; then
+    check "ASSERT_MSG for max_bytes precondition present (bus_prune)" "pass"
+else
+    check "ASSERT_MSG for max_bytes precondition present (bus_prune)" "fail"
+fi
+
+# Check for dedup_window_us assertion in bus_publish_dedup (HARDENING #10, from bus.c)
+if [[ $(strings "$NBS_BUS" | grep -c "dedup_window_us" || true) -gt 0 ]]; then
+    check "ASSERT_MSG for dedup_window_us precondition present (bus_publish_dedup)" "pass"
+else
+    check "ASSERT_MSG for dedup_window_us precondition present (bus_publish_dedup)" "fail"
+fi
+
+echo ""
+
 # --- Summary ---
 echo "=== Results ==="
 if [[ "$ERRORS" -eq 0 ]]; then

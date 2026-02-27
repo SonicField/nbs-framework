@@ -54,7 +54,7 @@ int detect_context_stress(const char *content);
 /*
  * detect_prompt_visible — Check if Claude's prompt is visible.
  *
- * Checks the last 3 lines of content for the UTF-8 prompt character.
+ * Checks the last 6 lines of content for the UTF-8 prompt character.
  *
  * Preconditions:
  *   - content != NULL

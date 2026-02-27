@@ -11,6 +11,9 @@
  *   - waitpid retries on EINTR
  *   - All string formatting via snprintf (never sprintf/strcat)
  *   - Manual resource cleanup on all error paths
+ *   - Cache files are created with mode 0600 (not world-readable)
+ *   - $HOME is validated for shell metacharacters before use
+ *   - Timeouts use CLOCK_MONOTONIC, not accumulated sleep
  */
 
 #include "session.h"
@@ -40,8 +43,12 @@
 /*
  * redirect_stderr_to_devnull — Redirect stderr to /dev/null in child.
  *
- * If /dev/null is unavailable, close stderr outright so the child
- * doesn't write to the parent's terminal.
+ * If /dev/null is unavailable, close stderr outright. This is acceptable
+ * because the child immediately calls execvp() after this function
+ * returns — no writes to stderr should occur between here and execvp().
+ * The fallback (closing stderr) prevents the child from writing to the
+ * parent's terminal; the semantic difference from /dev/null redirection
+ * is immaterial given the immediate exec. (Violation S10 documentation.)
  */
 static void redirect_stderr_to_devnull(void)
 {
@@ -68,7 +75,9 @@ static void redirect_stderr_to_devnull(void)
  * Postconditions:
  *   - On success (return >= 0): out_buf contains NUL-terminated stdout,
  *     return value is the child exit code
- *   - On failure (return -1): fork/exec failed, out_buf contents undefined
+ *   - On read error during capture (return -1): partial output may be
+ *     in out_buf but the return value signals failure
+ *   - On fork/exec failure (return -1): out_buf contents undefined
  */
 static int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
 {
@@ -106,11 +115,16 @@ static int exec_capture(const char *const argv[], char *out_buf, size_t out_size
     close(pipefd[1]);
 
     size_t total = 0;
+    int read_error = 0;  /* Violation S3 fix: track read errors */
     while (total < out_size - 1) {
         ssize_t n = read(pipefd[0], out_buf + total, out_size - 1 - total);
         if (n < 0) {
             if (errno == EINTR)
                 continue;
+            /* Violation S3 fix: flag read error instead of silently breaking */
+            read_error = 1;
+            fprintf(stderr, "Warning: read() failed during capture: %s\n",
+                    strerror(errno));
             break;
         }
         if (n == 0)
@@ -127,6 +141,11 @@ static int exec_capture(const char *const argv[], char *out_buf, size_t out_size
     } while (wpid < 0 && errno == EINTR);
 
     if (wpid < 0) {
+        return -1;
+    }
+
+    /* Violation S3 fix: return -1 if read failed, even if child exited OK */
+    if (read_error) {
         return -1;
     }
 
@@ -191,6 +210,38 @@ static int exec_fire_and_forget(const char *const argv[])
     return -1;
 }
 
+/* ── Path safety ──────────────────────────────────────────────────── */
+
+/*
+ * is_safe_home_path — Validate that a HOME path contains no shell
+ * metacharacters that could enable injection via tmux pipe-pane.
+ *
+ * Violation S1 fix: $HOME is no longer trusted without validation.
+ *
+ * Accepts only: [a-zA-Z0-9/_.-]
+ * Rejects empty strings and paths containing quotes, backticks,
+ * dollar signs, semicolons, pipes, ampersands, spaces, etc.
+ *
+ * Returns 1 if safe, 0 if unsafe.
+ */
+int is_safe_home_path(const char *path)
+{
+    ASSERT_MSG(path != NULL, "is_safe_home_path: path is NULL");
+
+    if (path[0] == '\0') {
+        return 0;
+    }
+
+    for (const char *p = path; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '/' || *p == '_' ||
+              *p == '-' || *p == '.')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* ── Path resolution ──────────────────────────────────────────────── */
 
 /*
@@ -200,10 +251,11 @@ static int exec_fire_and_forget(const char *const argv[])
  *   - buf != NULL, bufsize > 0
  *   - suffix is non-NULL
  *   - $HOME is set in the environment
+ *   - $HOME contains only safe path characters (no shell metacharacters)
  *
  * Postconditions:
  *   - On success (returns 0): buf contains "$HOME/<suffix>"
- *   - On failure (returns -1): $HOME not set or path too long
+ *   - On failure (returns -1): $HOME not set, unsafe, or path too long
  */
 static int resolve_home_path(char *buf, size_t bufsize, const char *suffix)
 {
@@ -214,6 +266,13 @@ static int resolve_home_path(char *buf, size_t bufsize, const char *suffix)
     const char *home = getenv("HOME");
     if (!home) {
         fprintf(stderr, "Error: HOME environment variable not set\n");
+        return -1;
+    }
+
+    /* Violation S1 fix: validate $HOME for shell metacharacters */
+    if (!is_safe_home_path(home)) {
+        fprintf(stderr, "Error: HOME path contains unsafe characters: "
+                "only [a-zA-Z0-9/_.-] are allowed\n");
         return -1;
     }
 
@@ -310,7 +369,48 @@ static int capture_pane(const char *session_name, int scrollback,
     return (rc == 0) ? 0 : -1;
 }
 
+/* ── Monotonic time helper ────────────────────────────────────────── */
+
+/*
+ * get_monotonic_ms — Get current CLOCK_MONOTONIC time in milliseconds.
+ *
+ * Violation S6 fix: timeouts now use wall-clock time rather than
+ * accumulated nominal sleep intervals.
+ *
+ * Returns milliseconds since some fixed epoch, or -1 on failure.
+ */
+static long get_monotonic_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+        return -1;
+    }
+    return (long)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
+}
+
 /* ── Cache operations ─────────────────────────────────────────────── */
+
+/*
+ * open_secure — Open a file with explicit permissions (mode 0600).
+ *
+ * Violation S9 fix: cache files are no longer created world-readable.
+ *
+ * Returns FILE* on success, NULL on failure.
+ */
+static FILE *open_secure(const char *path, int flags)
+{
+    int fd = open(path, flags, 0600);
+    if (fd < 0) {
+        return NULL;
+    }
+    const char *mode = (flags & O_RDONLY) ? "r" : "w";
+    FILE *f = fdopen(fd, mode);
+    if (!f) {
+        close(fd);
+        return NULL;
+    }
+    return f;
+}
 
 /*
  * cache_session — Snapshot pane content to cache file.
@@ -336,7 +436,9 @@ static int cache_session(const char *name, const char *session_name)
     /* Capture pane content */
     char *buf = malloc(CAPTURE_BUF_SIZE);
     if (!buf) {
-        fprintf(stderr, "Error: malloc failed\n");
+        /* Violation S12 fix: include allocation size in error message */
+        fprintf(stderr, "Error: malloc failed for %zu bytes (capture buffer)\n",
+                (size_t)CAPTURE_BUF_SIZE);
         return -1;
     }
 
@@ -345,12 +447,12 @@ static int cache_session(const char *name, const char *session_name)
         return -1;
     }
 
-    /* Write output file */
+    /* Write output file — Violation S9 fix: use mode 0600 */
     char output_path[MAX_FILE_PATH];
     n = snprintf(output_path, sizeof(output_path), "%s/%s.output", cache_dir, name);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(output_path), "output_path truncated");
 
-    FILE *f = fopen(output_path, "w");
+    FILE *f = open_secure(output_path, O_WRONLY | O_CREAT | O_TRUNC);
     if (!f) {
         free(buf);
         return -1;
@@ -363,12 +465,12 @@ static int cache_session(const char *name, const char *session_name)
     fclose(f);
     free(buf);
 
-    /* Write timestamp file */
+    /* Write timestamp file — Violation S9 fix: use mode 0600 */
     char ts_path[MAX_FILE_PATH];
     n = snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(ts_path), "ts_path truncated");
 
-    f = fopen(ts_path, "w");
+    f = open_secure(ts_path, O_WRONLY | O_CREAT | O_TRUNC);
     if (!f) {
         return -1;
     }
@@ -385,7 +487,10 @@ static int cache_session(const char *name, const char *session_name)
  * read_cache — Read and consume cached session output.
  *
  * Prints cache content to stdout, then deletes the cache files.
- * Returns 0 on success, -1 if no cache exists.
+ * Returns 0 on success, -1 if no cache exists or read error occurs.
+ *
+ * Violation S13 fix: checks ferror() after fgets loop; does not delete
+ * cache files on read error.
  */
 static int read_cache(const char *name)
 {
@@ -413,9 +518,17 @@ static int read_cache(const char *name)
             return -1;
         }
     }
+
+    /* Violation S13 fix: check for read error before deleting cache */
+    if (ferror(f)) {
+        fprintf(stderr, "Warning: read error on cache file %s: %s\n",
+                output_path, strerror(errno));
+        fclose(f);
+        return -1;  /* Do not delete cache if read failed */
+    }
     fclose(f);
 
-    /* Delete cache files after reading */
+    /* Delete cache files after successful read */
     char ts_path[MAX_FILE_PATH];
     n = snprintf(ts_path, sizeof(ts_path), "%s/%s.timestamp", cache_dir, name);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(ts_path), "ts_path truncated");
@@ -435,7 +548,9 @@ static int read_cache(const char *name)
  * read_log — Read persistent log file, stripping ANSI escape codes.
  *
  * Uses sed via fork+exec to strip escapes, matching the bash version.
- * Returns 0 on success, -1 if no log exists.
+ * Returns 0 on success, -1 if no log exists or sed fails.
+ *
+ * Violation S5 fix: only treats sed exit code 0 as success.
  */
 static int read_log(const char *name)
 {
@@ -467,11 +582,14 @@ static int read_log(const char *name)
 
     char *buf = malloc(CAPTURE_BUF_SIZE);
     if (!buf) {
+        fprintf(stderr, "Error: malloc failed for %zu bytes (log buffer)\n",
+                (size_t)CAPTURE_BUF_SIZE);
         return -1;
     }
 
     int rc = exec_capture(argv, buf, CAPTURE_BUF_SIZE);
-    if (rc >= 0) {
+    /* Violation S5 fix: only accept exit code 0, not any non-negative value */
+    if (rc == 0) {
         if (fputs(buf, stdout) == EOF) {
             free(buf);
             return -1;
@@ -479,7 +597,7 @@ static int read_log(const char *name)
     }
     free(buf);
 
-    return (rc >= 0) ? 0 : -1;
+    return (rc == 0) ? 0 : -1;
 }
 
 /* ── Tool reminder header ─────────────────────────────────────────── */
@@ -506,6 +624,52 @@ static void show_tool_header(void)
         "- Lock:        `pty-session-lock acquire/release <ses> <handle>`\n"
         "- Suppress:    `export NBS_PTY_QUIET=1`\n"
     );
+}
+
+/* ── Log search helper ────────────────────────────────────────────── */
+
+/*
+ * search_log_for_pattern — Search persistent log for a text pattern.
+ *
+ * Violation S8 fix: extracted from duplicated code in cmd_wait().
+ * Used both when session is already gone on entry and when session
+ * exits during polling.
+ *
+ * Returns EXIT_SUCCESS_CODE if pattern found, EXIT_NOT_FOUND if not.
+ */
+static int search_log_for_pattern(const char *name, const char *pattern)
+{
+    ASSERT_MSG(name != NULL, "search_log_for_pattern: name is NULL");
+    ASSERT_MSG(pattern != NULL, "search_log_for_pattern: pattern is NULL");
+
+    char log_path[MAX_PATH_LEN];
+    if (resolve_home_path(log_path, sizeof(log_path),
+                           ".pty-session/logs") != 0) {
+        return EXIT_NOT_FOUND;
+    }
+
+    char full_log[MAX_PATH_LEN];
+    int n = snprintf(full_log, sizeof(full_log), "%s/%s.log", log_path, name);
+    if (n <= 0 || (size_t)n >= sizeof(full_log)) {
+        return EXIT_NOT_FOUND;
+    }
+
+    FILE *f = fopen(full_log, "r");
+    if (!f) {
+        return EXIT_NOT_FOUND;
+    }
+
+    char line[4096];
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, pattern) != NULL) {
+            fclose(f);
+            printf("Pattern found in log after session exit\n");
+            return EXIT_SUCCESS_CODE;
+        }
+    }
+    fclose(f);
+
+    return EXIT_NOT_FOUND;
 }
 
 /* ── Command implementations ──────────────────────────────────────── */
@@ -687,17 +851,24 @@ int cmd_read(const char *name, int scrollback, int wait_mode, int timeout)
 
     /* Wait mode: poll until session exits, then read cache */
     if (wait_mode) {
-        long elapsed_ms = 0;
+        /* Violation S6 fix: use CLOCK_MONOTONIC for timeout */
         long timeout_ms = (long)timeout * 1000;
+        /* Violation S7 fix: postcondition on multiplication */
+        ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (long)timeout,
+                   "timeout_ms overflow: timeout=%d, timeout_ms=%ld",
+                   timeout, timeout_ms);
+
+        long start_ms = get_monotonic_ms();
+        ASSERT_MSG(start_ms >= 0, "clock_gettime(CLOCK_MONOTONIC) failed");
 
         while (session_exists(session)) {
-            if (elapsed_ms >= timeout_ms) {
+            long now_ms = get_monotonic_ms();
+            if (now_ms < 0 || (now_ms - start_ms) >= timeout_ms) {
                 fprintf(stderr, "Error: Timeout after %ds waiting for session to exit\n",
                         timeout);
                 return EXIT_TIMEOUT;
             }
             usleep(POLL_INTERVAL_USEC);
-            elapsed_ms += POLL_INTERVAL_USEC / 1000;
         }
 
         /* Session has exited, try cache then log */
@@ -716,12 +887,18 @@ int cmd_read(const char *name, int scrollback, int wait_mode, int timeout)
     if (session_exists(session)) {
         char *buf = malloc(CAPTURE_BUF_SIZE);
         if (!buf) {
-            fprintf(stderr, "Error: malloc failed\n");
+            fprintf(stderr, "Error: malloc failed for %zu bytes (capture buffer)\n",
+                    (size_t)CAPTURE_BUF_SIZE);
             return EXIT_ERROR;
         }
 
         if (capture_pane(session, scrollback, buf, CAPTURE_BUF_SIZE) == 0) {
-            fputs(buf, stdout);
+            /* Violation S4 fix: check fputs return value */
+            if (fputs(buf, stdout) == EOF) {
+                free(buf);
+                fprintf(stderr, "Error: failed to write output to stdout\n");
+                return EXIT_ERROR;
+            }
             free(buf);
             return EXIT_SUCCESS_CODE;
         }
@@ -770,67 +947,53 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     if (!session_exists(session)) {
         /* Session already gone — check persistent log for the pattern.
          * This handles the race where the session completes before
-         * wait starts polling. */
-        char log_path[MAX_PATH_LEN];
-        if (resolve_home_path(log_path, sizeof(log_path),
-                               ".pty-session/logs") == 0) {
-            char full_log[MAX_PATH_LEN];
-            int n = snprintf(full_log, sizeof(full_log),
-                             "%s/%s.log", log_path, name);
-            if (n > 0 && (size_t)n < sizeof(full_log)) {
-                FILE *f = fopen(full_log, "r");
-                if (f) {
-                    char line[4096];
-                    while (fgets(line, sizeof(line), f)) {
-                        if (strstr(line, pattern) != NULL) {
-                            fclose(f);
-                            printf("Pattern found in log after session exit\n");
-                            return EXIT_SUCCESS_CODE;
-                        }
-                    }
-                    fclose(f);
-                }
-            }
+         * wait starts polling.
+         * Violation S8 fix: use extracted helper. */
+        int log_rc = search_log_for_pattern(name, pattern);
+        if (log_rc == EXIT_SUCCESS_CODE) {
+            return EXIT_SUCCESS_CODE;
         }
         fprintf(stderr, "Session '%s' exited without producing pattern '%s'\n",
                 name, pattern);
         return EXIT_NOT_FOUND;
     }
 
-    long elapsed_ms = 0;
+    /* Violation S6 fix: use CLOCK_MONOTONIC for timeout */
     long timeout_ms = (long)timeout * 1000;
+    /* Violation S7 fix: postcondition on multiplication */
+    ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (long)timeout,
+               "timeout_ms overflow: timeout=%d, timeout_ms=%ld",
+               timeout, timeout_ms);
+
+    long start_ms = get_monotonic_ms();
+    ASSERT_MSG(start_ms >= 0, "clock_gettime(CLOCK_MONOTONIC) failed");
 
     char *buf = malloc(CAPTURE_BUF_SIZE);
     if (!buf) {
-        fprintf(stderr, "Error: malloc failed\n");
+        fprintf(stderr, "Error: malloc failed for %zu bytes (capture buffer)\n",
+                (size_t)CAPTURE_BUF_SIZE);
         return EXIT_ERROR;
     }
 
-    while (elapsed_ms < timeout_ms) {
+    for (;;) {
+        long now_ms = get_monotonic_ms();
+        long elapsed_ms = (now_ms >= 0) ? (now_ms - start_ms) : timeout_ms;
+
+        if (elapsed_ms >= timeout_ms) {
+            fprintf(stderr, "Timeout after %ds waiting for pattern: %s\n",
+                    timeout, pattern);
+            free(buf);
+            return EXIT_TIMEOUT;
+        }
+
         /* Check if session is still alive */
         if (!session_exists(session)) {
-            /* Session exited — check persistent log for the pattern */
+            /* Session exited — check persistent log for the pattern.
+             * Violation S8 fix: use extracted helper. */
             free(buf);
-            char log_path[MAX_PATH_LEN];
-            if (resolve_home_path(log_path, sizeof(log_path),
-                                   ".pty-session/logs") == 0) {
-                char full_log[MAX_PATH_LEN];
-                int n = snprintf(full_log, sizeof(full_log),
-                                 "%s/%s.log", log_path, name);
-                if (n > 0 && (size_t)n < sizeof(full_log)) {
-                    FILE *f = fopen(full_log, "r");
-                    if (f) {
-                        char line[4096];
-                        while (fgets(line, sizeof(line), f)) {
-                            if (strstr(line, pattern) != NULL) {
-                                fclose(f);
-                                printf("Pattern found in log after session exit\n");
-                                return EXIT_SUCCESS_CODE;
-                            }
-                        }
-                        fclose(f);
-                    }
-                }
+            int log_rc = search_log_for_pattern(name, pattern);
+            if (log_rc == EXIT_SUCCESS_CODE) {
+                return EXIT_SUCCESS_CODE;
             }
             fprintf(stderr, "Session '%s' exited without producing pattern '%s'\n",
                     name, pattern);
@@ -847,12 +1010,7 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
         }
 
         usleep(POLL_INTERVAL_USEC);
-        elapsed_ms += POLL_INTERVAL_USEC / 1000;
     }
-
-    fprintf(stderr, "Timeout after %ds waiting for pattern: %s\n", timeout, pattern);
-    free(buf);
-    return EXIT_TIMEOUT;
 }
 
 int cmd_kill(const char *name)
@@ -910,7 +1068,8 @@ int cmd_list(void)
     /* List running sessions */
     char *buf = malloc(CAPTURE_BUF_SIZE);
     if (!buf) {
-        fprintf(stderr, "Error: malloc failed\n");
+        fprintf(stderr, "Error: malloc failed for %zu bytes (list buffer)\n",
+                (size_t)CAPTURE_BUF_SIZE);
         return EXIT_ERROR;
     }
 
@@ -943,11 +1102,18 @@ int cmd_list(void)
 
     /*
      * Track names already printed so we don't duplicate entries.
-     * Simple approach: store up to 256 names seen so far.
+     * Violation S2 fix: use dynamic allocation instead of 64 KiB
+     * stack array.
      */
-    char seen_names[256][MAX_SESSION_NAME];
+    int seen_capacity = 256;
     int seen_count = 0;
-    int seen_overflow = 0;
+    char (*seen_names)[MAX_SESSION_NAME] = malloc(
+        (size_t)seen_capacity * sizeof(*seen_names));
+    if (!seen_names) {
+        fprintf(stderr, "Error: malloc failed for seen_names tracking\n");
+        free(buf);
+        return EXIT_ERROR;
+    }
 
     /* List killed sessions from cache */
     char cache_dir[MAX_PATH_LEN];
@@ -970,17 +1136,31 @@ int cmd_list(void)
                     printf("  %-20s killed (cached)\n", sname);
                     has_sessions = 1;
 
-                    if (seen_count < 256) {
-                        n = snprintf(seen_names[seen_count], sizeof(seen_names[0]),
-                                 "%s", sname);
-                        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(seen_names[0]), "seen_names truncated");
-                        seen_count++;
-                    } else if (!seen_overflow) {
-                        fprintf(stderr,
-                                "Warning: More than 256 cached sessions, "
-                                "duplicates may appear in listing\n");
-                        seen_overflow = 1;
+                    /* Violation S2 fix: grow buffer if needed */
+                    if (seen_count >= seen_capacity) {
+                        int new_cap = seen_capacity * 2;
+                        char (*new_names)[MAX_SESSION_NAME] = realloc(
+                            seen_names,
+                            (size_t)new_cap * sizeof(*new_names));
+                        if (!new_names) {
+                            fprintf(stderr,
+                                    "Error: realloc failed for seen_names "
+                                    "(at %d entries)\n", seen_count);
+                            /* Cannot maintain dedup invariant; abort listing */
+                            closedir(dir);
+                            free(seen_names);
+                            free(buf);
+                            return EXIT_ERROR;
+                        }
+                        seen_names = new_names;
+                        seen_capacity = new_cap;
                     }
+
+                    n = snprintf(seen_names[seen_count],
+                                 sizeof(seen_names[0]), "%s", sname);
+                    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(seen_names[0]),
+                               "seen_names truncated");
+                    seen_count++;
                 }
             }
             closedir(dir);
@@ -1037,6 +1217,7 @@ int cmd_list(void)
         printf("  (none)\n");
     }
 
+    free(seen_names);
     free(buf);
     return EXIT_SUCCESS_CODE;
 }
@@ -1079,3 +1260,19 @@ int cmd_help(void)
 
     return EXIT_SUCCESS_CODE;
 }
+
+/* ── Test-visible wrappers ────────────────────────────────────────── */
+
+#ifdef TEST_BUILD
+
+int test_is_safe_name(const char *name)
+{
+    return is_safe_name(name);
+}
+
+int test_is_safe_home_path(const char *path)
+{
+    return is_safe_home_path(path);
+}
+
+#endif /* TEST_BUILD */

@@ -170,6 +170,13 @@ if [[ ! -d "$NBS_ROOT" ]]; then
     exit 1
 fi
 
+# V1.7: HARDENING — reject NBS_ROOT with embedded newlines/carriage returns.
+# These can cause surprising behaviour in mkdir -p, file paths, and JSON output.
+if [[ "$NBS_ROOT" == *$'\n'* || "$NBS_ROOT" == *$'\r'* ]]; then
+    echo "Error: NBS_ROOT path contains newline or carriage return characters" >&2
+    exit 4
+fi
+
 # V1.1: Re-validate NBS_MODEL if overridden by --model=
 if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
     echo "Error: NBS_MODEL contains invalid characters: '$NBS_MODEL'" >&2
@@ -179,18 +186,25 @@ fi
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # --- Handle collision guard ---
+# V1.7: Use flock for atomic PID file acquisition (fixes TOCTOU race where
+# two instances could both see a stale/absent PID and both write their PID)
 mkdir -p "${NBS_ROOT}/.nbs/pids"
 PIDFILE="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
-if [[ -f "$PIDFILE" ]]; then
+exec 9>"$PIDFILE"
+if ! flock -n 9; then
     EXISTING_PID=$(cat "$PIDFILE" 2>/dev/null)
-    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
-        if [[ "$FORCE_SPAWN" == "1" ]]; then
-            echo "Warning: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID) — --force specified, proceeding" >&2
-        else
-            echo "Error: Handle '$SIDECAR_HANDLE' already active (PID $EXISTING_PID)" >&2
-            echo "  Use --force to override, or choose a different NBS_HANDLE." >&2
-            exit 1
-        fi
+    # V1.8: Validate PID is numeric before use in messages (prevents
+    # misleading output from corrupted/tampered PID files)
+    if [[ -n "$EXISTING_PID" && ! "$EXISTING_PID" =~ ^[0-9]+$ ]]; then
+        echo "Error: PID file '$PIDFILE' contains non-numeric value: '$EXISTING_PID'" >&2
+        exit 1
+    fi
+    if [[ "$FORCE_SPAWN" == "1" ]]; then
+        echo "Warning: Handle '$SIDECAR_HANDLE' already locked (PID ${EXISTING_PID:-unknown}) — --force specified, proceeding" >&2
+    else
+        echo "Error: Handle '$SIDECAR_HANDLE' already active (PID ${EXISTING_PID:-unknown})" >&2
+        echo "  Use --force to override, or choose a different NBS_HANDLE." >&2
+        exit 1
     fi
 fi
 echo "$$" > "$PIDFILE"
@@ -201,8 +215,22 @@ if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
     SESSION_UUID="$NBS_CONTINUE_SESSION"
     CLAUDE_ARGS+=("--resume" "$SESSION_UUID")
 else
-    SESSION_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "no-uuid-$$-$(date +%s)")
+    SESSION_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "")
+    # V1.7: Postcondition — verify a UUID was actually generated (fixes silent
+    # fallback to non-UUID value "no-uuid-$$-..." when all generators fail)
+    if [[ -z "$SESSION_UUID" ]]; then
+        echo "Error: Failed to generate a UUID. Install uuidgen or ensure /proc/sys/kernel/random/uuid is available." >&2
+        exit 1
+    fi
     CLAUDE_ARGS+=("--session-id" "$SESSION_UUID")
+fi
+
+# V1.7: SECURITY — validate SESSION_UUID characters to prevent JSON injection
+# (SESSION_UUID from --continue= is user-supplied; generated UUIDs should also
+# pass but we verify unconditionally as a postcondition)
+if [[ ! "$SESSION_UUID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Session UUID contains invalid characters: '$SESSION_UUID'" >&2
+    exit 4
 fi
 
 # --- Model passthrough ---
@@ -282,6 +310,12 @@ if [[ -n "${TMUX:-}" ]]; then
     if [[ "$POLL_DISABLE" != "1" ]]; then
         "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
+        # V1.7: Postcondition — verify sidecar did not exit immediately
+        sleep 0.2
+        if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+            echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
+            exit 1
+        fi
     fi
 
     # Run claude in foreground
@@ -320,9 +354,18 @@ else
     if [[ "$POLL_DISABLE" != "1" ]]; then
         "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
+        # V1.7: Postcondition — verify sidecar did not exit immediately
+        sleep 0.2
+        if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+            echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
+            exit 1
+        fi
     fi
 
     # Attach to the session
+    # V1.7: HARDENING — document coupling with pty-session naming convention.
+    # COUPLING: pty-session names its tmux session "pty_${SESSION_NAME}".
+    # If pty-session changes this convention, this will break.
     TMUX_SESSION="pty_${SESSION_NAME}"
     if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
         echo "Error: tmux session '$TMUX_SESSION' does not exist after pty-session create" >&2

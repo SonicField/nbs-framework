@@ -46,7 +46,11 @@ int trigger_heartbeat(const char *registry_path, const char *handle,
  * trigger_pythia_spawn — Spawn Pythia worker via lock + fork+exec.
  *
  * Phase 2: replaces bus event publication with direct worker spawn.
- * Uses non-blocking lock to prevent concurrent spawns across sidecars.
+ * Lock serialises concurrent spawn commands across sidecars but does
+ * not prevent concurrent worker execution (the lock releases after
+ * the spawn command exits, before the worker completes). Cross-sidecar
+ * dedup is primarily handled by the shared bucket file in
+ * trigger_pythia_check; the lock is a secondary guard.
  *
  * Returns: 0 = spawned, 1 = lock busy (another sidecar handling it), -1 = error
  */
@@ -67,7 +71,8 @@ int trigger_shepard_check(const char *registry_path, const char *nbs_root,
 /*
  * trigger_shepard_spawn — Spawn Shepard worker via lock + fork+exec.
  *
- * Uses non-blocking lock to prevent concurrent spawns across sidecars.
+ * Lock serialises concurrent spawn commands; cross-sidecar dedup is
+ * primarily handled by the shared bucket file in trigger_shepard_check.
  *
  * Returns: 0 = spawned, 1 = lock busy, -1 = error
  */
@@ -77,10 +82,12 @@ int trigger_shepard_spawn(const char *nbs_root);
  * trigger_fixup_check — Wall-clock hourly fixup trigger.
  *
  * Checks shared timestamp file. If interval_secs have elapsed since
- * last run, spawns a fixup worker. Cross-sidecar dedup via timestamp
- * file + lock-guarded spawn.
+ * last run, spawns a fixup worker. Cross-sidecar dedup is best-effort
+ * via timestamp file (TOCTOU window exists) + lock-guarded spawn
+ * (serialises commands, not worker execution). Duplicate fixup runs
+ * are possible but harmless (idempotent).
  *
- * Returns: 0 = spawned, 1 = not time yet or disabled, -1 = error
+ * Returns: 0 = spawned, 1 = not time yet, -1 = error
  */
 int trigger_fixup_check(const char *nbs_root, int interval_secs);
 

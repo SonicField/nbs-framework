@@ -34,9 +34,16 @@ fi
 
 # Discover running sidecars
 # V4.3: Use [n] trick to prevent pgrep from self-matching
-PIDS=$(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null || true)
+# V5.4: Distinguish "no matches" (exit 1) from "pgrep error" (exit 2+)
+PIDS=$(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null) || {
+    pgrep_rc=$?
+    if [[ $pgrep_rc -gt 1 ]]; then
+        echo "ERROR: pgrep failed with exit code $pgrep_rc" >&2
+        exit 1
+    fi
+}
 
-if [[ -z "$PIDS" ]]; then
+if [[ -z "${PIDS:-}" ]]; then
     echo "No running sidecars found."
     exit 0
 fi
@@ -45,6 +52,12 @@ RESTARTED=0
 FAILED=0
 
 for pid in $PIDS; do
+    # V5.7: Assert PID is numeric before using in /proc paths or kill
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+        echo "ASSERTION FAILED: pgrep returned non-numeric PID: '$pid'" >&2
+        exit 1
+    fi
+
     # Read full command line from /proc (NUL-separated)
     if [[ ! -r "/proc/$pid/cmdline" ]]; then
         continue
@@ -102,7 +115,7 @@ for pid in $PIDS; do
 
     # V4.1: Validate NEW_ARGS is non-empty before exec
     if [[ ${#NEW_ARGS[@]} -eq 0 ]]; then
-        echo "FAIL — no command after argument filtering"
+        echo "FAIL: $HANDLE (PID $pid) — no command after argument filtering"
         FAILED=$((FAILED + 1))
         continue
     fi
@@ -115,14 +128,28 @@ for pid in $PIDS; do
     fi
 
     if [[ ! -x "${NEW_ARGS[0]}" ]]; then
-        echo "FAIL — sidecar binary not executable: ${NEW_ARGS[0]}"
+        echo "FAIL: $HANDLE (PID $pid) — sidecar binary not executable: ${NEW_ARGS[0]}"
         FAILED=$((FAILED + 1))
         continue
     fi
 
+    # V5.5: SECURITY — validate argument formats to prevent injection
+    # Arguments from /proc cmdline should only be --flag or --flag=value
+    for arg in "${NEW_ARGS[@]:1}"; do
+        if [[ ! "$arg" =~ ^--[a-zA-Z_-]+= ]] && [[ ! "$arg" =~ ^--[a-zA-Z_-]+$ ]]; then
+            echo "FAIL: $HANDLE (PID $pid) — unexpected argument format: '$arg'" >&2
+            FAILED=$((FAILED + 1))
+            continue 2
+        fi
+    done
+
     # Kill old sidecar
+    # V5.1: Log kill result instead of silently discarding errors
     echo -n "Restarting $HANDLE (PID $pid)... "
-    kill "$pid" 2>/dev/null || true
+    if ! kill "$pid" 2>/dev/null; then
+        # Process may already be dead — the loop below will confirm
+        echo -n "(kill signal may not have been delivered to PID $pid) "
+    fi
     # Wait for process to die (up to 3s)
     for i in 1 2 3 4 5 6; do
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -131,8 +158,15 @@ for pid in $PIDS; do
         sleep 0.5
     done
 
+    # V5.2: Escalate to SIGKILL if SIGTERM did not work
     if kill -0 "$pid" 2>/dev/null; then
-        echo "FAIL — old process did not die"
+        echo -n "SIGTERM did not kill PID $pid, sending SIGKILL... "
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "FAIL: $HANDLE (PID $pid) — old process did not die even after SIGKILL"
         FAILED=$((FAILED + 1))
         continue
     fi
@@ -140,15 +174,25 @@ for pid in $PIDS; do
     # Launch new sidecar
     "${NEW_ARGS[@]}" &
     NEW_PID=$!
-    disown "$NEW_PID" 2>/dev/null || true
+    # V5.3: Log disown failure — indicates backgrounding logic error
+    if ! disown "$NEW_PID" 2>/dev/null; then
+        echo "WARNING: disown failed for PID $NEW_PID — process may be killed when script exits"
+    fi
 
-    # Verify it started
-    sleep 0.5
+    # V5.8: Improved postcondition — verify new process survives startup
+    # Check twice with a gap to catch processes that crash during init
+    sleep 1
     if kill -0 "$NEW_PID" 2>/dev/null; then
-        echo "$pid → $NEW_PID"
-        RESTARTED=$((RESTARTED + 1))
+        sleep 2
+        if kill -0 "$NEW_PID" 2>/dev/null; then
+            echo "$pid → $NEW_PID"
+            RESTARTED=$((RESTARTED + 1))
+        else
+            echo "FAIL: $HANDLE — new process (PID $NEW_PID) died during startup"
+            FAILED=$((FAILED + 1))
+        fi
     else
-        echo "FAIL — new process died immediately"
+        echo "FAIL: $HANDLE (PID $pid) — new process (PID $NEW_PID) died immediately"
         FAILED=$((FAILED + 1))
     fi
 

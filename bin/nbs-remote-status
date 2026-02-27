@@ -49,6 +49,7 @@ CHAT_HANDLE=""
 LAST=100
 
 usage() {
+    [[ -f "$0" ]] || { echo "Error: cannot read $0 for usage" >&2; return 1; }
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
 }
 
@@ -79,13 +80,28 @@ if [[ -z "$SESSION" ]]; then
     exit 4
 fi
 
+# Precondition: session name must contain only safe characters (SECURITY: prevents marker/command injection)
+[[ "$SESSION" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo "Error: session name contains invalid characters: '$SESSION'" >&2; exit 4; }
+
 if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
     echo "Error: --handle is required when --chat is set" >&2
     exit 4
 fi
 
-# Validate numeric arguments
-[[ "$LAST" =~ ^[0-9]+$ ]] || { echo "Error: --last must be a positive integer, got '$LAST'" >&2; exit 4; }
+# Precondition: nbs-chat must exist if --chat is used (BUG: validated late, fails silently after all work done)
+if [[ -n "$CHAT_FILE" ]]; then
+    [[ -x "$NBS_CHAT" ]] || { echo "Error: nbs-chat not found at $NBS_CHAT" >&2; exit 1; }
+fi
+
+# Validate numeric arguments — must be a positive integer, not zero (BUG: LAST=0 guarantees timeout)
+[[ "$LAST" =~ ^[0-9]+$ ]] && (( LAST > 0 )) || { echo "Error: --last must be a positive integer, got '$LAST'" >&2; exit 4; }
+
+# Validate CWD is an absolute path with safe characters (SECURITY: prevents injection via cd command)
+if [[ -n "$CWD" ]]; then
+    [[ "$CWD" == /* ]] || { echo "Error: --cwd must be an absolute path, got '$CWD'" >&2; exit 4; }
+    CWD_RE='^[a-zA-Z0-9/._ -]+$'
+    [[ "$CWD" =~ $CWD_RE ]] || { echo "Error: --cwd contains suspicious characters: '$CWD'" >&2; exit 4; }
+fi
 
 # Verify session exists
 if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
@@ -93,8 +109,11 @@ if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
     exit 2
 fi
 
-MARKER_START="NBS_STATUS_START_$$"
-MARKER_END="NBS_STATUS_END_$$"
+# Use markers with cryptographic randomness to prevent injection and collision
+# (BUG: PID-only markers collide on PID reuse; SECURITY: predictable markers injectable)
+MARKER_RANDOM=$(head -c 16 /dev/urandom | xxd -p)
+MARKER_START="NBS_STATUS_START_${MARKER_RANDOM}"
+MARKER_END="NBS_STATUS_END_${MARKER_RANDOM}"
 
 # Build command: git log, status, and diff --stat in one shot
 STATUS_CMD="echo '---HEAD---'; git log --oneline -1; echo '---BRANCH---'; git rev-parse --abbrev-ref HEAD; echo '---STATUS---'; git status --porcelain; echo '---DIFFSTAT---'; git diff --stat"
@@ -104,7 +123,8 @@ if [[ -n "$CWD" ]]; then
     FULL_CMD="cd $(printf '%q' "$CWD") && ${STATUS_CMD}"
 fi
 
-if ! "$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"; then
+# Single-quote markers in remote command to prevent shell expansion
+if ! "$PTY_SESSION" send "$SESSION" "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
     echo "Error: Failed to send status command to session '$SESSION'" >&2
     exit 1
 fi
@@ -113,16 +133,32 @@ fi
 TIMEOUT=30
 elapsed=0
 POLL=2
+consecutive_failures=0
 
 while (( elapsed < TIMEOUT )); do
     sleep "$POLL"
     elapsed=$((elapsed + POLL))
 
-    output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null) || true
-    if echo "$output" | grep -q "$MARKER_END"; then
-        raw=$(echo "$output" | sed -n "/${MARKER_START}/,/${MARKER_END}/p" \
-            | grep -v "$MARKER_START" \
-            | grep -v "$MARKER_END")
+    # Track consecutive read failures to detect dead sessions (BUG: was silently swallowed with || true)
+    if output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null); then
+        consecutive_failures=0
+    else
+        consecutive_failures=$((consecutive_failures + 1))
+        if (( consecutive_failures >= 3 )); then
+            echo "Error: pty-session read failed 3 consecutive times for '$SESSION'" >&2
+            exit 2
+        fi
+        continue
+    fi
+
+    # Use grep -F for fixed-string matching (HARDENING: markers treated as literal, not regex)
+    if echo "$output" | grep -qF "$MARKER_END"; then
+        # Extract content using awk with literal string matching (HARDENING: sed treated markers as regex)
+        raw=$(echo "$output" | awk -v start="$MARKER_START" -v end="$MARKER_END" '
+            $0 == start { capture=1; next }
+            $0 == end { capture=0; next }
+            capture { print }
+        ')
 
         # Parse sections
         head_line=$(echo "$raw" | sed -n '/---HEAD---/,/---BRANCH---/p' | grep -v '^---' | head -1)
@@ -130,10 +166,17 @@ while (( elapsed < TIMEOUT )); do
         status_lines=$(echo "$raw" | sed -n '/---STATUS---/,/---DIFFSTAT---/p' | grep -v '^---')
         diffstat=$(echo "$raw" | sed -n '/---DIFFSTAT---/,$p' | grep -v '^---')
 
-        # Count modified files
+        # Postcondition: verify parse succeeded (BUG: empty sections produce misleading "clean" status)
+        if [[ -z "$head_line" ]] || [[ -z "$branch" ]]; then
+            echo "Error: Failed to parse git status from remote output. Raw output:" >&2
+            echo "$raw" >&2
+            exit 1
+        fi
+
+        # Count modified files using porcelain format (HARDENING: grep -c '.' counted any non-empty line)
         n_modified=0
         if [[ -n "$status_lines" ]]; then
-            n_modified=$(echo "$status_lines" | grep -c '.' || true)
+            n_modified=$(echo "$status_lines" | grep -c '^[MADRCU? ]' || true)
         fi
 
         # Format output
@@ -158,7 +201,12 @@ ${diffstat}"
 
         # Post to chat if requested
         if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
-            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$result" 2>&1 || echo "Warning: Failed to post status to chat" >&2
+            # Fail hard if chat post fails — user explicitly requested it (BUG: was silently downgraded to warning)
+            # stderr flows to stderr naturally (HARDENING: 2>&1 was hiding error details)
+            if ! "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$result"; then
+                echo "Error: Failed to post status to chat file '$CHAT_FILE'" >&2
+                exit 1
+            fi
         fi
 
         exit 0

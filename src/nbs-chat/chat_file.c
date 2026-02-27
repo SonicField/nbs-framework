@@ -36,10 +36,13 @@ static int safe_parse_int(const char *str, int *out) {
 static int safe_parse_int64(const char *str, int64_t *out) {
     ASSERT_MSG(str != NULL, "safe_parse_int64: str is NULL");
     ASSERT_MSG(out != NULL, "safe_parse_int64: out is NULL");
+    _Static_assert(sizeof(long long) >= sizeof(int64_t),
+                   "long long must be at least as wide as int64_t");
     char *endptr;
     errno = 0;
     long long val = strtoll(str, &endptr, 10);
     if (errno != 0 || endptr == str || (*endptr != '\0' && *endptr != '\n' && *endptr != '\r')) return -1;
+    if (val < INT64_MIN || val > INT64_MAX) return -1;
     *out = (int64_t)val;
     return 0;
 }
@@ -125,6 +128,11 @@ static int parse_participants(const char *line, participant_t *parts, int max_pa
         count++;
     }
 
+    /* Postcondition: count is within bounds */
+    ASSERT_MSG(count >= 0 && count <= max_parts,
+               "parse_participants: count %d out of bounds [0, %d]",
+               count, max_parts);
+
     return count;
 }
 
@@ -150,6 +158,10 @@ static void format_participants(const participant_t *parts, int count,
         else if (written > 0)
             offset = buf_size - 1;  /* truncated */
     }
+    /* Postcondition: buffer is null-terminated within bounds */
+    ASSERT_MSG(offset < buf_size,
+               "format_participants: output truncated beyond buffer (offset %zu >= buf_size %zu)",
+               offset, buf_size);
 }
 
 static int update_participants(participant_t *parts, int count,
@@ -314,6 +326,7 @@ static int chat_auto_archive(const char *path, char **all_lines,
     FILE *af = fdopen(afd, "w");
     if (!af) {
         close(afd);
+        unlink(archive_tmp);
         free(archive_content);
         return -1;
     }
@@ -398,6 +411,7 @@ static int chat_auto_archive(const char *path, char **all_lines,
     FILE *mf = fdopen(mfd, "w");
     if (!mf) {
         close(mfd);
+        unlink(main_tmp);
         return -1;
     }
 
@@ -501,12 +515,6 @@ static int chat_auto_archive(const char *path, char **all_lines,
 int chat_create(const char *path) {
     ASSERT_MSG(path != NULL, "chat_create: path is NULL");
 
-    /* Check if file already exists */
-    struct stat st;
-    if (stat(path, &st) == 0) {
-        return -1; /* Already exists */
-    }
-
     char timestamp[64];
     get_timestamp(timestamp, sizeof(timestamp));
 
@@ -524,9 +532,13 @@ int chat_create(const char *path) {
 
     int64_t file_len = compute_file_length(content);
 
-    /* Now write the actual file with file-length inserted */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return -2;
+    /* Atomic create-or-fail: O_EXCL ensures no TOCTOU race.
+     * If the file already exists, open() fails with EEXIST. */
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        if (errno == EEXIST) return -1; /* Already exists */
+        return -2;
+    }
     FILE *f = fdopen(fd, "w");
     if (!f) { close(fd); return -2; }
 
@@ -548,6 +560,7 @@ int chat_create(const char *path) {
     }
 
     /* Postcondition: verify file-length matches actual size */
+    struct stat st;
     int stat_rc = stat(path, &st);
     ASSERT_MSG(stat_rc == 0,
                "chat_create: stat failed after write: %s", strerror(errno));
@@ -573,6 +586,8 @@ int chat_read(const char *path, chat_state_t *state) {
     int line_number = 0;
 
     /* Temporary message storage */
+    _Static_assert(MAX_MESSAGES <= SIZE_MAX / sizeof(chat_message_t),
+                   "MAX_MESSAGES * sizeof(chat_message_t) would overflow size_t");
     state->messages = malloc(sizeof(chat_message_t) * MAX_MESSAGES);
     if (!state->messages) {
         fclose(f);
@@ -669,6 +684,12 @@ int chat_read(const char *path, chat_state_t *state) {
                 }
 
                 if (handle_len < MAX_HANDLE_LEN && handle_len > 0) {
+                    /* Precondition: colon+2 must be within the decoded buffer */
+                    ASSERT_MSG(colon + 2 >= (char *)decoded &&
+                               (size_t)(colon + 2 - (char *)decoded) <= (size_t)decoded_len,
+                               "chat_read: colon+2 offset %td out of bounds [0, %d] "
+                               "for message at line %d",
+                               colon + 2 - (char *)decoded, decoded_len, line_number);
                     chat_message_t *msg = &state->messages[state->message_count];
                     strncpy(msg->handle, (char *)decoded, handle_len);
                     msg->handle[handle_len] = '\0';
@@ -812,6 +833,7 @@ int chat_send(const char *path, const char *handle, const char *message) {
     int encoded_line_count = 0;
     char line_buf[MAX_MESSAGE_LEN];
     int past_delim = 0;
+    int seen_header_marker = 0;
 
     while (fgets(line_buf, sizeof(line_buf), f)) {
         size_t ll = strlen(line_buf);
@@ -819,10 +841,9 @@ int chat_send(const char *path, const char *handle, const char *message) {
             line_buf[--ll] = '\0';
 
         if (!past_delim) {
-            if (strcmp(line_buf, "---") == 0 && encoded_line_count == 0) {
-                /* This is the closing delimiter of the header */
-                /* But we need to distinguish from "=== nbs-chat ===" */
-                /* Check if we've seen the opening marker */
+            if (strcmp(line_buf, "=== nbs-chat ===") == 0) {
+                seen_header_marker = 1;
+            } else if (strcmp(line_buf, "---") == 0 && seen_header_marker) {
                 past_delim = 1;
             }
             continue;
@@ -967,23 +988,18 @@ int chat_send(const char *path, const char *handle, const char *message) {
     }
 
     /* Postcondition: verify file-length matches actual .tmp size.
-     * Non-fatal: if mismatch, warn and continue — the data is correct
-     * even if the self-referential size header is wrong. A mismatch
-     * here typically means compute_file_length has a rounding bug,
-     * not data corruption. The alternative (abort) kills the agent
-     * and makes the chat system fragile to edge cases. */
+     * A mismatch means compute_file_length has a bug; the data
+     * written is inconsistent with the header. Per engineering
+     * standards: never silently continue after an invariant violation. */
     struct stat st;
     int stat_rc = stat(tmp_path, &st);
-    if (stat_rc != 0) {
-        fprintf(stderr, "warning: chat_send: stat failed on %s after write: %s\n",
-                tmp_path, strerror(errno));
-    } else if ((int64_t)st.st_size != file_len) {
-        fprintf(stderr, "warning: chat_send: file-length header %" PRId64
-                " != actual size %" PRId64 " — continuing with actual size\n",
-                file_len, (int64_t)st.st_size);
-        /* The data is written correctly; the header value is just a
-         * cosmetic discrepancy. Do NOT abort. */
-    }
+    ASSERT_MSG(stat_rc == 0,
+               "chat_send: stat failed on %s after write: %s",
+               tmp_path, strerror(errno));
+    ASSERT_MSG((int64_t)st.st_size == file_len,
+               "chat_send postcondition: file-length header %" PRId64
+               " != actual size %" PRId64 " — compute_file_length has a bug",
+               file_len, (int64_t)st.st_size);
 
     /* Atomic rename: replace the original file with the .tmp file.
      * rename() is atomic on POSIX filesystems (same filesystem). */
@@ -1088,9 +1104,11 @@ int chat_truncate(const char *path, int keep_count) {
     }
 
     char **encoded_lines = NULL;
-    int encoded_line_count = 0;
+    int stored_line_count = 0;  /* Lines actually allocated in encoded_lines */
+    int total_line_count = 0;   /* Total message lines in file (including uncollected) */
     char line_buf[MAX_MESSAGE_LEN];
     int past_delim = 0;
+    int seen_header_marker = 0;
 
     while (fgets(line_buf, sizeof(line_buf), f)) {
         size_t ll = strlen(line_buf);
@@ -1098,21 +1116,24 @@ int chat_truncate(const char *path, int keep_count) {
             line_buf[--ll] = '\0';
 
         if (!past_delim) {
-            if (strcmp(line_buf, "---") == 0 && encoded_line_count == 0)
+            if (strcmp(line_buf, "=== nbs-chat ===") == 0) {
+                seen_header_marker = 1;
+            } else if (strcmp(line_buf, "---") == 0 && seen_header_marker) {
                 past_delim = 1;
+            }
             continue;
         }
 
         if (ll > 0) {
+            total_line_count++;
             /* Only collect lines up to keep_count */
-            if (encoded_line_count >= keep_count) {
-                encoded_line_count++;
+            if (stored_line_count >= keep_count) {
                 continue;  /* Count but don't store */
             }
             char **tmp = realloc(encoded_lines,
-                                 sizeof(char *) * (encoded_line_count + 1));
+                                 sizeof(char *) * (stored_line_count + 1));
             if (!tmp) {
-                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+                for (int j = 0; j < stored_line_count; j++) free(encoded_lines[j]);
                 free(encoded_lines);
                 fclose(f);
                 chat_state_free(&state);
@@ -1120,22 +1141,27 @@ int chat_truncate(const char *path, int keep_count) {
                 return -1;
             }
             encoded_lines = tmp;
-            encoded_lines[encoded_line_count] = strdup(line_buf);
-            if (!encoded_lines[encoded_line_count]) {
-                for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+            encoded_lines[stored_line_count] = strdup(line_buf);
+            if (!encoded_lines[stored_line_count]) {
+                for (int j = 0; j < stored_line_count; j++) free(encoded_lines[j]);
                 free(encoded_lines);
                 fclose(f);
                 chat_state_free(&state);
                 chat_lock_release(lock_fd);
                 return -1;
             }
-            encoded_line_count++;
+            stored_line_count++;
         }
     }
     fclose(f);
 
-    /* encoded_line_count now holds the stored count (= keep_count) */
-    int stored = (encoded_line_count > keep_count) ? keep_count : encoded_line_count;
+    /* Postcondition: stored_line_count <= keep_count and <= total_line_count */
+    ASSERT_MSG(stored_line_count <= keep_count,
+               "chat_truncate: stored_line_count %d > keep_count %d",
+               stored_line_count, keep_count);
+    ASSERT_MSG(stored_line_count <= total_line_count,
+               "chat_truncate: stored_line_count %d > total_line_count %d",
+               stored_line_count, total_line_count);
 
     /* Recompute participants from kept messages */
     participant_t parts[MAX_PARTICIPANTS];
@@ -1188,13 +1214,13 @@ int chat_truncate(const char *path, int keep_count) {
 
     /* Build content without file-length for size computation */
     size_t content_size = header_len;
-    for (int i = 0; i < stored; i++) {
+    for (int i = 0; i < stored_line_count; i++) {
         content_size += strlen(encoded_lines[i]) + 1;
     }
 
     char *content_no_fl = malloc(content_size + 1);
     if (!content_no_fl) {
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
@@ -1204,7 +1230,7 @@ int chat_truncate(const char *path, int keep_count) {
     size_t offset = 0;
     memcpy(content_no_fl + offset, header, header_len);
     offset += header_len;
-    for (int i = 0; i < stored; i++) {
+    for (int i = 0; i < stored_line_count; i++) {
         size_t ll = strlen(encoded_lines[i]);
         memcpy(content_no_fl + offset, encoded_lines[i], ll);
         offset += ll;
@@ -1223,7 +1249,7 @@ int chat_truncate(const char *path, int keep_count) {
     int wfd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (wfd < 0) {
         free(content_no_fl);
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
@@ -1234,7 +1260,7 @@ int chat_truncate(const char *path, int keep_count) {
         close(wfd);
         unlink(tmp_path);
         free(content_no_fl);
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
@@ -1248,14 +1274,14 @@ int chat_truncate(const char *path, int keep_count) {
     if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
     if (fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
     if (fprintf(f, "---\n") < 0) write_err = 1;
-    for (int i = 0; i < stored; i++) {
+    for (int i = 0; i < stored_line_count; i++) {
         if (fprintf(f, "%s\n", encoded_lines[i]) < 0) write_err = 1;
     }
     if (write_err) {
         fclose(f);
         unlink(tmp_path);
         free(content_no_fl);
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
@@ -1264,25 +1290,29 @@ int chat_truncate(const char *path, int keep_count) {
     if (fclose(f) != 0) {
         unlink(tmp_path);
         free(content_no_fl);
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
         return -1;
     }
 
-    /* Verify file-length */
+    /* Postcondition: verify file-length matches actual .tmp size */
     struct stat st;
-    if (stat(tmp_path, &st) == 0 && (int64_t)st.st_size != file_len) {
-        fprintf(stderr, "warning: chat_truncate: file-length %" PRId64
-                " != actual %" PRId64 "\n", file_len, (int64_t)st.st_size);
-    }
+    int stat_rc = stat(tmp_path, &st);
+    ASSERT_MSG(stat_rc == 0,
+               "chat_truncate: stat failed on %s after write: %s",
+               tmp_path, strerror(errno));
+    ASSERT_MSG((int64_t)st.st_size == file_len,
+               "chat_truncate postcondition: file-length header %" PRId64
+               " != actual size %" PRId64 " — compute_file_length has a bug",
+               file_len, (int64_t)st.st_size);
 
     /* Atomic rename */
     if (rename(tmp_path, path) != 0) {
         unlink(tmp_path);
         free(content_no_fl);
-        for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+        for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
         free(encoded_lines);
         chat_state_free(&state);
         chat_lock_release(lock_fd);
@@ -1290,7 +1320,7 @@ int chat_truncate(const char *path, int keep_count) {
     }
 
     free(content_no_fl);
-    for (int i = 0; i < stored; i++) free(encoded_lines[i]);
+    for (int i = 0; i < stored_line_count; i++) free(encoded_lines[i]);
     free(encoded_lines);
     chat_state_free(&state);
     chat_lock_release(lock_fd);

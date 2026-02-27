@@ -59,6 +59,7 @@ CWD=""
 LAST=200
 
 usage() {
+    [[ -f "$0" ]] || { echo "Error: cannot read $0 for usage" >&2; return 1; }
     grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
 }
 
@@ -94,13 +95,40 @@ if [[ -z "$SESSION" ]]; then
     exit 4
 fi
 
+# Precondition: session name must contain only safe characters (BUG/SECURITY: marker injection via SESSION)
+[[ "$SESSION" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo "Error: session name contains invalid characters: '$SESSION'" >&2; exit 4; }
+
 if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
     echo "Error: --handle is required when --chat is set" >&2
     exit 4
 fi
 
-# Validate numeric arguments
-[[ "$LAST" =~ ^[0-9]+$ ]] || { echo "Error: --last must be a positive integer, got '$LAST'" >&2; exit 4; }
+# Precondition: nbs-chat must exist if --chat is used (BUG: validated late, fails silently after all work done)
+if [[ -n "$CHAT_FILE" ]]; then
+    [[ -x "$NBS_CHAT" ]] || { echo "Error: nbs-chat not found at $NBS_CHAT" >&2; exit 1; }
+fi
+
+# Validate numeric arguments — must be a positive integer, not zero (BUG: LAST=0 guarantees timeout)
+[[ "$LAST" =~ ^[0-9]+$ ]] && (( LAST > 0 )) || { echo "Error: --last must be a positive integer, got '$LAST'" >&2; exit 4; }
+
+# Validate COMMIT matches a git ref pattern (SECURITY: prevents flag injection via --commit=--output=...)
+if [[ -n "$COMMIT" ]]; then
+    COMMIT_RE='^[a-zA-Z0-9_.^~/@{}-]+$'
+    [[ "$COMMIT" =~ $COMMIT_RE ]] || { echo "Error: --commit value contains invalid characters: '$COMMIT'" >&2; exit 4; }
+fi
+
+# Validate DIFF_PATH contains only path-safe characters (HARDENING: catches errors early)
+if [[ -n "$DIFF_PATH" ]]; then
+    PATH_RE='^[a-zA-Z0-9_./ -]+$'
+    [[ "$DIFF_PATH" =~ $PATH_RE ]] || { echo "Error: --path contains invalid characters: '$DIFF_PATH'" >&2; exit 4; }
+fi
+
+# Validate CWD is an absolute path with safe characters (HARDENING: catches injection early)
+if [[ -n "$CWD" ]]; then
+    [[ "$CWD" == /* ]] || { echo "Error: --cwd must be an absolute path, got '$CWD'" >&2; exit 4; }
+    CWD_RE='^[a-zA-Z0-9/._ -]+$'
+    [[ "$CWD" =~ $CWD_RE ]] || { echo "Error: --cwd contains suspicious characters: '$CWD'" >&2; exit 4; }
+fi
 
 # Verify session exists
 if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
@@ -129,11 +157,14 @@ if [[ -n "$CWD" ]]; then
     FULL_CMD="cd $(printf '%q' "$CWD") && ${GIT_CMD}"
 fi
 
-# Use markers to delimit output
-MARKER_START="NBS_DIFF_START_$$"
-MARKER_END="NBS_DIFF_END_$$"
+# Use markers with cryptographic randomness to prevent injection and collision
+# (SECURITY: PID-only markers are predictable and injectable; $$ expands differently on remote shell)
+MARKER_RANDOM=$(head -c 16 /dev/urandom | xxd -p)
+MARKER_START="NBS_DIFF_START_${MARKER_RANDOM}"
+MARKER_END="NBS_DIFF_END_${MARKER_RANDOM}"
 
-if ! "$PTY_SESSION" send "$SESSION" "echo ${MARKER_START}; ${FULL_CMD}; echo ${MARKER_END}"; then
+# Single-quote markers in remote command to prevent shell expansion (BUG: $$ was expanded by remote shell)
+if ! "$PTY_SESSION" send "$SESSION" "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
     echo "Error: Failed to send diff command to session '$SESSION'" >&2
     exit 1
 fi
@@ -142,17 +173,37 @@ fi
 TIMEOUT=30
 elapsed=0
 POLL=2
+consecutive_failures=0
 
 while (( elapsed < TIMEOUT )); do
     sleep "$POLL"
     elapsed=$((elapsed + POLL))
 
-    output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null) || true
-    if echo "$output" | grep -q "$MARKER_END"; then
-        # Extract diff content
-        diff_output=$(echo "$output" | sed -n "/${MARKER_START}/,/${MARKER_END}/p" \
-            | grep -v "$MARKER_START" \
-            | grep -v "$MARKER_END")
+    # Track consecutive read failures to detect dead sessions (HARDENING: was silently swallowed)
+    if output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null); then
+        consecutive_failures=0
+    else
+        consecutive_failures=$((consecutive_failures + 1))
+        if (( consecutive_failures >= 3 )); then
+            echo "Error: pty-session read failed 3 consecutive times for '$SESSION'" >&2
+            exit 2
+        fi
+        continue
+    fi
+
+    # Use grep -F for fixed-string matching (HARDENING: markers treated as literal, not regex)
+    if echo "$output" | grep -qF "$MARKER_END"; then
+        # Extract diff content using awk with literal string matching (HARDENING: sed treated markers as regex)
+        diff_output=$(echo "$output" | awk -v start="$MARKER_START" -v end="$MARKER_END" '
+            $0 == start { capture=1; next }
+            $0 == end { capture=0; next }
+            capture { print }
+        ')
+
+        # Postcondition: note when diff is empty (HARDENING: could indicate extraction failure vs no changes)
+        if [[ -z "$diff_output" ]]; then
+            echo "(no diff output)" >&2
+        fi
 
         # Print to stdout
         echo "$diff_output"
@@ -169,7 +220,11 @@ $(echo "$diff_output" | head -50)
                 chat_msg="git diff:
 ${diff_output}"
             fi
-            "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$chat_msg" 2>&1 || echo "Warning: Failed to post diff to chat" >&2
+            # Fail hard if chat post fails — user explicitly requested it (BUG: was silently swallowed)
+            if ! "$NBS_CHAT" send "$CHAT_FILE" "$CHAT_HANDLE" "$chat_msg"; then
+                echo "Error: Failed to post diff to chat file '$CHAT_FILE'" >&2
+                exit 1
+            fi
         fi
 
         exit 0

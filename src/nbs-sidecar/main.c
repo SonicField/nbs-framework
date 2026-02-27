@@ -17,10 +17,15 @@
 #include "../nbs-common/nbs_assert.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* No timing interval should exceed ~27 hours (100000 seconds).
+ * This bounds env_int values to a sane range for all config fields. */
+#define ENV_INT_MAX 100000
 
 static void print_usage(void) {
     fprintf(stderr,
@@ -52,12 +57,15 @@ static void print_usage(void) {
  * Returns the value if set and valid, or default_val otherwise.
  */
 static int env_int(const char *name, int default_val) {
+    ASSERT_MSG(name != NULL, "env_int: name is NULL");
+
     const char *val = getenv(name);
     if (!val || val[0] == '\0') return default_val;
 
     char *endptr;
+    errno = 0;
     long v = strtol(val, &endptr, 10);
-    if (*endptr != '\0' || v < 0 || v > 100000) {
+    if (*endptr != '\0' || errno == ERANGE || v < 0 || v > ENV_INT_MAX) {
         fprintf(stderr, "warning: %s='%s' invalid, using default %d\n",
                 name, val, default_val);
         return default_val;
@@ -81,15 +89,19 @@ static void env_str(const char *name, char *buf, size_t buf_size) {
 }
 
 /*
- * is_valid_handle — Check handle matches ^[a-zA-Z0-9_-]+$.
+ * is_valid_handle — Check handle matches ^[a-zA-Z0-9_-]+$ with bounded length.
+ *
+ * Iterates at most SIDECAR_MAX_HANDLE characters. Rejects if the string
+ * has not terminated within that bound.
  */
 static int is_valid_handle(const char *h) {
     if (!h || h[0] == '\0') return 0;
-    for (const char *p = h; *p; p++) {
-        if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-')
+    for (size_t i = 0; i < SIDECAR_MAX_HANDLE; i++) {
+        if (h[i] == '\0') return 1;
+        if (!isalnum((unsigned char)h[i]) && h[i] != '_' && h[i] != '-')
             return 0;
     }
-    return 1;
+    return 0; /* too long */
 }
 
 int main(int argc, char **argv) {
@@ -216,6 +228,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: --root is required\n");
         return SIDECAR_EXIT_BAD_ARGS;
     }
+    if (cfg.nbs_root[0] != '/') {
+        fprintf(stderr, "Error: --root must be an absolute path (got '%s')\n",
+                cfg.nbs_root);
+        return SIDECAR_EXIT_BAD_ARGS;
+    }
+    if (access(cfg.nbs_root, F_OK) != 0) {
+        fprintf(stderr, "Error: --root directory '%s' does not exist\n",
+                cfg.nbs_root);
+        return SIDECAR_EXIT_BAD_ARGS;
+    }
 
     /* Transport-specific validation */
     if (cfg.transport_mode == TRANSPORT_TMUX) {
@@ -238,10 +260,15 @@ int main(int argc, char **argv) {
      * If NBS_INITIAL_PROMPT is set, prepend the handle to it.
      * If not set, use the default handle + chat skill prompt. */
     if (cfg.initial_prompt[0] == '\0') {
-        snprintf(cfg.initial_prompt, sizeof(cfg.initial_prompt),
+        int n = snprintf(cfg.initial_prompt, sizeof(cfg.initial_prompt),
                  "Your NBS handle is '%s'. Load /nbs-teams-chat. "
                  "Use this handle for all nbs-chat send commands.",
                  cfg.handle);
+        if (n < 0 || (size_t)n >= sizeof(cfg.initial_prompt)) {
+            fprintf(stderr, "Error: default initial prompt truncated "
+                    "(handle '%s' too long)\n", cfg.handle);
+            return SIDECAR_EXIT_BAD_ARGS;
+        }
     } else {
         /* Prepend handle announcement to custom initial prompt */
         char tmp[SIDECAR_MAX_PROMPT];
@@ -250,16 +277,19 @@ int main(int argc, char **argv) {
                  cfg.handle, cfg.initial_prompt);
         if (n >= 0 && (size_t)n < sizeof(tmp)) {
             memcpy(cfg.initial_prompt, tmp, (size_t)n + 1);
+        } else {
+            fprintf(stderr, "warning: initial prompt too long to prepend handle "
+                    "announcement; handle may not be set in session\n");
         }
-        /* If truncated, keep the original — better than losing it */
     }
 
     /* Redirect stderr to log file if specified */
     if (cfg.log_file[0] != '\0') {
         FILE *logf = freopen(cfg.log_file, "a", stderr);
         if (!logf) {
-            fprintf(stdout, "warning: could not open log file '%s'\n",
-                    cfg.log_file);
+            fprintf(stdout, "Error: could not open log file '%s', "
+                    "and stderr is now closed\n", cfg.log_file);
+            return SIDECAR_EXIT_ERROR;
         }
     }
 
@@ -288,8 +318,14 @@ int main(int argc, char **argv) {
     /* Run the sidecar */
     int result = sidecar_run(&cfg, &tp);
 
+    ASSERT_MSG(result == SIDECAR_EXIT_OK || result == SIDECAR_EXIT_ERROR,
+               "sidecar_run returned unexpected exit code: %d", result);
+
     /* Cleanup */
     transport_free(&tp);
+
+    ASSERT_MSG(tp.ctx == NULL,
+               "transport_free did not release context");
 
     return result;
 }

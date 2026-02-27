@@ -40,6 +40,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <signal.h>
 
 /* Include the headers from the source directory */
 #include "chat_file.h"
@@ -689,6 +693,229 @@ static void test_assertion_ordering_valid_inputs(void) {
     TEST_PASS("assertion ordering: all valid inputs pass without assertion failure");
 }
 
+/* --- Helper: test that a function call triggers ASSERT_MSG (abort -> SIGABRT) ---
+ *
+ * Forks a child process, runs the callback, and verifies the child died
+ * from SIGABRT. This is the only safe way to test assertion failures
+ * without terminating the test process itself.
+ *
+ * Returns 1 if the child was killed by SIGABRT, 0 otherwise. */
+typedef void (*assert_test_fn)(void);
+
+static int expect_abort(assert_test_fn fn) {
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) return 0; /* fork failed */
+    if (pid == 0) {
+        /* Child: suppress stderr noise from ASSERT_MSG, then run fn */
+        freopen("/dev/null", "w", stderr);
+        fn();
+        _exit(0); /* If we get here, the assertion did NOT fire */
+    }
+    /* Parent: wait for child */
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+}
+
+/* --- SECURITY #1: base64_encode rejects input_len > INT_MAX/4*3 --- */
+
+static void encode_intmax_overflow_fn(void) {
+    /* input_len just above the INT_MAX precondition bound.
+     * (INT_MAX / 4) * 3 + 1 would produce output > INT_MAX.
+     * We don't need to actually allocate this much memory -- the
+     * precondition fires before any buffer access. */
+    size_t too_large = ((size_t)INT_MAX / 4) * 3 + 1;
+    char dummy_out[8];
+    /* input pointer is non-NULL but we pass too_large length.
+     * The assertion should fire before any dereference of input. */
+    base64_encode((const unsigned char *)"x", too_large, dummy_out,
+                  sizeof(dummy_out));
+}
+
+static void test_encode_intmax_precondition(void) {
+    TEST_ASSERT(expect_abort(encode_intmax_overflow_fn),
+                "base64_encode should abort on input_len exceeding INT_MAX "
+                "output bound, but child did not die from SIGABRT");
+
+    /* Verify the boundary value just AT the limit succeeds (no abort).
+     * We can't actually allocate (INT_MAX/4)*3 bytes, but we can verify
+     * the precondition itself does not fire by checking that the function
+     * proceeds to the buffer-size check and returns -1 (buffer too small)
+     * rather than aborting. */
+    size_t at_limit = ((size_t)INT_MAX / 4) * 3;
+    char small_out[8];
+    int ret = base64_encode((const unsigned char *)"x", at_limit,
+                            small_out, sizeof(small_out));
+    TEST_ASSERT(ret == -1,
+                "base64_encode at INT_MAX boundary should return -1 "
+                "(buffer too small), got %d", ret);
+
+    TEST_PASS("SECURITY #1: base64_encode INT_MAX precondition fires early");
+}
+
+/* --- SECURITY #2: base64_decode rejects input_len > INT_MAX/3*4+4 --- */
+
+static void decode_intmax_overflow_fn(void) {
+    /* input_len above the INT_MAX precondition bound, must be multiple of 4 */
+    size_t too_large = (size_t)INT_MAX / 3 * 4 + 8; /* +8 to be safely above, still %4==0 */
+    unsigned char dummy_out[8];
+    base64_decode("AAAA", too_large, dummy_out, sizeof(dummy_out));
+}
+
+static void test_decode_intmax_precondition(void) {
+    TEST_ASSERT(expect_abort(decode_intmax_overflow_fn),
+                "base64_decode should abort on input_len exceeding INT_MAX "
+                "output bound, but child did not die from SIGABRT");
+
+    /* Boundary test: input_len at the limit should NOT trigger the INT_MAX
+     * precondition. However, we cannot test this in the parent process
+     * because the function will access input[input_len - 1] during
+     * whitespace stripping, which would be an out-of-bounds read on a
+     * small buffer. The key assertion is that values ABOVE the limit
+     * abort (tested above). The at-limit case is exercised indirectly
+     * by the large-input round-trip test (64 KB), which is well within
+     * the INT_MAX bound. */
+
+    TEST_PASS("SECURITY #2: base64_decode INT_MAX precondition fires early");
+}
+
+/* --- HARDENING #4: base64_decoded_size rejects non-multiple-of-4 --- */
+
+static void decoded_size_bad_len_1_fn(void) {
+    (void)base64_decoded_size(1);
+}
+
+static void decoded_size_bad_len_5_fn(void) {
+    (void)base64_decoded_size(5);
+}
+
+static void decoded_size_bad_len_7_fn(void) {
+    (void)base64_decoded_size(7);
+}
+
+static void test_decoded_size_rejects_non_multiple_of_4(void) {
+    TEST_ASSERT(expect_abort(decoded_size_bad_len_1_fn),
+                "base64_decoded_size(1) should abort (not multiple of 4)");
+    TEST_ASSERT(expect_abort(decoded_size_bad_len_5_fn),
+                "base64_decoded_size(5) should abort (not multiple of 4)");
+    TEST_ASSERT(expect_abort(decoded_size_bad_len_7_fn),
+                "base64_decoded_size(7) should abort (not multiple of 4)");
+
+    /* Valid inputs should not abort */
+    TEST_ASSERT(base64_decoded_size(0) == 3,
+                "base64_decoded_size(0) should return 3, got %zu",
+                base64_decoded_size(0));
+    TEST_ASSERT(base64_decoded_size(4) == 6,
+                "base64_decoded_size(4) should return 6, got %zu",
+                base64_decoded_size(4));
+    TEST_ASSERT(base64_decoded_size(8) == 9,
+                "base64_decoded_size(8) should return 9, got %zu",
+                base64_decoded_size(8));
+
+    TEST_PASS("HARDENING #4: base64_decoded_size rejects non-multiple-of-4");
+}
+
+/* --- HARDENING #5: encode output validity postcondition ---
+ *
+ * The postcondition is inside base64_encode and uses base64_is_valid_char.
+ * We test this indirectly: if the postcondition is active, then any valid
+ * encode must pass through it. We also verify the inverse: all valid
+ * base64 chars are accepted, all invalid ones rejected. */
+
+static void test_encode_output_validity_postcondition(void) {
+    /* Verify base64_is_valid_char accepts exactly the right characters */
+    const char *valid = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+    for (size_t i = 0; valid[i]; i++) {
+        TEST_ASSERT(base64_is_valid_char((unsigned char)valid[i]) == 1,
+                    "base64_is_valid_char('%c') should return 1", valid[i]);
+    }
+
+    /* Verify all other byte values are rejected */
+    int valid_count = 0;
+    for (int c = 0; c < 256; c++) {
+        if (base64_is_valid_char((unsigned char)c)) {
+            valid_count++;
+        }
+    }
+    /* 26 + 26 + 10 + 3 (+ / =) = 65 valid characters */
+    TEST_ASSERT(valid_count == 65,
+                "expected 65 valid base64 chars, got %d", valid_count);
+
+    /* Encode various inputs and confirm no assertion fires (which would
+     * abort the process). The encode postcondition checks every output
+     * character, so if we get here without abort, the postcondition
+     * passed for all these inputs. */
+    unsigned char binary_input[256];
+    for (int i = 0; i < 256; i++) binary_input[i] = (unsigned char)i;
+
+    size_t enc_size = base64_encoded_size(256);
+    char *enc_buf = malloc(enc_size);
+    TEST_ASSERT(enc_buf != NULL, "malloc failed");
+
+    int ret = base64_encode(binary_input, 256, enc_buf, enc_size);
+    TEST_ASSERT(ret > 0,
+                "base64_encode of 256 bytes should succeed, got %d", ret);
+
+    /* Also verify from the caller side using the now-public function */
+    for (int i = 0; i < ret; i++) {
+        TEST_ASSERT(base64_is_valid_char((unsigned char)enc_buf[i]),
+                    "caller-side check: char 0x%02x at %d is invalid",
+                    (unsigned char)enc_buf[i], i);
+    }
+
+    free(enc_buf);
+
+    TEST_PASS("HARDENING #5: encode output validity postcondition verified");
+}
+
+/* --- HARDENING #6: base64_is_valid_char is accessible from callers --- */
+
+static void test_base64_is_valid_char_accessible(void) {
+    /* This test's existence proves the function is linkable.
+     * We test boundary values of each character class. */
+
+    /* Letters */
+    TEST_ASSERT(base64_is_valid_char('A') == 1, "'A' should be valid");
+    TEST_ASSERT(base64_is_valid_char('Z') == 1, "'Z' should be valid");
+    TEST_ASSERT(base64_is_valid_char('a') == 1, "'a' should be valid");
+    TEST_ASSERT(base64_is_valid_char('z') == 1, "'z' should be valid");
+
+    /* Digits */
+    TEST_ASSERT(base64_is_valid_char('0') == 1, "'0' should be valid");
+    TEST_ASSERT(base64_is_valid_char('9') == 1, "'9' should be valid");
+
+    /* Special */
+    TEST_ASSERT(base64_is_valid_char('+') == 1, "'+' should be valid");
+    TEST_ASSERT(base64_is_valid_char('/') == 1, "'/' should be valid");
+    TEST_ASSERT(base64_is_valid_char('=') == 1, "'=' should be valid");
+
+    /* Just outside valid ranges */
+    TEST_ASSERT(base64_is_valid_char('@') == 0, "'@' (before 'A') should be invalid");
+    TEST_ASSERT(base64_is_valid_char('[') == 0, "'[' (after 'Z') should be invalid");
+    TEST_ASSERT(base64_is_valid_char('`') == 0, "'`' (before 'a') should be invalid");
+    TEST_ASSERT(base64_is_valid_char('{') == 0, "'{' (after 'z') should be invalid");
+    TEST_ASSERT(base64_is_valid_char(0x00) == 0, "NUL should be invalid");
+    TEST_ASSERT(base64_is_valid_char(0xFF) == 0, "0xFF should be invalid");
+    TEST_ASSERT(base64_is_valid_char(' ') == 0, "space should be invalid");
+    TEST_ASSERT(base64_is_valid_char('\n') == 0, "newline should be invalid");
+
+    TEST_PASS("HARDENING #6: base64_is_valid_char accessible from callers");
+}
+
+/* --- HARDENING #3: CHAR_BIT == 8 static assertion ---
+ *
+ * This is a compile-time check (_Static_assert). If CHAR_BIT != 8,
+ * the code would not compile at all. The test here simply documents
+ * that the assertion exists by verifying the assumed value at runtime. */
+
+static void test_char_bit_is_8(void) {
+    TEST_ASSERT(CHAR_BIT == 8,
+                "CHAR_BIT is %d, but base64 requires 8-bit bytes", CHAR_BIT);
+    TEST_PASS("HARDENING #3: CHAR_BIT == 8 verified (compile-time _Static_assert exists)");
+}
+
 int main(void) {
     printf("=== base64 unit tests ===\n\n");
 
@@ -711,6 +938,14 @@ int main(void) {
     test_thread_safety_decode_table();
     test_empty_input_postcondition();
     test_assertion_ordering_valid_inputs();
+
+    /* Audit violation tests (SECURITY + HARDENING) */
+    test_encode_intmax_precondition();
+    test_decode_intmax_precondition();
+    test_decoded_size_rejects_non_multiple_of_4();
+    test_encode_output_validity_postcondition();
+    test_base64_is_valid_char_accessible();
+    test_char_bit_is_8();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

@@ -34,7 +34,9 @@ int registry_process_inbox(const char *inbox_path, const char *registry_path,
  *
  * type: "chat" or "bus"
  * out: buffer for the path
- * Returns: 0 if found, -1 if not found or error
+ * Returns: 0 if found, -1 if not found or I/O error.
+ *   On "not found", errno is set to 0. On I/O error, errno is set
+ *   by the failing syscall. Callers can check errno to distinguish.
  */
 int registry_find_first(const char *registry_path, const char *type,
                          char *out, size_t out_size);
@@ -43,8 +45,11 @@ int registry_find_first(const char *registry_path, const char *type,
  * registry_for_each — Iterate over all entries of a given type.
  *
  * type: "chat" or "bus"
- * callback: called for each entry with the path and user data
- * Returns: number of entries iterated, or -1 on error
+ * callback: called for each entry with the path and user data.
+ *   Return 0 to continue iteration, non-zero for early exit.
+ *   Non-zero is an early-exit signal, not an error indication.
+ * Returns: number of entries iterated (including the one that
+ *   triggered early exit, if any), or -1 on I/O error
  */
 int registry_for_each(const char *registry_path, const char *type,
                        int (*callback)(const char *path, void *user_data),

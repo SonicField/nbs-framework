@@ -70,9 +70,14 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry);
  *   - log_path != NULL
  *
  * Postconditions:
- *   - If file did not exist: created with header, returns 0
- *   - If file already exists: no-op, returns 0
- *   - On error: returns -1
+ *   - If file did not exist: created with header, returns SCRIBE_EXIT_OK (0)
+ *   - If file already exists: no-op, returns SCRIBE_EXIT_OK (0)
+ *   - On error: returns SCRIBE_EXIT_ERROR (1)
+ *
+ * Note: When called from scribe_log_append, initialisation is performed
+ * under the fcntl lock using an atomic O_CREAT|O_EXCL create to prevent
+ * TOCTOU races. Direct callers of scribe_log_init should be aware that
+ * concurrent calls are not serialised unless they arrange their own locking.
  */
 int scribe_log_init(const char *log_path);
 

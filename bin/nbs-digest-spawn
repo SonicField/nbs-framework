@@ -23,17 +23,43 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 NBS_WORKERS="${SCRIPT_DIR}/nbs-workers"
 NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
 
+# [HARDENING #5] Assert required external tools exist and are executable
+for tool in "$NBS_WORKERS" "$NBS_CHAT"; do
+    [[ -x "$tool" ]] || {
+        echo "ASSERTION FAILED: required tool not found or not executable: $tool" >&2
+        exit 1
+    }
+done
+
 if [[ $# -lt 1 ]]; then
     echo "Usage: nbs-digest-spawn <chat-file> [--wait]" >&2
     exit 4
 fi
 
-CHAT_FILE="$1"
-WAIT=false
+# [HARDENING #4] Validate argument count and reject unknown options
+if [[ $# -gt 2 ]]; then
+    echo "Error: unexpected arguments: ${*:3}" >&2
+    exit 4
+fi
+if [[ $# -eq 2 && "$2" != "--wait" ]]; then
+    echo "Error: unknown option: $2" >&2
+    exit 4
+fi
 
+WAIT=false
 if [[ "${2:-}" == "--wait" ]]; then
     WAIT=true
 fi
+
+# [SECURITY #3, #7] Validate CHAT_FILE is a canonical absolute path with safe characters
+if ! CHAT_FILE="$(realpath -- "$1" 2>/dev/null)"; then
+    echo "Error: cannot resolve path: $1" >&2
+    exit 1
+fi
+[[ "$CHAT_FILE" =~ ^/[a-zA-Z0-9_./-]+$ ]] || {
+    echo "Error: chat file path contains unsafe characters: $CHAT_FILE" >&2
+    exit 4
+}
 
 if [[ ! -f "$CHAT_FILE" ]]; then
     echo "Error: chat file not found: $CHAT_FILE" >&2
@@ -41,20 +67,32 @@ if [[ ! -f "$CHAT_FILE" ]]; then
 fi
 
 # Spawn ephemeral digest worker
+# CHAT_FILE has been validated to contain only safe characters (alphanumeric, dots,
+# hyphens, underscores, forward slashes) so it is safe to embed in the prompt string.
 TASK_DESC="Your handle is 'shepard'. Load /nbs-chat-digest. Digest the last 500 messages of ${CHAT_FILE} by launching 5 parallel sub-agents (use --last=100 --offset=0/100/200/300/400). Each sub-agent summarises decisions, blockers, 3Ws, and outcomes. Synthesise into a single digest of at least 200 lines. Post the FULL digest text to ${CHAT_FILE} via nbs-chat send using handle 'shepard'. Also write to .nbs/digests/. Exit after posting."
 
-WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC" 2>/dev/null)
+# [BUG #1] Do not suppress stderr from spawn -- let errors propagate
+WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC") || {
+    echo "Error: nbs-workers spawn failed (exit $?)" >&2
+    exit 1
+}
 
 if [[ -z "$WORKER_NAME" ]]; then
-    echo "Error: failed to spawn digest worker" >&2
+    echo "Error: failed to spawn digest worker (empty name returned)" >&2
     exit 1
 fi
 
 echo "Digest worker spawned: $WORKER_NAME"
 
 if [[ "$WAIT" == true ]]; then
-    # Poll for completion (check task file status)
-    TASK_FILE="${PROJECT_ROOT}/.nbs/workers/${WORKER_NAME}.md"
+    # [HARDENING #8] Assert workers directory exists before polling
+    WORKERS_DIR="${PROJECT_ROOT}/.nbs/workers"
+    [[ -d "$WORKERS_DIR" ]] || {
+        echo "ASSERTION FAILED: workers directory not found: $WORKERS_DIR" >&2
+        exit 1
+    }
+    TASK_FILE="${WORKERS_DIR}/${WORKER_NAME}.md"
+
     TIMEOUT=600
     ELAPSED=0
 
@@ -63,7 +101,8 @@ if [[ "$WAIT" == true ]]; then
         ELAPSED=$((ELAPSED + 5))
 
         if [[ -f "$TASK_FILE" ]]; then
-            STATE=$(grep '^State:' "$TASK_FILE" 2>/dev/null | awk '{print $2}' || true)
+            # [HARDENING #9] Normalise state extraction with tolower
+            STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}' || true)
             if [[ "$STATE" == "completed" || "$STATE" == "failed" || "$STATE" == "escalated" ]]; then
                 echo "Digest worker finished: $STATE"
                 break
@@ -71,13 +110,17 @@ if [[ "$WAIT" == true ]]; then
         fi
     done
 
+    # [BUG #6] Timeout is a failure, not a warning -- exit non-zero
     if (( ELAPSED >= TIMEOUT )); then
-        echo "Warning: digest worker timed out after ${TIMEOUT}s" >&2
+        echo "Error: digest worker timed out after ${TIMEOUT}s" >&2
+        exit 1
     fi
 fi
 
-# Post restart banner
-"$NBS_CHAT" send "$CHAT_FILE" shepard \
-    "=== TEAM RESTART — Digest above summarises prior session ===" 2>/dev/null || true
+# [BUG #2] Do not swallow banner post errors -- report failure
+if ! "$NBS_CHAT" send "$CHAT_FILE" shepard \
+    "=== TEAM RESTART — Digest above summarises prior session ==="; then
+    echo "Warning: failed to post restart banner to $CHAT_FILE" >&2
+fi
 
 echo "Restart banner posted to $CHAT_FILE"

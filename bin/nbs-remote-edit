@@ -28,13 +28,30 @@
 set -euo pipefail
 
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
-STAGING_DIR="$(cd "${NBS_REMOTE_EDIT_DIR:-.nbs/remote-edit}" 2>/dev/null && pwd || echo "$(pwd)/.nbs/remote-edit")"
+
+# V7: Validate NBS_REMOTE_EDIT_DIR if explicitly set, rather than silently falling back
+if [[ -n "${NBS_REMOTE_EDIT_DIR:-}" ]]; then
+    [[ -d "$NBS_REMOTE_EDIT_DIR" ]] || {
+        echo "Error: NBS_REMOTE_EDIT_DIR does not exist: $NBS_REMOTE_EDIT_DIR" >&2
+        exit 1
+    }
+    STAGING_DIR="$(cd "$NBS_REMOTE_EDIT_DIR" && pwd)"
+else
+    STAGING_DIR="$(pwd)/.nbs/remote-edit"
+fi
 
 # Suppress pty-session tool banner
 export NBS_PTY_QUIET=1
 
+# V8: Guard usage against $0 not being a readable file
 usage() {
-    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+    if [[ -f "$0" ]] && [[ -r "$0" ]]; then
+        # Extract only the header comment block (lines starting with # before
+        # the first non-comment, non-shebang line), not inline code comments
+        sed -n '2,/^[^#]/{ /^#/p }' "$0" | grep -v '!/bin/bash' | cut -c3-
+    else
+        echo "Usage: nbs-remote-edit {pull|push|diff|help} <server> <remote-path>" >&2
+    fi
 }
 
 die() {
@@ -47,20 +64,38 @@ die() {
 
 [[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
 
+# V1 (SECURITY): Validate hostname and remote path against injection
+# V2 (BUG): Validate remote_path is absolute
 local_path() {
     local host="$1"
     local remote_path="$2"
-    [[ "$host" =~ [/] ]] && die 4 "<server> must be an SSH hostname (e.g. build-host not a path"
+    # Hostname: only alphanumeric, dots, hyphens, underscores, @ (for user@host)
+    [[ "$host" =~ ^[a-zA-Z0-9._@-]+$ ]] || die 4 "Invalid server hostname (only alphanumeric, dots, hyphens, underscores, @ allowed): $host"
+    # Remote path must be absolute
+    [[ "$remote_path" =~ ^/ ]] || die 4 "Remote path must be absolute (start with /), got: $remote_path"
+    # Remote path must contain only safe POSIX path characters
+    [[ "$remote_path" =~ [^a-zA-Z0-9_./-] ]] && die 4 "Remote path contains disallowed characters: $remote_path"
     echo "${STAGING_DIR}/${host}${remote_path}"
 }
 
 # Run scp via a short-lived pty-session (gets user's credentials)
 run_scp() {
-    local session_name="nbs-edit-$$"
-    "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1
+    # V9: Add RANDOM suffix for uniqueness under concurrent use
+    local session_name="nbs-edit-$$-${RANDOM}"
+
+    # V4: Check pty-session create success and report errors
+    if ! "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1; then
+        echo "Error: Failed to create pty-session '$session_name'" >&2
+        return 3
+    fi
     sleep 1
 
-    "$PTY_SESSION" send "$session_name" "$1; echo EDIT_RC=\$?" >/dev/null 2>&1
+    # V4: Check pty-session send success
+    if ! "$PTY_SESSION" send "$session_name" "$1; echo EDIT_RC=\$?" >/dev/null 2>&1; then
+        "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+        echo "Error: Failed to send command to pty-session '$session_name'" >&2
+        return 3
+    fi
 
     # Wait for completion
     local elapsed=0
@@ -70,15 +105,18 @@ run_scp() {
         elapsed=$((elapsed + 2))
         local output
         output=$("$PTY_SESSION" read "$session_name" 2>/dev/null) || true
-        if echo "$output" | grep -q "EDIT_RC="; then
-            local rc
-            rc=$(echo "$output" | grep -oP 'EDIT_RC=\K[0-9]+' | tail -1)
+        # V6: Use bash regex for stricter, atomic matching of exit code
+        if [[ "$output" =~ EDIT_RC=([0-9]+) ]]; then
+            local rc="${BASH_REMATCH[1]}"
             "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
-            return "${rc:-1}"
+            return "$rc"
         fi
     done
 
-    "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+    # V4: Warn if session kill fails (possible orphan)
+    if ! "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1; then
+        echo "Warning: failed to kill pty-session '$session_name' — may need manual cleanup" >&2
+    fi
     echo "Error: scp timed out after ${timeout}s" >&2
     return 3
 }
@@ -149,7 +187,8 @@ cmd_diff() {
 
     local tmp
     tmp=$(mktemp)
-    trap "rm -f $(printf '%q' "$tmp")" RETURN
+    # V3: Use EXIT instead of RETURN so temp file is cleaned on signals too
+    trap "rm -f $(printf '%q' "$tmp")" EXIT
 
     if run_scp "scp $(printf '%q' "${host}:${remote_path}") $(printf '%q' "$tmp")"; then
         diff -u "$tmp" "$lpath" --label "remote:${remote_path}" --label "local:${lpath}" || true

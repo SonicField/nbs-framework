@@ -74,6 +74,35 @@ int validate_worker_name(const char *name);
  */
 int validate_uuid(const char *s);
 
+/*
+ * validate_safe_handle -- Check handle is safe for shell interpolation.
+ *
+ * Preconditions:
+ *   - handle != NULL (aborts via ASSERT_MSG if NULL)
+ *
+ * Postconditions:
+ *   - Returns 1 if handle matches [a-z0-9][-a-z0-9]* (no leading hyphen)
+ *   - Returns 0 otherwise
+ *
+ * Security boundary: handles are interpolated into shell commands
+ * passed to tmux. This function rejects all shell metacharacters.
+ */
+int validate_safe_handle(const char *handle);
+
+/*
+ * validate_safe_model -- Check model name is safe for shell interpolation.
+ *
+ * Preconditions:
+ *   - model != NULL (aborts via ASSERT_MSG if NULL)
+ *
+ * Postconditions:
+ *   - Returns 1 if model matches [a-z0-9][-a-z0-9._:]* (no leading hyphen)
+ *   - Returns 0 otherwise
+ *
+ * Security boundary: model names are interpolated into shell commands.
+ */
+int validate_safe_model(const char *model);
+
 /* --- Commands --- */
 
 /*

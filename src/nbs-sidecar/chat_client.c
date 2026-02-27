@@ -14,6 +14,10 @@
  *   - Message counting and cursor reading are lock-free (read-only)
  *   - Base64 decoding uses the shared nbs-chat base64 module
  *   - chat_client_send delegates to exec_fire_and_forget
+ *
+ * Threading:
+ *   - resolve_nbs_chat() uses pthread_once for thread-safe one-time initialisation.
+ *   - Read-only file operations are inherently thread-safe (no shared mutable state).
  */
 
 #include "chat_client.h"
@@ -25,49 +29,52 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <libgen.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define MAX_PATH_BUF 4096
 
 /*
  * Cached absolute path to the nbs-chat binary.
- * Resolved once via /proc/self/exe — sibling binary in same directory.
+ * Resolved once via pthread_once — sibling binary in same directory.
  */
 #define CHAT_PATH_LEN 4096
 static char nbs_chat_path[CHAT_PATH_LEN] = "";
-static int nbs_chat_path_resolved = 0;
+static pthread_once_t nbs_chat_once = PTHREAD_ONCE_INIT;
 
-static const char *resolve_nbs_chat(void)
+static void resolve_nbs_chat_once(void)
 {
-    if (nbs_chat_path_resolved)
-        return nbs_chat_path[0] ? nbs_chat_path : "nbs-chat";
-
-    nbs_chat_path_resolved = 1;
-
     char self[CHAT_PATH_LEN];
     ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (len <= 0)
-        return "nbs-chat";
+        return;
     self[len] = '\0';
 
     char *slash = strrchr(self, '/');
     if (!slash)
-        return "nbs-chat";
+        return;
 
     size_t dir_len = (size_t)(slash - self);
     if (dir_len + sizeof("/nbs-chat") > sizeof(nbs_chat_path))
-        return "nbs-chat";
+        return;
 
     memcpy(nbs_chat_path, self, dir_len);
     memcpy(nbs_chat_path + dir_len, "/nbs-chat", sizeof("/nbs-chat"));
 
     if (access(nbs_chat_path, X_OK) != 0) {
         nbs_chat_path[0] = '\0';
-        return "nbs-chat";
+        return;
     }
+}
 
-    return nbs_chat_path;
+static const char *resolve_nbs_chat(void)
+{
+    pthread_once(&nbs_chat_once, resolve_nbs_chat_once);
+    if (nbs_chat_path[0] != '\0')
+        return nbs_chat_path;
+    return "nbs-chat";
 }
 
 /* ---- chat_client_count_messages ---- */
@@ -113,6 +120,7 @@ int chat_client_count_messages(const char *chat_path)
 int chat_client_read_cursor(const char *chat_path, const char *handle)
 {
     ASSERT_MSG(chat_path != NULL, "chat_client_read_cursor: chat_path is NULL");
+    ASSERT_MSG(chat_path[0] != '\0', "chat_client_read_cursor: chat_path is empty");
     ASSERT_MSG(handle != NULL, "chat_client_read_cursor: handle is NULL");
     ASSERT_MSG(handle[0] != '\0', "chat_client_read_cursor: handle is empty");
 
@@ -153,8 +161,16 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
 
         if (strcmp(key, handle) == 0) {
             int parsed = 0;
-            if (sscanf(value, "%d", &parsed) == 1)
+            if (sscanf(value, "%d", &parsed) == 1) {
+                /* Clamp: negative cursor values are invalid (treat as no cursor).
+                 * Values near INT_MAX would cause overflow in `cursor + 1`
+                 * arithmetic downstream, so cap to INT_MAX - 1. */
+                if (parsed < 0)
+                    parsed = 0;
+                if (parsed > INT_MAX - 1)
+                    parsed = INT_MAX - 1;
                 result = parsed;
+            }
             break;
         }
     }
@@ -193,8 +209,12 @@ static int check_unread_cb(const char *path, void *user_data)
         return 0;
 
     int total = chat_client_count_messages(path);
-    if (total < 0)
-        return 0; /* File missing or unreadable — skip, matching bash */
+    if (total < 0) {
+        /* File missing or unreadable — skip, matching bash.
+         * Log so operational issues are observable. */
+        fprintf(stderr, "check_unread_cb: cannot read chat '%s'\n", path);
+        return 0;
+    }
 
     ctx->has_chat = 1;
 
@@ -202,8 +222,9 @@ static int check_unread_cb(const char *path, void *user_data)
     if (cursor < 0)
         cursor = 0;
 
-    /* Unread if total > cursor + 1 (cursor is 0-indexed last-read index) */
-    if (total > cursor + 1) {
+    /* Unread if total > cursor + 1 (cursor is 0-indexed last-read index).
+     * Use `total - 1 > cursor` to avoid overflow when cursor is near INT_MAX. */
+    if (total - 1 > cursor) {
         int n_unread = total - cursor - 1;
         ctx->unread_count += n_unread;
 
@@ -291,6 +312,13 @@ int chat_client_check_unread(const char *registry_path, const char *handle,
         return 2;
     if (ctx.unread_count == 0)
         return 1;
+
+    /* Postconditions: returning 0 means unread messages exist */
+    ASSERT_MSG(*unread_count > 0,
+               "chat_client_check_unread: returning 0 but unread_count is %d",
+               *unread_count);
+    ASSERT_MSG(summary[0] != '\0',
+               "chat_client_check_unread: returning 0 but summary is empty");
     return 0;
 }
 
@@ -318,6 +346,8 @@ struct sidecar_only_ctx {
 static int extract_handle_from_decoded(const char *decoded, size_t decoded_len,
                                        char *out_handle, size_t handle_size)
 {
+    ASSERT_MSG(decoded != NULL, "extract_handle_from_decoded: decoded is NULL");
+    ASSERT_MSG(out_handle != NULL, "extract_handle_from_decoded: out_handle is NULL");
     ASSERT_MSG(handle_size > 0, "extract_handle_from_decoded: handle_size is 0");
 
     /* Find first ": " — this separates handle (possibly with |epoch) from content */
@@ -365,23 +395,28 @@ static int sidecar_only_cb(const char *path, void *user_data)
     struct sidecar_only_ctx *ctx = user_data;
 
     int total = chat_client_count_messages(path);
-    if (total < 0)
+    if (total < 0) {
+        fprintf(stderr, "sidecar_only_cb: cannot read chat '%s'\n", path);
         return 0;
+    }
 
     int cursor = chat_client_read_cursor(path, ctx->handle);
     if (cursor < 0)
         cursor = 0;
 
-    /* No unread in this chat — skip */
-    if (total <= cursor + 1)
+    /* No unread in this chat — skip.
+     * Use `total - 1 > cursor` to avoid overflow when cursor is near INT_MAX. */
+    if (total <= 0 || total - 1 <= cursor)
         return 0;
 
     ctx->has_unread = 1;
 
     /* Open chat file and find unread messages */
     FILE *f = fopen(path, "r");
-    if (!f)
+    if (!f) {
+        fprintf(stderr, "sidecar_only_cb: fopen failed for '%s'\n", path);
         return 0;
+    }
 
     char *line = NULL;
     size_t line_cap = 0;
@@ -411,17 +446,29 @@ static int sidecar_only_cb(const char *path, void *user_data)
         if (msg_index <= skip_count)
             continue;
 
-        /* Decode base64 message line */
+        /* Decode base64 message line.
+         * Cap line_len to prevent unreasonably large allocations from
+         * corrupt/adversarial chat files. */
+        ASSERT_MSG((size_t)line_len < MAX_PATH_BUF * 16,
+                   "sidecar_only_cb: unreasonably large base64 line: "
+                   "%zd bytes in '%s'", line_len, path);
         size_t decoded_max = base64_decoded_size((size_t)line_len);
+        ASSERT_MSG(decoded_max < SIZE_MAX,
+                   "sidecar_only_cb: decoded_max overflow");
         unsigned char *decoded = malloc(decoded_max + 1);
-        if (!decoded)
-            continue; /* Allocation failure — skip */
+        if (!decoded) {
+            fprintf(stderr, "sidecar_only_cb: malloc(%zu) failed for '%s'\n",
+                    decoded_max + 1, path);
+            continue;
+        }
 
         int decoded_len = base64_decode(line, (size_t)line_len,
                                          decoded, decoded_max);
         if (decoded_len < 0) {
             free(decoded);
-            continue; /* Decode failure — skip */
+            fprintf(stderr, "sidecar_only_cb: base64_decode failed for "
+                    "message %d in '%s'\n", msg_index, path);
+            continue;
         }
 
         /* NUL-terminate for string operations */
@@ -459,6 +506,8 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
                "chat_client_are_unread_sidecar_only: registry_path is NULL");
     ASSERT_MSG(handle != NULL,
                "chat_client_are_unread_sidecar_only: handle is NULL");
+    ASSERT_MSG(handle[0] != '\0',
+               "chat_client_are_unread_sidecar_only: handle is empty");
 
     struct sidecar_only_ctx ctx = {
         .handle = handle,
@@ -483,11 +532,17 @@ int chat_client_send(const char *chat_path, const char *handle,
                       const char *message)
 {
     ASSERT_MSG(chat_path != NULL, "chat_client_send: chat_path is NULL");
+    ASSERT_MSG(chat_path[0] != '\0', "chat_client_send: chat_path is empty");
     ASSERT_MSG(handle != NULL, "chat_client_send: handle is NULL");
+    ASSERT_MSG(handle[0] != '\0', "chat_client_send: handle is empty");
     ASSERT_MSG(message != NULL, "chat_client_send: message is NULL");
+    ASSERT_MSG(message[0] != '\0', "chat_client_send: message is empty");
+
+    const char *chat_bin = resolve_nbs_chat();
+    ASSERT_MSG(chat_bin != NULL, "chat_client_send: resolve_nbs_chat returned NULL");
 
     const char *argv[] = {
-        resolve_nbs_chat(), "send", chat_path, handle, message, NULL
+        chat_bin, "send", chat_path, handle, message, NULL
     };
 
     int rc = exec_fire_and_forget(argv);

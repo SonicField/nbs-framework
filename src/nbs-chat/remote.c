@@ -145,6 +145,13 @@ static int shell_escape(const char *arg, char *buf, size_t buf_size)
 
     buf[pos] = '\0';
 
+    /* Postcondition: buf is NUL-terminated at the expected position */
+    ASSERT_MSG(buf[pos] == '\0',
+               "shell_escape postcondition: buf not NUL-terminated at pos %zu", pos);
+    ASSERT_MSG(strlen(buf) == pos,
+               "shell_escape postcondition: strlen(buf)=%zu != pos=%zu, embedded NUL or overwrite",
+               strlen(buf), pos);
+
     /* Guard against size_t -> int truncation */
     if (pos > (size_t)INT_MAX) return -1;
 
@@ -156,8 +163,11 @@ static int shell_escape(const char *arg, char *buf, size_t buf_size)
 /*
  * contains_shell_metachar — Check if a string contains shell injection characters.
  *
- * Rejects strings containing: ; ` $ ( ) | & < > { } ! \ newline
+ * Rejects strings containing: ; ` $ ( ) | & < > { } ! \ " ' newline
  * These could be used for command injection when passed to SSH -o options.
+ * Quotes (" and ') are rejected because SSH's config parser interprets them
+ * in option values (e.g. ProxyCommand="malicious"), enabling injection via
+ * SSH's own parsing rather than the shell.
  *
  * Returns 1 if dangerous characters found, 0 if clean.
  */
@@ -169,6 +179,7 @@ static int contains_shell_metachar(const char *s)
         case ';': case '`': case '$': case '(': case ')':
         case '|': case '&': case '<': case '>': case '{':
         case '}': case '!': case '\\': case '\n': case '\r':
+        case '"': case '\'':
             return 1;
         default:
             break;
@@ -187,14 +198,16 @@ static int contains_shell_metachar(const char *s)
  * Preconditions:  cfg->host != NULL, chat_argc >= 2, chat_argv != NULL
  * Postconditions: Returns heap-allocated, NULL-terminated argv array.
  *                 argv[0] = "ssh", last element = NULL.
- *                 Caller must free argv, the remote command string (last non-NULL),
- *                 port_str_out (if non-NULL), and *opts_out (if non-NULL).
+ *                 Caller must free argv, *remote_cmd_out (the heap-allocated
+ *                 remote command string), port_str_out (if non-NULL),
+ *                 and *opts_out (if non-NULL).
  *
  * Returns NULL on allocation failure or if inputs are invalid.
  */
 static char **build_ssh_argv(const remote_config_t *cfg,
                               int chat_argc, char **chat_argv,
-                              char **opts_out, char **port_str_out)
+                              char **opts_out, char **port_str_out,
+                              char **remote_cmd_out)
 {
     ASSERT_MSG(cfg != NULL, "build_ssh_argv: cfg is NULL");
     ASSERT_MSG(cfg->host != NULL, "build_ssh_argv: cfg->host is NULL");
@@ -202,9 +215,11 @@ static char **build_ssh_argv(const remote_config_t *cfg,
     ASSERT_MSG(chat_argv != NULL, "build_ssh_argv: chat_argv is NULL");
     ASSERT_MSG(opts_out != NULL, "build_ssh_argv: opts_out is NULL");
     ASSERT_MSG(port_str_out != NULL, "build_ssh_argv: port_str_out is NULL");
+    ASSERT_MSG(remote_cmd_out != NULL, "build_ssh_argv: remote_cmd_out is NULL");
 
     *opts_out = NULL;
     *port_str_out = NULL;
+    *remote_cmd_out = NULL;
 
     /*
      * Build the remote command string with shell escaping.
@@ -331,7 +346,10 @@ static char **build_ssh_argv(const remote_config_t *cfg,
          * but defence-in-depth: reject options containing shell metacharacters
          * that could be exploited via ProxyCommand or similar directives.
          */
-        if (contains_shell_metachar(cfg->ssh_opts)) {
+        int has_meta = contains_shell_metachar(cfg->ssh_opts);
+        ASSERT_MSG(has_meta == 0 || has_meta == 1,
+                   "contains_shell_metachar returned unexpected value %d", has_meta);
+        if (has_meta) {
             fprintf(stderr, "Error: NBS_CHAT_OPTS contains dangerous characters "
                     "(;`$()| etc.) — refusing to proceed\n");
             free(remote_cmd);
@@ -361,7 +379,14 @@ static char **build_ssh_argv(const remote_config_t *cfg,
                 opt = strtok_r(NULL, ",", &saveptr);
             }
         } else {
-            fprintf(stderr, "warning: build_ssh_argv: strdup failed for SSH options, ignoring NBS_CHAT_OPTS\n");
+            /* Violation 1 fix: strdup failure is allocation failure, not soft fallback.
+             * Silently dropping SSH options under memory pressure is a bug. */
+            fprintf(stderr, "Error: build_ssh_argv: strdup failed for SSH options\n");
+            free(remote_cmd);
+            free(*port_str_out);
+            *port_str_out = NULL;
+            free(argv);
+            return NULL;
         }
     }
 
@@ -374,10 +399,19 @@ static char **build_ssh_argv(const remote_config_t *cfg,
     ASSERT_MSG(ai < max_args,
                "build_ssh_argv: argv overflow before remote_cmd, ai=%d", ai);
     argv[ai++] = remote_cmd;
+    *remote_cmd_out = remote_cmd;  /* Track explicitly for caller cleanup */
 
     ASSERT_MSG(ai < max_args,
                "build_ssh_argv: no room for NULL terminator, ai=%d", ai);
     argv[ai] = NULL;
+
+    /* Postcondition: argv[0] is "ssh", last element is NULL, remote_cmd tracked */
+    ASSERT_MSG(strcmp(argv[0], "ssh") == 0,
+               "build_ssh_argv postcondition: argv[0]='%s', expected 'ssh'", argv[0]);
+    ASSERT_MSG(argv[ai] == NULL,
+               "build_ssh_argv postcondition: argv not NULL-terminated at index %d", ai);
+    ASSERT_MSG(*remote_cmd_out != NULL,
+               "build_ssh_argv postcondition: remote_cmd_out is NULL");
 
     return argv;
 }
@@ -406,7 +440,17 @@ static int run_ssh(char **argv, const char *host)
     }
 
     if (pid == 0) {
-        /* Child: exec ssh */
+        /*
+         * Child: exec ssh.
+         *
+         * Safety note: This program is single-threaded and installs no signal
+         * handlers before fork(). Therefore:
+         * - No async-signal-safety concerns with strerror() on exec failure
+         * - No signal dispositions need resetting
+         * - No file descriptors need closing (stdin/stdout/stderr pass through)
+         * If threading or signal handlers are added in future, this code
+         * must be revisited.
+         */
         execvp("ssh", argv);
         fprintf(stderr, "Error: Failed to execute ssh: %s\n", strerror(errno));
         _exit(127);
@@ -443,6 +487,10 @@ static int run_ssh(char **argv, const char *host)
         fprintf(stderr, "Error: ssh command not found on PATH\n");
         return 1;
     }
+
+    /* Postcondition: exit_code is in range [0, 254] — 255 and 127 already mapped to 1 */
+    ASSERT_MSG(exit_code >= 0 && exit_code <= 254,
+               "run_ssh postcondition: exit_code %d out of range [0, 254]", exit_code);
 
     return exit_code;
 }
@@ -503,7 +551,8 @@ int main(int argc, char **argv)
     /* Build SSH command with shell-escaped arguments */
     char *opts_buf = NULL;
     char *port_str_heap = NULL;
-    char **ssh_argv = build_ssh_argv(&cfg, argc, argv, &opts_buf, &port_str_heap);
+    char *remote_cmd = NULL;
+    char **ssh_argv = build_ssh_argv(&cfg, argc, argv, &opts_buf, &port_str_heap, &remote_cmd);
     if (!ssh_argv) {
         fprintf(stderr, "Error: Failed to allocate SSH command\n");
         return 1;
@@ -514,18 +563,25 @@ int main(int argc, char **argv)
 
     /*
      * Cleanup: free heap-allocated resources.
-     * The remote_cmd is the last non-NULL element in argv.
-     * port_str_heap and opts_buf are tracked explicitly (not fragile search).
+     * All heap pointers are tracked explicitly — no fragile structural searches.
      */
-    for (int i = 0; ssh_argv[i] != NULL; i++) {
-        if (ssh_argv[i + 1] == NULL) {
-            free(ssh_argv[i]); /* This is the malloc'd remote_cmd */
-            break;
-        }
-    }
+    free(remote_cmd);
     free(port_str_heap);
     free(opts_buf);
     free(ssh_argv);
+
+    /*
+     * Violation 6 fix: validate exit code against documented range.
+     * Exit codes mirror nbs-chat exactly (0-4), with SSH failures mapped to 1.
+     * If a remote process returns an unexpected code, clamp to 1 (general error)
+     * and log a diagnostic rather than aborting — future nbs-chat versions
+     * might add codes, and aborting would be worse than clamping.
+     */
+    if (exit_code < 0 || exit_code > 4) {
+        fprintf(stderr, "Warning: unexpected exit code %d from remote nbs-chat "
+                "(expected 0-4), mapping to 1 (general error)\n", exit_code);
+        exit_code = 1;
+    }
 
     return exit_code;
 }

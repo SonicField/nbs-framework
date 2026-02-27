@@ -30,6 +30,10 @@
 /*
  * Cached absolute path to the nbs-workers binary.
  * Resolved once via /proc/self/exe — sibling binary in same directory.
+ *
+ * HARDENING #8: Invariant: resolve_nbs_workers must only be called from
+ * the main event loop thread. Not thread-safe by design — file-scope
+ * statics have no synchronisation.
  */
 #define WORKERS_PATH_LEN 4096
 static char nbs_workers_path[WORKERS_PATH_LEN] = "";
@@ -89,6 +93,8 @@ static int count_dir_by_type(const char *dir_path, const char *type_substr) {
     int crc = closedir(d);
     ASSERT_MSG(crc == 0, "count_dir_by_type: closedir failed: %s",
                strerror(errno));
+    /* HARDENING #9: postcondition — count must not have overflowed */
+    ASSERT_MSG(count >= 0, "count_dir_by_type: count overflow: %d", count);
     return count;
 }
 
@@ -104,6 +110,9 @@ static int count_dir_by_type(const char *dir_path, const char *type_substr) {
  */
 static int count_bus_events_by_type(const char *bus_dir,
                                      const char *type_substr) {
+    /* HARDENING #16 fix: check NULL before strlen dereference */
+    ASSERT_MSG(bus_dir != NULL, "count_bus_events_by_type: bus_dir is NULL");
+    ASSERT_MSG(type_substr != NULL, "count_bus_events_by_type: type_substr is NULL");
     ASSERT_MSG(strlen(bus_dir) < 4000,
            "count_bus_events_by_type: bus_dir too long: %zu", strlen(bus_dir));
 
@@ -127,6 +136,9 @@ static int count_bus_events_by_type(const char *bus_dir,
  * Falls back to 0 if the file does not exist.
  */
 static int count_scribe_decisions(const char *nbs_root) {
+    /* HARDENING #12 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "count_scribe_decisions: nbs_root is NULL");
+
     char path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/scribe/live-log.md", nbs_root);
@@ -149,6 +161,7 @@ static int count_scribe_decisions(const char *nbs_root) {
  * read_pythia_interval — Read pythia-interval from config.yaml.
  */
 static int read_pythia_interval(const char *bus_dir) {
+    ASSERT_MSG(bus_dir != NULL, "read_pythia_interval: bus_dir is NULL");
     ASSERT_MSG(strlen(bus_dir) < 4000,
            "read_pythia_interval: bus_dir too long: %zu", strlen(bus_dir));
     char config_path[4096];
@@ -189,6 +202,9 @@ static int read_pythia_interval(const char *bus_dir) {
  * not exist or is unreadable (first run).
  */
 static int read_shared_pythia_bucket(const char *nbs_root) {
+    /* HARDENING #14 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "read_shared_pythia_bucket: nbs_root is NULL");
+
     char path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/pythia-last-bucket", nbs_root);
@@ -215,6 +231,9 @@ static int read_shared_pythia_bucket(const char *nbs_root) {
  * Uses tmp+rename for atomicity — same pattern as standup timestamp.
  */
 static void write_shared_pythia_bucket(const char *nbs_root, int bucket) {
+    /* HARDENING #14 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "write_shared_pythia_bucket: nbs_root is NULL");
+
     char path[4096], tmp_path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/pythia-last-bucket", nbs_root);
@@ -277,10 +296,13 @@ int trigger_pythia_check(const char *registry_path, const char *nbs_root,
          * The shared file records which bucket was last triggered by ANY
          * sidecar. If another sidecar already triggered this bucket, skip.
          *
-         * This is analogous to the standup CSMA/CD shared timestamp file
-         * (.standup-ts), but uses bucket numbers instead of timestamps.
-         * The flock in trigger_pythia_spawn provides a secondary guard,
-         * but releases too quickly to prevent sequential duplicates.
+         * BUG #17 acknowledgement: the read-then-write of the shared
+         * bucket file is not atomic (TOCTOU). Two sidecars can both read
+         * the old bucket, both pass the check, and both write+spawn.
+         * The flock in trigger_pythia_spawn serialises the spawn command
+         * but releases before the spawned worker completes. The dedup is
+         * therefore best-effort, not guaranteed. Worst case: a duplicate
+         * Pythia assessment (expensive but not data-corrupting).
          */
         int shared_bucket = read_shared_pythia_bucket(nbs_root);
         if (shared_bucket >= current_bucket) {
@@ -344,7 +366,12 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
     ASSERT_MSG(handle != NULL, "trigger_standup_check: handle is NULL");
     ASSERT_MSG(last_standup_time != NULL, "trigger_standup_check: last_standup_time is NULL");
 
-    if (interval_minutes <= 0) return 1;
+    /* HARDENING #2 + BUG #1 fix: validate interval_minutes range.
+     * Non-positive is a caller bug, not a disable signal.
+     * Upper bound of 1440 (24h) prevents integer overflow in * 60. */
+    ASSERT_MSG(interval_minutes > 0 && interval_minutes <= 1440,
+               "trigger_standup_check: interval_minutes out of range: %d",
+               interval_minutes);
 
     time_t now = time(NULL);
     int interval_secs = interval_minutes * 60;
@@ -368,7 +395,10 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
 
     /* CSMA/CD: check shared timestamp file */
     char ts_file[4096 + 16];
-    snprintf(ts_file, sizeof(ts_file), "%s.standup-ts", chat_path);
+    int ts_n = snprintf(ts_file, sizeof(ts_file), "%s.standup-ts", chat_path);
+    /* BUG #5 fix: assert snprintf did not truncate */
+    ASSERT_MSG(ts_n > 0 && (size_t)ts_n < sizeof(ts_file),
+               "trigger_standup_check: ts_file path truncated");
 
     time_t last_global = 0;
     FILE *tsf = fopen(ts_file, "r");
@@ -425,11 +455,15 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
             "something, quote it with timestamp. No quote = no evidence.";
     }
 
-    chat_client_send(chat_path, "sidecar", standup_msg);
+    /* HARDENING #18 fix: use handle as sender identity */
+    chat_client_send(chat_path, handle, standup_msg);
 
     /* Update shared timestamp atomically */
     char ts_tmp[4096 + 24];
-    snprintf(ts_tmp, sizeof(ts_tmp), "%s.tmp", ts_file);
+    int ts_tmp_n = snprintf(ts_tmp, sizeof(ts_tmp), "%s.tmp", ts_file);
+    /* BUG #6 fix: assert snprintf did not truncate */
+    ASSERT_MSG(ts_tmp_n > 0 && (size_t)ts_tmp_n < sizeof(ts_tmp),
+               "trigger_standup_check: ts_tmp path truncated");
     FILE *wtf = fopen(ts_tmp, "w");
     if (wtf) {
         if (fprintf(wtf, "%ld\n", (long)now) < 0) {
@@ -458,7 +492,11 @@ int trigger_heartbeat(const char *registry_path, const char *handle,
     ASSERT_MSG(handle != NULL, "trigger_heartbeat: handle is NULL");
     ASSERT_MSG(last_heartbeat_time != NULL, "trigger_heartbeat: last_heartbeat_time is NULL");
 
-    if (interval <= 0) return 1;
+    /* HARDENING #3 fix: negative interval is a caller bug.
+     * interval=0 is a documented disable signal. */
+    ASSERT_MSG(interval >= 0,
+               "trigger_heartbeat: interval must be non-negative, got %d", interval);
+    if (interval == 0) return 1;
 
     time_t now = time(NULL);
 
@@ -554,6 +592,7 @@ int trigger_pythia_spawn(const char *nbs_root) {
  * read_shepard_interval — Read shepard-interval from config.yaml.
  */
 static int read_shepard_interval(const char *bus_dir) {
+    ASSERT_MSG(bus_dir != NULL, "read_shepard_interval: bus_dir is NULL");
     ASSERT_MSG(strlen(bus_dir) < 4000,
            "read_shepard_interval: bus_dir too long: %zu", strlen(bus_dir));
     char config_path[4096];
@@ -582,6 +621,9 @@ static int read_shepard_interval(const char *bus_dir) {
 }
 
 static int read_shared_shepard_bucket(const char *nbs_root) {
+    /* HARDENING #15 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "read_shared_shepard_bucket: nbs_root is NULL");
+
     char path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/shepard-last-bucket", nbs_root);
@@ -603,6 +645,9 @@ static int read_shared_shepard_bucket(const char *nbs_root) {
 }
 
 static void write_shared_shepard_bucket(const char *nbs_root, int bucket) {
+    /* HARDENING #15 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "write_shared_shepard_bucket: nbs_root is NULL");
+
     char path[4096], tmp_path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/shepard-last-bucket", nbs_root);
@@ -648,7 +693,8 @@ int trigger_shepard_check(const char *registry_path, const char *nbs_root,
     int last_bucket = *last_trigger_count / interval;
 
     if (current_bucket > last_bucket && message_count > 0) {
-        /* Cross-sidecar dedup */
+        /* Cross-sidecar dedup — best-effort via shared bucket file.
+         * Same TOCTOU limitation as Pythia (see BUG #17 comment there). */
         int shared_bucket = read_shared_shepard_bucket(nbs_root);
         if (shared_bucket >= current_bucket) {
             *last_trigger_count = message_count;
@@ -735,6 +781,9 @@ int trigger_shepard_spawn(const char *nbs_root) {
 /* --- Fixup trigger (wall-clock, hourly) --- */
 
 static time_t read_fixup_last_run(const char *nbs_root) {
+    /* HARDENING #13 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "read_fixup_last_run: nbs_root is NULL");
+
     char path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/fixup-last-run", nbs_root);
@@ -756,6 +805,9 @@ static time_t read_fixup_last_run(const char *nbs_root) {
 }
 
 static void write_fixup_last_run(const char *nbs_root, time_t when) {
+    /* HARDENING #13 fix: precondition on nbs_root */
+    ASSERT_MSG(nbs_root != NULL, "write_fixup_last_run: nbs_root is NULL");
+
     char path[4096], tmp_path[4096];
     int n = snprintf(path, sizeof(path),
                      "%s/.nbs/fixup-last-run", nbs_root);
@@ -786,7 +838,10 @@ static void write_fixup_last_run(const char *nbs_root, time_t when) {
 int trigger_fixup_check(const char *nbs_root, int interval_secs) {
     ASSERT_MSG(nbs_root != NULL, "trigger_fixup_check: nbs_root is NULL");
 
-    if (interval_secs <= 0) return 1;
+    /* HARDENING #4 fix: non-positive interval is a caller bug */
+    ASSERT_MSG(interval_secs > 0,
+               "trigger_fixup_check: interval_secs must be positive, got %d",
+               interval_secs);
 
     time_t now = time(NULL);
     time_t last_run = read_fixup_last_run(nbs_root);
@@ -801,7 +856,17 @@ int trigger_fixup_check(const char *nbs_root, int interval_secs) {
         return 1;
     }
 
-    /* Time elapsed — claim and spawn */
+    /* Time elapsed — claim and spawn.
+     *
+     * BUG #7 acknowledgement: there is a TOCTOU window between reading
+     * the timestamp (above) and writing here. Two sidecars can both read
+     * the stale timestamp, both pass the elapsed check, and both proceed.
+     * The lock in trigger_fixup_spawn serialises the spawn command but
+     * does not prevent sequential duplicate spawns. This is acceptable:
+     * fixup runs are idempotent, and duplicate runs are harmless (just
+     * wasteful). A bucket-number scheme (like Pythia/Shepard) would
+     * eliminate duplicates but adds complexity disproportionate to the
+     * risk for an hourly-cadence trigger. */
     write_fixup_last_run(nbs_root, now);
     trigger_fixup_spawn(nbs_root);
     return 0;

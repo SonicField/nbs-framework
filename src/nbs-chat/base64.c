@@ -5,7 +5,7 @@
  *   - decode_table uses 0xFF for invalid entries; only valid base64
  *     characters map to values 0-63, and '=' maps to 64.
  *   - All sextet extractions are masked with & 0x3F.
- *   - Input is validated via is_valid_base64_char() before decode_table lookup.
+ *   - Input is validated via base64_is_valid_char() before decode_table lookup.
  *   - An assertion guards the decode_table lookup as a defence-in-depth
  *     measure against the 'A'/0 ambiguity.
  */
@@ -14,6 +14,13 @@
 #include "chat_file.h"
 #include <assert.h>
 #include <limits.h>
+
+/* HARDENING #3: Base64 bit arithmetic assumes 8-bit bytes throughout.
+ * Shift widths (16, 8), masks (0x3F, 0xFF), and the 256-entry decode
+ * table all depend on CHAR_BIT == 8. Fail at compile time on exotic
+ * platforms rather than silently producing wrong output. */
+_Static_assert(CHAR_BIT == 8,
+               "base64 implementation requires 8-bit bytes");
 
 static const char encode_table[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -33,7 +40,7 @@ static const char encode_table[] =
  *
  * The 'A'/0 ambiguity: 'A' maps to 0, and uninitialised entries also
  * default to 0 with C zero-initialisation. We solve this by explicitly
- * setting all non-base64 entries to 0xFF. The is_valid_base64_char()
+ * setting all non-base64 entries to 0xFF. The base64_is_valid_char()
  * function serves as the primary validity check; the 0xFF sentinel in
  * this table provides defence-in-depth.
  */
@@ -87,8 +94,9 @@ static const unsigned char decode_table[256] = {
 };
 /* clang-format on */
 
-/* Validate a character is in the base64 alphabet (including '=' padding) */
-static int is_valid_base64_char(unsigned char c) {
+/* Validate a character is in the base64 alphabet (including '=' padding).
+ * Exposed via base64.h so callers can write their own postcondition checks. */
+int base64_is_valid_char(unsigned char c) {
     if (c == '=' || c == '+' || c == '/') return 1;
     if (c >= 'A' && c <= 'Z') return 1;
     if (c >= 'a' && c <= 'z') return 1;
@@ -110,6 +118,17 @@ int base64_encode(const unsigned char *input, size_t input_len,
     ASSERT_MSG(input_len <= (SIZE_MAX - 4) / 4 * 3,
                "base64_encode: input_len %zu would overflow size calculation",
                input_len);
+    /* SECURITY: Fail fast if input would produce output exceeding INT_MAX.
+     * The return type is int, so output length must fit. Without this
+     * precondition, the function would encode the entire input (O(n) work)
+     * before the postcondition at the end catches the overflow — a
+     * denial-of-service vector for attacker-controlled input_len.
+     * Bound: output_len = ((input_len + 2) / 3) * 4, so for output_len
+     * <= INT_MAX we need input_len <= (INT_MAX / 4) * 3. */
+    ASSERT_MSG(input_len <= ((size_t)INT_MAX / 4) * 3,
+               "base64_encode: input_len %zu would produce output exceeding "
+               "INT_MAX (%d); cannot represent result as int return value",
+               input_len, INT_MAX);
 
     size_t needed = base64_encoded_size(input_len);
     if (output_size < needed) {
@@ -160,6 +179,18 @@ int base64_encode(const unsigned char *input, size_t input_len,
                "base64_encode: output length %zu exceeds INT_MAX; "
                "input too large for int return type", j);
 
+    /* HARDENING #5: Verify output contains only valid base64 characters.
+     * A corruption in encode_table indexing could produce non-base64 output
+     * that would silently pass through without this check. This is O(n) but
+     * fires on every encode — it is an executable specification, not a
+     * debugging aid. */
+    for (size_t k = 0; k < j; k++) {
+        ASSERT_MSG(base64_is_valid_char((unsigned char)output[k]),
+                   "base64_encode: output character 0x%02x at position %zu "
+                   "is not valid base64; encode logic corrupted",
+                   (unsigned char)output[k], k);
+    }
+
     return (int)j;
 }
 
@@ -172,6 +203,19 @@ int base64_decode(const char *input, size_t input_len,
     ASSERT_MSG(output != NULL,
                "base64_decode: output buffer is NULL; "
                "caller must provide a valid output buffer");
+    /* SECURITY: Fail fast if input would produce output exceeding INT_MAX.
+     * The return type is int, so decoded length must fit. This check MUST
+     * precede the whitespace stripping loop because that loop accesses
+     * input[input_len - 1], which would be an out-of-bounds read for
+     * absurdly large input_len values.
+     * Bound: out_len = (input_len / 4) * 3 - padding, so worst case
+     * (no padding) out_len = (input_len / 4) * 3. For out_len <= INT_MAX
+     * we need input_len <= (INT_MAX / 3) * 4. We add 4 to account for
+     * padding reducing out_len by up to 2. */
+    ASSERT_MSG(input_len <= (size_t)INT_MAX / 3 * 4 + 4,
+               "base64_decode: input_len %zu would produce output exceeding "
+               "INT_MAX (%d); cannot represent result as int return value",
+               input_len, INT_MAX);
 
     /* Strip trailing whitespace/newlines */
     while (input_len > 0 && (input[input_len - 1] == '\n' ||
@@ -206,7 +250,7 @@ int base64_decode(const char *input, size_t input_len,
      *   - Non-final blocks must not contain '=' at all.
      */
     for (size_t i = 0; i < input_len; i++) {
-        if (!is_valid_base64_char((unsigned char)input[i])) {
+        if (!base64_is_valid_char((unsigned char)input[i])) {
             fprintf(stderr,
                     "base64_decode: invalid character 0x%02x at position %zu; "
                     "only A-Z, a-z, 0-9, +, /, = are valid base64 characters\n",

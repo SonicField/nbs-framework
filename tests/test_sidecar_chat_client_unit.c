@@ -20,6 +20,13 @@
  *  16.  send: successful send → returns 0
  *  17.  count_messages: long lines (>4095 chars) not double-counted
  *  18.  are_unread_sidecar_only: non-sidecar in long line → returns 0
+ *
+ * Adversarial tests (BUG/SECURITY violations):
+ *  19.  read_cursor: INT_MAX cursor clamped to INT_MAX-1 (overflow prevention)
+ *  20.  read_cursor: negative cursor clamped to 0
+ *  21.  check_unread: large cursor does not cause overflow in unread count
+ *  22.  check_unread: postconditions hold on return 0 (summary non-empty)
+ *  23.  read_cursor: chat_path emptiness precondition (via assertion)
  */
 
 #include "../src/nbs-sidecar/chat_client.h"
@@ -670,6 +677,136 @@ int main(void)
             int after = chat_client_count_messages(chat_path);
             CHECK("send: message count increased to 1", after == 1);
         }
+    }
+
+    /* ============================================================
+     * 19. read_cursor: INT_MAX cursor clamped to INT_MAX-1
+     *
+     * BUG: cursor + 1 overflows when cursor is INT_MAX. After fix,
+     * read_cursor clamps to INT_MAX - 1. The comparison
+     * total - 1 > cursor is also overflow-safe.
+     * ============================================================ */
+    {
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/cursor_overflow.chat",
+                 tmpdir);
+        write_chat_file(chat_path, NULL);
+
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=2147483647\n");
+
+        int cursor = chat_client_read_cursor(chat_path, "agent");
+        CHECK("read_cursor: INT_MAX clamped to INT_MAX-1",
+              cursor == 2147483646);
+    }
+
+    /* ============================================================
+     * 20. read_cursor: negative cursor clamped to 0
+     *
+     * BUG: sscanf with %d allowed negative values. After fix,
+     * negative values are clamped to 0.
+     * ============================================================ */
+    {
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/cursor_neg.chat", tmpdir);
+        write_chat_file(chat_path, NULL);
+
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=-5\n");
+
+        int cursor = chat_client_read_cursor(chat_path, "agent");
+        CHECK("read_cursor: negative value clamped to 0", cursor == 0);
+    }
+
+    /* ============================================================
+     * 21. check_unread: large cursor does not cause overflow
+     *
+     * BUG: total > cursor + 1 overflows when cursor is large.
+     * After fix: comparison uses total - 1 > cursor (safe because
+     * total >= 0) and cursor is clamped by read_cursor.
+     *
+     * With cursor at INT_MAX-1 and total=3, we expect:
+     *   total - 1 > cursor → 2 > 2147483646 → false → caught up
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t21", tmpdir);
+        mkdirs(sub);
+
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/live.chat", sub);
+
+        const char *msgs[] = { b64_msg1, b64_msg2, b64_msg3, NULL };
+        write_chat_file(chat_path, msgs);
+
+        /* cursor = INT_MAX → clamped to INT_MAX-1 by read_cursor */
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=2147483647\n");
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3];
+        snprintf(entry, sizeof(entry), "chat:%s\n", chat_path);
+        write_file(registry_path, entry);
+
+        int unread_count = -1;
+        char summary[L3] = {0};
+        int rc = chat_client_check_unread(registry_path, "agent",
+                                          &unread_count, summary,
+                                          sizeof(summary));
+
+        /* With cursor at 2147483646 and total=3, should be "caught up".
+         * Before the fix, cursor + 1 would overflow to INT_MIN,
+         * making total > INT_MIN always true → wrong unread count. */
+        CHECK("overflow: returns 1 (caught up, not spurious unread)",
+              rc == 1);
+        CHECK("overflow: unread_count is 0", unread_count == 0);
+    }
+
+    /* ============================================================
+     * 22. check_unread: postconditions on return 0
+     *
+     * HARDENING: when check_unread returns 0 (unread found),
+     * unread_count > 0 and summary is non-empty.
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t22", tmpdir);
+        mkdirs(sub);
+
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/live.chat", sub);
+
+        const char *msgs[] = { b64_msg1, b64_msg2, b64_msg3, NULL };
+        write_chat_file(chat_path, msgs);
+
+        /* cursor at 0 → 2 unread messages */
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=0\n");
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3];
+        snprintf(entry, sizeof(entry), "chat:%s\n", chat_path);
+        write_file(registry_path, entry);
+
+        int unread_count = -1;
+        char summary[L3] = {0};
+        int rc = chat_client_check_unread(registry_path, "agent",
+                                          &unread_count, summary,
+                                          sizeof(summary));
+
+        CHECK("postcond: returns 0 (unread)", rc == 0);
+        CHECK("postcond: unread_count > 0", unread_count > 0);
+        CHECK("postcond: summary non-empty", summary[0] != '\0');
+        CHECK("postcond: summary contains count",
+              strstr(summary, "2 unread") != NULL);
     }
 
     /* Clean up */

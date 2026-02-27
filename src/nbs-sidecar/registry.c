@@ -108,13 +108,21 @@ static int registry_remove(const char *registry_path, const char *entry)
     if (!f)
         return (errno == ENOENT) ? 0 : -1;
 
+    /* Use mkstemp for atomic tmp file — prevents symlink attacks (SECURITY #9) */
     char tmp_path[MAX_FPATH];
-    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", registry_path);
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.XXXXXX", registry_path);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(tmp_path),
                "registry_remove: tmp_path truncated for '%s'", registry_path);
 
-    FILE *tmp = fopen(tmp_path, "w");
+    int tmp_fd = mkstemp(tmp_path);
+    if (tmp_fd < 0) {
+        fclose(f);
+        return -1;
+    }
+    FILE *tmp = fdopen(tmp_fd, "w");
     if (!tmp) {
+        close(tmp_fd);
+        unlink(tmp_path);
         fclose(f);
         return -1;
     }
@@ -202,8 +210,12 @@ static int count_lines(const char *buf)
     int count = 0;
     const char *p = buf;
     while (*p) {
-        if (*p == '\n')
+        if (*p == '\n') {
             count++;
+            /* HARDENING #7 fix: guard against int overflow on line count */
+            ASSERT_MSG(count > 0,
+                       "count_lines: line count overflow (exceeded INT_MAX)");
+        }
         p++;
     }
 
@@ -225,6 +237,8 @@ static int get_line_n(const char *buf, int n, char *out, size_t out_size)
     ASSERT_MSG(buf != NULL, "get_line_n: buf is NULL");
     ASSERT_MSG(out != NULL, "get_line_n: out is NULL");
     ASSERT_MSG(out_size > 0, "get_line_n: out_size is 0");
+    /* HARDENING #6 fix: validate line index is non-negative */
+    ASSERT_MSG(n >= 0, "get_line_n: line index must be non-negative, got %d", n);
 
     int current = 0;
     const char *p = buf;
@@ -273,20 +287,29 @@ static int process_control_command(const char *line, const char *registry_path)
         return 0; /* Incomplete line — ignore, matching bash behaviour */
 
     char entry[MAX_ENTRY];
+    int en; /* snprintf return for entry construction — BUG #2 fix */
 
     if (strcmp(verb, "register-chat") == 0) {
-        snprintf(entry, sizeof(entry), "chat:%s", path);
+        en = snprintf(entry, sizeof(entry), "chat:%s", path);
+        ASSERT_MSG(en >= 0 && (size_t)en < sizeof(entry),
+                   "process_control_command: entry truncated for chat:'%s'", path);
         if (!registry_contains(registry_path, entry))
             return registry_append(registry_path, entry);
     } else if (strcmp(verb, "unregister-chat") == 0) {
-        snprintf(entry, sizeof(entry), "chat:%s", path);
+        en = snprintf(entry, sizeof(entry), "chat:%s", path);
+        ASSERT_MSG(en >= 0 && (size_t)en < sizeof(entry),
+                   "process_control_command: entry truncated for chat:'%s'", path);
         return registry_remove(registry_path, entry);
     } else if (strcmp(verb, "register-bus") == 0) {
-        snprintf(entry, sizeof(entry), "bus:%s", path);
+        en = snprintf(entry, sizeof(entry), "bus:%s", path);
+        ASSERT_MSG(en >= 0 && (size_t)en < sizeof(entry),
+                   "process_control_command: entry truncated for bus:'%s'", path);
         if (!registry_contains(registry_path, entry))
             return registry_append(registry_path, entry);
     } else if (strcmp(verb, "unregister-bus") == 0) {
-        snprintf(entry, sizeof(entry), "bus:%s", path);
+        en = snprintf(entry, sizeof(entry), "bus:%s", path);
+        ASSERT_MSG(en >= 0 && (size_t)en < sizeof(entry),
+                   "process_control_command: entry truncated for bus:'%s'", path);
         return registry_remove(registry_path, entry);
     }
     /* Unknown verb — silently ignore, matching bash behaviour */
@@ -327,8 +350,12 @@ int registry_seed(const char *nbs_root, const char *registry_path)
 
             /* chat_dir (<=4095) + "/" + d_name (<=255) fits in MAX_FPATH */
             char full_path[MAX_FPATH];
-            snprintf(full_path, sizeof(full_path), "%s/%s",
+            int fp_n = snprintf(full_path, sizeof(full_path), "%s/%s",
                      chat_dir, ent->d_name);
+            /* BUG #3 fix: assert snprintf did not truncate */
+            ASSERT_MSG(fp_n >= 0 && (size_t)fp_n < sizeof(full_path),
+                       "registry_seed: full_path truncated for '%s/%s'",
+                       chat_dir, ent->d_name);
 
             /* Verify it's a regular file */
             struct stat st;
@@ -337,7 +364,10 @@ int registry_seed(const char *nbs_root, const char *registry_path)
 
             /* "chat:" (5) + full_path (<=MAX_FPATH-1) fits in MAX_ENTRY */
             char entry[MAX_ENTRY];
-            snprintf(entry, sizeof(entry), "chat:%s", full_path);
+            int e_n = snprintf(entry, sizeof(entry), "chat:%s", full_path);
+            /* BUG #3 fix: assert snprintf did not truncate */
+            ASSERT_MSG(e_n >= 0 && (size_t)e_n < sizeof(entry),
+                       "registry_seed: chat entry truncated for '%s'", full_path);
 
             if (!registry_contains(registry_path, entry)) {
                 if (registry_append(registry_path, entry) != 0) {
@@ -358,7 +388,10 @@ int registry_seed(const char *nbs_root, const char *registry_path)
     struct stat st;
     if (stat(events_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
         char entry[MAX_ENTRY];
-        snprintf(entry, sizeof(entry), "bus:%s", events_dir);
+        int ev_n = snprintf(entry, sizeof(entry), "bus:%s", events_dir);
+        /* BUG #4 fix: assert snprintf did not truncate */
+        ASSERT_MSG(ev_n >= 0 && (size_t)ev_n < sizeof(entry),
+                   "registry_seed: bus entry truncated for '%s'", events_dir);
 
         if (!registry_contains(registry_path, entry)) {
             if (registry_append(registry_path, entry) != 0)
@@ -377,6 +410,9 @@ int registry_process_inbox(const char *inbox_path, const char *registry_path,
                "registry_process_inbox: registry_path is NULL");
     ASSERT_MSG(inbox_line != NULL,
                "registry_process_inbox: inbox_line is NULL");
+    /* HARDENING #8 fix: validate inbox_line is non-negative */
+    ASSERT_MSG(*inbox_line >= 0,
+               "registry_process_inbox: inbox_line is negative: %d", *inbox_line);
 
     /* Read entire inbox file */
     FILE *f = fopen(inbox_path, "r");
@@ -388,12 +424,17 @@ int registry_process_inbox(const char *inbox_path, const char *registry_path,
         return -1;
     }
     long file_size = ftell(f);
+    if (file_size < 0) {
+        /* BUG #1 fix: ftell returns -1 on error — do not conflate with empty */
+        fclose(f);
+        return -1;
+    }
     if (fseek(f, 0, SEEK_SET) != 0) {
         fclose(f);
         return -1;
     }
 
-    if (file_size <= 0) {
+    if (file_size == 0) {
         fclose(f);
         return 0;
     }
@@ -461,7 +502,10 @@ int registry_find_first(const char *registry_path, const char *type,
         return -1;
 
     char prefix[256];
-    snprintf(prefix, sizeof(prefix), "%s:", type);
+    int pn = snprintf(prefix, sizeof(prefix), "%s:", type);
+    /* BUG #5 fix: assert prefix not truncated */
+    ASSERT_MSG(pn >= 0 && (size_t)pn < sizeof(prefix),
+               "registry_find_first: type prefix truncated for '%s'", type);
     size_t prefix_len = strlen(prefix);
 
     char line[MAX_ENTRY];
@@ -479,6 +523,8 @@ int registry_find_first(const char *registry_path, const char *type,
     }
 
     fclose(f);
+    /* HARDENING #11 fix: distinguish "not found" from I/O error */
+    errno = 0;
     return -1;
 }
 
@@ -496,7 +542,10 @@ int registry_for_each(const char *registry_path, const char *type,
         return -1;
 
     char prefix[256];
-    snprintf(prefix, sizeof(prefix), "%s:", type);
+    int pn2 = snprintf(prefix, sizeof(prefix), "%s:", type);
+    /* BUG #5 fix: assert prefix not truncated */
+    ASSERT_MSG(pn2 >= 0 && (size_t)pn2 < sizeof(prefix),
+               "registry_for_each: type prefix truncated for '%s'", type);
     size_t prefix_len = strlen(prefix);
 
     char line[MAX_ENTRY];
@@ -512,6 +561,11 @@ int registry_for_each(const char *registry_path, const char *type,
             int rc = callback(line + prefix_len, user_data);
             count++;
             if (rc != 0) {
+                /* HARDENING #10: non-zero callback return is an early-exit
+                 * signal, not an error. Callers use this to stop iteration
+                 * once they have found what they need. The count of entries
+                 * visited (including the one that triggered early exit) is
+                 * returned so the caller knows how many were processed. */
                 fclose(f);
                 return count;
             }

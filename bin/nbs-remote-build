@@ -45,8 +45,11 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
-# Precondition: pty-session binary must exist
-[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+# Precondition: pty-session binary must exist and be executable
+[[ -x "$PTY_SESSION" ]] || {
+    echo "ASSERTION FAILED: pty-session binary not found or not executable at $PTY_SESSION. Required for remote build execution. Install from https://github.com/SonicField/nbs-framework" >&2
+    exit 1
+}
 
 # Suppress pty-session tool header (we ARE the higher-level tool)
 export NBS_PTY_QUIET=1
@@ -125,9 +128,17 @@ if [[ -n "$CHAT_FILE" ]] && [[ -z "$CHAT_HANDLE" ]]; then
     exit 4
 fi
 
-# Validate numeric arguments
-[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || { echo "Error: --timeout must be a positive integer, got '$TIMEOUT'" >&2; exit 4; }
-[[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] || { echo "Error: --poll must be a positive integer, got '$POLL_INTERVAL'" >&2; exit 4; }
+# Precondition: nbs-chat binary must exist when --chat is used
+if [[ -n "$CHAT_FILE" ]]; then
+    [[ -x "$NBS_CHAT" ]] || {
+        echo "ASSERTION FAILED: nbs-chat not found or not executable at $NBS_CHAT, required when --chat is set. Install from https://github.com/SonicField/nbs-framework" >&2
+        exit 1
+    }
+fi
+
+# Validate numeric arguments — must be strictly positive integers
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] && (( TIMEOUT > 0 )) || { echo "Error: --timeout must be a positive integer > 0, got '$TIMEOUT'" >&2; exit 4; }
+[[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] && (( POLL_INTERVAL > 0 )) || { echo "Error: --poll must be a positive integer > 0, got '$POLL_INTERVAL'" >&2; exit 4; }
 
 # Validate regex pattern before entering poll loop
 _regex_rc=0
@@ -155,29 +166,65 @@ if [[ "$QUIET" != true ]]; then
 fi
 
 # Poll for completion, checking chat between polls
+# Use wall-clock time to avoid cumulative drift from command overhead
+start_time=$(date +%s)
 elapsed=0
 chat_messages_shown=0
+consecutive_read_failures=0
 
 while (( elapsed < TIMEOUT )); do
     sleep "$POLL_INTERVAL"
-    elapsed=$((elapsed + POLL_INTERVAL))
+    now=$(date +%s)
+    elapsed=$((now - start_time))
 
     # Check if build is done (prompt visible in last few lines)
-    last_lines=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || true
+    read_rc=0
+    last_lines=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || read_rc=$?
+    if (( read_rc != 0 )); then
+        consecutive_read_failures=$((consecutive_read_failures + 1))
+        if (( consecutive_read_failures >= 3 )); then
+            echo "Error: pty-session read failed $consecutive_read_failures consecutive times, session may be dead" >&2
+            exit 1
+        fi
+    else
+        consecutive_read_failures=0
+    fi
     if echo "$last_lines" | grep -qE "$PROMPT_PATTERN"; then
+        # SECURITY: Verify the shell is truly idle by sending a sentinel command.
+        # Build output can contain text matching the prompt pattern (e.g. "$ " in
+        # a log message), causing false-positive completion detection. We confirm
+        # by sending a unique echo command and verifying it appears in output.
+        sentinel="NBS_SENTINEL_${RANDOM}_${RANDOM}"
+        "$PTY_SESSION" send "$SESSION" "echo $sentinel" 2>/dev/null || true
+        sleep 1
+        sentinel_output=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || true
+        if ! echo "$sentinel_output" | grep -qF "$sentinel"; then
+            # Sentinel not found — prompt match was a false positive from build output
+            continue
+        fi
+
         if [[ "$QUIET" != true ]]; then
             echo "" >&2
             echo "Build completed in ${elapsed}s" >&2
         fi
 
-        # Print build output
-        "$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null
+        # Postcondition: retrieve and verify build output
+        build_output=$("$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null) || {
+            echo "Warning: build completed but could not read output from session '$SESSION'" >&2
+        }
+        if [[ -n "${build_output:-}" ]]; then
+            echo "$build_output"
+        fi
         exit 0
     fi
 
     # Check chat if configured
     if [[ -n "$CHAT_FILE" ]] && [[ -n "$CHAT_HANDLE" ]]; then
-        unread=$("$NBS_CHAT" read "$CHAT_FILE" --unread="$CHAT_HANDLE" 2>/dev/null) || true
+        unread_rc=0
+        unread=$("$NBS_CHAT" read "$CHAT_FILE" --unread="$CHAT_HANDLE" 2>/dev/null) || unread_rc=$?
+        if (( unread_rc != 0 )); then
+            echo "Warning: nbs-chat read failed (exit $unread_rc), chat monitoring may be impaired" >&2
+        fi
         if [[ -n "$unread" ]]; then
             echo "--- CHAT (during build) ---" >&2
             echo "$unread" >&2
@@ -199,5 +246,7 @@ if [[ "$QUIET" != true ]]; then
 fi
 
 # Print whatever output we have
-"$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null
+if ! "$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null; then
+    echo "Warning: could not read final output from session '$SESSION'" >&2
+fi
 exit 3

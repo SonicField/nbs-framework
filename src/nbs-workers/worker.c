@@ -46,7 +46,8 @@ static void redirect_stderr_to_devnull(void)
     if (fd >= 0) {
         if (dup2(fd, STDERR_FILENO) < 0)
             _exit(126);
-        close(fd);
+        if (fd != STDERR_FILENO)
+            close(fd);
     } else {
         close(STDERR_FILENO);
     }
@@ -136,10 +137,12 @@ static int exec_fire_and_forget(const char *const argv[])
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
             if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
-                close(fd);
+                if (fd != STDOUT_FILENO && fd != STDERR_FILENO)
+                    close(fd);
                 _exit(126);
             }
-            close(fd);
+            if (fd != STDOUT_FILENO && fd != STDERR_FILENO)
+                close(fd);
         } else {
             close(STDOUT_FILENO);
             close(STDERR_FILENO);
@@ -182,7 +185,8 @@ static int exec_spawn_detached(const char *const argv[])
         if (fd >= 0) {
             if (dup2(fd, STDOUT_FILENO) < 0)
                 _exit(126);
-            close(fd);
+            if (fd != STDOUT_FILENO)
+                close(fd);
         }
         execvp(argv[0], (char *const *)argv);
         _exit(127);
@@ -285,7 +289,7 @@ static void get_timestamp(char *buf, size_t bufsz)
 int validate_slug(const char *slug)
 {
     ASSERT_MSG(slug != NULL, "validate_slug: slug is NULL");
-    if (slug == NULL || slug[0] == '\0')
+    if (slug[0] == '\0')
         return 0;
     for (const char *p = slug; *p; p++) {
         if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9')))
@@ -297,7 +301,7 @@ int validate_slug(const char *slug)
 int validate_worker_name(const char *name)
 {
     ASSERT_MSG(name != NULL, "validate_worker_name: name is NULL");
-    if (name == NULL || name[0] == '\0')
+    if (name[0] == '\0')
         return 0;
 
     /* Find the last dash — everything before is slug, after is 4 hex chars */
@@ -328,7 +332,7 @@ int validate_uuid(const char *s)
 {
     ASSERT_MSG(s != NULL, "validate_uuid: s is NULL");
     /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars) */
-    if (s == NULL || strlen(s) != 36)
+    if (strlen(s) != 36)
         return 0;
 
     for (int i = 0; i < 36; i++) {
@@ -340,6 +344,48 @@ int validate_uuid(const char *s)
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
                 return 0;
         }
+    }
+    return 1;
+}
+
+/*
+ * validate_safe_handle — Check handle is safe for shell interpolation.
+ *
+ * Allowed: [a-z0-9] and hyphens (not leading).
+ * This is the security boundary for cmd_continue's shell command construction.
+ */
+int validate_safe_handle(const char *handle)
+{
+    ASSERT_MSG(handle != NULL, "validate_safe_handle: handle is NULL");
+    if (handle[0] == '\0')
+        return 0;
+    /* Leading hyphen could be parsed as a command option */
+    if (handle[0] == '-')
+        return 0;
+    for (const char *p = handle; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-'))
+            return 0;
+    }
+    return 1;
+}
+
+/*
+ * validate_safe_model — Check model name is safe for shell interpolation.
+ *
+ * Allowed: [a-z0-9] and hyphens, dots, colons, underscores (not leading hyphen).
+ * Model names like "claude-opus-4-6", "model:latest", "my.model.v2" are valid.
+ */
+int validate_safe_model(const char *model)
+{
+    ASSERT_MSG(model != NULL, "validate_safe_model: model is NULL");
+    if (model[0] == '\0')
+        return 0;
+    if (model[0] == '-')
+        return 0;
+    for (const char *p = model; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
+              *p == '-' || *p == '.' || *p == ':' || *p == '_'))
+            return 0;
     }
     return 1;
 }
@@ -694,11 +740,27 @@ static int json_extract_string(const char *json, const char *key,
     if (n < 0 || (size_t)n >= sizeof(pattern))
         return -1;
 
-    const char *pos = strstr(json, pattern);
+    /* Search for the key, verifying it is at a JSON key position
+     * (not a substring of another key or embedded in a value).
+     * A key must be preceded by '{', ',', or whitespace. */
+    const char *pos = json;
+    size_t pat_len = strlen(pattern);
+    while ((pos = strstr(pos, pattern)) != NULL) {
+        if (pos == json) {
+            break; /* At start of string -- valid key position */
+        }
+        char prev = *(pos - 1);
+        if (prev == '{' || prev == ',' ||
+            prev == ' ' || prev == '\t' ||
+            prev == '\n' || prev == '\r') {
+            break;
+        }
+        pos += pat_len; /* Not at key position -- skip and continue */
+    }
     if (!pos)
         return -1;
 
-    pos += strlen(pattern);
+    pos += pat_len;
     while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
         pos++;
     if (*pos != ':')
@@ -717,6 +779,13 @@ static int json_extract_string(const char *json, const char *key,
     }
     buf[i] = '\0';
 
+    /* Postcondition: no unprocessed JSON escape sequences.
+     * This parser does not handle \", \\, \n etc. If the value
+     * contains a backslash, the extraction is wrong. */
+    ASSERT_MSG(strchr(buf, '\\') == NULL,
+               "json_extract_string: unhandled escape sequence in value "
+               "for key '%s': '%s'", key, buf);
+
     return 0;
 }
 
@@ -730,11 +799,24 @@ static long json_extract_number(const char *json, const char *key)
     if (n < 0 || (size_t)n >= sizeof(pattern))
         return -1;
 
-    const char *pos = strstr(json, pattern);
+    const char *pos = json;
+    size_t pat_len = strlen(pattern);
+    while ((pos = strstr(pos, pattern)) != NULL) {
+        if (pos == json) {
+            break;
+        }
+        char prev = *(pos - 1);
+        if (prev == '{' || prev == ',' ||
+            prev == ' ' || prev == '\t' ||
+            prev == '\n' || prev == '\r') {
+            break;
+        }
+        pos += pat_len;
+    }
     if (!pos)
         return -1;
 
-    pos += strlen(pattern);
+    pos += pat_len;
     while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
         pos++;
     if (*pos != ':')
@@ -797,23 +879,46 @@ static int update_field_in_file(const char *path, const char *prefix,
     memcpy(new_content + before_len + new_line_len, line_end, after_len);
     new_content[new_total] = '\0';
 
-    FILE *f = fopen(path, "w");
+    /* Atomic write: write to tmp file, then rename over original.
+     * This prevents data loss on crash between truncate and write. */
+    char tmp_path[PATH_BUF_SIZE];
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) {
+        free(content);
+        free(new_content);
+        return -1;
+    }
+
+    FILE *f = fopen(tmp_path, "w");
     if (!f) {
         free(content);
         free(new_content);
         return -1;
     }
     size_t written = fwrite(new_content, 1, new_total, f);
-    fclose(f);
+    if (fclose(f) != 0 || written != new_total) {
+        /* Write or flush failed — remove the partial temp file,
+         * original file is untouched. */
+        fprintf(stderr, "Error: short write to %s: wrote %zu of %zu bytes\n",
+                tmp_path, written, new_total);
+        unlink(tmp_path);
+        free(content);
+        free(new_content);
+        return -1;
+    }
+
+    /* Postcondition: temp file fully written. Rename atomically. */
+    if (rename(tmp_path, path) != 0) {
+        fprintf(stderr, "Error: rename %s -> %s failed (errno=%d: %s)\n",
+                tmp_path, path, errno, strerror(errno));
+        unlink(tmp_path);
+        free(content);
+        free(new_content);
+        return -1;
+    }
 
     free(content);
     free(new_content);
-
-    if (written != new_total) {
-        fprintf(stderr, "Error: short write to %s: wrote %zu of %zu bytes\n",
-                path, written, new_total);
-        return -1;
-    }
 
     return 0;
 }
@@ -1045,7 +1150,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
         "## Log\n"
         "\n"
         "[Worker appends findings here]\n",
-        slug, task_description, timestamp);
+        name, task_description, timestamp);
 
     fclose(f);
 
@@ -1183,6 +1288,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
 
 int cmd_status(const char *name, const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_status: cwd is NULL");
     if (!name || name[0] == '\0') {
         fprintf(stderr, "Error: status requires <name>\n");
         return EXIT_BAD_ARGS;
@@ -1249,6 +1355,9 @@ int cmd_status(const char *name, const char *cwd)
 int cmd_search(const char *name, const char *pattern,
                int context_lines, const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_search: cwd is NULL");
+    ASSERT_MSG(context_lines >= 0 && context_lines <= 10000,
+               "cmd_search: context_lines out of range: %d", context_lines);
     if (!name || name[0] == '\0' || !pattern || pattern[0] == '\0') {
         fprintf(stderr,
                 "Error: search requires <name> <regex> [--context=N]\n");
@@ -1410,6 +1519,7 @@ int cmd_search(const char *name, const char *pattern,
 
 int cmd_results(const char *name, const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_results: cwd is NULL");
     if (!name || name[0] == '\0') {
         fprintf(stderr, "Error: results requires <name>\n");
         return EXIT_BAD_ARGS;
@@ -1473,6 +1583,7 @@ int cmd_results(const char *name, const char *cwd)
 
 int cmd_dismiss(const char *name, const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_dismiss: cwd is NULL");
     if (!name || name[0] == '\0') {
         fprintf(stderr, "Error: dismiss requires <name>\n");
         return EXIT_BAD_ARGS;
@@ -1565,10 +1676,33 @@ int cmd_dismiss(const char *name, const char *cwd)
 int cmd_continue(const char *handle, const char *model_override,
                  const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_continue: cwd is NULL");
     if (!handle || handle[0] == '\0') {
         fprintf(stderr,
                 "Error: continue requires <handle>\n"
                 "Usage: nbs-workers continue <handle> [--model=MODEL]\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    /* Security: handle is interpolated into a shell command (tmux new-session).
+     * Validate against a safe character set to prevent injection. */
+    if (!validate_safe_handle(handle)) {
+        fprintf(stderr,
+                "Error: handle contains unsafe characters: %s\n"
+                "  Handles must match [a-z0-9][-a-z0-9]* "
+                "(no shell metacharacters, path separators, or uppercase).\n",
+                handle);
+        return EXIT_BAD_ARGS;
+    }
+
+    /* Validate model override if provided */
+    if (model_override && model_override[0] != '\0' &&
+        !validate_safe_model(model_override)) {
+        fprintf(stderr,
+                "Error: model name contains unsafe characters: %s\n"
+                "  Model names must match [a-z0-9][-a-z0-9._:]* "
+                "(no shell metacharacters).\n",
+                model_override);
         return EXIT_BAD_ARGS;
     }
 
@@ -1709,6 +1843,7 @@ int cmd_continue(const char *handle, const char *model_override,
 
 int cmd_session(const char *handle, const char *cwd)
 {
+    ASSERT_MSG(cwd != NULL, "cmd_session: cwd is NULL");
     if (!handle || handle[0] == '\0') {
         fprintf(stderr,
                 "Error: session requires <handle>\n"
@@ -1762,13 +1897,18 @@ int cmd_session(const char *handle, const char *cwd)
     printf("  Started: %s\n", has_started ? started : "<missing>");
     printf("  Tmux: %s\n", has_tmux ? tmux_session_name : "<missing>");
     printf("  Project: %s\n", has_project_root ? project_root : "<missing>");
-    printf("  PID: %ld\n", pid_val);
+    if (pid_val > 0)
+        printf("  PID: %ld\n", pid_val);
+    else
+        printf("  PID: <unknown>\n");
 
     /* Check if PID is alive */
     if (pid_val > 0 && kill((pid_t)pid_val, 0) == 0) {
         printf("  Status: ALIVE\n");
-    } else {
+    } else if (pid_val > 0) {
         printf("  Status: DEAD (PID %ld not running)\n", pid_val);
+    } else {
+        printf("  Status: UNKNOWN (no PID recorded)\n");
     }
 
     /* Check tmux session */

@@ -203,7 +203,7 @@ static void test_context_stress_negative(void)
 
 static void test_prompt_visible_positive(void)
 {
-    /* ❯ is UTF-8: 0xe2 0x9d 0xaf */
+    /* UTF-8 prompt character */
     const char *content = "some text\n\xe2\x9d\xaf \n";
     int result = detect_prompt_visible(content);
 
@@ -213,7 +213,7 @@ static void test_prompt_visible_positive(void)
     TEST_PASS("prompt_visible positive");
 }
 
-/* ---- 11. prompt_visible negative: ❯ not in last 6 lines ---- */
+/* ---- 11. prompt_visible negative: prompt not in last 6 lines ---- */
 
 static void test_prompt_visible_negative(void)
 {
@@ -252,12 +252,211 @@ static void test_skill_failure_negative(void)
     TEST_PASS("skill_failure negative");
 }
 
+/* ==== ADVERSARIAL TESTS — targeting audit violations ==== */
+
+/*
+ * V2 (BUG): detect_prompt_visible — pointer UB when content is all newlines.
+ * The old code decremented p below content, producing undefined behaviour.
+ * After fix, index-based loop must handle this without UB.
+ */
+static void test_prompt_visible_all_newlines(void)
+{
+    const char *content = "\n\n\n\n\n\n\n\n";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 0,
+                "all-newlines: expected prompt_visible=0, got %d", result);
+
+    TEST_PASS("prompt_visible: all newlines (V2 UB boundary)");
+}
+
+/*
+ * V2 (BUG): detect_prompt_visible — single character, no newlines.
+ * The backward scan should not go below index 0.
+ */
+static void test_prompt_visible_single_char(void)
+{
+    const char *content = "x";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 0,
+                "single char: expected prompt_visible=0, got %d", result);
+
+    TEST_PASS("prompt_visible: single char (V2 UB boundary)");
+}
+
+/*
+ * V2 (BUG): detect_prompt_visible — empty string.
+ * The function has a len==0 early return; verify it works.
+ */
+static void test_prompt_visible_empty_string(void)
+{
+    const char *content = "";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 0,
+                "empty: expected prompt_visible=0, got %d", result);
+
+    TEST_PASS("prompt_visible: empty string (V2 UB boundary)");
+}
+
+/*
+ * V2 (BUG): detect_prompt_visible — fewer than 6 lines, prompt in first line.
+ * Backward scan exhausts entire content without finding 6 newlines.
+ */
+static void test_prompt_visible_fewer_than_6_lines_with_prompt(void)
+{
+    const char *content = "line1\nline2\n\xe2\x9d\xaf\n";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 1,
+                "3 lines with prompt: expected prompt_visible=1, got %d", result);
+
+    TEST_PASS("prompt_visible: fewer than 6 lines with prompt (V2 UB boundary)");
+}
+
+/*
+ * V2 (BUG): detect_prompt_visible — exactly 6 lines, prompt on first line.
+ * Boundary: search_start should be set to content (beginning), prompt found.
+ */
+static void test_prompt_visible_exactly_6_lines_prompt_at_start(void)
+{
+    const char *content = "\xe2\x9d\xaf\nline2\nline3\nline4\nline5\nline6\n";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 1,
+                "6 lines prompt at start: expected 1, got %d", result);
+
+    TEST_PASS("prompt_visible: exactly 6 lines, prompt at start");
+}
+
+/*
+ * V2 (BUG): detect_prompt_visible — trailing newlines padding (tmux panes).
+ * The content ends with many trailing newlines. The skip-trailing-newlines
+ * logic must handle this without UB.
+ */
+static void test_prompt_visible_trailing_newlines(void)
+{
+    /* Prompt on last real line, followed by padding newlines */
+    const char *content = "some text\n\xe2\x9d\xaf\n\n\n\n\n\n\n\n\n";
+    int result = detect_prompt_visible(content);
+
+    TEST_ASSERT(result == 1,
+                "trailing newlines: expected prompt_visible=1, got %d", result);
+
+    TEST_PASS("prompt_visible: trailing newlines padding");
+}
+
+/*
+ * V1 (HARDENING): detect_ask_modal — digit at end of string without
+ * following '.'. Tests that *(p+1) reading NUL is handled safely.
+ */
+static void test_ask_modal_digit_at_end(void)
+{
+    const char *content = "Type something.\n1";
+    dialogue_response_t resp = {0, 0};
+    dialogue_type_t type = detect_blocking_dialogue(content, &resp);
+
+    TEST_ASSERT(type == DIALOGUE_NONE,
+                "digit-at-end: expected DIALOGUE_NONE, got %d", type);
+
+    TEST_PASS("ask_modal: digit at end of string (V1 NUL boundary)");
+}
+
+/*
+ * V3 (HARDENING): detect_blocking_dialogue with NULL response — type
+ * detected but response not populated. Verify this doesn't crash and
+ * still returns the correct type.
+ */
+static void test_blocking_dialogue_null_response(void)
+{
+    const char *content = "Would you like to proceed?\n1. Yes";
+    dialogue_type_t type = detect_blocking_dialogue(content, NULL);
+
+    TEST_ASSERT(type == DIALOGUE_PLAN_MODE,
+                "null response: expected DIALOGUE_PLAN_MODE, got %d", type);
+
+    TEST_PASS("blocking_dialogue: NULL response accepted");
+}
+
+/*
+ * V7 (HARDENING): detect_context_stress — empty string returns 0.
+ */
+static void test_context_stress_empty(void)
+{
+    int result = detect_context_stress("");
+
+    TEST_ASSERT(result == 0,
+                "empty: expected stress=0, got %d", result);
+
+    TEST_PASS("context_stress: empty string");
+}
+
+/*
+ * V7 (HARDENING): detect_skill_failure — empty string returns 0.
+ */
+static void test_skill_failure_empty(void)
+{
+    int result = detect_skill_failure("");
+
+    TEST_ASSERT(result == 0,
+                "empty: expected skill_failure=0, got %d", result);
+
+    TEST_PASS("skill_failure: empty string");
+}
+
+/*
+ * V5 (HARDENING): detect_blocking_dialogue — empty string.
+ * No dialogue should be detected.
+ */
+static void test_blocking_dialogue_empty(void)
+{
+    dialogue_response_t resp = {0, 0};
+    dialogue_type_t type = detect_blocking_dialogue("", &resp);
+
+    TEST_ASSERT(type == DIALOGUE_NONE,
+                "empty: expected DIALOGUE_NONE, got %d", type);
+
+    TEST_PASS("blocking_dialogue: empty string");
+}
+
+/*
+ * ask_modal: number 5 should NOT match (only 1-4 valid).
+ */
+static void test_ask_modal_number_out_of_range(void)
+{
+    const char *content = "Type something.\n5. Out of range";
+    dialogue_response_t resp = {0, 0};
+    dialogue_type_t type = detect_blocking_dialogue(content, &resp);
+
+    TEST_ASSERT(type == DIALOGUE_NONE,
+                "number 5: expected DIALOGUE_NONE, got %d", type);
+
+    TEST_PASS("ask_modal: number 5 out of range");
+}
+
+/*
+ * ask_modal: '>' prefix followed by number.
+ */
+static void test_ask_modal_gt_prefix(void)
+{
+    const char *content = "Type something.\n> 2. Option B";
+    dialogue_response_t resp = {0, 0};
+    dialogue_type_t type = detect_blocking_dialogue(content, &resp);
+
+    TEST_ASSERT(type == DIALOGUE_ASK_MODAL,
+                "> prefix: expected DIALOGUE_ASK_MODAL, got %d", type);
+
+    TEST_PASS("ask_modal: > prefix");
+}
+
 /* ---- main ---- */
 
 int main(void)
 {
     printf("test_sidecar_detect_unit\n");
 
+    /* Original tests */
     test_plan_mode_positive();
     test_plan_mode_negative();
     test_ask_modal_positive();
@@ -271,6 +470,21 @@ int main(void)
     test_prompt_visible_negative();
     test_skill_failure_positive();
     test_skill_failure_negative();
+
+    /* Adversarial tests — audit violations */
+    test_prompt_visible_all_newlines();
+    test_prompt_visible_single_char();
+    test_prompt_visible_empty_string();
+    test_prompt_visible_fewer_than_6_lines_with_prompt();
+    test_prompt_visible_exactly_6_lines_prompt_at_start();
+    test_prompt_visible_trailing_newlines();
+    test_ask_modal_digit_at_end();
+    test_blocking_dialogue_null_response();
+    test_context_stress_empty();
+    test_skill_failure_empty();
+    test_blocking_dialogue_empty();
+    test_ask_modal_number_out_of_range();
+    test_ask_modal_gt_prefix();
 
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
 

@@ -15,6 +15,8 @@
 #ifndef NBS_PTY_SESSION_H
 #define NBS_PTY_SESSION_H
 
+#include <stddef.h>  /* size_t */
+
 #define PTY_PREFIX       "pty_"
 #define PTY_PREFIX_LEN   4
 
@@ -118,5 +120,35 @@ int cmd_list(void);
  * cmd_help — Print usage information to stdout.
  */
 int cmd_help(void);
+
+/*
+ * is_safe_home_path — Validate that a HOME path contains no shell
+ * metacharacters that could enable injection via tmux pipe-pane.
+ *
+ * Accepts only: [a-zA-Z0-9/_.-]
+ * Rejects empty strings and paths containing quotes, backticks,
+ * dollar signs, semicolons, pipes, ampersands, etc.
+ *
+ * Returns 1 if safe, 0 if unsafe.
+ */
+int is_safe_home_path(const char *path);
+
+#ifdef TEST_BUILD
+/*
+ * Test-visible wrappers for static functions.
+ * Only available when compiled with -DTEST_BUILD.
+ */
+
+/* From main.c */
+int test_parse_int_option(const char *arg, int default_val);
+void test_sanitise_for_display(const char *input, char *buf, size_t bufsize);
+int test_dispatch_read(int argc, char *argv[]);
+int test_dispatch_wait(int argc, char *argv[]);
+
+/* From session.c */
+int test_is_safe_name(const char *name);
+int test_is_safe_home_path(const char *path);
+
+#endif /* TEST_BUILD */
 
 #endif /* NBS_PTY_SESSION_H */

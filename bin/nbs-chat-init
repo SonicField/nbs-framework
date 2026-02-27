@@ -83,6 +83,18 @@ validate_chat_name() {
     fi
 }
 
+# --- PROJECT_NAME validation ---
+# Audit Violation 4 (SECURITY): PROJECT_NAME used unsanitised in tmux send-keys prompts.
+# Restrict to safe characters to prevent shell metacharacter injection into tmux sessions.
+validate_project_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_.\ -]+$ ]]; then
+        error "PROJECT_NAME contains invalid characters: '$name'"
+        error "Allowed: alphanumeric, hyphen, underscore, dot, space (regex: ^[a-zA-Z0-9_. -]+\$)"
+        exit 4
+    fi
+}
+
 # --- Dry-run wrapper ---
 # Every side-effectful operation goes through run().
 # In dry-run mode, the command is printed but not executed.
@@ -90,7 +102,7 @@ validate_chat_name() {
 
 run() {
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} $*"
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "$*"
         return 0
     fi
     "$@"
@@ -140,7 +152,7 @@ confirm() {
     if [[ "$FORCE" == "true" ]]; then
         return 0
     fi
-    read -rp "$(echo -e "${YELLOW}[nbs-chat-init]${NC} $message [y/N]: ")" answer
+    read -rp "$(printf '%b %s [y/N]: ' "${YELLOW}[nbs-chat-init]${NC}" "$message")" answer
     case "$answer" in
         [Yy]|[Yy]es) return 0 ;;
         *) return 1 ;;
@@ -299,19 +311,22 @@ if [[ -z "$PROJECT_NAME" ]]; then
     PROJECT_NAME="$(basename "$PROJECT_ROOT")"
 fi
 
+# Audit Violation 4 (SECURITY): Validate PROJECT_NAME before use in tmux send-keys prompts.
+validate_project_name "$PROJECT_NAME"
+
 PROJECT_ID=$(generate_project_id "$PROJECT_ROOT")
 
 echo ""
-echo -e "${BOLD}NBS Init${NC}"
+printf '%b\n' "${BOLD}NBS Init${NC}"
 echo "  Project:    $PROJECT_NAME"
 echo "  Chat name:  $CHAT_NAME"
 echo "  Root:       $PROJECT_ROOT"
 echo "  Project ID: $PROJECT_ID"
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  Mode:       ${YELLOW}DRY RUN${NC}"
+    printf '  Mode:       %b\n' "${YELLOW}DRY RUN${NC}"
 fi
 if [[ "$SPAWN_ONLY" == "true" ]]; then
-    echo -e "  Mode:       ${YELLOW}SPAWN ONLY${NC}"
+    printf '  Mode:       %b\n' "${YELLOW}SPAWN ONLY${NC}"
 fi
 echo ""
 
@@ -345,7 +360,7 @@ run mkdir -p "${PROJECT_ROOT}/.nbs/events/processed"
 # V5.4: Use absolute paths for config.yaml
 if [[ ! -f "${PROJECT_ROOT}/.nbs/events/config.yaml" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/events/config.yaml (defaults)"
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Write .nbs/events/config.yaml (defaults)"
     else
         # Violation 7 (BUG): cat heredoc bypasses run(). This is intentional:
         # the enclosing DRY_RUN guard prevents execution in dry-run mode,
@@ -374,10 +389,16 @@ fi
 # 1.3 Bus self-test: publish, check, ack, verify
 info "  Bus self-test..."
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-bus publish → check → ack → verify"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "nbs-bus publish → check → ack → verify"
 else
     # Use a unique event type per invocation to avoid dedup window collisions
-    SELF_TEST_TYPE="self-test-$(date +%s)"
+    # Audit Violation 5 (HARDENING): Check date +%s return value.
+    local self_test_ts
+    self_test_ts=$(date +%s) || {
+        error "date command failed during self-test event type generation"
+        exit 1
+    }
+    SELF_TEST_TYPE="self-test-${self_test_ts}"
 
     # Publish a test event
     # Violation 4 (BUG): Check nbs-bus publish return value.
@@ -440,7 +461,7 @@ fi
 
 # 2.2 Create fresh chat
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat create $CHAT_FILE"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "nbs-chat create $CHAT_FILE"
 else
     # Violation 5 (BUG): Check nbs-chat create return value.
     if ! nbs-chat create "$CHAT_FILE" >/dev/null 2>&1; then
@@ -452,7 +473,7 @@ fi
 
 # 2.3 Post init message
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat send init message"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "nbs-chat send init message"
 else
     # Violation 5 (BUG): Check nbs-chat send return value.
     if ! nbs-chat send "$CHAT_FILE" nbs-chat-init \
@@ -475,7 +496,7 @@ run mkdir -p "${PROJECT_ROOT}/.nbs/scribe"
 
 if [[ ! -f "$SCRIBE_LOG" ]] || [[ "$DRY_RUN" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} Write $SCRIBE_LOG (header)"
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Write $SCRIBE_LOG (header)"
     else
         CREATED_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         # Violation 7 (BUG): cat heredoc bypasses run(). Intentional — guarded by DRY_RUN check above.
@@ -523,8 +544,8 @@ compact_decision_log() {
     local archive_file="${PROJECT_ROOT}/.nbs/scribe/${CHAT_NAME}-log-archive-${archive_ts}.md"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} Archive $log_file ($entry_count entries) → $archive_file"
-        echo -e "  ${YELLOW}[DRY-RUN]${NC} Create new $log_file with link to archive"
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Archive $log_file ($entry_count entries) → $archive_file"
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Create new $log_file with link to archive"
         return 0
     fi
 
@@ -535,8 +556,15 @@ compact_decision_log() {
     # Extract header fields from the archive for the new log
     local project_name
     project_name=$(grep '^Project:' "$archive_file" | head -1 | sed 's/^Project: //')
+    # Audit Violation 6 (BUG): Warn on missing archive headers instead of silently masking.
+    if [[ -z "$project_name" ]]; then
+        warn "  Archive '$archive_file' missing 'Project:' header, using default '$PROJECT_NAME'"
+    fi
     local chat_ref
     chat_ref=$(grep '^Chat:' "$archive_file" | head -1 | sed 's/^Chat: //')
+    if [[ -z "$chat_ref" ]]; then
+        warn "  Archive '$archive_file' missing 'Chat:' header, using default '${CHAT_NAME}.chat'"
+    fi
     local created_ts
     created_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -578,7 +606,7 @@ fi
 info "Phase 4: Project identity..."
 
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} Write .nbs/project-id ($PROJECT_ID)"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Write .nbs/project-id ($PROJECT_ID)"
 else
     # Violation 7 (BUG): echo redirect bypasses run(). Intentional — guarded by DRY_RUN check above.
     # V5.5: Use absolute path for project-id
@@ -595,9 +623,9 @@ fi  # end of SPAWN_ONLY != true
 info "Phase 5: Health check..."
 
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-bus status .nbs/events/"
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} nbs-chat read $CHAT_FILE"
-    echo -e "  ${YELLOW}[DRY-RUN]${NC} Verify $SCRIBE_LOG header"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "nbs-bus status ${PROJECT_ROOT}/.nbs/events/"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "nbs-chat read $CHAT_FILE"
+    printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Verify $SCRIBE_LOG header"
 else
     HEALTH_PASS=true
 
@@ -656,12 +684,16 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
     if [[ "$SPAWN_SCRIBE" == "true" ]]; then
         info "  Spawning Scribe..."
         if [[ "$DRY_RUN" == "true" ]]; then
-            echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $SCRIBE_SESSION"
-            echo -e "  ${YELLOW}[DRY-RUN]${NC} → NBS_HANDLE=scribe nbs-claude"
-            echo -e "  ${YELLOW}[DRY-RUN]${NC} → Send Scribe role prompt"
+            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $SCRIBE_SESSION"
+            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=scribe nbs-claude"
+            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ Send Scribe role prompt"
         else
             # Create tmux session in the project directory
-            tmux new-session -d -s "$SCRIBE_SESSION" -c "$PROJECT_ROOT"
+            # Audit Violation 7 (BUG): Check tmux new-session return value.
+            if ! tmux new-session -d -s "$SCRIBE_SESSION" -c "$PROJECT_ROOT"; then
+                error "Failed to create tmux session '$SCRIBE_SESSION'"
+                exit 1
+            fi
 
             # Wait for shell to initialise
             sleep 2
@@ -672,7 +704,11 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
             # This is required for autonomous operation but means the AI can modify files,
             # execute commands, and access network resources without human approval.
             # TODO: Architectural decision needed — consider scoped permissions or audit logging.
-            tmux send-keys -t "$SCRIBE_SESSION" "NBS_HANDLE=scribe nbs-claude --dangerously-skip-permissions" Enter
+            # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
+            if ! tmux send-keys -t "$SCRIBE_SESSION" "NBS_HANDLE=scribe nbs-claude --dangerously-skip-permissions" Enter; then
+                error "Failed to send launch command to tmux session '$SCRIBE_SESSION'"
+                exit 1
+            fi
 
             # Wait for Claude to start
             sleep 3
@@ -696,7 +732,11 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                 warn "  Scribe CLI did not become ready within ${max_wait}s"
             fi
 
-            tmux send-keys -t "$SCRIBE_SESSION" "$SCRIBE_PROMPT" Enter
+            # Audit Violation 8 (HARDENING): Check tmux send-keys return value for prompt delivery.
+            if ! tmux send-keys -t "$SCRIBE_SESSION" "$SCRIBE_PROMPT" Enter; then
+                error "Failed to send prompt to tmux session '$SCRIBE_SESSION'"
+                exit 1
+            fi
 
             # Extra Enter for reliability
             sleep 1
@@ -724,14 +764,22 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
         if [[ "$SPAWN_PYTHIA" == "true" ]]; then
             info "  Spawning Pythia..."
             if [[ "$DRY_RUN" == "true" ]]; then
-                echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $PYTHIA_SESSION"
-                echo -e "  ${YELLOW}[DRY-RUN]${NC} → NBS_HANDLE=pythia nbs-claude"
-                echo -e "  ${YELLOW}[DRY-RUN]${NC} → Send Pythia role prompt"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $PYTHIA_SESSION"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=pythia nbs-claude"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ Send Pythia role prompt"
             else
-                tmux new-session -d -s "$PYTHIA_SESSION" -c "$PROJECT_ROOT"
+                # Audit Violation 7 (BUG): Check tmux new-session return value.
+                if ! tmux new-session -d -s "$PYTHIA_SESSION" -c "$PROJECT_ROOT"; then
+                    error "Failed to create tmux session '$PYTHIA_SESSION'"
+                    exit 1
+                fi
                 sleep 2
                 # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
-                tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter
+                # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
+                if ! tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter; then
+                    error "Failed to send launch command to tmux session '$PYTHIA_SESSION'"
+                    exit 1
+                fi
                 sleep 3
 
                 PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. Read the decision log at $SCRIBE_LOG. Post your structured assessment to $CHAT_FILE. When your assessment is posted and the bus event published, exit."
@@ -752,7 +800,11 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                     warn "  Pythia CLI did not become ready within ${max_wait}s"
                 fi
 
-                tmux send-keys -t "$PYTHIA_SESSION" "$PYTHIA_PROMPT" Enter
+                # Audit Violation 8 (HARDENING): Check tmux send-keys return value for prompt delivery.
+                if ! tmux send-keys -t "$PYTHIA_SESSION" "$PYTHIA_PROMPT" Enter; then
+                    error "Failed to send prompt to tmux session '$PYTHIA_SESSION'"
+                    exit 1
+                fi
                 sleep 1
                 tmux send-keys -t "$PYTHIA_SESSION" "" Enter
 
@@ -779,13 +831,38 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
         if [[ "$SPAWN_ALL" == "true" ]]; then
             info "  Spawning Claude..."
             if [[ "$DRY_RUN" == "true" ]]; then
-                echo -e "  ${YELLOW}[DRY-RUN]${NC} tmux new-session -d -s $CLAUDE_SESSION"
-                echo -e "  ${YELLOW}[DRY-RUN]${NC} → nbs-claude"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $CLAUDE_SESSION"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=claude nbs-claude"
             else
-                tmux new-session -d -s "$CLAUDE_SESSION" -c "$PROJECT_ROOT"
+                # Audit Violation 7 (BUG): Check tmux new-session return value.
+                if ! tmux new-session -d -s "$CLAUDE_SESSION" -c "$PROJECT_ROOT"; then
+                    error "Failed to create tmux session '$CLAUDE_SESSION'"
+                    exit 1
+                fi
                 sleep 2
                 # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
-                tmux send-keys -t "$CLAUDE_SESSION" "nbs-claude --dangerously-skip-permissions" Enter
+                # Audit Violation 10 (BUG): Add NBS_HANDLE=claude to main Claude spawn.
+                # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
+                if ! tmux send-keys -t "$CLAUDE_SESSION" "NBS_HANDLE=claude nbs-claude --dangerously-skip-permissions" Enter; then
+                    error "Failed to send launch command to tmux session '$CLAUDE_SESSION'"
+                    exit 1
+                fi
+
+                # Audit Violation 11 (HARDENING): Add readiness wait loop for main Claude,
+                # consistent with Scribe and Pythia spawn patterns.
+                wait_count=0
+                max_wait=60
+                while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
+                    if tmux capture-pane -t "$CLAUDE_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
+                        break
+                    fi
+                    sleep 1
+                    wait_count=$((${wait_count:-0} + 1))
+                done
+
+                if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
+                    warn "  Claude CLI did not become ready within ${max_wait}s"
+                fi
 
                 ok "  Claude spawned: $CLAUDE_SESSION"
                 info "  Attach: tmux attach -t $CLAUDE_SESSION"
@@ -808,7 +885,7 @@ fi
 # ============================================================
 
 echo ""
-echo -e "${BOLD}=== NBS Init Complete ===${NC}"
+printf '%b\n' "${BOLD}=== NBS Init Complete ===${NC}"
 echo ""
 echo "  Project:    $PROJECT_NAME"
 echo "  Chat name:  $CHAT_NAME"
@@ -816,10 +893,10 @@ echo "  Root:       $PROJECT_ROOT"
 echo "  Project ID: $PROJECT_ID"
 echo ""
 echo "  Components:"
-echo "    Bus:        .nbs/events/"
+echo "    Bus:        ${PROJECT_ROOT}/.nbs/events/"
 echo "    Chat:       $CHAT_FILE"
 echo "    Scribe log: $SCRIBE_LOG"
-echo "    Config:     .nbs/events/config.yaml"
+echo "    Config:     ${PROJECT_ROOT}/.nbs/events/config.yaml"
 
 if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     echo ""

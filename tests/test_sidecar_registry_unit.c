@@ -13,6 +13,19 @@
  *   9.  process_inbox forward-only: only processes new lines
  *  10.  process_inbox comments skipped
  *  11.  process_inbox empty lines skipped
+ *
+ * Adversarial tests (audit violations):
+ *  12.  BUG #1: empty inbox file returns 0, not error
+ *  13.  HARDENING #12: forward-only — double process produces no duplicates
+ *  14.  SECURITY #9: unregister leaves no predictable .tmp file
+ *  15.  HARDENING #11: find_first "not found" sets errno=0
+ *  16.  HARDENING #10: for_each early-exit callback returns correct count
+ *  17.  BUG #1: process_inbox on nonexistent file returns 0 (ENOENT)
+ *  18.  Unknown verbs in inbox are silently skipped
+ *  19.  register-bus + unregister-bus round-trip
+ *  20.  process_inbox with whitespace-only lines
+ *  21.  Seed skips archive files
+ *  22.  Seed skips non-regular files (symlinks to dirs, etc.)
  */
 
 #include "../src/nbs-sidecar/registry.h"
@@ -122,7 +135,7 @@ static void rmrf(const char *path)
     (void)system(cmd);
 }
 
-/* ---- for_each callback ---- */
+/* ---- for_each callbacks ---- */
 
 static int count_callback(const char *path, void *user_data)
 {
@@ -130,6 +143,15 @@ static int count_callback(const char *path, void *user_data)
     int *count = (int *)user_data;
     (*count)++;
     return 0;
+}
+
+/* Callback that stops after first entry (for HARDENING #10 test) */
+static int stop_after_first(const char *path, void *user_data)
+{
+    (void)path;
+    int *count = (int *)user_data;
+    (*count)++;
+    return 1;  /* non-zero = early exit */
 }
 
 /* ---- Tests ---- */
@@ -357,6 +379,233 @@ int main(void)
         int lines_after = count_file_lines(registry_path);
         CHECK("process_inbox empty lines: exactly 1 new entry",
               lines_after == lines_before + 1);
+    }
+
+    /* =================================================================
+     * Adversarial tests (audit violations)
+     * ================================================================= */
+    printf("\n-- Adversarial tests (audit fixes) --\n");
+
+    /* 12. BUG #1: empty inbox file returns 0, not error */
+    {
+        char empty_inbox[L1];
+        snprintf(empty_inbox, sizeof(empty_inbox), "%s/empty_inbox", tmpdir);
+        touch(empty_inbox);  /* empty file */
+
+        int inbox_line = 0;
+        int rc = registry_process_inbox(empty_inbox, registry_path,
+                                        &inbox_line);
+        CHECK("empty inbox returns 0", rc == 0);
+        CHECK("empty inbox: inbox_line unchanged", inbox_line == 0);
+    }
+
+    /* 13. HARDENING #12: forward-only — double process produces no duplicates */
+    {
+        char fwd_inbox[L1];
+        snprintf(fwd_inbox, sizeof(fwd_inbox), "%s/fwd_inbox", tmpdir);
+        write_file(fwd_inbox,
+                   "register-chat /tmp/fwd_test_A.chat\n"
+                   "register-chat /tmp/fwd_test_B.chat\n");
+
+        int inbox_line = 0;
+        int rc1 = registry_process_inbox(fwd_inbox, registry_path,
+                                         &inbox_line);
+        CHECK("forward-only: first call returns 2", rc1 == 2);
+        CHECK("forward-only: inbox_line is 2", inbox_line == 2);
+
+        /* Second call with same file and same inbox_line: no new commands */
+        int rc2 = registry_process_inbox(fwd_inbox, registry_path,
+                                         &inbox_line);
+        CHECK("forward-only: second call returns 0", rc2 == 0);
+        CHECK("forward-only: inbox_line still 2", inbox_line == 2);
+
+        /* Verify entries exist exactly once */
+        CHECK("forward-only: A registered",
+              file_contains_line(registry_path, "chat:/tmp/fwd_test_A.chat"));
+        CHECK("forward-only: B registered",
+              file_contains_line(registry_path, "chat:/tmp/fwd_test_B.chat"));
+
+        /* Clean up */
+        write_file(fwd_inbox, "unregister-chat /tmp/fwd_test_A.chat\n"
+                              "unregister-chat /tmp/fwd_test_B.chat\n");
+        int cl = 0;
+        registry_process_inbox(fwd_inbox, registry_path, &cl);
+    }
+
+    /* 14. SECURITY #9: unregister leaves no predictable .tmp file */
+    {
+        /* Register then unregister — verify no .tmp file lingers */
+        write_file(inbox_path, "register-chat /tmp/sec_test.chat\n");
+        int cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+
+        write_file(inbox_path, "unregister-chat /tmp/sec_test.chat\n");
+        cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+
+        /* The old code would leave registry_path.tmp; the new code uses
+         * mkstemp which creates a random name and renames atomically.
+         * The predictable .tmp file should NOT exist. */
+        char predictable_tmp[L2];
+        snprintf(predictable_tmp, sizeof(predictable_tmp),
+                 "%s.tmp", registry_path);
+        struct stat st;
+        CHECK("SECURITY: no predictable .tmp file after unregister",
+              stat(predictable_tmp, &st) != 0);
+    }
+
+    /* 15. HARDENING #11: find_first "not found" sets errno=0 */
+    {
+        errno = 42;  /* Set to arbitrary non-zero value */
+        char out[L2] = {0};
+        int rc = registry_find_first(registry_path, "nonexistent",
+                                     out, sizeof(out));
+        CHECK("find_first not-found: returns -1", rc == -1);
+        CHECK("find_first not-found: errno is 0", errno == 0);
+    }
+
+    /* 16. HARDENING #10: for_each early-exit callback */
+    {
+        /* Register two chats then test early exit */
+        write_file(inbox_path, "register-chat /tmp/early_A.chat\n"
+                              "register-chat /tmp/early_B.chat\n");
+        int cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+
+        /* Test with stop_after_first: should visit exactly 1 entry */
+        int stop_count = 0;
+        int rc = registry_for_each(registry_path, "chat",
+                                   stop_after_first, &stop_count);
+        CHECK("for_each early-exit: callback called once", stop_count == 1);
+        CHECK("for_each early-exit: returns 1 (count of visited)", rc == 1);
+
+        /* Test with count_callback: should visit all chat entries */
+        int all_count = 0;
+        rc = registry_for_each(registry_path, "chat",
+                               count_callback, &all_count);
+        CHECK("for_each full iteration: visits all chats", all_count >= 2);
+        CHECK("for_each full iteration: returns same as callback count",
+              rc == all_count);
+
+        /* Clean up */
+        write_file(inbox_path, "unregister-chat /tmp/early_A.chat\n"
+                              "unregister-chat /tmp/early_B.chat\n");
+        cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+    }
+
+    /* 17. BUG #1: process_inbox on nonexistent file returns 0 (ENOENT) */
+    {
+        int inbox_line = 0;
+        int rc = registry_process_inbox("/tmp/nbs_nonexistent_inbox_XXXXXX",
+                                        registry_path, &inbox_line);
+        CHECK("nonexistent inbox returns 0", rc == 0);
+    }
+
+    /* 18. Unknown verbs in inbox are silently skipped (matching bash) */
+    {
+        write_file(inbox_path,
+                   "unknown-verb /tmp/something\n"
+                   "register-chat /tmp/known_verb.chat\n"
+                   "also-unknown /tmp/else\n");
+
+        int inbox_line = 0;
+        int rc = registry_process_inbox(inbox_path, registry_path,
+                                        &inbox_line);
+        /* All 3 lines count as "processed" (process_control_command returns
+         * 0 for both known and unknown verbs — matching bash behaviour) */
+        CHECK("unknown verbs: returns 3 (all lines processed)", rc == 3);
+        CHECK("unknown verbs: only known verb adds entry",
+              file_contains_line(registry_path, "chat:/tmp/known_verb.chat"));
+        CHECK("unknown verbs: inbox_line advanced to 3", inbox_line == 3);
+
+        /* Clean up */
+        write_file(inbox_path, "unregister-chat /tmp/known_verb.chat\n");
+        int cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+    }
+
+    /* 19. register-bus + unregister-bus round-trip */
+    {
+        int lines_before = count_file_lines(registry_path);
+
+        write_file(inbox_path, "register-bus /tmp/test_bus_dir\n");
+        int inbox_line = 0;
+        int rc = registry_process_inbox(inbox_path, registry_path,
+                                        &inbox_line);
+        CHECK("register-bus: returns 1", rc == 1);
+        CHECK("register-bus: entry added",
+              file_contains_line(registry_path, "bus:/tmp/test_bus_dir"));
+
+        int lines_mid = count_file_lines(registry_path);
+        CHECK("register-bus: exactly 1 new entry",
+              lines_mid == lines_before + 1);
+
+        write_file(inbox_path, "unregister-bus /tmp/test_bus_dir\n");
+        inbox_line = 0;
+        rc = registry_process_inbox(inbox_path, registry_path, &inbox_line);
+        CHECK("unregister-bus: returns 1", rc == 1);
+        CHECK("unregister-bus: entry removed",
+              !file_contains_line(registry_path, "bus:/tmp/test_bus_dir"));
+
+        int lines_after = count_file_lines(registry_path);
+        CHECK("unregister-bus: back to original count",
+              lines_after == lines_before);
+    }
+
+    /* 20. process_inbox with whitespace-only lines */
+    {
+        int lines_before = count_file_lines(registry_path);
+
+        write_file(inbox_path,
+                   "   \n"
+                   "\t\n"
+                   "  \t  \n"
+                   "register-chat /tmp/ws_test.chat\n");
+
+        int inbox_line = 0;
+        int rc = registry_process_inbox(inbox_path, registry_path,
+                                        &inbox_line);
+        CHECK("whitespace-only lines: returns 1", rc == 1);
+        CHECK("whitespace-only lines: entry added",
+              file_contains_line(registry_path, "chat:/tmp/ws_test.chat"));
+
+        int lines_after = count_file_lines(registry_path);
+        CHECK("whitespace-only lines: exactly 1 new entry",
+              lines_after == lines_before + 1);
+
+        /* Clean up */
+        write_file(inbox_path, "unregister-chat /tmp/ws_test.chat\n");
+        int cl = 0;
+        registry_process_inbox(inbox_path, registry_path, &cl);
+    }
+
+    /* 21. Seed skips archive files */
+    {
+        /* Create an archive chat file */
+        char archive_file[L2];
+        snprintf(archive_file, sizeof(archive_file),
+                 "%s/live-archive.chat", chat_dir);
+        touch(archive_file);
+
+        /* Clean and re-seed */
+        unlink(registry_path);
+        int rc = registry_seed(nbs_root, registry_path);
+        CHECK("seed skips archives: returns 0", rc == 0);
+
+        /* Build expected entry and verify it's NOT in registry */
+        char archive_entry[L3];
+        snprintf(archive_entry, sizeof(archive_entry),
+                 "chat:%s", archive_file);
+        CHECK("seed skips archives: archive not in registry",
+              !file_contains_line(registry_path, archive_entry));
+
+        /* Verify the non-archive files are still registered */
+        int lines = count_file_lines(registry_path);
+        CHECK("seed skips archives: 3 entries (2 chat + 1 bus)", lines == 3);
+
+        /* Clean up */
+        unlink(archive_file);
     }
 
     /* Clean up */

@@ -264,18 +264,22 @@ static int cmd_read(int argc, char **argv) {
         }
     }
 
+    /* V5 fix: check file existence before chat_read to avoid stale errno */
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
-        /* Distinguish file-not-found from other read errors via errno */
-        if (errno == ENOENT) {
-            fprintf(stderr, "Error: Chat file not found: %s\n", path);
-            return 2;
-        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
     }
+    ASSERT_MSG(state.message_count == 0 || state.messages != NULL,
+               "cmd_read: chat_read returned 0 but messages is NULL with message_count=%d",
+               state.message_count);
 
     if (state.skipped_count > 0) {
         fprintf(stderr, "warning: %d message(s) skipped (decode failure)\n",
@@ -329,9 +333,15 @@ static int cmd_read(int argc, char **argv) {
         }
     }
 
-    /* Apply --offset filter (skip N messages from the end) */
-    if (offset_n > 0 && end - start > offset_n) {
-        end -= offset_n;
+    /* V7 fix: Apply --offset filter with range warning */
+    if (offset_n > 0) {
+        if (end - start <= offset_n) {
+            fprintf(stderr, "warning: --offset=%d exceeds available message count (%d), showing nothing\n",
+                    offset_n, end - start);
+            start = end;
+        } else {
+            end -= offset_n;
+        }
     }
 
     /* Apply --last filter */
@@ -362,8 +372,10 @@ static int cmd_read(int argc, char **argv) {
         }
     }
 
-    /* Advance read cursor after displaying */
-    if (unread_handle && end > 0) {
+    /* V9 fix: Advance read cursor only when messages were actually displayed.
+     * Previously used (end > 0) which advances cursor even when start == end
+     * (i.e., all messages filtered out by --last=0, --before, etc.). */
+    if (unread_handle && end > start) {
         int cw_rc = chat_cursor_write(path, unread_handle, end - 1);
         if (cw_rc < 0) {
             fprintf(stderr, "warning: failed to update read cursor for '%s'\n", unread_handle);
@@ -413,14 +425,15 @@ static int cmd_poll(int argc, char **argv) {
         }
     }
 
+    /* V5 fix: check file existence before chat_poll to avoid stale errno */
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+
     int result = chat_poll(path, handle, timeout);
     if (result == 3) return 3; /* Timeout */
     if (result < 0) {
-        /* Distinguish file-not-found from other errors */
-        if (errno == ENOENT) {
-            fprintf(stderr, "Error: Chat file not found: %s\n", path);
-            return 2;
-        }
         fprintf(stderr, "Error: Poll failed on '%s' (chat_poll returned %d, errno=%d: %s)\n",
                 path, result, errno, strerror(errno));
         return 1;
@@ -438,7 +451,16 @@ static int cmd_poll(int argc, char **argv) {
                 path, read_rc, errno, strerror(errno));
         return 1;
     }
-    /* Print the last message from someone other than the polling handle */
+    /* V2 fix: assert messages pointer is valid when count > 0 */
+    ASSERT_MSG(state.message_count == 0 || state.messages != NULL,
+               "cmd_poll: chat_read succeeded but messages is NULL with count=%d",
+               state.message_count);
+
+    /* V6 fix: Print the last message from someone other than the polling handle.
+     * Track whether a message was found to verify chat_poll's postcondition.
+     * Known TOCTOU window (V11): between chat_poll and chat_read, another
+     * process could modify the file. The assertion below catches this. */
+    int found = 0;
     for (int i = state.message_count - 1; i >= 0; i--) {
         if (strcmp(state.messages[i].handle, handle) != 0) {
             if (state.messages[i].timestamp > 0) {
@@ -456,9 +478,13 @@ static int cmd_poll(int argc, char **argv) {
                 printf("%s: %s\n", state.messages[i].handle,
                        state.messages[i].content);
             }
+            found = 1;
             break;
         }
     }
+    ASSERT_MSG(found,
+               "cmd_poll: chat_poll returned 0 but no message from another handle found in '%s'",
+               path);
     chat_state_free(&state);
 
     return 0;
@@ -483,17 +509,24 @@ static int cmd_participants(int argc, char **argv) {
     }
     path = abs_path;
 
+    /* V5 fix: check file existence before chat_read to avoid stale errno */
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
-        if (errno == ENOENT) {
-            fprintf(stderr, "Error: Chat file not found: %s\n", path);
-            return 2;
-        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
     }
+
+    /* V10 fix: bounds assertion on participant_count */
+    ASSERT_MSG(state.participant_count >= 0 && state.participant_count <= MAX_PARTICIPANTS,
+               "cmd_participants: participant_count=%d out of bounds [0, %d]",
+               state.participant_count, MAX_PARTICIPANTS);
 
     for (int i = 0; i < state.participant_count; i++) {
         printf("%-24s %d messages\n", state.participants[i].handle,
@@ -575,17 +608,24 @@ static int cmd_search(int argc, char **argv) {
         }
     }
 
+    /* V5 fix: check file existence before chat_read to avoid stale errno */
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
-        if (errno == ENOENT) {
-            fprintf(stderr, "Error: Chat file not found: %s\n", path);
-            return 2;
-        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
     }
+
+    /* V3 fix: assert messages pointer is valid when count > 0 */
+    ASSERT_MSG(state.message_count == 0 || state.messages != NULL,
+               "cmd_search: chat_read succeeded but messages is NULL with count=%d",
+               state.message_count);
 
     int match_count = 0;
     for (int i = 0; i < state.message_count; i++) {
@@ -671,17 +711,24 @@ static int cmd_delete(int argc, char **argv) {
         return 4;
     }
 
+    /* V5 fix: check file existence before chat_read to avoid stale errno */
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        fprintf(stderr, "Error: Chat file not found: %s\n", path);
+        return 2;
+    }
+
     /* Read file to find truncation point */
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
-        if (errno == ENOENT) {
-            fprintf(stderr, "Error: Chat file not found: %s\n", path);
-            return 2;
-        }
         fprintf(stderr, "Error: Failed to read chat file: %s\n", path);
         return 1;
     }
+
+    /* V4 fix: assert messages pointer is valid when count > 0 */
+    ASSERT_MSG(state.message_count == 0 || state.messages != NULL,
+               "cmd_delete: chat_read succeeded but messages is NULL with count=%d",
+               state.message_count);
 
     /* Find first message at or after the cutoff time */
     int truncate_at = state.message_count;  /* default: nothing to delete */
@@ -713,6 +760,15 @@ static int cmd_delete(int argc, char **argv) {
     if (rc < 0) {
         fprintf(stderr, "Error: Failed to truncate chat file\n");
         return 1;
+    }
+
+    /* V8 fix: postcondition verification -- re-read to confirm truncation */
+    chat_state_t verify_state;
+    if (chat_read(path, &verify_state) == 0) {
+        ASSERT_MSG(verify_state.message_count <= truncate_at,
+                   "cmd_delete: postcondition failed: expected <= %d messages after truncate, got %d",
+                   truncate_at, verify_state.message_count);
+        chat_state_free(&verify_state);
     }
 
     printf("Deleted %d message(s) (kept %d)\n", to_delete, truncate_at);

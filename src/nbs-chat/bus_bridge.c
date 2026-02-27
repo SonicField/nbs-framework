@@ -16,6 +16,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,9 +31,6 @@
  * The full message is still in the chat file — the event is just a signal.
  */
 #define MAX_PAYLOAD_LEN 2048
-
-/* Maximum path length for resolved binary paths */
-#define MAX_PATH_LEN 4096
 
 /*
  * Cached absolute path to the nbs-bus binary.
@@ -170,6 +168,10 @@ static int read_chat_participants(const char *chat_path,
                 p++;
 
             size_t handle_len = (size_t)(p - start);
+            /* Trim trailing whitespace (Violation 6 fix: prevents
+             * sender-comparison mismatches in @team expansion) */
+            while (handle_len > 0 && start[handle_len - 1] == ' ')
+                handle_len--;
             if (handle_len > 0 && handle_len < MAX_MENTION_HANDLE_LEN) {
                 memcpy(out_handles[found], start, handle_len);
                 out_handles[found][handle_len] = '\0';
@@ -336,6 +338,9 @@ int bus_find_events_dir(const char *chat_path, char *out_buf,
             if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
                 if (strlen(resolved) < out_buf_size) {
                     memcpy(out_buf, resolved, strlen(resolved) + 1);
+                    ASSERT_MSG(out_buf[0] == '/',
+                               "bus_find_events_dir: resolved path is not absolute: %s",
+                               out_buf);
                     return 0;
                 }
                 return -1;  /* Path too long for output buffer */
@@ -349,6 +354,9 @@ int bus_find_events_dir(const char *chat_path, char *out_buf,
             if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
                 if (strlen(resolved) < out_buf_size) {
                     memcpy(out_buf, resolved, strlen(resolved) + 1);
+                    ASSERT_MSG(out_buf[0] == '/',
+                               "bus_find_events_dir: resolved path is not absolute: %s",
+                               out_buf);
                     return 0;
                 }
                 return -1;
@@ -386,6 +394,7 @@ int bus_find_events_dir(const char *chat_path, char *out_buf,
 /*
  * bus_publish — Execute nbs-bus publish with the given arguments.
  *
+ * payload may be NULL (treated as empty string).
  * Returns 0 on success, -1 on failure. Failure is non-fatal to the caller.
  */
 static int bus_publish(const char *events_dir, const char *source,
@@ -401,7 +410,17 @@ static int bus_publish(const char *events_dir, const char *source,
      *
      * We use fork+exec rather than system() to avoid shell injection.
      * The payload is passed as a single argv element, not parsed by a shell.
+     *
+     * Payload truncation is done pre-fork so the child process only
+     * calls async-signal-safe functions (open, dup2, close, execlp, _exit).
      */
+    char truncated_payload[MAX_PAYLOAD_LEN];
+    if (payload != NULL) {
+        snprintf(truncated_payload, sizeof(truncated_payload), "%s", payload);
+    } else {
+        truncated_payload[0] = '\0';
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "bus_bridge: fork failed: %s\n", strerror(errno));
@@ -409,22 +428,16 @@ static int bus_publish(const char *events_dir, const char *source,
     }
 
     if (pid == 0) {
-        /* Child process */
-        /* Truncate payload if too long */
-        char truncated_payload[MAX_PAYLOAD_LEN];
-        if (payload != NULL) {
-            snprintf(truncated_payload, sizeof(truncated_payload), "%s", payload);
-        } else {
-            truncated_payload[0] = '\0';
-        }
+        /* Child process — only async-signal-safe functions below. */
 
         /* Redirect stdout/stderr to /dev/null — bus output should not
-         * interfere with chat output */
-        FILE *devnull = fopen("/dev/null", "w");
-        if (devnull) {
-            dup2(fileno(devnull), STDOUT_FILENO);
-            dup2(fileno(devnull), STDERR_FILENO);
-            fclose(devnull);
+         * interfere with chat output.
+         * open/dup2/close are async-signal-safe per POSIX.1-2008. */
+        int devnull_fd = open("/dev/null", O_WRONLY);
+        if (devnull_fd >= 0) {
+            dup2(devnull_fd, STDOUT_FILENO);
+            dup2(devnull_fd, STDERR_FILENO);
+            close(devnull_fd);
         } else {
             /* /dev/null unavailable (e.g. chroot). Close fds outright
              * so the child doesn't write to the parent's terminal. */
@@ -433,7 +446,7 @@ static int bus_publish(const char *events_dir, const char *source,
         }
 
         const char *bus_bin = resolve_nbs_bus();
-        execl(bus_bin, "nbs-bus", "publish",
+        execlp(bus_bin, "nbs-bus", "publish",
               events_dir, source, type, priority,
               truncated_payload, "--dedup-window=0", (char *)NULL);
 

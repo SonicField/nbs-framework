@@ -117,7 +117,7 @@ static const char *g_chat_file = NULL;
 static const char *g_handle = NULL;
 static int g_msg_count = 0;
 static volatile sig_atomic_t g_quit = 0;
-static char g_filter_handle[256] = {0};  /* empty = show all, non-empty = show only this handle */
+static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-empty = show only this handle */
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
@@ -289,14 +289,23 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
     /* Print prompt */
     print_prompt(handle);
 
-    /* Print buffer content */
+    /* Print buffer content — loop on short writes.
+     * Short writes to a terminal are rare but possible (e.g. signal
+     * interruption).  We loop to ensure all content is written. */
     if (ls->len > 0) {
-        ssize_t wr = write(STDOUT_FILENO, ls->buf, ls->len);
-        if (wr < 0) {
-            /* Write to stdout failed -- terminal may be disconnected.
-             * Log but do not abort; the main loop will detect POLLHUP. */
-            fprintf(stderr, "warning: write to stdout failed: %s\n",
-                    strerror(errno));
+        size_t written = 0;
+        while (written < ls->len) {
+            ssize_t wr = write(STDOUT_FILENO, ls->buf + written,
+                               ls->len - written);
+            if (wr < 0) {
+                if (errno == EINTR) continue;
+                /* Write to stdout failed -- terminal may be disconnected.
+                 * Log but do not abort; the main loop will detect POLLHUP. */
+                fprintf(stderr, "warning: write to stdout failed: %s\n",
+                        strerror(errno));
+                break;
+            }
+            written += (size_t)wr;
         }
     }
 
@@ -645,24 +654,40 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
 
 /* --- Send helper --- */
 
+/*
+ * do_send — Shared send logic: chat_send + msg_count + bus events.
+ *
+ * Returns 0 on success, -1 on send failure.
+ * This is the single source of truth for post-send side effects.
+ */
+static int do_send(const char *msg) {
+    ASSERT_MSG(msg != NULL, "do_send: msg is NULL");
+    ASSERT_MSG(g_chat_file != NULL, "do_send: g_chat_file is NULL");
+    ASSERT_MSG(g_handle != NULL, "do_send: g_handle is NULL");
+
+    if (chat_send(g_chat_file, g_handle, msg) != 0) {
+        return -1;
+    }
+
+    /* Guard against signed overflow on g_msg_count.  In practice
+     * MAX_MESSAGES is 10000 so this should never fire, but a corrupt
+     * or adversarial chat file could push the count toward INT_MAX. */
+    ASSERT_MSG(g_msg_count < INT_MAX,
+               "do_send: g_msg_count overflow: %d", g_msg_count);
+    g_msg_count++;
+
+    /* Publish bus events: standard chat-message + human-input priority signal */
+    bus_bridge_after_send(g_chat_file, g_handle, msg);
+    bus_bridge_human_input(g_chat_file, g_handle, msg);
+
+    return 0;
+}
+
 static void send_and_display(line_state_t *ls) {
     ASSERT_MSG(ls != NULL, "send_and_display: ls is NULL");
     ASSERT_MSG(ls->len > 0, "send_and_display: called with empty buffer");
 
-    if (chat_send(g_chat_file, g_handle, ls->buf) == 0) {
-        /* HARDENING NOTE: g_msg_count is incremented optimistically here
-         * under the assumption that chat_send returning 0 means the message
-         * was durably written.  If the file was concurrently truncated or
-         * the write was only partially flushed, this count could diverge
-         * from the actual message count.  The next poll_and_display call
-         * will reconcile via chat_read, so the window of inconsistency
-         * is bounded by POLL_INTERVAL_MS.  A postcondition check here
-         * would require a redundant chat_read, which is too expensive. */
-        g_msg_count++;
-        /* Publish bus events: standard chat-message + human-input priority signal */
-        bus_bridge_after_send(g_chat_file, g_handle, ls->buf);
-        bus_bridge_human_input(g_chat_file, g_handle, ls->buf);
-    } else {
+    if (do_send(ls->buf) != 0) {
         printf("  %s(send failed)%s\n", DIM, RESET);
     }
 }
@@ -703,10 +728,19 @@ static char *open_editor(void) {
     const char *editor = getenv("EDITOR");
     if (!editor || !editor_is_valid(editor)) editor = "vim";
 
-    /* Create temp file */
+    /* Create temp file with restricted permissions.
+     * mkstemp creates the file, but POSIX does not guarantee 0600 —
+     * the result depends on the process umask.  Explicitly set 0600
+     * to prevent other users from reading the draft message. */
     char tmppath[] = "/tmp/nbs-chat-edit.XXXXXX";
     int fd = mkstemp(tmppath);
     if (fd < 0) return NULL;
+    if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+        /* Cannot restrict permissions — refuse to use the file */
+        close(fd);
+        unlink(tmppath);
+        return NULL;
+    }
     if (close(fd) != 0) {
         unlink(tmppath);
         return NULL;
@@ -723,7 +757,7 @@ static char *open_editor(void) {
         /* Child: run editor with /dev/tty and sanitised environment.
          * Only PATH, HOME, TERM, and LANG are passed to the editor
          * to prevent leaking sensitive environment variables. */
-        int tty = open("/dev/tty", O_RDONLY);
+        int tty = open("/dev/tty", O_RDWR);
         if (tty < 0) {
             fprintf(stderr, "error: cannot open /dev/tty for editor: %s\n",
                     strerror(errno));
@@ -752,6 +786,11 @@ static char *open_editor(void) {
                     snprintf(entry, name_len + 1 + val_len + 1,
                              "%s=%s", safe_vars[i], val);
                     clean_env[env_count++] = entry;
+                } else {
+                    fprintf(stderr, "error: malloc failed for env var %s, "
+                            "editor cannot function without environment\n",
+                            safe_vars[i]);
+                    _exit(1);
                 }
             }
         }
@@ -813,7 +852,18 @@ static char *open_editor(void) {
         return NULL;
     }
 
-    char *content = malloc(len + 1);
+    /* Guard against len + 1 overflow on ILP32 where long == int (32-bit).
+     * Also cap at MAX_MESSAGE_LEN for sanity — editor output beyond
+     * 1 MB is almost certainly an error. */
+    if (len > MAX_MESSAGE_LEN || (unsigned long)len >= SIZE_MAX) {
+        fclose(f);
+        unlink(tmppath);
+        fprintf(stderr, "warning: editor file too large (%ld bytes, max %d)\n",
+                len, MAX_MESSAGE_LEN);
+        return NULL;
+    }
+
+    char *content = malloc((size_t)len + 1);
     if (!content) {
         fclose(f);
         unlink(tmppath);
@@ -882,6 +932,21 @@ int main(int argc, char **argv) {
     ASSERT_MSG(g_chat_file != NULL, "main: chat_file path is NULL");
     ASSERT_MSG(g_handle != NULL, "main: handle is NULL");
 
+    /* Validate handle is ASCII-only.  The cursor positioning arithmetic
+     * in line_redraw uses strlen (byte count) as display column count.
+     * Multi-byte UTF-8 characters would cause byte count != display width,
+     * corrupting cursor positioning.  Reject non-ASCII handles at startup
+     * rather than silently producing garbled output. */
+    for (const char *p = g_handle; *p; p++) {
+        if ((unsigned char)*p > 127) {
+            fprintf(stderr, "Error: Handle must be ASCII-only (got non-ASCII "
+                    "byte 0x%02x at position %td).\n"
+                    "Non-ASCII handles break cursor positioning.\n",
+                    (unsigned char)*p, p - g_handle);
+            return 4;
+        }
+    }
+
     /* Check file exists */
     struct stat st;
     if (stat(g_chat_file, &st) != 0) {
@@ -911,6 +976,7 @@ int main(int argc, char **argv) {
         have_termios = 1;
         raw = orig_termios;
         raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_lflag |= ISIG;  /* Explicitly ensure Ctrl-C generates SIGINT */
         raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
         if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
@@ -1051,18 +1117,8 @@ int main(int argc, char **argv) {
                     }
                 }
                 if (msg) {
-                    /* HARDENING NOTE: This send logic duplicates
-                     * send_and_display().  A refactor to unify both paths
-                     * would reduce the risk of them diverging.  Not done
-                     * here because the /edit path needs format_message
-                     * with the editor content, which send_and_display
-                     * does not provide.  Flagged for future cleanup. */
-                    if (chat_send(g_chat_file, g_handle, msg) == 0) {
+                    if (do_send(msg) == 0) {
                         format_message(g_handle, msg, g_handle, time(NULL));
-                        g_msg_count++;
-                        /* Publish bus events: standard chat-message + human-input priority signal */
-                        bus_bridge_after_send(g_chat_file, g_handle, msg);
-                        bus_bridge_human_input(g_chat_file, g_handle, msg);
                     } else {
                         printf("  %s(send failed)%s\n", DIM, RESET);
                     }
@@ -1128,7 +1184,13 @@ int main(int argc, char **argv) {
                 if (*target == '\0') {
                     printf("  %sUsage: /filter <handle>%s\n", DIM, RESET);
                 } else {
-                    snprintf(g_filter_handle, sizeof(g_filter_handle), "%s", target);
+                    int sn = snprintf(g_filter_handle, sizeof(g_filter_handle), "%s", target);
+                    if (sn < 0 || (size_t)sn >= sizeof(g_filter_handle)) {
+                        printf("  %swarning: filter handle truncated to %d chars "
+                               "(max handle length is %d)%s\n",
+                               DIM, (int)(sizeof(g_filter_handle) - 1),
+                               MAX_HANDLE_LEN - 1, RESET);
+                    }
                     printf("  %sFiltering: showing only messages from %s%s\n",
                            DIM, g_filter_handle, RESET);
                     /* Redisplay last 50 matching messages (most recent first, then reverse) */

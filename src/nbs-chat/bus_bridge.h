@@ -104,7 +104,8 @@ int bus_bridge_human_input(const char *chat_path, const char *handle,
  *   - Returns the number of unique handles found (0 to max_handles)
  *   - Each out_handles[i] for i < return value contains a NUL-terminated handle
  *   - If out_interrupt_flags != NULL: out_interrupt_flags[i] is 1 if the
- *     mention was followed by '!' (interrupt pattern), 0 otherwise
+ *     mention was followed by '!' (interrupt), 2 if followed by '?'
+ *     (query), or 0 otherwise
  *   - Email-like patterns (preceded by [a-zA-Z0-9._]) are excluded
  *   - Duplicate handles are excluded (only first occurrence counts)
  *
@@ -113,6 +114,9 @@ int bus_bridge_human_input(const char *chat_path, const char *handle,
  *
  * An @mention! (interrupt) is: @handle immediately followed by '!'.
  * The '!' is not part of the handle — it signals an interrupt request.
+ *
+ * An @mention? (query) is: @handle immediately followed by '?'.
+ * The '?' is not part of the handle — it signals a query request.
  */
 int bus_extract_mentions(const char *message,
                          char out_handles[][MAX_MENTION_HANDLE_LEN],

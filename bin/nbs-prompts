@@ -93,16 +93,42 @@ prompts=(
 "チェックイン：@scribe 前回のチェックイン以降のすべての決定事項と保留中の事項の要約を記録してください。@supervisor スクライブが記録を完了したら、確認のうえ次のタスク割り当てを設定してください。全エージェントへ：現在のタスクとブロッカーを申告してください。自己割り当ての作業は認められません — すべての割り当ては @supervisor から発せられます。スーパーバイザーの許可なしにセッション終了を宣言した場合は、今すぐ作業に戻ってください。"
 )
 
-# V3.2: Check od pipeline failure
+# Generate random u32 from /dev/urandom via od; validate non-empty numeric result
 raw=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ') || {
-    echo "Error: Failed to read /dev/urandom" >&2
+    echo "ASSERTION FAILED: od/tr pipeline failed reading /dev/urandom (exit=$?)" >&2
     exit 1
 }
 if [[ -z "$raw" ]]; then
-    echo "Error: Empty random value from /dev/urandom" >&2
+    echo "ASSERTION FAILED: Empty random value from od/tr pipeline on /dev/urandom" >&2
     exit 1
 fi
+
+# V1 (BUG): Validate that od output is a pure unsigned integer before arithmetic
+if ! [[ "$raw" =~ ^[0-9]+$ ]]; then
+    echo "ASSERTION FAILED: od produced non-numeric output: '$raw'" >&2
+    exit 1
+fi
+
+# V3 (HARDENING): Postcondition — value must be within u32 range [0, 4294967295]
+if (( raw > 4294967295 )); then
+    echo "ASSERTION FAILED: od value $raw exceeds u32 range [0, 4294967295]" >&2
+    exit 1
+fi
+
+# V2 (HARDENING): Precondition — prompts array must not be empty (division by zero guard)
+if (( ${#prompts[@]} == 0 )); then
+    echo "ASSERTION FAILED: prompts array is empty, cannot select a prompt" >&2
+    exit 1
+fi
+
 index=$(( raw % ${#prompts[@]} ))
+
+# V4 (HARDENING): Postcondition — selected prompt must be non-empty
+if [[ -z "${prompts[$index]}" ]]; then
+    echo "ASSERTION FAILED: Selected prompt at index $index is empty" >&2
+    exit 1
+fi
+
 # Append anti-hallucination rule (English, always — the rule must be
 # unambiguous regardless of which language the prompt is in)
 echo "${prompts[$index]} Rule: if you claim the human said something, quote it with timestamp. No quote = no evidence."

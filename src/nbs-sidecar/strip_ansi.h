@@ -17,9 +17,13 @@
  *   - CSI sequences: ESC [ ... final_byte (0x40-0x7E)
  *   - OSC sequences: ESC ] ... ST (ESC \ or BEL)
  *   - Simple escapes: ESC followed by single char in 0x20-0x7E
+ *   - Bare control characters: C0 (0x00-0x1F except \n, \t) and DEL (0x7F)
+ *   - C1 control codes: 0x80-0x9F (8-bit control characters)
  *
- * The string is modified in-place. The result is always <= the input length.
- * Returns the new length.
+ * The string is modified in-place. Returns the new length.
+ *
+ * Postcondition enforced by assertion: output length <= input length.
+ * Invariant enforced by assertion: write pointer never overtakes read pointer.
  */
 size_t strip_ansi(char *text);
 

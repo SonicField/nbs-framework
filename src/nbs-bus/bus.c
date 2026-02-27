@@ -34,20 +34,23 @@
 /* ------------------------------------------------------------------ */
 
 static const char *priority_names[] = {"critical", "high", "normal", "low"};
+#define BUS_NUM_PRIORITIES (sizeof(priority_names) / sizeof(priority_names[0]))
 
 int bus_priority_from_str(const char *s)
 {
     ASSERT_MSG(s != NULL, "bus_priority_from_str: s is NULL");
-    for (int i = 0; i < 4; i++) {
+    for (size_t i = 0; i < BUS_NUM_PRIORITIES; i++) {
         if (strcmp(s, priority_names[i]) == 0)
-            return i;
+            return (int)i;
     }
     return -1;
 }
 
 const char *bus_priority_to_str(int p)
 {
-    ASSERT_MSG(p >= 0 && p <= 3, "bus_priority_to_str: invalid priority %d", p);
+    ASSERT_MSG(p >= 0 && (size_t)p < BUS_NUM_PRIORITIES,
+               "bus_priority_to_str: invalid priority %d (max %zu)",
+               p, BUS_NUM_PRIORITIES - 1);
     return priority_names[p];
 }
 
@@ -157,7 +160,11 @@ static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_
     ASSERT_MSG(key_len > 0, "read_event_dedup_key: key_len is 0");
 
     FILE *fp = fopen(filepath, "r");
-    if (!fp) return -1;
+    if (!fp) {
+        fprintf(stderr, "Warning: cannot read event file %s: %s\n",
+                filepath, strerror(errno));
+        return -1;
+    }
 
     char line[512];
     int found = -1;
@@ -174,6 +181,12 @@ static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_
             found = 0;
             break;
         }
+    }
+
+    if (ferror(fp)) {
+        fprintf(stderr, "Warning: read error on event file: %s\n", filepath);
+        fclose(fp);
+        return -1;
     }
 
     fclose(fp);
@@ -199,7 +212,11 @@ static int read_event_fields(const char *filepath, int *priority,
     type_buf[0] = '\0';
 
     FILE *fp = fopen(filepath, "r");
-    if (!fp) return -1;
+    if (!fp) {
+        fprintf(stderr, "Warning: cannot read event file %s: %s\n",
+                filepath, strerror(errno));
+        return -1;
+    }
 
     char line[512];
     int found = 0; /* bitmask: 1=priority, 2=source, 4=type */
@@ -228,6 +245,17 @@ static int read_event_fields(const char *filepath, int *priority,
             type_buf[len] = '\0';
             found |= 4;
         }
+    }
+
+    if (ferror(fp)) {
+        fprintf(stderr, "Warning: read error on event file: %s\n", filepath);
+        fclose(fp);
+        return -1;
+    }
+
+    if (found != 7) {
+        fprintf(stderr, "Warning: incomplete event file %s (found mask=%d)\n",
+                filepath, found);
     }
 
     fclose(fp);
@@ -301,15 +329,19 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
 
         /* Parse timestamp from filename */
         long long ts_us;
-        if (parse_event_filename_timestamp(name, &ts_us) != 0)
-            continue; /* skip malformed filenames */
+        if (parse_event_filename_timestamp(name, &ts_us) != 0) {
+            fprintf(stderr, "Warning: skipping malformed event filename: %s\n", name);
+            continue;
+        }
 
         /* Read priority, source, and type from file content */
         bus_event_t *ev = &events[count];
         if (read_event_fields(fullpath, &ev->priority,
                               ev->source, sizeof(ev->source),
-                              ev->type, sizeof(ev->type)) != 0)
-            continue; /* skip events whose file cannot be read */
+                              ev->type, sizeof(ev->type)) != 0) {
+            fprintf(stderr, "Warning: skipping unreadable event file: %s\n", fullpath);
+            continue;
+        }
 
         int n_fn = snprintf(ev->filename, sizeof(ev->filename), "%s", name);
         ASSERT_MSG(n_fn >= 0 && (size_t)n_fn < sizeof(ev->filename),
@@ -390,8 +422,21 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
             if (errno == 0 && *endp == '\0' && v >= 0 &&
                 v <= LLONG_MAX / 1000000LL)
                 cfg->ack_timeout_s = v;
+        } else {
+            /* HARDENING #17: warn on unknown config keys */
+            char key_str[64];
+            size_t kl = key_len < sizeof(key_str) - 1 ? key_len : sizeof(key_str) - 1;
+            memcpy(key_str, line, kl);
+            key_str[kl] = '\0';
+            fprintf(stderr, "Warning: unknown config key '%s' in %s\n",
+                    key_str, config_path);
         }
-        /* Unknown keys silently ignored */
+    }
+
+    if (ferror(fp)) {
+        fprintf(stderr, "Warning: read error on config file: %s\n", config_path);
+        fclose(fp);
+        return -1;
     }
 
     fclose(fp);
@@ -645,6 +690,12 @@ int bus_read(const char *events_dir, const char *event_file)
         }
     }
 
+    if (ferror(fp)) {
+        fprintf(stderr, "Error: read error on event file: %s\n", event_file);
+        fclose(fp);
+        return -1;
+    }
+
     fclose(fp);
     return 0;
 }
@@ -736,7 +787,10 @@ int bus_ack_all(const char *events_dir, const char *handle)
             acked++;
     }
 
-    printf("Acknowledged %d event%s\n", acked, acked == 1 ? "" : "s");
+    if (printf("Acknowledged %d event%s\n", acked, acked == 1 ? "" : "s") < 0) {
+        fprintf(stderr, "Error: failed to write ack count to stdout\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -753,7 +807,10 @@ int bus_prune(const char *events_dir, long long max_bytes)
     struct stat dir_st;
     if (stat(processed_dir, &dir_st) != 0) {
         /* No processed directory — nothing to prune */
-        printf("Pruned 0 events (no processed directory)\n");
+        if (printf("Pruned 0 events (no processed directory)\n") < 0) {
+            fprintf(stderr, "Error: failed to write prune status to stdout\n");
+            return -1;
+        }
         return 0;
     }
 
@@ -802,9 +859,12 @@ int bus_prune(const char *events_dir, long long max_bytes)
     closedir(dir);
 
     if (total_size <= max_bytes) {
-        printf("Pruned 0 events (%.1f KB / %.1f KB limit)\n",
+        if (printf("Pruned 0 events (%.1f KB / %.1f KB limit)\n",
                (double)total_size / 1024.0,
-               (double)max_bytes / 1024.0);
+               (double)max_bytes / 1024.0) < 0) {
+            fprintf(stderr, "Error: failed to write prune status to stdout\n");
+            return -1;
+        }
         return 0;
     }
 
@@ -828,10 +888,13 @@ int bus_prune(const char *events_dir, long long max_bytes)
         }
     }
 
-    printf("Pruned %d event%s (%.1f KB remaining, %.1f KB limit)\n",
+    if (printf("Pruned %d event%s (%.1f KB remaining, %.1f KB limit)\n",
            pruned, pruned == 1 ? "" : "s",
            (double)total_size / 1024.0,
-           (double)max_bytes / 1024.0);
+           (double)max_bytes / 1024.0) < 0) {
+        fprintf(stderr, "Error: failed to write prune status to stdout\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -936,6 +999,9 @@ int bus_status(const char *events_dir)
     int cfg_rc = bus_load_config(events_dir, &cfg);
     ASSERT_MSG(cfg_rc == 0, "bus_status: bus_load_config failed for %s", events_dir);
     if (cfg.ack_timeout_s > 0 && count > 0) {
+        ASSERT_MSG(cfg.ack_timeout_s <= LLONG_MAX / 1000000LL,
+                   "bus_status: ack_timeout_s too large for us conversion: %lld",
+                   cfg.ack_timeout_s);
         long long current_us = now_us();
         long long timeout_us = cfg.ack_timeout_s * 1000000LL;
         int stale = 0;
@@ -962,6 +1028,10 @@ int bus_publish_dedup(const char *events_dir, const char *source,
     ASSERT_MSG(events_dir != NULL, "bus_publish_dedup: events_dir is NULL");
     ASSERT_MSG(source != NULL, "bus_publish_dedup: source is NULL");
     ASSERT_MSG(type != NULL, "bus_publish_dedup: type is NULL");
+    ASSERT_MSG(source[0] != '\0', "bus_publish_dedup: source is empty");
+    ASSERT_MSG(type[0] != '\0', "bus_publish_dedup: type is empty");
+    ASSERT_MSG(priority >= 0 && priority <= 3,
+               "bus_publish_dedup: invalid priority %d", priority);
     ASSERT_MSG(dedup_window_us > 0,
                "bus_publish_dedup: dedup_window_us <= 0: %lld", dedup_window_us);
 
@@ -973,6 +1043,7 @@ int bus_publish_dedup(const char *events_dir, const char *source,
 
     long long current_us = now_us();
     long long cutoff_us = current_us - dedup_window_us;
+    if (cutoff_us < 0) cutoff_us = 0; /* Clamp: avoid underflow when window > current time */
 
     /* Scan pending events directory for duplicates */
     DIR *dir = opendir(events_dir);

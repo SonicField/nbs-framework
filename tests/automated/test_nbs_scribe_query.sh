@@ -139,11 +139,11 @@ next_test "13. Literal search — dot not treated as regex"
 OUTPUT=$("$QUERY" --chat="$CHAT" "bus.c" 2>/dev/null) || true
 check "Found bus.c" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
 
-# Bug 2: preamble match doesn't crash
-next_test "14. Search term in preamble doesn't crash"
-OUTPUT=$("$QUERY" --chat="$CHAT" "Decision Log" 2>/dev/null) || true
-RC=$?
-check "Exits without error" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+# Bug 2: preamble match doesn't crash — exits 1 (no decision matches)
+next_test "14. Search term in preamble: no decision match, exits 1"
+RC=0
+"$QUERY" --chat="$CHAT" "Decision Log" 2>/dev/null || RC=$?
+check "Exits with 1 (no decision matches)" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
 
 # Regex mode
 next_test "15. --regex search"
@@ -208,6 +208,159 @@ next_test "23. Path derivation: chat dir → scribe dir"
 # Verify the ../scribe relative path works
 OUTPUT=$("$QUERY" --chat="$CHAT" --last=1)
 check "Derivation found log" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
+
+# =====================================================================
+# Violation fix tests: BUG, SECURITY, HARDENING
+# =====================================================================
+
+# --- BUG #1: --last=N must be validated as positive integer ---
+next_test "24. --last=0 exits 4 (not positive)"
+RC=0
+"$QUERY" --chat="$CHAT" --last=0 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "25. --last=abc exits 4 (not integer)"
+RC=0
+"$QUERY" --chat="$CHAT" --last=abc 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "26. --last=-1 exits 4 (negative)"
+RC=0
+"$QUERY" --chat="$CHAT" --last=-1 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "27. --last= (empty) exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--last=" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- BUG #5: empty search pattern must be rejected ---
+next_test "28. Empty search pattern exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- BUG #6: pattern starting with dash must not be interpreted as grep flag ---
+next_test "29. Pattern starting with dash is caught as unknown option"
+RC=0
+"$QUERY" --chat="$CHAT" "-something" 2>/dev/null || RC=$?
+# Starts with -, so case matches -* → unknown option → exit 4
+check "Exit code is 4 (unknown option)" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- BUG #8: pattern search exits 1 when no matches ---
+next_test "30. Pattern search with no matches exits 1"
+RC=0
+"$QUERY" --chat="$CHAT" "xyzzy_nonexistent_string" 2>/dev/null || RC=$?
+check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
+
+next_test "31. Pattern search with match exits 0"
+RC=0
+"$QUERY" --chat="$CHAT" "Pratt" >/dev/null 2>&1 || RC=$?
+check "Exit code is 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+
+# --- BUG #9: --by exits 1 when no matches ---
+next_test "32. --by with unknown handle exits 1"
+RC=0
+"$QUERY" --chat="$CHAT" --by=nonexistent_person 2>/dev/null || RC=$?
+check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
+
+# --- BUG #10: --tag exits 1 when no matches ---
+next_test "33. --tag with unknown tag exits 1"
+RC=0
+"$QUERY" --chat="$CHAT" --tag=nonexistent_tag 2>/dev/null || RC=$?
+check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
+
+# --- BUG #11: --superseded exits 1 when no superseded entries ---
+next_test "34. --superseded exits 1 on log with no superseded entries"
+# Create a log with no SUPERSEDES entries
+NO_SUPER_LOG="$TEST_DIR/.nbs/scribe/nosup-log.md"
+NO_SUPER_CHAT="$TEST_DIR/.nbs/chat/nosup.chat"
+touch "$NO_SUPER_CHAT"
+cat > "$NO_SUPER_LOG" << 'EOF2'
+# Decision Log
+
+---
+
+### D-1000000001 A simple decision
+- **Status:** decided
+
+---
+EOF2
+RC=0
+"$QUERY" --chat="$NO_SUPER_CHAT" --superseded 2>/dev/null || RC=$?
+check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
+rm -f "$NO_SUPER_LOG" "$NO_SUPER_CHAT"
+
+# --- SECURITY #12: path canonicalisation ---
+next_test "35. Scribe dir is canonicalised (no path traversal)"
+# The scribe directory must exist as a real directory for the script to work.
+# If it doesn't exist, the script should fail with exit 4.
+RC=0
+NOWHERE_CHAT="$TEST_DIR/nonexistent_dir/chat/test.chat"
+mkdir -p "$(dirname "$NOWHERE_CHAT")"
+touch "$NOWHERE_CHAT"
+"$QUERY" --chat="$NOWHERE_CHAT" --count 2>/dev/null || RC=$?
+check "Exit code is 4 (scribe dir not found)" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+rm -rf "$TEST_DIR/nonexistent_dir"
+
+# --- HARDENING #2: --id= format validation ---
+next_test "36. --id= with empty value exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--id=" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "37. --id= with regex metacharacters exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--id=.*" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "38. --id= with invalid format exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--id=notvalid" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- HARDENING #3: --by= empty handle validation ---
+next_test "39. --by= with empty value exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--by=" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- HARDENING #4: --tag= empty tag validation ---
+next_test "40. --tag= with empty value exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" "--tag=" 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- HARDENING #13: --chat= with no subcommand exits 4, not silent help ---
+next_test "41. --chat= with no subcommand exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" 2>/dev/null || RC=$?
+check "Exit code is 4 (not silent help)" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+next_test "42. --chat= with --regex but no pattern exits 4"
+RC=0
+"$QUERY" --chat="$CHAT" --regex 2>/dev/null || RC=$?
+check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+
+# --- Verify existing functionality still works with fixes ---
+next_test "43. --by=alex still finds decisions (regression)"
+OUTPUT=$("$QUERY" --chat="$CHAT" --by=alex 2>/dev/null) || true
+check "Found alex decisions" "$( echo "$OUTPUT" | grep -qF 'recursive descent' && echo pass || echo fail )"
+
+next_test "44. --tag=breaking-change still finds decisions (regression)"
+OUTPUT=$("$QUERY" --chat="$CHAT" --tag=breaking-change 2>/dev/null) || true
+check "Found breaking-change decision" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
+
+next_test "45. --superseded still finds entries (regression)"
+RC=0
+OUTPUT=$("$QUERY" --chat="$CHAT" --superseded 2>/dev/null) || RC=$?
+check "Exit code is 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "Contains SUPERSEDES" "$( echo "$OUTPUT" | grep -qF 'SUPERSEDES' && echo pass || echo fail )"
+
+next_test "46. Regex search with no match exits 1"
+RC=0
+"$QUERY" --chat="$CHAT" 'zzzzz_nomatch' --regex 2>/dev/null || RC=$?
+check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
 
 echo ""
 echo "=== Result: $PASS passed, $FAIL failed ==="

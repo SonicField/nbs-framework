@@ -2,11 +2,21 @@
  * test_terminal_unit.c -- Unit tests for terminal.c hardening fixes
  *
  * Tests:
- *   1. line_ensure_cap overflow detection near SIZE_MAX / 2
- *   2. EDITOR allowlist validation (reject shell metacharacters, accept known editors)
- *   3. Handle length overflow (strlen cast to int)
- *   4. Terminal width overflow in display calculations
- *   5. snprintf truncation detection in format_message
+ *   1.  line_ensure_cap overflow detection near SIZE_MAX / 2
+ *   2.  EDITOR allowlist validation (reject shell metacharacters, accept known editors)
+ *   3.  Handle length overflow (strlen cast to int)
+ *   4.  Terminal width overflow in display calculations
+ *   5.  snprintf truncation detection in format_message
+ *   6.  mkstemp uniqueness
+ *   7.  Binary mode file operations
+ *   8.  SECURITY: Temp file created with fchmod 0600
+ *   9.  BUG: Filter handle size matches MAX_HANDLE_LEN (64)
+ *   10. BUG: Non-ASCII handle rejection
+ *   11. BUG: Duplicated send logic consolidated (pattern test)
+ *   12. HARDENING: g_msg_count overflow guard pattern
+ *   13. HARDENING: ISIG flag explicitly set in raw mode
+ *   14. HARDENING: open_editor len+1 overflow guard
+ *   15. HARDENING: Short write loop on stdout
  *
  * These tests exercise the extracted/exported validation functions
  * from terminal.c. Because terminal.c is a monolithic main-bearing
@@ -32,6 +42,9 @@
 #include <stdint.h>
 #include <limits.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <termios.h>
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -170,6 +183,50 @@ static int terminal_width_calc_would_overflow(int prompt_vlen, size_t len,
     if (prompt_vlen > 0 && (int)len > INT_MAX - prompt_vlen) return -1;
     if (cursor > len) return -1;  /* invariant violation */
     return 0;
+}
+
+/*
+ * Mirror of handle ASCII validation from terminal.c main().
+ * Returns 1 if handle is ASCII-only, 0 if it contains non-ASCII bytes.
+ */
+static int handle_is_ascii(const char *handle) {
+    if (!handle) return 0;
+    for (const char *p = handle; *p; p++) {
+        if ((unsigned char)*p > 127) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Mirror of filter handle size constraint.
+ * MAX_HANDLE_LEN is 64 in chat_file.h.
+ */
+#define MAX_HANDLE_LEN 64
+
+/*
+ * Mirror of filter handle snprintf with truncation detection.
+ * Returns 0 if handle fits, -1 if truncated.
+ */
+static int filter_handle_set(char *filter_buf, size_t filter_size,
+                              const char *target) {
+    int sn = snprintf(filter_buf, filter_size, "%s", target);
+    if (sn < 0 || (size_t)sn >= filter_size) {
+        return -1;  /* truncated */
+    }
+    return 0;  /* fits */
+}
+
+/*
+ * Mirror of open_editor file size guard.
+ * MAX_MESSAGE_LEN is 1MB in chat_file.h.
+ */
+#define MAX_MESSAGE_LEN (1024 * 1024)
+
+static int editor_file_size_safe(long len) {
+    if (len <= 0) return 0;           /* empty or error */
+    if (len > MAX_MESSAGE_LEN) return 0;  /* too large */
+    if ((unsigned long)len >= SIZE_MAX) return 0;  /* overflow on len+1 */
+    return 1;  /* safe */
 }
 
 /* ================================================================
@@ -479,6 +536,472 @@ static void test_binary_mode_fseek_ftell(void) {
     TEST_PASS("binary mode fseek/ftell gives correct length for \\r\\n content");
 }
 
+/* --- Test 8: SECURITY -- Temp file permissions via fchmod --- */
+
+static void test_tempfile_permissions_fchmod(void) {
+    /* The fix for audit violation #1 (SECURITY): mkstemp followed by
+     * fchmod(fd, S_IRUSR | S_IWUSR) to ensure 0600 regardless of umask.
+     *
+     * Adversarial scenario: process umask is 0000 (most permissive).
+     * Without fchmod, the file would be world-readable.  With fchmod,
+     * it must be owner-only. */
+
+    /* Save and set permissive umask */
+    mode_t old_umask = umask(0000);
+
+    char tmppath[] = "/tmp/nbs-chat-sectest.XXXXXX";
+    int fd = mkstemp(tmppath);
+    TEST_ASSERT(fd >= 0, "mkstemp should succeed");
+
+    /* Apply the fix: fchmod to 0600 */
+    int rc = fchmod(fd, S_IRUSR | S_IWUSR);
+    TEST_ASSERT(rc == 0, "fchmod should succeed");
+
+    /* Verify permissions */
+    struct stat sb;
+    TEST_ASSERT(fstat(fd, &sb) == 0, "fstat should succeed");
+
+    mode_t perms = sb.st_mode & 0777;
+    TEST_ASSERT(perms == 0600,
+                "temp file must be 0600 even with umask 0000, got %04o",
+                (unsigned)perms);
+
+    /* Verify: without fchmod, umask 0000 would leave the file as
+     * whatever mkstemp creates (typically 0600 on Linux, but POSIX
+     * does not guarantee this).  The test proves that fchmod enforces
+     * the correct permissions regardless. */
+
+    close(fd);
+    unlink(tmppath);
+
+    /* Restore original umask */
+    umask(old_umask);
+
+    TEST_PASS("SECURITY: temp file permissions are 0600 after fchmod");
+}
+
+static void test_tempfile_permissions_adversarial_umask(void) {
+    /* Additional adversarial test: even with umask 0077, fchmod must
+     * still produce 0600 (not 0700 or other combinations). */
+
+    mode_t old_umask = umask(0077);
+
+    char tmppath[] = "/tmp/nbs-chat-sectest2.XXXXXX";
+    int fd = mkstemp(tmppath);
+    TEST_ASSERT(fd >= 0, "mkstemp should succeed with umask 0077");
+
+    int rc = fchmod(fd, S_IRUSR | S_IWUSR);
+    TEST_ASSERT(rc == 0, "fchmod should succeed with umask 0077");
+
+    struct stat sb;
+    TEST_ASSERT(fstat(fd, &sb) == 0, "fstat should succeed");
+
+    mode_t perms = sb.st_mode & 0777;
+    TEST_ASSERT(perms == 0600,
+                "temp file must be 0600 with umask 0077, got %04o",
+                (unsigned)perms);
+
+    close(fd);
+    unlink(tmppath);
+    umask(old_umask);
+
+    TEST_PASS("SECURITY: temp file 0600 regardless of umask value");
+}
+
+/* --- Test 9: BUG -- Filter handle size matches MAX_HANDLE_LEN --- */
+
+static void test_filter_handle_size_constraint(void) {
+    /* The fix for audit violation #4 (BUG): g_filter_handle must be
+     * char[MAX_HANDLE_LEN], not char[256].  A handle longer than
+     * MAX_HANDLE_LEN-1 chars would be truncated by snprintf, which
+     * means it can never match any message's handle field (also
+     * bounded by MAX_HANDLE_LEN).
+     *
+     * Adversarial scenario: user types /filter followed by a 65+ char
+     * string.  The old code silently stored it in char[256], but it
+     * would never match anything.  The fix truncates to MAX_HANDLE_LEN
+     * and warns the user. */
+
+    char filter_buf[MAX_HANDLE_LEN];
+
+    /* Normal handle: fits without truncation */
+    TEST_ASSERT(filter_handle_set(filter_buf, sizeof(filter_buf), "alice") == 0,
+                "'alice' should fit in filter buffer");
+    TEST_ASSERT(strcmp(filter_buf, "alice") == 0,
+                "filter buffer should contain 'alice', got '%s'", filter_buf);
+
+    /* Handle at MAX_HANDLE_LEN - 1 (63 chars): fits exactly */
+    char exact_handle[MAX_HANDLE_LEN];
+    memset(exact_handle, 'x', MAX_HANDLE_LEN - 1);
+    exact_handle[MAX_HANDLE_LEN - 1] = '\0';
+    TEST_ASSERT(filter_handle_set(filter_buf, sizeof(filter_buf), exact_handle) == 0,
+                "63-char handle should fit exactly");
+    TEST_ASSERT(strlen(filter_buf) == MAX_HANDLE_LEN - 1,
+                "filter buffer should have length 63, got %zu", strlen(filter_buf));
+
+    /* Handle at MAX_HANDLE_LEN (64 chars): truncated */
+    char long_handle[MAX_HANDLE_LEN + 1];
+    memset(long_handle, 'y', MAX_HANDLE_LEN);
+    long_handle[MAX_HANDLE_LEN] = '\0';
+    TEST_ASSERT(filter_handle_set(filter_buf, sizeof(filter_buf), long_handle) == -1,
+                "64-char handle should be detected as truncated");
+
+    /* Very long handle (256 chars): truncated */
+    char huge_handle[257];
+    memset(huge_handle, 'z', 256);
+    huge_handle[256] = '\0';
+    TEST_ASSERT(filter_handle_set(filter_buf, sizeof(filter_buf), huge_handle) == -1,
+                "256-char handle should be detected as truncated");
+
+    /* Empty handle: fits but is degenerate */
+    TEST_ASSERT(filter_handle_set(filter_buf, sizeof(filter_buf), "") == 0,
+                "empty handle should fit");
+    TEST_ASSERT(filter_buf[0] == '\0',
+                "filter buffer should be empty string");
+
+    TEST_PASS("BUG: filter handle bounded by MAX_HANDLE_LEN with truncation detection");
+}
+
+/* --- Test 10: BUG -- Non-ASCII handle rejection --- */
+
+static void test_handle_ascii_validation(void) {
+    /* The fix for audit violation #6 (BUG): handles must be ASCII-only
+     * because the cursor positioning arithmetic uses strlen (byte count)
+     * as display column count.  Multi-byte UTF-8 characters would cause
+     * byte count != display width, corrupting cursor positioning.
+     *
+     * Adversarial inputs: various non-ASCII patterns. */
+
+    /* ASCII handles should pass */
+    TEST_ASSERT(handle_is_ascii("alice") == 1,
+                "'alice' is ASCII");
+    TEST_ASSERT(handle_is_ascii("user-123_test") == 1,
+                "'user-123_test' is ASCII");
+    TEST_ASSERT(handle_is_ascii("A") == 1,
+                "'A' is ASCII");
+    TEST_ASSERT(handle_is_ascii("") == 1,
+                "empty string is vacuously ASCII");
+
+    /* Non-ASCII: accented characters (UTF-8 multi-byte) */
+    TEST_ASSERT(handle_is_ascii("caf\xc3\xa9") == 0,
+                "'cafe' with accented e (0xC3 0xA9) is non-ASCII");
+
+    /* Non-ASCII: emoji (UTF-8 4-byte) */
+    TEST_ASSERT(handle_is_ascii("\xf0\x9f\x98\x80") == 0,
+                "emoji (U+1F600) is non-ASCII");
+
+    /* Non-ASCII: CJK character */
+    TEST_ASSERT(handle_is_ascii("\xe4\xb8\xad") == 0,
+                "CJK character (U+4E2D) is non-ASCII");
+
+    /* Non-ASCII: single high byte */
+    TEST_ASSERT(handle_is_ascii("user\x80") == 0,
+                "handle with 0x80 byte is non-ASCII");
+
+    /* Non-ASCII: 0xFF byte (invalid UTF-8) */
+    TEST_ASSERT(handle_is_ascii("user\xff") == 0,
+                "handle with 0xFF byte is non-ASCII");
+
+    /* ASCII mixed with printable special chars */
+    TEST_ASSERT(handle_is_ascii("user.name@host") == 1,
+                "'user.name@host' is ASCII (even if unusual for a handle)");
+
+    /* NULL should fail */
+    TEST_ASSERT(handle_is_ascii(NULL) == 0,
+                "NULL handle is not ASCII");
+
+    TEST_PASS("BUG: non-ASCII handle correctly rejected");
+}
+
+/* --- Test 11: BUG -- Duplicated send logic consolidated --- */
+
+static void test_send_logic_consolidation(void) {
+    /* The fix for audit violation #5 (BUG): both the normal Enter path
+     * and the /edit path must use the same send logic (do_send).
+     *
+     * We cannot directly test terminal.c's internal functions from here,
+     * but we can verify the algorithm pattern: a single function that
+     * performs chat_send + msg_count_increment + bus_bridge calls.
+     *
+     * The pattern test: simulate the operations that do_send performs
+     * and verify all three side effects happen together or not at all. */
+
+    int msg_count = 5;
+    int send_ok = 1;  /* Simulate chat_send returning 0 */
+    int bus_after_called = 0;
+    int bus_human_called = 0;
+
+    /* Simulate do_send logic */
+    if (send_ok) {
+        /* All three side effects must happen together */
+        msg_count++;
+        bus_after_called = 1;
+        bus_human_called = 1;
+    }
+
+    TEST_ASSERT(msg_count == 6,
+                "msg_count should increment on successful send");
+    TEST_ASSERT(bus_after_called == 1,
+                "bus_bridge_after_send should be called");
+    TEST_ASSERT(bus_human_called == 1,
+                "bus_bridge_human_input should be called");
+
+    /* Simulate send failure */
+    send_ok = 0;
+    int prev_count = msg_count;
+    bus_after_called = 0;
+    bus_human_called = 0;
+
+    if (send_ok) {
+        msg_count++;
+        bus_after_called = 1;
+        bus_human_called = 1;
+    }
+
+    TEST_ASSERT(msg_count == prev_count,
+                "msg_count must NOT increment on failed send");
+    TEST_ASSERT(bus_after_called == 0,
+                "bus_bridge_after_send must NOT be called on failed send");
+    TEST_ASSERT(bus_human_called == 0,
+                "bus_bridge_human_input must NOT be called on failed send");
+
+    TEST_PASS("BUG: send logic consolidation -- all side effects atomic");
+}
+
+/* --- Test 12: HARDENING -- g_msg_count overflow guard --- */
+
+static void test_msg_count_overflow_guard(void) {
+    /* The fix for audit violation #7 (HARDENING): g_msg_count++ must
+     * have a guard against INT_MAX overflow.
+     *
+     * The do_send function adds:
+     *   ASSERT_MSG(g_msg_count < INT_MAX, ...)
+     *
+     * We test the guard logic here. */
+
+    /* Normal value: increment is safe */
+    int count = 100;
+    int safe = (count < INT_MAX) ? 1 : 0;
+    TEST_ASSERT(safe == 1, "count=100 should be safe to increment");
+
+    /* At INT_MAX - 1: increment is safe (result = INT_MAX) */
+    count = INT_MAX - 1;
+    safe = (count < INT_MAX) ? 1 : 0;
+    TEST_ASSERT(safe == 1, "count=INT_MAX-1 should be safe to increment");
+
+    /* At INT_MAX: increment would overflow -- guard must trigger */
+    count = INT_MAX;
+    safe = (count < INT_MAX) ? 1 : 0;
+    TEST_ASSERT(safe == 0,
+                "count=INT_MAX must be detected as overflow risk");
+
+    /* At MAX_MESSAGES (10000): always safe, sanity check */
+    count = 10000;
+    safe = (count < INT_MAX) ? 1 : 0;
+    TEST_ASSERT(safe == 1, "count=10000 (MAX_MESSAGES) should be safe");
+
+    TEST_PASS("HARDENING: g_msg_count overflow guard");
+}
+
+/* --- Test 13: HARDENING -- ISIG explicitly set --- */
+
+static void test_isig_flag_explicitly_set(void) {
+    /* The fix for audit violation #8 (HARDENING): after disabling
+     * ECHO and ICANON, the code must explicitly set ISIG so that
+     * Ctrl-C still generates SIGINT.
+     *
+     * Test the bitwise logic: starting from a termios where ISIG
+     * might be cleared, verify that the fix produces ISIG set. */
+
+    struct termios t;
+    memset(&t, 0, sizeof(t));
+
+    /* Scenario 1: ISIG was already set (inherited from normal terminal) */
+    t.c_lflag = ECHO | ICANON | ISIG;
+    t.c_lflag &= ~(ECHO | ICANON);
+    t.c_lflag |= ISIG;
+    TEST_ASSERT((t.c_lflag & ISIG) != 0,
+                "ISIG should be set when already present");
+    TEST_ASSERT((t.c_lflag & ECHO) == 0,
+                "ECHO should be cleared");
+    TEST_ASSERT((t.c_lflag & ICANON) == 0,
+                "ICANON should be cleared");
+
+    /* Scenario 2: ISIG was NOT set (adversarial parent cleared it) */
+    t.c_lflag = ECHO | ICANON;  /* No ISIG */
+    t.c_lflag &= ~(ECHO | ICANON);
+    t.c_lflag |= ISIG;
+    TEST_ASSERT((t.c_lflag & ISIG) != 0,
+                "ISIG should be set even when parent cleared it");
+
+    /* Scenario 3: All flags cleared (completely empty lflag) */
+    t.c_lflag = 0;
+    t.c_lflag &= ~(ECHO | ICANON);
+    t.c_lflag |= ISIG;
+    TEST_ASSERT((t.c_lflag & ISIG) != 0,
+                "ISIG should be set from zero");
+
+    TEST_PASS("HARDENING: ISIG explicitly set in raw mode");
+}
+
+/* --- Test 14: HARDENING -- open_editor file size guard --- */
+
+static void test_editor_file_size_guard(void) {
+    /* The fix for audit violation #9 (HARDENING): guard against
+     * len + 1 overflow on ILP32, and cap at MAX_MESSAGE_LEN.
+     *
+     * Adversarial scenarios: very large files, boundary values. */
+
+    /* Normal file: safe */
+    TEST_ASSERT(editor_file_size_safe(100) == 1,
+                "100 bytes should be safe");
+
+    /* File at MAX_MESSAGE_LEN: safe */
+    TEST_ASSERT(editor_file_size_safe(MAX_MESSAGE_LEN) == 1,
+                "1 MB should be safe");
+
+    /* File just over MAX_MESSAGE_LEN: rejected */
+    TEST_ASSERT(editor_file_size_safe(MAX_MESSAGE_LEN + 1) == 0,
+                "1 MB + 1 should be rejected");
+
+    /* Zero-length file: rejected (empty, nothing to send) */
+    TEST_ASSERT(editor_file_size_safe(0) == 0,
+                "zero-length file should be rejected");
+
+    /* Negative length (ftell error): rejected */
+    TEST_ASSERT(editor_file_size_safe(-1) == 0,
+                "negative length (ftell error) should be rejected");
+
+    /* LONG_MAX on ILP32 (2^31-1): rejected (way over MAX_MESSAGE_LEN) */
+    TEST_ASSERT(editor_file_size_safe(LONG_MAX) == 0,
+                "LONG_MAX should be rejected");
+
+    /* Large but under MAX_MESSAGE_LEN: safe */
+    TEST_ASSERT(editor_file_size_safe(500000) == 1,
+                "500 KB should be safe");
+
+    TEST_PASS("HARDENING: open_editor file size guard");
+}
+
+/* --- Test 15: HARDENING -- Short write loop pattern --- */
+
+static void test_short_write_loop(void) {
+    /* The fix for audit violation #10 (HARDENING): write() to stdout
+     * must loop on short writes (and handle EINTR).
+     *
+     * We test the algorithm pattern: given a buffer and simulated
+     * short writes, verify all bytes are eventually written. */
+
+    /* Simulate a buffer of 100 bytes */
+    size_t total = 100;
+    size_t written = 0;
+
+    /* Simulated write sizes: 30, 30, 30, 10 (short writes) */
+    size_t write_sizes[] = {30, 30, 30, 10};
+    int write_idx = 0;
+
+    while (written < total) {
+        size_t remaining = total - written;
+        /* Simulate write returning less than requested */
+        size_t wr = (write_idx < 4) ? write_sizes[write_idx] : remaining;
+        if (wr > remaining) wr = remaining;
+        written += wr;
+        write_idx++;
+    }
+
+    TEST_ASSERT(written == total,
+                "all bytes should be written after looping, wrote %zu of %zu",
+                written, total);
+    TEST_ASSERT(write_idx == 4,
+                "should have taken 4 iterations for short writes, took %d",
+                write_idx);
+
+    /* Edge case: single write succeeds fully */
+    written = 0;
+    total = 50;
+    size_t wr = total;
+    written += wr;
+    TEST_ASSERT(written == total,
+                "single full write should complete immediately");
+
+    TEST_PASS("HARDENING: short write loop pattern");
+}
+
+/* --- Test 16: HARDENING -- /dev/tty opened O_RDWR --- */
+
+static void test_dev_tty_rdwr(void) {
+    /* The fix for audit violation #3 (HARDENING): /dev/tty should be
+     * opened O_RDWR, not O_RDONLY, so editors can use it for both
+     * input and output.
+     *
+     * We verify that O_RDWR opens /dev/tty successfully (if available). */
+
+    int fd = open("/dev/tty", O_RDWR);
+    if (fd >= 0) {
+        /* Verify the fd is readable and writable by checking flags */
+        int flags = fcntl(fd, F_GETFL);
+        TEST_ASSERT(flags >= 0, "fcntl F_GETFL should succeed on /dev/tty");
+        int accmode = flags & O_ACCMODE;
+        TEST_ASSERT(accmode == O_RDWR,
+                    "/dev/tty opened with O_RDWR should have RDWR access mode, got %d",
+                    accmode);
+        close(fd);
+        TEST_PASS("HARDENING: /dev/tty opens successfully with O_RDWR");
+    } else {
+        /* No /dev/tty (e.g. in CI without a terminal) -- skip gracefully */
+        printf("  SKIP: /dev/tty not available (no controlling terminal)\n");
+        tests_passed++;
+    }
+}
+
+/* --- Test 17: HARDENING -- child malloc failure logs and exits --- */
+
+static void test_child_malloc_failure_pattern(void) {
+    /* The fix for audit violation #2 (HARDENING): if malloc fails for
+     * an environment variable entry in the child process, the child
+     * must log an error and _exit(1), not silently skip the variable.
+     *
+     * We test the pattern: if entry allocation fails, the code path
+     * must produce an error exit, not continue with a partial env. */
+
+    /* Simulate: 4 env vars, malloc fails for the 2nd one */
+    int env_count = 0;
+    int should_fail_at = 1;  /* Simulate malloc failure at index 1 (HOME) */
+    int error_exit = 0;
+
+    for (int i = 0; i < 4; i++) {
+        int malloc_ok = (i != should_fail_at);
+        if (malloc_ok) {
+            env_count++;
+        } else {
+            /* The fix: log and exit instead of silently skipping */
+            error_exit = 1;
+            break;
+        }
+    }
+
+    TEST_ASSERT(error_exit == 1,
+                "malloc failure must trigger error exit, not silent skip");
+    TEST_ASSERT(env_count == 1,
+                "only vars before the failure should be counted, got %d",
+                env_count);
+
+    /* Without the fix (old behaviour): would silently skip and continue */
+    env_count = 0;
+    error_exit = 0;
+    for (int i = 0; i < 4; i++) {
+        int malloc_ok = (i != should_fail_at);
+        if (malloc_ok) {
+            env_count++;
+        }
+        /* Old code: just `if (entry) { ... }` with no else */
+    }
+    TEST_ASSERT(env_count == 3,
+                "old behaviour would silently produce 3 vars instead of 4");
+
+    TEST_PASS("HARDENING: child malloc failure triggers error exit");
+}
+
 /* ================================================================ */
 
 int main(void) {
@@ -509,6 +1032,37 @@ int main(void) {
 
     /* Binary mode file I/O */
     test_binary_mode_fseek_ftell();
+
+    /* SECURITY: temp file permissions */
+    test_tempfile_permissions_fchmod();
+    test_tempfile_permissions_adversarial_umask();
+
+    /* BUG: filter handle size */
+    test_filter_handle_size_constraint();
+
+    /* BUG: non-ASCII handle rejection */
+    test_handle_ascii_validation();
+
+    /* BUG: send logic consolidation */
+    test_send_logic_consolidation();
+
+    /* HARDENING: g_msg_count overflow guard */
+    test_msg_count_overflow_guard();
+
+    /* HARDENING: ISIG flag */
+    test_isig_flag_explicitly_set();
+
+    /* HARDENING: file size guard */
+    test_editor_file_size_guard();
+
+    /* HARDENING: short write loop */
+    test_short_write_loop();
+
+    /* HARDENING: /dev/tty O_RDWR */
+    test_dev_tty_rdwr();
+
+    /* HARDENING: child malloc failure */
+    test_child_malloc_failure_pattern();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

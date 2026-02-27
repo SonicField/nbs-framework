@@ -32,7 +32,11 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_registry_unit \
              $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit \
              $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit \
-             $(UNIT_TEST_DIR)/test_sidecar_triggers_unit
+             $(UNIT_TEST_DIR)/test_sidecar_triggers_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_transport_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit
 
 .PHONY: all clean install debug asan test test-unit test-all
 
@@ -89,6 +93,18 @@ $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_str
 $(UNIT_TEST_DIR)/test_sidecar_triggers_unit: $(UNIT_TEST_DIR)/test_sidecar_triggers_unit.c triggers.o bus_client.o chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
+$(UNIT_TEST_DIR)/test_sidecar_transport_unit: $(UNIT_TEST_DIR)/test_sidecar_transport_unit.c transport_pty.o transport_tmux.o exec_util.o
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
+$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_tmux.o transport_pty.o $(CHAT_LIB_OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
+$(UNIT_TEST_DIR)/test_sidecar_bus_client_unit: $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit.c bus_client.o exec_util.o
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
+$(UNIT_TEST_DIR)/test_sidecar_chat_client_unit: $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit.c chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
 test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_detect_unit
 	$(UNIT_TEST_DIR)/test_sidecar_hash_unit
@@ -97,6 +113,10 @@ test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit
 	$(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit
 	$(UNIT_TEST_DIR)/test_sidecar_triggers_unit
+	$(UNIT_TEST_DIR)/test_sidecar_transport_unit
+	$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit
+	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit
+	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit
 
 test: all install
 	./$(ASSERT_CHECK)

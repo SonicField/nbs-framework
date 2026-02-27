@@ -1,5 +1,5 @@
 /*
- * main.c — nbs-workers entry point and command dispatch.
+ * main.c -- nbs-workers entry point and command dispatch.
  *
  * Parses command-line arguments and dispatches to the appropriate
  * command handler in worker.c. Passes the current working directory
@@ -21,15 +21,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 int main(int argc, char *argv[])
 {
     ASSERT_MSG(argv != NULL, "main: argv is NULL");
+    ASSERT_MSG(argc >= 1, "main: argc must be >= 1, got %d", argc);
 
-    /* Get current working directory — all path construction uses this */
+    /* Precondition: all argv entries are non-NULL */
+    for (int i = 0; i < argc; i++) {
+        ASSERT_MSG(argv[i] != NULL, "main: argv[%d] is NULL", i);
+    }
+
+    /* Get current working directory -- all path construction uses this */
     char cwd[PATH_BUF_SIZE];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
-        fprintf(stderr, "Error: getcwd() failed\n");
+        fprintf(stderr, "Error: getcwd() failed (errno=%d: %s). "
+                "Cannot determine working directory for path resolution.\n",
+                errno, strerror(errno));
         return EXIT_ERROR;
     }
 
@@ -75,9 +84,11 @@ int main(int argc, char *argv[])
         /* Parse optional --context=N */
         for (int i = 4; i < argc; i++) {
             if (strncmp(argv[i], "--context=", 10) == 0) {
+                errno = 0;
                 char *endptr;
                 long parsed = strtol(argv[i] + 10, &endptr, 10);
-                if (*endptr == '\0' && parsed >= 0 && parsed <= 10000) {
+                if (*endptr == '\0' && errno != ERANGE &&
+                    parsed >= 0 && parsed <= 10000) {
                     context = (int)parsed;
                 } else {
                     fprintf(stderr,
@@ -87,9 +98,14 @@ int main(int argc, char *argv[])
                 }
             } else {
                 fprintf(stderr,
-                        "Warning: unknown argument ignored: %s\n", argv[i]);
+                        "Error: unknown argument: %s\n", argv[i]);
+                return EXIT_BAD_ARGS;
             }
         }
+
+        /* Postcondition: context is in valid range */
+        ASSERT_MSG(context >= 0 && context <= 10000,
+                   "search: context out of range after parsing: %d", context);
 
         return cmd_search(argv[2], argv[3], context, cwd);
     }

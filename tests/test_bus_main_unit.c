@@ -53,7 +53,11 @@ static int tests_failed = 0;
 
 /* --- Replicated validation logic from main.c (under test) --- */
 
-#define BUS_MAX_PATH 4096
+#define BUS_MAX_PATH       4096
+#define BUS_MAX_HANDLE      128
+#define BUS_MAX_TYPE        128
+#define BUS_MAX_PAYLOAD   16384
+#define BUS_MAX_FILENAME    512
 
 /*
  * Replicated: overflow guard for seconds-to-microseconds conversion.
@@ -406,6 +410,260 @@ static void test_strtoll_llong_max_string(void)
 }
 
 /* ================================================================ */
+/* Test: empty --handle= detection (BUG #1)                          */
+/* ================================================================ */
+
+/*
+ * Replicated: parse_handle_opt with the fix applied.
+ * Returns:
+ *   handle string pointer on success
+ *   NULL if no --handle flag present
+ *   (char *)-1 if --handle= is empty (error sentinel)
+ */
+static const char *parse_handle_opt_fixed(int argc, const char **argv, int start)
+{
+    if (argv == NULL) return NULL;
+    if (start < 0 || start > argc) return NULL;
+    for (int i = start; i < argc; i++) {
+        if (strncmp(argv[i], "--handle=", 9) == 0) {
+            const char *h = argv[i] + 9;
+            if (h[0] == '\0') return (const char *)-1; /* error sentinel */
+            return h;
+        }
+    }
+    return NULL;
+}
+
+static void test_handle_opt_empty_is_error(void)
+{
+    const char *args[] = {"nbs-bus", "check", "/tmp", "--handle="};
+    const char *result = parse_handle_opt_fixed(4, args, 3);
+    TEST_ASSERT(result == (const char *)-1,
+                "empty --handle= should return error sentinel, got %p",
+                (void *)result);
+
+    TEST_PASS("BUG #1: empty --handle= detected as error");
+}
+
+static void test_handle_opt_valid(void)
+{
+    const char *args[] = {"nbs-bus", "check", "/tmp", "--handle=worker-a"};
+    const char *result = parse_handle_opt_fixed(4, args, 3);
+    TEST_ASSERT(result != NULL && result != (const char *)-1,
+                "valid --handle should return non-NULL, non-sentinel");
+    TEST_ASSERT(strcmp(result, "worker-a") == 0,
+                "expected 'worker-a', got '%s'", result);
+
+    TEST_PASS("BUG #1: valid --handle= returns correct value");
+}
+
+static void test_handle_opt_absent(void)
+{
+    const char *args[] = {"nbs-bus", "check", "/tmp"};
+    const char *result = parse_handle_opt_fixed(3, args, 3);
+    TEST_ASSERT(result == NULL,
+                "absent --handle should return NULL");
+
+    TEST_PASS("BUG #1: absent --handle returns NULL");
+}
+
+/* ================================================================ */
+/* Test: max_bytes zero rejection (BUG #2)                           */
+/* ================================================================ */
+
+/*
+ * Replicated: the check that max_bytes must be positive before calling
+ * bus_prune. After the fix, max_bytes <= 0 should be caught.
+ */
+static int validate_max_bytes(long long max_bytes)
+{
+    return max_bytes > 0 ? 0 : -1;
+}
+
+static void test_max_bytes_zero_rejected(void)
+{
+    TEST_ASSERT(validate_max_bytes(0) == -1,
+                "max_bytes == 0 should be rejected");
+    TEST_PASS("BUG #2: max_bytes == 0 rejected");
+}
+
+static void test_max_bytes_negative_rejected(void)
+{
+    TEST_ASSERT(validate_max_bytes(-1) == -1,
+                "max_bytes == -1 should be rejected");
+    TEST_ASSERT(validate_max_bytes(LLONG_MIN) == -1,
+                "max_bytes == LLONG_MIN should be rejected");
+    TEST_PASS("BUG #2: negative max_bytes rejected");
+}
+
+static void test_max_bytes_positive_accepted(void)
+{
+    TEST_ASSERT(validate_max_bytes(1) == 0,
+                "max_bytes == 1 should be accepted");
+    TEST_ASSERT(validate_max_bytes(16LL * 1024 * 1024) == 0,
+                "max_bytes == 16MB should be accepted");
+    TEST_PASS("BUG #2: positive max_bytes accepted");
+}
+
+/* ================================================================ */
+/* Test: source/type/payload length bounds (BUG #3)                  */
+/* ================================================================ */
+
+static int validate_field_length(const char *s, size_t max_len, const char *label)
+{
+    (void)label;
+    if (s == NULL) return -1;
+    if (strlen(s) >= max_len) return -1;
+    return 0;
+}
+
+static void test_source_length_at_limit(void)
+{
+    char src[BUS_MAX_HANDLE + 1];
+    memset(src, 'a', BUS_MAX_HANDLE);
+    src[BUS_MAX_HANDLE] = '\0';
+
+    TEST_ASSERT(validate_field_length(src, BUS_MAX_HANDLE, "source") == -1,
+                "source of length %d should be rejected", BUS_MAX_HANDLE);
+
+    /* One below limit should pass */
+    src[BUS_MAX_HANDLE - 1] = '\0';
+    TEST_ASSERT(validate_field_length(src, BUS_MAX_HANDLE, "source") == 0,
+                "source of length %d should be accepted", BUS_MAX_HANDLE - 1);
+
+    TEST_PASS("BUG #3: source length boundary check");
+}
+
+static void test_type_length_at_limit(void)
+{
+    char type[BUS_MAX_TYPE + 1];
+    memset(type, 'b', BUS_MAX_TYPE);
+    type[BUS_MAX_TYPE] = '\0';
+
+    TEST_ASSERT(validate_field_length(type, BUS_MAX_TYPE, "type") == -1,
+                "type of length %d should be rejected", BUS_MAX_TYPE);
+
+    type[BUS_MAX_TYPE - 1] = '\0';
+    TEST_ASSERT(validate_field_length(type, BUS_MAX_TYPE, "type") == 0,
+                "type of length %d should be accepted", BUS_MAX_TYPE - 1);
+
+    TEST_PASS("BUG #3: type length boundary check");
+}
+
+static void test_payload_length_at_limit(void)
+{
+    char *payload = malloc(BUS_MAX_PAYLOAD + 1);
+    TEST_ASSERT(payload != NULL, "malloc failed");
+    memset(payload, 'c', BUS_MAX_PAYLOAD);
+    payload[BUS_MAX_PAYLOAD] = '\0';
+
+    TEST_ASSERT(validate_field_length(payload, BUS_MAX_PAYLOAD, "payload") == -1,
+                "payload of length %d should be rejected", BUS_MAX_PAYLOAD);
+
+    payload[BUS_MAX_PAYLOAD - 1] = '\0';
+    TEST_ASSERT(validate_field_length(payload, BUS_MAX_PAYLOAD, "payload") == 0,
+                "payload of length %d should be accepted", BUS_MAX_PAYLOAD - 1);
+
+    free(payload);
+    TEST_PASS("BUG #3: payload length boundary check");
+}
+
+/* ================================================================ */
+/* Test: path traversal in event_file (SECURITY #4)                  */
+/* ================================================================ */
+
+static int validate_event_filename(const char *event_file)
+{
+    if (event_file == NULL || event_file[0] == '\0') return -1;
+    if (strchr(event_file, '/') != NULL) return -1;
+    if (strncmp(event_file, "..", 2) == 0) return -1;
+    if (strlen(event_file) >= BUS_MAX_FILENAME) return -1;
+    return 0;
+}
+
+static void test_event_file_path_traversal_slash(void)
+{
+    TEST_ASSERT(validate_event_filename("../../../etc/passwd") == -1,
+                "path traversal with / should be rejected");
+    TEST_ASSERT(validate_event_filename("processed/foo.event") == -1,
+                "subdirectory path should be rejected");
+    TEST_ASSERT(validate_event_filename("/absolute/path.event") == -1,
+                "absolute path should be rejected");
+    TEST_PASS("SECURITY #4: event_file with / rejected");
+}
+
+static void test_event_file_path_traversal_dotdot(void)
+{
+    TEST_ASSERT(validate_event_filename("..") == -1,
+                "dotdot should be rejected");
+    TEST_ASSERT(validate_event_filename("..foo.event") == -1,
+                "dotdot prefix should be rejected");
+    TEST_PASS("SECURITY #4: event_file with .. prefix rejected");
+}
+
+static void test_event_file_valid(void)
+{
+    TEST_ASSERT(validate_event_filename("12345-worker-task-99.event") == 0,
+                "valid event filename should be accepted");
+    TEST_PASS("SECURITY #4: valid event_file accepted");
+}
+
+static void test_event_file_overlength(void)
+{
+    char long_name[BUS_MAX_FILENAME + 8];
+    memset(long_name, 'f', BUS_MAX_FILENAME);
+    strcpy(long_name + BUS_MAX_FILENAME - 6, ".event");
+    /* Now long_name is exactly BUS_MAX_FILENAME chars (sans NUL) — rebuild at limit */
+    memset(long_name, 'f', BUS_MAX_FILENAME);
+    long_name[BUS_MAX_FILENAME] = '\0';
+
+    TEST_ASSERT(validate_event_filename(long_name) == -1,
+                "event_file >= BUS_MAX_FILENAME should be rejected");
+    TEST_PASS("HARDENING #11: overlength event_file rejected");
+}
+
+/* ================================================================ */
+/* Test: handle validation (SECURITY #5, #6)                         */
+/* ================================================================ */
+
+static int validate_handle(const char *handle)
+{
+    if (handle == NULL) return 0; /* NULL = no filter, OK */
+    if (handle[0] == '\0') return -1;
+    if (strchr(handle, '/') != NULL) return -1;
+    /* Reuse whitespace check */
+    if (validate_non_empty_no_whitespace(handle) != 0) return -1;
+    return 0;
+}
+
+static void test_handle_path_traversal(void)
+{
+    TEST_ASSERT(validate_handle("../evil") == -1,
+                "handle with / should be rejected");
+    TEST_ASSERT(validate_handle("foo/bar") == -1,
+                "handle with / should be rejected");
+    TEST_PASS("SECURITY #5/#6: handle with / rejected");
+}
+
+static void test_handle_whitespace(void)
+{
+    TEST_ASSERT(validate_handle("hello world") == -1,
+                "handle with space should be rejected");
+    TEST_ASSERT(validate_handle("tab\there") == -1,
+                "handle with tab should be rejected");
+    TEST_PASS("SECURITY #5/#6: handle with whitespace rejected");
+}
+
+static void test_handle_valid(void)
+{
+    TEST_ASSERT(validate_handle("worker-a") == 0,
+                "valid handle should be accepted");
+    TEST_ASSERT(validate_handle(NULL) == 0,
+                "NULL handle (no filter) should be accepted");
+    TEST_PASS("SECURITY #5/#6: valid handle accepted");
+}
+
+/* ================================================================ */
 /* main                                                              */
 /* ================================================================ */
 
@@ -441,6 +699,32 @@ int main(void)
     /* strtoll boundary tests */
     test_strtoll_boundary_values();
     test_strtoll_llong_max_string();
+
+    /* BUG #1: empty --handle= detection */
+    test_handle_opt_empty_is_error();
+    test_handle_opt_valid();
+    test_handle_opt_absent();
+
+    /* BUG #2: max_bytes zero rejection */
+    test_max_bytes_zero_rejected();
+    test_max_bytes_negative_rejected();
+    test_max_bytes_positive_accepted();
+
+    /* BUG #3: source/type/payload length bounds */
+    test_source_length_at_limit();
+    test_type_length_at_limit();
+    test_payload_length_at_limit();
+
+    /* SECURITY #4: event_file path traversal */
+    test_event_file_path_traversal_slash();
+    test_event_file_path_traversal_dotdot();
+    test_event_file_valid();
+    test_event_file_overlength();
+
+    /* SECURITY #5/#6: handle validation */
+    test_handle_path_traversal();
+    test_handle_whitespace();
+    test_handle_valid();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

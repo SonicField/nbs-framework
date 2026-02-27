@@ -26,8 +26,14 @@ set -euo pipefail
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 export NBS_PTY_QUIET=1
 
+# V8 (from remote-edit pattern): Guard usage against $0 not being a file
 usage() {
-    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+    if [[ -f "$0" ]] && [[ -r "$0" ]]; then
+        # Extract only the header comment block, not inline code comments
+        sed -n '2,/^[^#]/{ /^#/p }' "$0" | grep -v '!/bin/bash' | cut -c3-
+    else
+        echo "Usage: nbs-remote-read <server> <remote-path> [--head=N|--tail=N|--lines=M-N|--grep=PAT]" >&2
+    fi
 }
 
 die() {
@@ -45,14 +51,24 @@ fetch_file() {
     local host="$1"
     local remote_path="$2"
     local local_path="$3"
-    local session_name="nbs-read-$$"
+    # V9: Add RANDOM suffix to session name for collision safety
+    local session_name="nbs-read-$$-${RANDOM}"
 
-    "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1
+    # V6: Check pty-session create success and report errors
+    if ! "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1; then
+        echo "Error: failed to create pty-session '$session_name'" >&2
+        return 1
+    fi
     sleep 1
 
-    "$PTY_SESSION" send "$session_name" \
+    # V7: Check pty-session send success
+    if ! "$PTY_SESSION" send "$session_name" \
         "scp $(printf '%q' "${host}:${remote_path}") $(printf '%q' "$local_path") 2>&1; echo FETCH_RC=\$?" \
-        >/dev/null 2>&1
+        >/dev/null 2>&1; then
+        "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+        echo "Error: failed to send scp command to pty-session '$session_name'" >&2
+        return 1
+    fi
 
     local elapsed=0
     local timeout=20
@@ -60,22 +76,27 @@ fetch_file() {
         sleep 1
         elapsed=$((elapsed + 1))
         local output
-        output=$("$PTY_SESSION" read "$session_name" 2>/dev/null) || true
-        if echo "$output" | grep -q "FETCH_RC="; then
-            local rc
-            rc=$(echo "$output" | grep -oP 'FETCH_RC=\K[0-9]+' | tail -1)
+        # V11: Capture stderr along with stdout so errors are visible
+        output=$("$PTY_SESSION" read "$session_name" 2>&1) || true
+        # Use bash regex for stricter matching (same pattern as remote-edit V6)
+        if [[ "$output" =~ FETCH_RC=([0-9]+) ]]; then
+            local rc="${BASH_REMATCH[1]}"
             "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
-            return "${rc:-1}"
+            return "$rc"
         fi
     done
 
-    "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+    # V8 (orphan warning): Warn if session kill fails
+    if ! "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1; then
+        echo "Warning: failed to kill pty-session '$session_name' — may need manual cleanup" >&2
+    fi
     echo "Error: scp timed out after ${timeout}s" >&2
     return 3
 }
 
 case "${1:-}" in
-    help|--help|-h|"") usage; exit 0 ;;
+    help|--help|-h) usage; exit 0 ;;
+    "") if [[ $# -eq 0 ]]; then usage; exit 0; fi ;;
 esac
 
 if [[ $# -lt 2 ]]; then
@@ -85,6 +106,16 @@ fi
 HOST="$1"
 REMOTE_PATH="$2"
 shift 2
+
+# V12: Validate HOST and REMOTE_PATH are non-empty and well-formed
+[[ -n "$HOST" ]] || die 4 "<server> must not be empty"
+[[ -n "$REMOTE_PATH" ]] || die 4 "<remote-path> must not be empty"
+# Hostname: only alphanumeric, dots, hyphens, underscores, @ (for user@host)
+[[ "$HOST" =~ ^[a-zA-Z0-9._@-]+$ ]] || die 4 "Invalid server hostname (only alphanumeric, dots, hyphens, underscores, @ allowed): $HOST"
+# Remote path must be absolute
+[[ "$REMOTE_PATH" =~ ^/ ]] || die 4 "Remote path must be absolute (start with /), got: $REMOTE_PATH"
+# Remote path must contain only safe POSIX path characters
+[[ "$REMOTE_PATH" =~ [^a-zA-Z0-9_./-] ]] && die 4 "Remote path contains disallowed characters: $REMOTE_PATH"
 
 # Parse options
 MODE="cat"
@@ -101,9 +132,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# V2/V3: Validate MODE_ARG for numeric/pattern correctness before use
+case "$MODE" in
+    head|tail)
+        [[ "$MODE_ARG" =~ ^[0-9]+$ ]] || die 4 "--${MODE} requires a positive integer, got: $MODE_ARG"
+        (( MODE_ARG > 0 )) || die 4 "--${MODE} requires a value > 0, got: $MODE_ARG"
+        ;;
+    lines)
+        [[ "$MODE_ARG" =~ ^[0-9]+-[0-9]+$ ]] || die 4 "--lines requires M-N format (e.g. 10-20), got: $MODE_ARG"
+        # V10: Validate start <= end
+        local_start="${MODE_ARG%-*}"
+        local_end="${MODE_ARG#*-}"
+        (( local_start <= local_end )) || die 4 "--lines start must be <= end, got: $MODE_ARG"
+        ;;
+    grep)
+        [[ -n "$MODE_ARG" ]] || die 4 "--grep requires a non-empty pattern"
+        ;;
+esac
+
 # Fetch to temp file
 TMP=$(mktemp)
-trap "rm -f '$TMP'" EXIT
+# V1: Use single-quoted trap to defer expansion to execution time
+trap 'rm -f "$TMP"' EXIT
 
 if ! fetch_file "$HOST" "$REMOTE_PATH" "$TMP"; then
     echo "Error: failed to fetch ${HOST}:${REMOTE_PATH}" >&2
@@ -125,5 +175,17 @@ case "$MODE" in
         END="${MODE_ARG#*-}"
         sed -n "${START},${END}p" "$TMP"
         ;;
-    grep)  grep -n "$MODE_ARG" "$TMP" || true ;;
+    # V4/V5: Use -- to prevent pattern-as-flag injection; distinguish grep exit codes
+    grep)
+        set +e
+        grep -n -- "$MODE_ARG" "$TMP"
+        grep_rc=$?
+        set -e
+        if (( grep_rc == 1 )); then
+            echo "(no matches)" >&2
+        elif (( grep_rc > 1 )); then
+            echo "Error: grep failed on pattern: $MODE_ARG" >&2
+            exit 1
+        fi
+        ;;
 esac

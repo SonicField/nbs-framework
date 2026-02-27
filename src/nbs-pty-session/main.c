@@ -15,11 +15,74 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <ctype.h>
+
+/*
+ * MAX_OPTION_VALUE — Upper bound for integer option values.
+ *
+ * Rationale: This is the ceiling for all --timeout and --scrollback
+ * values. 100000 seconds (~27 hours) is a generous upper bound for any
+ * interactive session timeout. Scrollback of 100000 lines is similarly
+ * extreme but not unreasonable for long-running sessions.
+ */
+#define MAX_OPTION_VALUE 100000
+
+/*
+ * MAX_DISPLAY_LEN — Maximum length for user-provided strings in error
+ * messages. Prevents unbounded output to stderr (Violation M6).
+ */
+#define MAX_DISPLAY_LEN 256
+
+/*
+ * sanitise_for_display — Replace non-printable characters with '?'.
+ *
+ * Preconditions:
+ *   - input != NULL
+ *   - buf != NULL, bufsize > 0
+ *
+ * Postconditions:
+ *   - buf contains NUL-terminated string with only printable ASCII
+ *   - Non-printable characters (including ANSI escapes) replaced with '?'
+ *   - Output truncated to bufsize-1 characters
+ *
+ * Addresses Violation M5 (SECURITY): terminal escape injection via
+ * unsanitised user input in error messages.
+ */
+static void sanitise_for_display(const char *input, char *buf, size_t bufsize)
+{
+    ASSERT_MSG(input != NULL, "sanitise_for_display: input is NULL");
+    ASSERT_MSG(buf != NULL, "sanitise_for_display: buf is NULL");
+    ASSERT_MSG(bufsize > 0, "sanitise_for_display: bufsize is 0");
+
+    size_t i;
+    size_t max = bufsize - 1;
+    for (i = 0; i < max && input[i] != '\0'; i++) {
+        /* Accept printable ASCII only (0x20-0x7E) */
+        if (input[i] >= 0x20 && input[i] <= 0x7E) {
+            buf[i] = input[i];
+        } else {
+            buf[i] = '?';
+        }
+    }
+    buf[i] = '\0';
+}
 
 /*
  * parse_int_option — Extract integer value from "--key=N" option.
  *
- * Returns the integer value, or default_val if parsing fails.
+ * Preconditions:
+ *   - arg != NULL
+ *
+ * Postconditions:
+ *   - If no '=' or empty after '=': returns default_val (not an error;
+ *     the option was present but the value portion was absent)
+ *   - If value is a valid integer in 1..MAX_OPTION_VALUE: returns value
+ *   - If value is invalid (non-numeric, out of range, overflow): returns -1
+ *
+ * Returns -1 as error sentinel. Callers must check for -1 and return
+ * EXIT_BAD_ARGS. (Violation M1: no longer silently returns default.)
  */
 static int parse_int_option(const char *arg, int default_val)
 {
@@ -30,12 +93,31 @@ static int parse_int_option(const char *arg, int default_val)
         return default_val;
     }
 
+    /* Violation M7 fix: check errno for strtol overflow */
+    errno = 0;
     char *endptr;
     long val = strtol(eq + 1, &endptr, 10);
-    if (*endptr != '\0' || val <= 0 || val > 100000) {
-        fprintf(stderr, "Warning: invalid value in '%s', using default %d\n",
-                arg, default_val);
-        return default_val;
+
+    if (errno == ERANGE) {
+        fprintf(stderr, "Error: numeric overflow in '%s': "
+                "value must be an integer in 1..%d\n",
+                arg, MAX_OPTION_VALUE);
+        return -1;
+    }
+
+    if (*endptr != '\0') {
+        fprintf(stderr, "Error: non-numeric value in '%s': "
+                "must be an integer in 1..%d\n",
+                arg, MAX_OPTION_VALUE);
+        return -1;
+    }
+
+    if (val <= 0 || val > MAX_OPTION_VALUE) {
+        /* Violation M9 fix: message includes valid range */
+        fprintf(stderr, "Error: value out of range in '%s': "
+                "must be an integer in 1..%d\n",
+                arg, MAX_OPTION_VALUE);
+        return -1;
     }
 
     return (int)val;
@@ -46,7 +128,10 @@ static int parse_int_option(const char *arg, int default_val)
  *
  * The caller must free the returned buffer.
  * Returns NULL on allocation failure.
+ *
+ * Only used by dispatch_create and dispatch_send (excluded in TEST_BUILD).
  */
+#ifndef TEST_BUILD
 static char *join_args(int argc, char *argv[], int start)
 {
     ASSERT_MSG(argv != NULL, "join_args: argv is NULL");
@@ -90,6 +175,14 @@ static char *join_args(int argc, char *argv[], int start)
 
     return buf;
 }
+#endif /* TEST_BUILD — join_args */
+
+/*
+ * The following dispatch functions (create, send, kill) are only used
+ * by main(), which is excluded in TEST_BUILD. Guard them to avoid
+ * unused-function warnings under -Werror.
+ */
+#ifndef TEST_BUILD
 
 /*
  * dispatch_create — Parse and dispatch "create <name> <command...>"
@@ -156,8 +249,12 @@ static int dispatch_send(int argc, char *argv[])
     return rc;
 }
 
+#endif /* TEST_BUILD — dispatch_create, dispatch_send */
+
 /*
  * dispatch_read — Parse and dispatch "read <name> [options]"
+ *
+ * Violation M3 fix: unrecognised options now rejected with EXIT_BAD_ARGS.
  */
 static int dispatch_read(int argc, char *argv[])
 {
@@ -178,10 +275,23 @@ static int dispatch_read(int argc, char *argv[])
         if (strncmp(argv[i], "--scrollback=", 13) == 0 ||
             strncmp(argv[i], "--last=", 7) == 0) {
             scrollback = parse_int_option(argv[i], scrollback);
+            if (scrollback == -1) {
+                return EXIT_BAD_ARGS;
+            }
         } else if (strcmp(argv[i], "--wait") == 0) {
             wait_mode = 1;
         } else if (strncmp(argv[i], "--timeout=", 10) == 0) {
             timeout = parse_int_option(argv[i], timeout);
+            if (timeout == -1) {
+                return EXIT_BAD_ARGS;
+            }
+        } else {
+            /* Violation M3 fix: reject unrecognised options */
+            char safe_opt[MAX_DISPLAY_LEN];
+            sanitise_for_display(argv[i], safe_opt, sizeof(safe_opt));
+            fprintf(stderr, "Error: unrecognised option '%s'\n", safe_opt);
+            fprintf(stderr, "Valid options: --scrollback=N, --last=N, --wait, --timeout=N\n");
+            return EXIT_BAD_ARGS;
         }
     }
 
@@ -190,6 +300,8 @@ static int dispatch_read(int argc, char *argv[])
 
 /*
  * dispatch_wait — Parse and dispatch "wait <name> <pattern> [--timeout=N]"
+ *
+ * Violation M4 fix: unrecognised options now rejected with EXIT_BAD_ARGS.
  */
 static int dispatch_wait(int argc, char *argv[])
 {
@@ -208,12 +320,23 @@ static int dispatch_wait(int argc, char *argv[])
     for (int i = 4; i < argc; i++) {
         if (strncmp(argv[i], "--timeout=", 10) == 0) {
             timeout = parse_int_option(argv[i], timeout);
+            if (timeout == -1) {
+                return EXIT_BAD_ARGS;
+            }
+        } else {
+            /* Violation M4 fix: reject unrecognised options */
+            char safe_opt[MAX_DISPLAY_LEN];
+            sanitise_for_display(argv[i], safe_opt, sizeof(safe_opt));
+            fprintf(stderr, "Error: unrecognised option '%s'\n", safe_opt);
+            fprintf(stderr, "Valid options: --timeout=N\n");
+            return EXIT_BAD_ARGS;
         }
     }
 
     return cmd_wait(name, pattern, timeout);
 }
 
+#ifndef TEST_BUILD
 /*
  * dispatch_kill — Parse and dispatch "kill <name>"
  */
@@ -229,7 +352,9 @@ static int dispatch_kill(int argc, char *argv[])
 
     return cmd_kill(argv[2]);
 }
+#endif /* TEST_BUILD — dispatch_kill */
 
+#ifndef TEST_BUILD
 int main(int argc, char *argv[])
 {
     ASSERT_MSG(argv != NULL, "main: argv is NULL");
@@ -257,8 +382,42 @@ int main(int argc, char *argv[])
                strcmp(cmd, "-h") == 0) {
         return cmd_help();
     } else {
-        fprintf(stderr, "Unknown command: %s\n", cmd);
+        /*
+         * Violation M5 fix: sanitise cmd before printing to prevent
+         * terminal escape injection.
+         * Violation M6 fix: truncate to MAX_DISPLAY_LEN.
+         */
+        char safe_cmd[MAX_DISPLAY_LEN];
+        sanitise_for_display(cmd, safe_cmd, sizeof(safe_cmd));
+        fprintf(stderr, "Unknown command: %s\n", safe_cmd);
         fprintf(stderr, "Run 'pty-session help' for usage\n");
         return EXIT_BAD_ARGS;
     }
 }
+#endif /* TEST_BUILD */
+
+/* ── Test-visible wrappers ────────────────────────────────────────── */
+
+#ifdef TEST_BUILD
+
+int test_parse_int_option(const char *arg, int default_val)
+{
+    return parse_int_option(arg, default_val);
+}
+
+void test_sanitise_for_display(const char *input, char *buf, size_t bufsize)
+{
+    sanitise_for_display(input, buf, bufsize);
+}
+
+int test_dispatch_read(int argc, char *argv[])
+{
+    return dispatch_read(argc, argv);
+}
+
+int test_dispatch_wait(int argc, char *argv[])
+{
+    return dispatch_wait(argc, argv);
+}
+
+#endif /* TEST_BUILD */

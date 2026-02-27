@@ -15,6 +15,10 @@
  * POSIX advisory lock via fcntl F_SETLKW. Advisory locks are cooperative;
  * all processes must use this function for exclusion to be effective.
  *
+ * WARNING: Advisory lock correctness is an unverifiable assumption.
+ * There is no mechanism to detect or prevent direct file access
+ * bypassing this lock. All chat file accessors MUST use this API.
+ *
  * Preconditions:
  *   - chat_path != NULL
  *   - strlen(chat_path) + 6 <= MAX_PATH_LEN
