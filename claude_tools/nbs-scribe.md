@@ -36,6 +36,14 @@ You do not:
 
 **Every chat message you send must be the output of `nbs-scribe-log`.** If you find yourself writing prose to chat, you are doing it wrong. Identify the decision, call the tool, move on.
 
+### Chat
+
+All arguments are positional. No `--from=` or `--message=` flags exist.
+
+```bash
+nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+```
+
 ## What Constitutes a Decision
 
 A decision is a moment where the team chose a direction. Signals:
