@@ -2,8 +2,8 @@
 
 **Date:** 26 February 2026
 **Author:** generalist
-**Source:** build-host branch `aarch64-jit-generators` at `41c82288`
-**Script:** `deopt_stats_measure.py` on build-host
+**Source:** aarch64 dev server, branch `aarch64-jit-generators` at `41c82288`
+**Script:** `deopt_stats_measure.py` on aarch64 dev server
 **Requested by:** Alex (20:15:18Z): "I believe we can get the jit as fast as the adaptive interpreter for all benchmarks — we are just missing optimisations or hitting deopts which are causing jit recompiles."
 
 ---
@@ -220,7 +220,7 @@ The deopt problem is **real but narrow** (4/26 = 15%). The structural problem is
 
 ## Raw Data
 
-Script: `deopt_stats_measure.py` on build-host at `/data/users/alexturner/cinderx_dev/cinderx/`
-Log: `/tmp/deopt_classification.log` on build-host
+Script: `deopt_stats_measure.py` on aarch64 dev server
+Log: `/tmp/deopt_classification.log` on aarch64 dev server
 Branch: `aarch64-jit-generators` at `41c82288`
 Build: includes Step 6 cold block marking + JIT default-on (`compile_after_n_calls{0}`, overridden by `cinderjit.auto()` to 1000)

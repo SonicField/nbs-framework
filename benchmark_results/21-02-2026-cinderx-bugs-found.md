@@ -1,6 +1,6 @@
 # Pre-Existing CinderX JIT Bugs — 21–26 February 2026
 
-Found during speculative inlining benchmark testing on build-host (aarch64, Python 3.12.12+meta).
+Found during speculative inlining benchmark testing on aarch64 dev server (aarch64, Python 3.12).
 
 All bugs are pre-existing in the CinderX JIT infrastructure — none are caused by our speculative inlining commit (725004da). Confirmed via systematic falsification.
 
@@ -231,7 +231,7 @@ python3 -c "import cinderx"  # SIGSEGV
 
 **Proof:** `ls -la cinderx/PythonLib/_cinderx.cpython-312-aarch64-linux-gnu.so` shows `d` (directory) instead of `-` (file). Removing the corrupt directory and rebuilding restores correct behaviour.
 
-**Fix:** Applied by supervisor on build-host — changed line 378 from:
+**Fix:** Applied by supervisor on aarch64 dev server — changed line 378 from:
 ```python
 os.makedirs(extension_dir, exist_ok=True)
 ```
@@ -374,7 +374,7 @@ mid-deopt mutation is downstream — possibly in CPython's eval loop when proces
 the reified frame with modified `co_flags`. Academically interesting but does not
 change the fix — the lazy-flag approach resolves it regardless of exact crash site.
 
-**Key architectural findings (verified on build-host
+**Key architectural findings (verified on aarch64 dev server):**
 - `CodeRuntime*` is per-PyCodeObject (per-CompilationKey), NOT per-function-object.
   Counter accumulates correctly across function instantiations.
 - `CI_CO_SUPPRESS_JIT` (0x40000000) already checked by `reoptFunc()` (pyjit.cpp:798)
