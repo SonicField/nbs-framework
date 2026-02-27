@@ -1131,19 +1131,25 @@ int main(int argc, char **argv) {
                     snprintf(g_filter_handle, sizeof(g_filter_handle), "%s", target);
                     printf("  %sFiltering: showing only messages from %s%s\n",
                            DIM, g_filter_handle, RESET);
-                    /* Redisplay filtered history */
+                    /* Redisplay last 50 matching messages (most recent first, then reverse) */
                     chat_state_t fstate;
                     if (chat_read(g_chat_file, &fstate) == 0) {
-                        int shown = 0;
-                        for (int i = 0; i < fstate.message_count && shown < 50; i++) {
+                        /* Collect indices of matching messages */
+                        int matches[50];
+                        int match_count = 0;
+                        for (int i = fstate.message_count - 1; i >= 0 && match_count < 50; i--) {
                             if (strcmp(fstate.messages[i].handle, g_filter_handle) == 0) {
-                                format_message(fstate.messages[i].handle,
-                                              fstate.messages[i].content, g_handle,
-                                              fstate.messages[i].timestamp);
-                                shown++;
+                                matches[match_count++] = i;
                             }
                         }
-                        if (shown == 0) {
+                        /* Display in chronological order (reverse the collected indices) */
+                        for (int j = match_count - 1; j >= 0; j--) {
+                            int i = matches[j];
+                            format_message(fstate.messages[i].handle,
+                                          fstate.messages[i].content, g_handle,
+                                          fstate.messages[i].timestamp);
+                        }
+                        if (match_count == 0) {
                             printf("  %sNo messages from '%s'%s\n",
                                    DIM, g_filter_handle, RESET);
                         }
@@ -1171,9 +1177,21 @@ int main(int argc, char **argv) {
             /* /unfilter — return to showing all messages */
             if (strcmp(edit.buf, "/unfilter") == 0) {
                 if (g_filter_handle[0] != '\0') {
-                    printf("  %sFilter cleared — showing all messages%s\n",
-                           DIM, RESET);
                     g_filter_handle[0] = '\0';
+                    printf("  %sFilter cleared — showing last 20 messages%s\n",
+                           DIM, RESET);
+                    /* Redisplay recent messages so the screen makes sense */
+                    chat_state_t ustate;
+                    if (chat_read(g_chat_file, &ustate) == 0) {
+                        int start = ustate.message_count - 20;
+                        if (start < 0) start = 0;
+                        for (int i = start; i < ustate.message_count; i++) {
+                            format_message(ustate.messages[i].handle,
+                                          ustate.messages[i].content, g_handle,
+                                          ustate.messages[i].timestamp);
+                        }
+                        chat_state_free(&ustate);
+                    }
                 } else {
                     printf("  %sNo filter active%s\n", DIM, RESET);
                 }
