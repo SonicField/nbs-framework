@@ -1,0 +1,93 @@
+#!/bin/bash
+# nbs-scribe-query: Search the scribe decision log
+#
+# Usage:
+#   nbs-scribe-query <log-file> <pattern>            Search decisions
+#   nbs-scribe-query <log-file> --id=D-<timestamp>   Look up a specific decision
+#   nbs-scribe-query <log-file> --last=N             Show last N decisions
+#   nbs-scribe-query <log-file> --by=<handle>        Decisions involving handle
+#   nbs-scribe-query <log-file> --tag=<risk-tag>     Decisions with risk tag
+#   nbs-scribe-query <log-file> --count              Count total decisions
+#   nbs-scribe-query <log-file> --superseded         Show all superseded decisions
+#
+# Exit codes:
+#   0 - Success (matches found)
+#   1 - No matches
+#   4 - Invalid arguments
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+    exit 4
+fi
+
+LOG="$1"
+shift
+
+if [[ ! -f "$LOG" ]]; then
+    echo "Error: log file not found: $LOG" >&2
+    exit 4
+fi
+
+case "${1:---help}" in
+    --help|-h)
+        grep '^#' "$0" | grep -v '!/bin/bash' | cut -c3-
+        exit 0
+        ;;
+    --count)
+        grep -c '^### D-' "$LOG"
+        exit 0
+        ;;
+    --last=*)
+        N="${1#--last=}"
+        # Extract last N decision blocks (each starts with ### D-)
+        grep -n '^### D-' "$LOG" | tail -"$N" | while IFS=: read -r line_num _rest; do
+            sed -n "${line_num},/^---$/p" "$LOG" | head -10
+            echo ""
+        done
+        exit 0
+        ;;
+    --id=*)
+        ID="${1#--id=}"
+        # Find the decision and print its full block
+        LINE=$(grep -n "^### ${ID}" "$LOG" | head -1 | cut -d: -f1)
+        if [[ -z "$LINE" ]]; then
+            echo "Decision not found: $ID" >&2
+            exit 1
+        fi
+        sed -n "${LINE},/^---$/p" "$LOG" | head -12
+        exit 0
+        ;;
+    --by=*)
+        HANDLE="${1#--by=}"
+        grep -B1 -A7 "Participants:.*${HANDLE}" "$LOG" | grep -A8 '^### D-'
+        exit $?
+        ;;
+    --tag=*)
+        TAG="${1#--tag=}"
+        grep -B3 -A5 "Risk tags:.*${TAG}" "$LOG" | grep -A8 '^### D-'
+        exit $?
+        ;;
+    --superseded)
+        grep -A8 '\[SUPERSEDES' "$LOG"
+        exit $?
+        ;;
+    -*)
+        echo "Unknown option: $1" >&2
+        exit 4
+        ;;
+    *)
+        # Free-text search — show matching decision blocks
+        PATTERN="$1"
+        grep -n "$PATTERN" "$LOG" | while IFS=: read -r line_num _rest; do
+            # Walk backwards to find the decision header
+            HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1)
+            if [[ -n "$HEADER_LINE" ]]; then
+                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
+                echo ""
+            fi
+        done | awk '!seen[$0]++' # dedup
+        exit 0
+        ;;
+esac
