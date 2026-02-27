@@ -2,23 +2,28 @@
 # nbs-scribe-query: Search the scribe decision log
 #
 # Usage:
-#   nbs-scribe-query <log-file> <pattern>            Search decisions (literal text)
-#   nbs-scribe-query <log-file> <pattern> --regex    Search with regex pattern
-#   nbs-scribe-query <log-file> --id=D-<timestamp>   Look up a specific decision
-#   nbs-scribe-query <log-file> --last=N             Show last N decisions
-#   nbs-scribe-query <log-file> --by=<handle>        Decisions involving handle
-#   nbs-scribe-query <log-file> --tag=<risk-tag>     Decisions with risk tag
-#   nbs-scribe-query <log-file> --count              Count total decisions
-#   nbs-scribe-query <log-file> --superseded         Show all superseded decisions
+#   nbs-scribe-query --chat=<chat-file> <pattern>    Search decisions (literal text)
+#   nbs-scribe-query --chat=<chat-file> <pattern> --regex  Search with ERE regex
+#   nbs-scribe-query --chat=<chat-file> --id=D-<ts>  Look up a specific decision
+#   nbs-scribe-query --chat=<chat-file> --last=N     Show last N decisions
+#   nbs-scribe-query --chat=<chat-file> --by=<handle>  Decisions involving handle
+#   nbs-scribe-query --chat=<chat-file> --tag=<tag>  Decisions with risk tag
+#   nbs-scribe-query --chat=<chat-file> --count      Count total decisions
+#   nbs-scribe-query --chat=<chat-file> --superseded Show all corrections
 #
-# Search is literal (fixed string) by default. Use --regex for regex patterns.
-# This prevents accidental matches from characters like . * + in search terms.
+# The log file is derived from the chat file name:
+#   .nbs/chat/live.chat → .nbs/scribe/live-log.md
+#   .nbs/chat/work.chat → .nbs/scribe/work-log.md
+#
+# Search is literal (fixed string) by default. Use --regex for grep
+# extended regex (ERE). Perl regex (\s, \d, lookahead) is not supported.
+# ERE supports: . * + ? | () [] {n,m} — but not \s \d \w.
 #
 # Examples:
-#   nbs-scribe-query .nbs/scribe/live-log.md benchmark     Literal search
-#   nbs-scribe-query .nbs/scribe/live-log.md 'deopt.*crash' --regex  Regex
-#   nbs-scribe-query .nbs/scribe/live-log.md --last=5       Last 5 decisions
-#   nbs-scribe-query .nbs/scribe/live-log.md --by=theologian Her decisions
+#   nbs-scribe-query --chat=.nbs/chat/live.chat benchmark
+#   nbs-scribe-query --chat=.nbs/chat/live.chat --last=5
+#   nbs-scribe-query --chat=.nbs/chat/live.chat --by=theologian
+#   nbs-scribe-query --chat=.nbs/chat/live.chat 'deopt.*crash' --regex
 #
 # Exit codes:
 #   0 - Success (matches found)
@@ -27,39 +32,44 @@
 
 set -euo pipefail
 
-# Help check before log file validation
-if [[ $# -ge 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+# Help check first
+if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
     sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
-    exit 0
+    [[ $# -eq 0 ]] && exit 4 || exit 0
 fi
 
-if [[ $# -lt 1 ]]; then
-    sed -n '2,/^$/p' "$0" | grep '^#' | cut -c3-
-    exit 4
-fi
-
-LOG="$1"
-shift
-
-if [[ ! -f "$LOG" ]]; then
-    echo "Error: log file not found: $LOG" >&2
-    exit 4
-fi
-
-# Check for --regex flag anywhere in remaining args
+# Extract flags from args
 USE_REGEX=false
+CHAT_FILE=""
 ARGS=()
 for arg in "$@"; do
-    if [[ "$arg" == "--regex" ]]; then
-        USE_REGEX=true
-    else
-        ARGS+=("$arg")
-    fi
+    case "$arg" in
+        --regex) USE_REGEX=true ;;
+        --chat=*) CHAT_FILE="${arg#--chat=}" ;;
+        *) ARGS+=("$arg") ;;
+    esac
 done
-# Restore positional args without --regex
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
-# Select grep mode: -F (fixed/literal) or default (regex)
+if [[ -z "$CHAT_FILE" ]]; then
+    echo "Error: --chat=<chat-file> is required" >&2
+    echo "Example: nbs-scribe-query --chat=.nbs/chat/live.chat benchmark" >&2
+    exit 4
+fi
+
+# Derive log path from chat file name
+# .nbs/chat/live.chat → .nbs/scribe/live-log.md
+CHAT_DIR=$(dirname "$CHAT_FILE")
+CHAT_BASE=$(basename "$CHAT_FILE" .chat)
+SCRIBE_DIR="${CHAT_DIR}/../scribe"
+LOG="${SCRIBE_DIR}/${CHAT_BASE}-log.md"
+
+if [[ ! -f "$LOG" ]]; then
+    echo "Error: scribe log not found: $LOG (derived from $CHAT_FILE)" >&2
+    exit 4
+fi
+
+# Select grep mode
 if [[ "$USE_REGEX" == true ]]; then
     GREP_MODE=""
 else
@@ -72,7 +82,8 @@ case "${1:---help}" in
         exit 0
         ;;
     --count)
-        grep -c '^### D-' "$LOG"
+        c=$(grep -c '^### D-' "$LOG" 2>/dev/null || true)
+        echo "${c:-0}"
         exit 0
         ;;
     --last=*)
@@ -85,7 +96,7 @@ case "${1:---help}" in
         ;;
     --id=*)
         ID="${1#--id=}"
-        LINE=$(grep -n "^### ${ID}" "$LOG" | head -1 | cut -d: -f1)
+        LINE=$(grep -n "^### ${ID}" "$LOG" 2>/dev/null | head -1 | cut -d: -f1 || true)
         if [[ -z "$LINE" ]]; then
             echo "Decision not found: $ID" >&2
             exit 1
@@ -95,8 +106,7 @@ case "${1:---help}" in
         ;;
     --by=*)
         HANDLE="${1#--by=}"
-        # Find lines containing "Participants:" AND the handle, show the decision block
-        grep -n "Participants:" "$LOG" | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
+        grep -n "Participants:" "$LOG" 2>/dev/null | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
             HEADER_LINE=$(head -"$pline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
@@ -107,7 +117,7 @@ case "${1:---help}" in
         ;;
     --tag=*)
         TAG="${1#--tag=}"
-        grep -n "Risk tags:" "$LOG" | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
+        grep -n "Risk tags:" "$LOG" 2>/dev/null | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
             HEADER_LINE=$(head -"$tline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
@@ -117,18 +127,16 @@ case "${1:---help}" in
         exit 0
         ;;
     --superseded)
-        grep -A8 '\[SUPERSEDES' "$LOG"
-        exit $?
+        grep -A8 '\[SUPERSEDES' "$LOG" 2>/dev/null || true
+        exit 0
         ;;
     -*)
         echo "Unknown option: $1" >&2
         exit 4
         ;;
     *)
-        # Free-text search — show matching decision blocks
         PATTERN="$1"
-        grep -n $GREP_MODE "$PATTERN" "$LOG" | while IFS=: read -r line_num _rest; do
-            # Find the decision header above this match (may be empty if match is in preamble)
+        grep -n $GREP_MODE "$PATTERN" "$LOG" 2>/dev/null | while IFS=: read -r line_num _rest; do
             HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
             if [[ -n "$HEADER_LINE" ]]; then
                 sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10

@@ -34,11 +34,11 @@ Use this table to select the right tool for each situation. Do not use raw comma
 | Preview a delete | `nbs-chat delete <file> --after=<time> --dry-run` | Guessing what will be deleted |
 | Wait for a reply | Do nothing — you will be notified | `sleep N && nbs-chat read`, polling loops |
 | Ack all bus events | `nbs-bus ack-all .nbs/events/` | Manual file operations on events/ |
-| Search decision log | `nbs-scribe-query <log> <pattern>` | `grep` on the raw log file |
-| Look up a decision | `nbs-scribe-query <log> --id=D-<ts>` | Manual scrollback through log |
-| Last N decisions | `nbs-scribe-query <log> --last=5` | `tail` on the log file |
-| Decisions by handle | `nbs-scribe-query <log> --by=<handle>` | `grep` with manual context |
-| Count decisions | `nbs-scribe-query <log> --count` | `grep -c` on the log file |
+| Search decision log | `nbs-scribe-query --chat=<file> <pattern>` | `grep` on the raw log file |
+| Look up a decision | `nbs-scribe-query --chat=<file> --id=D-<ts>` | Manual scrollback through log |
+| Last N decisions | `nbs-scribe-query --chat=<file> --last=5` | `tail` on the log file |
+| Decisions by handle | `nbs-scribe-query --chat=<file> --by=<handle>` | `grep` with manual context |
+| Count decisions | `nbs-scribe-query --chat=<file> --count` | `grep -c` on the log file |
 | Edit a remote file | `nbs-remote-edit pull/push <host> <path>` | `sed`, heredocs, Python str.replace via pty-session |
 | Read a remote file | `nbs-remote-read <host> <path> [--head=N]` | `pty-session send <ses> 'cat file' && sleep && pty-session read` |
 | Run a remote build | `nbs-remote-build <ses> '<cmd>' --chat=...` | `pty-session send <ses> 'make' && sleep 120` |

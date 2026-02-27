@@ -24,8 +24,13 @@ check() {
 
 next_test() { echo ""; echo "$1"; }
 
-# Create a test log
-LOG="$TEST_DIR/test-log.md"
+# Create test directory structure matching .nbs layout
+mkdir -p "$TEST_DIR/.nbs/chat"
+mkdir -p "$TEST_DIR/.nbs/scribe"
+CHAT="$TEST_DIR/.nbs/chat/test.chat"
+LOG="$TEST_DIR/.nbs/scribe/test-log.md"
+touch "$CHAT"  # chat file just needs to exist for derivation
+
 cat > "$LOG" << 'LOGEOF'
 # Decision Log
 
@@ -80,69 +85,69 @@ check "Exit code is 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
 
 next_test "3. --help with log file also works"
 RC=0
-"$QUERY" "$LOG" --help >/dev/null 2>&1 || RC=$?
+"$QUERY" --chat="$CHAT" --help >/dev/null 2>&1 || RC=$?
 check "Exit code is 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
 
 # Count
 next_test "4. --count returns 3"
-COUNT=$("$QUERY" "$LOG" --count)
+COUNT=$("$QUERY" --chat="$CHAT" --count)
 check "Count is 3" "$( [[ "$COUNT" -eq 3 ]] && echo pass || echo fail )"
 
 # --last
 next_test "5. --last=1 shows only the last decision"
-OUTPUT=$("$QUERY" "$LOG" --last=1)
+OUTPUT=$("$QUERY" --chat="$CHAT" --last=1)
 check "Contains file-based" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
 check "Does not contain recursive" "$( echo "$OUTPUT" | grep -qF 'recursive descent' && echo fail || echo pass )"
 
 next_test "6. --last=2 shows two decisions"
-OUTPUT=$("$QUERY" "$LOG" --last=2)
+OUTPUT=$("$QUERY" --chat="$CHAT" --last=2)
 check "Contains Pratt" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
 check "Contains file-based" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
 
 # --id
 next_test "7. --id lookup"
-OUTPUT=$("$QUERY" "$LOG" --id=D-1000000002)
+OUTPUT=$("$QUERY" --chat="$CHAT" --id=D-1000000002)
 check "Found Pratt decision" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
 check "Shows rationale" "$( echo "$OUTPUT" | grep -qF 'operator precedence' && echo pass || echo fail )"
 
 next_test "8. --id not found exits 1"
 RC=0
-"$QUERY" "$LOG" --id=D-9999999999 2>/dev/null || RC=$?
+"$QUERY" --chat="$CHAT" --id=D-9999999999 2>/dev/null || RC=$?
 check "Exit code is 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
 
 # --by
 next_test "9. --by=theologian"
-OUTPUT=$("$QUERY" "$LOG" --by=theologian 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" --by=theologian 2>/dev/null) || true
 check "Contains theologian's decision" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
 
 # --tag
 next_test "10. --tag=perf-risk"
-OUTPUT=$("$QUERY" "$LOG" --tag=perf-risk 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" --tag=perf-risk 2>/dev/null) || true
 check "Contains perf-risk decision" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
 
 # --superseded
 next_test "11. --superseded shows corrections"
-OUTPUT=$("$QUERY" "$LOG" --superseded 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" --superseded 2>/dev/null) || true
 check "Contains SUPERSEDES" "$( echo "$OUTPUT" | grep -qF 'SUPERSEDES D-1000000001' && echo pass || echo fail )"
 
 # Free-text literal search
 next_test "12. Literal search for 'LL(1)'"
-OUTPUT=$("$QUERY" "$LOG" "LL(1)" 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" "LL(1)" 2>/dev/null) || true
 check "Found LL(1) match" "$( echo "$OUTPUT" | grep -qF 'recursive descent' && echo pass || echo fail )"
 
 next_test "13. Literal search — dot not treated as regex"
-OUTPUT=$("$QUERY" "$LOG" "bus.c" 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" "bus.c" 2>/dev/null) || true
 check "Found bus.c" "$( echo "$OUTPUT" | grep -qF 'file-based events' && echo pass || echo fail )"
 
 # Bug 2: preamble match doesn't crash
 next_test "14. Search term in preamble doesn't crash"
-OUTPUT=$("$QUERY" "$LOG" "Decision Log" 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" "Decision Log" 2>/dev/null) || true
 RC=$?
 check "Exits without error" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
 
 # Regex mode
 next_test "15. --regex search"
-OUTPUT=$("$QUERY" "$LOG" 'Pratt.*parser' --regex 2>/dev/null) || true
+OUTPUT=$("$QUERY" --chat="$CHAT" 'Pratt.*parser' --regex 2>/dev/null) || true
 check "Regex found match" "$( echo "$OUTPUT" | grep -qF 'Pratt parser' && echo pass || echo fail )"
 
 # No args
@@ -151,16 +156,19 @@ RC=0
 "$QUERY" 2>/dev/null || RC=$?
 check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
 
-# Missing log file
-next_test "17. Missing log file exits 4"
+# Missing log file (chat exists but derived log doesn't)
+next_test "17. Missing scribe log exits 4"
 RC=0
-"$QUERY" /nonexistent/log.md --count 2>/dev/null || RC=$?
+FAKE_CHAT="$TEST_DIR/.nbs/chat/nonexistent.chat"
+touch "$FAKE_CHAT"
+"$QUERY" --chat="$FAKE_CHAT" --count 2>/dev/null || RC=$?
 check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
+rm -f "$FAKE_CHAT"
 
 # Unknown option
 next_test "18. Unknown option exits 4"
 RC=0
-"$QUERY" "$LOG" --bogus 2>/dev/null || RC=$?
+"$QUERY" --chat="$CHAT" --bogus 2>/dev/null || RC=$?
 check "Exit code is 4" "$( [[ $RC -eq 4 ]] && echo pass || echo fail )"
 
 echo ""
