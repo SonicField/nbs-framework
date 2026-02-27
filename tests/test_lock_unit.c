@@ -14,8 +14,9 @@
  *   10. Postcondition: acquire returns fd >= 0 (violation 3 hardening)
  *   11. Unlock failure on bad fd causes abort (violation 4 bug fix)
  *   12. Close failure on bad fd causes abort (violation 7 hardening)
- *   13. Logging before blocking F_SETLKW (violation 2 hardening)
- *   14. F_GETLK postcondition check runs after release (violation 5)
+ *   13. Uncontested acquire produces no stderr log
+ *   14. Contended acquire logs to stderr
+ *   15. F_GETLK postcondition check runs after release (violation 5)
  *
  * Build (from src/nbs-chat/ via Makefile):
  *   make test-unit
@@ -375,12 +376,12 @@ static void test_release_valid_fd_does_not_abort(void) {
     TEST_PASS("release on valid fd does not abort (no false positive)");
 }
 
-/* --- Violation 2 (HARDENING): Logging before blocking F_SETLKW ---
+/* --- Lock logging: no log on uncontested acquire, log only on contention ---
  *
- * We verify that chat_lock_acquire writes an "info:" log to stderr before
- * blocking. We capture the child's stderr and check for the log line. */
+ * The lock uses F_SETLK (non-blocking) first. If it succeeds, no log.
+ * Only if the lock is contended does it log and fall back to F_SETLKW. */
 
-static void test_acquire_logs_before_blocking(void) {
+static void test_uncontested_acquire_no_log(void) {
     int pipefd[2];
     int ret = pipe(pipefd);
     TEST_ASSERT(ret == 0, "pipe() failed: %s", strerror(errno));
@@ -395,12 +396,11 @@ static void test_acquire_logs_before_blocking(void) {
         close(pipefd[1]);
 
         char path[256];
-        snprintf(path, sizeof(path), "/tmp/test_lock_log_%d", getpid());
+        snprintf(path, sizeof(path), "/tmp/test_lock_quiet_%d", getpid());
         int fd = chat_lock_acquire(path);
         if (fd >= 0) {
             chat_lock_release(fd);
         }
-        /* Clean up */
         char lock_path[MAX_PATH_LEN];
         snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
         unlink(lock_path);
@@ -422,11 +422,68 @@ static void test_acquire_logs_before_blocking(void) {
     int status = 0;
     waitpid(pid, &status, 0);
 
-    /* Verify the log line is present */
-    TEST_ASSERT(strstr(buf, "info: chat_lock_acquire: waiting for lock") != NULL,
-                "expected 'info: chat_lock_acquire: waiting for lock' in stderr, got: %s", buf);
+    /* Uncontested acquire should produce NO "info:" log */
+    TEST_ASSERT(strstr(buf, "info:") == NULL,
+                "uncontested acquire should not log, but got: %s", buf);
 
-    TEST_PASS("acquire logs before blocking F_SETLKW");
+    TEST_PASS("uncontested acquire produces no stderr log");
+}
+
+static void test_contended_acquire_logs(void) {
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/test_lock_contend_%d", getpid());
+
+    /* Parent acquires lock first */
+    int parent_fd = chat_lock_acquire(path);
+    TEST_ASSERT(parent_fd >= 0, "parent acquire failed: %d", parent_fd);
+
+    int pipefd[2];
+    int ret = pipe(pipefd);
+    TEST_ASSERT(ret == 0, "pipe() failed: %s", strerror(errno));
+
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0, "fork() failed: %s", strerror(errno));
+
+    if (pid == 0) {
+        /* Child: redirect stderr to pipe, try to acquire (will contend) */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+
+        int fd = chat_lock_acquire(path);
+        if (fd >= 0) {
+            chat_lock_release(fd);
+        }
+        _exit(0);
+    }
+
+    /* Parent: hold lock briefly, then release so child can proceed */
+    usleep(100000); /* 100ms — child should be contending by now */
+    chat_lock_release(parent_fd);
+
+    /* Read child's stderr */
+    close(pipefd[1]);
+    char buf[4096];
+    ssize_t n = 0;
+    ssize_t total = 0;
+    while ((n = read(pipefd[0], buf + total, sizeof(buf) - (size_t)total - 1)) > 0) {
+        total += n;
+    }
+    buf[total] = '\0';
+    close(pipefd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    /* Contended acquire SHOULD produce the log */
+    TEST_ASSERT(strstr(buf, "info: chat_lock_acquire: lock contended") != NULL,
+                "contended acquire should log, but got: '%s'", buf);
+
+    char lock_path[MAX_PATH_LEN];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    unlink(lock_path);
+
+    TEST_PASS("contended acquire logs to stderr");
 }
 
 /* --- Violation 5 (HARDENING): F_GETLK postcondition check runs ---
@@ -575,7 +632,8 @@ int main(void) {
     test_postcondition_fd_valid();
     test_release_closed_fd_aborts();
     test_release_valid_fd_does_not_abort();
-    test_acquire_logs_before_blocking();
+    test_uncontested_acquire_no_log();
+    test_contended_acquire_logs();
     test_postcondition_check_runs();
     test_null_path_aborts();
     test_negative_fd_aborts();
