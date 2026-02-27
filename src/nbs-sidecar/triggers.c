@@ -455,8 +455,12 @@ int trigger_standup_check(const char *registry_path, const char *nbs_root,
             "something, quote it with timestamp. No quote = no evidence.";
     }
 
-    /* HARDENING #18 fix: use handle as sender identity */
-    chat_client_send(chat_path, handle, standup_msg);
+    /* Post standups as "sidecar", not as the agent's handle.
+     * Using the agent's handle makes it look like the agent wrote the
+     * standup, which confuses both the agent (sees messages it didn't
+     * write under its own name) and other agents (read the backlog
+     * and treat it as a coordinator directive to emulate). */
+    chat_client_send(chat_path, "sidecar", standup_msg);
 
     /* Update shared timestamp atomically */
     char ts_tmp[4096 + 24];
