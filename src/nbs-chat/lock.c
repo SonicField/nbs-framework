@@ -37,21 +37,25 @@ int chat_lock_acquire(const char *chat_path) {
         .l_len = 0, /* Lock entire file */
     };
 
-    /* Block until lock is acquired.
-     * F_SETLKW blocks indefinitely — this is intentional. Lock contention
-     * is expected to be brief (held only for read-modify-write cycles).
-     * A timeout is not used because POSIX fcntl does not support one, and
-     * alarm-based interruption would complicate error handling for minimal
-     * benefit given the expected short hold times.
-     *
-     * Log before blocking so that stalls are diagnosable. */
-    fprintf(stderr, "info: chat_lock_acquire: waiting for lock on %s (pid %d)\n",
-            lock_path, (int)getpid());
-    if (fcntl(fd, F_SETLKW, &fl) < 0) {
-        fprintf(stderr, "warning: chat_lock_acquire: fcntl lock failed for %s: %s\n",
-                lock_path, strerror(errno));
-        close(fd);
-        return -1;
+    /* Try non-blocking first. Only log and block if the lock is contended.
+     * This avoids spamming stderr on every uncontested lock acquisition
+     * while still making genuine contention visible for diagnosis. */
+    if (fcntl(fd, F_SETLK, &fl) < 0) {
+        if (errno != EACCES && errno != EAGAIN) {
+            fprintf(stderr, "warning: chat_lock_acquire: fcntl lock failed for %s: %s\n",
+                    lock_path, strerror(errno));
+            close(fd);
+            return -1;
+        }
+        /* Lock is contended — log and wait */
+        fprintf(stderr, "info: chat_lock_acquire: lock contended on %s (pid %d), waiting\n",
+                lock_path, (int)getpid());
+        if (fcntl(fd, F_SETLKW, &fl) < 0) {
+            fprintf(stderr, "warning: chat_lock_acquire: fcntl blocking lock failed for %s: %s\n",
+                    lock_path, strerror(errno));
+            close(fd);
+            return -1;
+        }
     }
 
     /* Postcondition: fd is valid and lock is held */
