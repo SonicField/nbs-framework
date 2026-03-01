@@ -312,6 +312,7 @@ if [[ -n "${TMUX:-}" ]]; then
     if [[ "$POLL_DISABLE" != "1" ]]; then
         "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
+        disown "$SIDECAR_PID"
         # V1.7: Postcondition — verify sidecar did not exit immediately
         sleep 0.2
         if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
@@ -356,6 +357,7 @@ else
     if [[ "$POLL_DISABLE" != "1" ]]; then
         "${SIDECAR_ARGS[@]}" &
         SIDECAR_PID=$!
+        disown "$SIDECAR_PID"
         # V1.7: Postcondition — verify sidecar did not exit immediately
         sleep 0.2
         if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then

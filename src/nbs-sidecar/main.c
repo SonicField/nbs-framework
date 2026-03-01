@@ -18,6 +18,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -282,6 +283,13 @@ int main(int argc, char **argv) {
                     "announcement; handle may not be set in session\n");
         }
     }
+
+    /* Ignore SIGHUP — the sidecar is backgrounded by nbs-claude and must
+     * survive parent shell exit and tmux session restarts. Without this,
+     * any session kill or shell exit sends SIGHUP and silently kills the
+     * sidecar with no log output (the signal arrives before any stderr
+     * write can complete). */
+    signal(SIGHUP, SIG_IGN);
 
     /* Redirect stderr to log file if specified */
     if (cfg.log_file[0] != '\0') {
