@@ -41,7 +41,7 @@ set -euo pipefail
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
-NBS_MODEL="${NBS_MODEL:-}"
+NBS_MODEL="${NBS_MODEL:-opus[1m]}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
@@ -61,7 +61,8 @@ if [[ ! "$SIDECAR_HANDLE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
 fi
 
 # V1.1: Validate NBS_MODEL with safe-character regex
-if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+# V1.1: Validate NBS_MODEL — alphanumeric/dots/hyphens/colons with optional [1m] suffix
+if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+(\[1m\])?$ ]]; then
     echo "Error: NBS_MODEL contains invalid characters: '$NBS_MODEL'" >&2
     exit 4
 fi
@@ -178,7 +179,8 @@ if [[ "$NBS_ROOT" == *$'\n'* || "$NBS_ROOT" == *$'\r'* ]]; then
 fi
 
 # V1.1: Re-validate NBS_MODEL if overridden by --model=
-if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+$ ]]; then
+# V1.1: Validate NBS_MODEL — alphanumeric/dots/hyphens/colons with optional [1m] suffix
+if [[ -n "$NBS_MODEL" && ! "$NBS_MODEL" =~ ^[a-zA-Z0-9_.:-]+(\[1m\])?$ ]]; then
     echo "Error: NBS_MODEL contains invalid characters: '$NBS_MODEL'" >&2
     exit 4
 fi
