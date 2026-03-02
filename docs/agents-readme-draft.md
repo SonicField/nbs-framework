@@ -28,11 +28,11 @@ CinderX requires a shared-library CPython build with all symbols exported.
 
 ```bash
 cd ~/local/cinderx_dev/python-3.12
-CFLAGS='-fvisibility=default' LDFLAGS='-Wl,--export-dynamic' ./configure \
+LDFLAGS='-Wl,--export-dynamic' ./configure \
     --enable-shared \
     --prefix=$HOME/local/cinderx_dev/python-install \
     --without-ensurepip
-make -j8
+make CFLAGS_NODIST='-fvisibility=default' -j8
 make install
 ```
 
@@ -57,7 +57,7 @@ nm -D ~/local/cinderx_dev/python-install/lib/libpython3.12.so.1.0 | grep _PyUnio
 | Flag | Purpose |
 |------|---------|
 | `--enable-shared` | Creates `libpython3.12.so` (CinderX .so links against it) |
-| `-fvisibility=default` | Overrides CPython's `-fvisibility=hidden` on internal headers, exporting `_Py*` symbols |
+| `-fvisibility=default` | Passed via `CFLAGS_NODIST` at make time. Overrides CPython's `-fvisibility=hidden` (which is appended after user CFLAGS at configure time). Exports `_Py*` symbols from `libpython3.12.so` |
 | `-Wl,--export-dynamic` | Exports symbols from the executable's dynamic table |
 | `--without-ensurepip` | Saves ~2 min build time (pip not needed) |
 
