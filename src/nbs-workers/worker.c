@@ -486,6 +486,9 @@ static int tmux_send_keys(const char *session_name, const char *keys,
     return exec_fire_and_forget(argv);
 }
 
+/* Used by nbs-workers continue for prompt detection. Not used by spawn
+ * (which uses claude -p instead of interactive mode). */
+__attribute__((unused))
 static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
 {
     ASSERT_MSG(session_name != NULL, "tmux_capture_pane: session_name is NULL");
@@ -1199,75 +1202,34 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Allow shell to initialise */
     sleep(2);
 
-    /* Send the initial Claude command with NBS_HANDLE for sidecar identity.
-     * Use the slug (e.g. "shepard") as the handle, not the unique name
-     * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
-     * handles in chat. The hex suffix remains on the task file and tmux
-     * session name to prevent file collisions.
+    /* Launch Claude in pipe mode for ephemeral workers.
      *
-     * --force: ephemeral workers may not exit cleanly (Claude stays at
-     * prompt after task completion). The next spawn must override the
-     * stale handle lock from the previous worker. Without --force,
-     * all watchdog workers (librarian, shepard, pythia) block
-     * permanently after one worker fails to exit. */
+     * Interactive Claude never exits — it stays at its prompt after
+     * completing the task. This holds the handle flock forever, blocking
+     * all subsequent spawns of the same handle.
+     *
+     * claude -p runs non-interactively: processes the prompt, exits.
+     * No sidecar, no pidfile, no session metadata — ephemeral workers
+     * don't need any of that. They post to chat, publish a bus event,
+     * and die. The tmux session exits when claude -p completes.
+     *
+     * The task is already in task_file (.nbs/workers/<name>.md). */
     {
         char launch_cmd[PATH_BUF_SIZE];
         int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "NBS_HANDLE=%s bin/nbs-claude --force",
-                         slug);
+                         "claude -p 'Read %s and execute the task.' "
+                         "--dangerously-skip-permissions "
+                         "--model 'opus[1m]'; exit",
+                         task_file);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
                    "cmd_spawn: launch_cmd too long");
         tmux_send_keys(session, launch_cmd, 1);
     }
 
-    /* Allow Claude to start */
+    /* claude -p handles everything: reads task file, executes, exits.
+     * No need to wait for prompt, send task separately, or retry Enter.
+     * The tmux session exits when claude -p completes (via "; exit"). */
     sleep(3);
-
-    /* Send the task prompt.
-     * TRUST BOUNDARY: task_description originates from the CLI user (argv[4]).
-     * It is passed to tmux send-keys which interprets it as shell input.
-     * Shell metacharacters (backticks, $(), ;, |) WILL be interpreted.
-     * This is acceptable because the caller is the same user who owns
-     * the tmux session — they cannot escalate privileges beyond what
-     * they already have. */
-    {
-        char prompt[PATH_BUF_SIZE * 2];
-        int n = snprintf(prompt, sizeof(prompt),
-                         "Read %s and execute the task. "
-                         "Update the Status and Log sections when complete.",
-                         task_file);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(prompt),
-                   "cmd_spawn: prompt too long");
-        tmux_send_keys(session, prompt, 1);
-    }
-
-    /* Wait for Claude Code UI to be ready (poll for prompt indicator) */
-    {
-        int wait_count = 0;
-        int max_wait = 30;
-        char pane_buf[CAPTURE_BUF_SIZE];
-
-        while (wait_count < max_wait) {
-            if (tmux_capture_pane(session, pane_buf, sizeof(pane_buf)) == 0) {
-                /* UTF-8 encoded ❯ is 0xe2 0x9d 0xaf */
-                if (strstr(pane_buf, "\xe2\x9d\xaf") != NULL) {
-                    break;
-                }
-            }
-            sleep(1);
-            wait_count++;
-        }
-
-        if (wait_count >= max_wait) {
-            fprintf(stderr,
-                    "Warning: timed out waiting for Claude UI prompt (%ds)\n",
-                    max_wait);
-        }
-    }
-
-    /* Extra Enter for reliability */
-    sleep(1);
-    tmux_send_keys(session, "", 1);
 
     /* Publish bus event */
     {
