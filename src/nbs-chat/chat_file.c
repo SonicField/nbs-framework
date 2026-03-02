@@ -635,6 +635,18 @@ int chat_read(const char *path, chat_state_t *state) {
         }
 
         if (past_header && len > 0 && state->message_count < MAX_MESSAGES) {
+            /* Validate base64 padding before decode — corrupt lines with
+             * length not a multiple of 4 would trigger the precondition
+             * assert in base64_decoded_size and abort the process. Skip
+             * corrupt lines gracefully instead. */
+            if (len % 4 != 0) {
+                fprintf(stderr, "warning: chat_read: corrupt base64 at line %d "
+                        "(len=%zu not multiple of 4, first 20 chars: '%.20s'), skipping\n",
+                        line_number, len, line);
+                state->skipped_count++;
+                continue;
+            }
+
             /* Decode base64 message */
             size_t decoded_max = base64_decoded_size(len);
             unsigned char *decoded = malloc(decoded_max + 1);

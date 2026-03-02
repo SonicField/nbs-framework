@@ -452,6 +452,11 @@ static int sidecar_only_cb(const char *path, void *user_data)
         ASSERT_MSG((size_t)line_len < MAX_PATH_BUF * 16,
                    "sidecar_only_cb: unreasonably large base64 line: "
                    "%zd bytes in '%s'", line_len, path);
+        /* Skip corrupt lines with length not a multiple of 4 —
+         * base64_decoded_size asserts this precondition and would abort */
+        if ((size_t)line_len % 4 != 0) {
+            continue;
+        }
         size_t decoded_max = base64_decoded_size((size_t)line_len);
         ASSERT_MSG(decoded_max < SIZE_MAX,
                    "sidecar_only_cb: decoded_max overflow");
