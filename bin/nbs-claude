@@ -133,8 +133,15 @@ trap cleanup INT TERM EXIT
 
 # --- Main ---
 
-# Build claude command with args (intercept --root= etc. for sidecar)
-CLAUDE_ARGS=("claude")
+# Parse nbs-specific args, extract values, build CLAUDE_ARGS via helper.
+# nbs-claude-build-args handles: --dangerously-skip-permissions (always added),
+# --model (from NBS_MODEL or --model=), --resume/--session-id (from
+# NBS_CONTINUE_SESSION or --continue=), passthrough of unknown args.
+# nbs-specific args (--root=, --force, --remote-host=, --remote-ssh-opts=)
+# are consumed here and not passed to the helper.
+
+# First pass: extract nbs-specific args that nbs-claude needs but claude doesn't.
+BUILDER_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --root=*)
@@ -149,29 +156,33 @@ for arg in "$@"; do
         --force)
             FORCE_SPAWN=1
             ;;
-        --model=*)
-            NBS_MODEL="${arg#--model=}"
-            ;;
-        --continue=*)
-            NBS_CONTINUE_SESSION="${arg#--continue=}"
-            ;;
         *)
-            CLAUDE_ARGS+=("$arg")
+            BUILDER_ARGS+=("$arg")
             ;;
     esac
 done
 
-# Ensure --dangerously-skip-permissions is passed (agents run unattended)
-HAS_SKIP_PERMS=0
-for arg in "${CLAUDE_ARGS[@]}"; do
-    if [[ "$arg" == "--dangerously-skip-permissions" ]]; then
-        HAS_SKIP_PERMS=1
-        break
-    fi
-done
-if [[ "$HAS_SKIP_PERMS" -eq 0 ]]; then
-    CLAUDE_ARGS+=("--dangerously-skip-permissions")
+# Build CLAUDE_ARGS via the testable helper
+BUILDER_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/nbs-claude-build-args"
+if [[ ! -x "$BUILDER_SCRIPT" ]]; then
+    echo "Error: nbs-claude-build-args not found at $BUILDER_SCRIPT" >&2
+    exit 1
 fi
+
+mapfile -t CLAUDE_ARGS < <(
+    NBS_MODEL="$NBS_MODEL" \
+    NBS_CONTINUE_SESSION="$NBS_CONTINUE_SESSION" \
+    bash "$BUILDER_SCRIPT" "${BUILDER_ARGS[@]+"${BUILDER_ARGS[@]}"}"
+)
+
+# Re-read NBS_MODEL and NBS_CONTINUE_SESSION in case --model= or --continue=
+# was in the caller args (the builder consumed them but we need the values too)
+for arg in "${BUILDER_ARGS[@]+"${BUILDER_ARGS[@]}"}"; do
+    case "$arg" in
+        --model=*) NBS_MODEL="${arg#--model=}" ;;
+        --continue=*) NBS_CONTINUE_SESSION="${arg#--continue=}" ;;
+    esac
+done
 
 # Re-resolve NBS_ROOT to absolute if overridden by --root=
 NBS_ROOT="$(cd "$NBS_ROOT" && pwd)" || {
@@ -223,19 +234,19 @@ if ! flock -n 9; then
 fi
 echo "$$" > "$PIDFILE"
 
-# --- Session ID generation ---
+# --- Session ID ---
+# The builder already added --resume or --session-id to CLAUDE_ARGS.
+# We still need SESSION_UUID for metadata and tmux session naming.
 SESSION_UUID=""
 if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
     SESSION_UUID="$NBS_CONTINUE_SESSION"
-    CLAUDE_ARGS+=("--resume" "$SESSION_UUID")
 else
     SESSION_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "")
-    # V1.7: Postcondition — verify a UUID was actually generated (fixes silent
-    # fallback to non-UUID value "no-uuid-$$-..." when all generators fail)
     if [[ -z "$SESSION_UUID" ]]; then
         echo "Error: Failed to generate a UUID. Install uuidgen or ensure /proc/sys/kernel/random/uuid is available." >&2
         exit 1
     fi
+    # Add --session-id since builder didn't have it (generated after builder ran)
     CLAUDE_ARGS+=("--session-id" "$SESSION_UUID")
 fi
 
@@ -245,11 +256,6 @@ fi
 if [[ ! "$SESSION_UUID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: Session UUID contains invalid characters: '$SESSION_UUID'" >&2
     exit 4
-fi
-
-# --- Model passthrough ---
-if [[ -n "$NBS_MODEL" ]]; then
-    CLAUDE_ARGS+=("--model" "$NBS_MODEL")
 fi
 
 # --- Session metadata ---

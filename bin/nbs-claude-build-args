@@ -1,0 +1,80 @@
+#!/bin/bash
+# nbs-claude-build-args — Build the CLAUDE_ARGS array.
+#
+# Extracted from nbs-claude so the argument logic is testable in isolation.
+# Reads NBS_MODEL and NBS_CONTINUE_SESSION from environment.
+# Reads caller arguments from $@.
+# Prints one argument per line to stdout.
+#
+# nbs-specific arguments (--root=, --force, --remote-host=, --remote-ssh-opts=,
+# --model=, --continue=) are consumed and not passed through.
+# All other arguments are passed through to claude.
+#
+# Outputs (one per line):
+#   claude
+#   --dangerously-skip-permissions
+#   --model
+#   opus[1m]
+#   --session-id or --resume
+#   <session-id>
+#   <passthrough args...>
+
+set -euo pipefail
+
+# --- Parse caller arguments ---
+
+NBS_MODEL="${NBS_MODEL-opus[1m]}"
+NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION-}"
+PASSTHROUGH_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --root=*|--remote-host=*|--remote-ssh-opts=*|--force)
+            # nbs-specific — consumed, not passed to claude
+            ;;
+        --model=*)
+            NBS_MODEL="${arg#--model=}"
+            ;;
+        --continue=*)
+            NBS_CONTINUE_SESSION="${arg#--continue=}"
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$arg")
+            ;;
+    esac
+done
+
+# --- Build CLAUDE_ARGS ---
+
+CLAUDE_ARGS=("claude")
+
+# Agents run unattended — always add unless caller already passed it
+HAS_SKIP_PERMS=0
+for arg in "${PASSTHROUGH_ARGS[@]+"${PASSTHROUGH_ARGS[@]}"}"; do
+    if [[ "$arg" == "--dangerously-skip-permissions" ]]; then
+        HAS_SKIP_PERMS=1
+        break
+    fi
+done
+if [[ "$HAS_SKIP_PERMS" -eq 0 ]]; then
+    CLAUDE_ARGS+=("--dangerously-skip-permissions")
+fi
+
+# Model
+if [[ -n "$NBS_MODEL" ]]; then
+    CLAUDE_ARGS+=("--model" "$NBS_MODEL")
+fi
+
+# Session continuation or new session ID
+if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
+    CLAUDE_ARGS+=("--resume" "$NBS_CONTINUE_SESSION")
+fi
+
+# Passthrough args from caller
+CLAUDE_ARGS+=("${PASSTHROUGH_ARGS[@]+"${PASSTHROUGH_ARGS[@]}"}")
+
+# --- Output one arg per line ---
+
+for arg in "${CLAUDE_ARGS[@]}"; do
+    echo "$arg"
+done
