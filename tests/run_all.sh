@@ -126,6 +126,61 @@ if [[ -f "$SCRIPT_DIR/automated/test_nbs_claude_fixes.sh" ]]; then
     run_test "$SCRIPT_DIR/automated/test_nbs_claude_fixes.sh"
 fi
 
+# --- Previously orphaned tests (added by testkeeper audit 2026-03-02) ---
+
+# pty-session adversarial and feature tests
+run_test "$SCRIPT_DIR/automated/test_pty_session_adversarial.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_adv_invalid.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_adv_no_collision.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_last.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_lock.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_timeout.sh"
+run_test "$SCRIPT_DIR/automated/test_pty_session_wait_fallback.sh"
+
+# nbs-chat additional tests
+run_test "$SCRIPT_DIR/automated/test_nbs_chat_gaps.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_chat_web.sh"
+run_test "$SCRIPT_DIR/automated/test_auto_archive.sh"
+
+# nbs-claude additional tests
+run_test "$SCRIPT_DIR/automated/test_nbs_claude_args.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_claude_audit_v17.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_prompts.sh"
+
+# nbs-remote tests
+run_test "$SCRIPT_DIR/automated/test_nbs_remote_build.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_remote_diff_status.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_remote_edit_static.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_remote_read.sh"
+if [[ -f "$SCRIPT_DIR/automated/test_claude_remote_audit_v2.sh" ]]; then
+    run_test "$SCRIPT_DIR/automated/test_claude_remote_audit_v2.sh"
+fi
+
+# nbs-scribe tests
+run_test "$SCRIPT_DIR/automated/test_nbs_scribe_log.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_scribe_log_audit.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_scribe_query.sh"
+run_test "$SCRIPT_DIR/automated/test_scribe_adversarial.sh"
+run_test "$SCRIPT_DIR/automated/test_scribe_adv_no_noise.sh"
+
+# Installation and integration tests
+run_test "$SCRIPT_DIR/automated/test_install_audit.sh"
+run_test "$SCRIPT_DIR/automated/test_tripod_integration.sh"
+
+# Base64 assertion tests
+run_test "$SCRIPT_DIR/automated/test_base64_assertions.sh"
+
+# Sidecar tests
+run_test "$SCRIPT_DIR/automated/test_sidecar_restart_fixes.sh"
+run_test "$SCRIPT_DIR/automated/test_supervisor_adv_no_old_pattern.sh"
+
+# Worker tests
+run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
+
+# Digest and librarian tests
+run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
+run_test "$SCRIPT_DIR/automated/test_librarian.sh"
+
 # nbs-chat remote tests (requires ssh localhost)
 if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh" ]]; then
     if ssh -o BatchMode=yes -o ConnectTimeout=3 localhost true 2>/dev/null; then
