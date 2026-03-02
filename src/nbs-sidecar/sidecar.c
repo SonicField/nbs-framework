@@ -183,7 +183,7 @@ done:
                                  chat_path, sizeof(chat_path)) == 0) {
             char msg[SIDECAR_MAX_MESSAGE];
             snprintf(msg, sizeof(msg),
-                     "URGENT: @team - agent unresponsive %s", cfg->handle);
+                     "URGENT: @supervisor - agent unresponsive %s", cfg->handle);
             int rc = chat_client_send(chat_path, "sidecar", msg);
             if (rc != 0) {
                 fprintf(stderr, "handle_interrupt: chat_client_send URGENT failed "
@@ -371,14 +371,23 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         }
     }
 
-    /* Apply cooldown (critical and mentions bypass).
+    /* Apply cooldown (critical and non-sidecar mentions bypass).
      * Use time_t for elapsed to avoid int overflow when last_notify_time
-     * is 0 (memset-initialised) — (now - 0) overflows int on 64-bit. */
+     * is 0 (memset-initialised) — (now - 0) overflows int on 64-bit.
+     *
+     * Sidecar-originated mentions (payload contains "from sidecar:") do
+     * NOT bypass cooldown. Without this, URGENT @team messages from
+     * sidecar create an O(N^2) notification storm: each agent's sidecar
+     * posts @team, bus_bridge fans out to N events, and mention bypass
+     * ensures every event triggers immediate notification. */
     now = time(NULL);
     time_t elapsed = now - state->last_notify_time;
 
+    int mention_bypasses_cooldown = (state->mention_detected == 1 &&
+        strstr(state->mention_payload, "from sidecar:") == NULL);
+
     if (strcmp(state->bus_max_priority, "critical") != 0 &&
-        state->mention_detected != 1 &&
+        !mention_bypasses_cooldown &&
         elapsed < cfg->notify_cooldown) {
         return 1;
     }
