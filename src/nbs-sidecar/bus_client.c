@@ -173,10 +173,13 @@ int bus_client_read(const char *bus_dir, const char *event_file,
     if (rc < 0)
         return -1;
 
-    /* Postcondition: on success, payload is NUL-terminated and non-empty */
-    ASSERT_MSG(payload[0] != '\0',
-               "bus_client_read: exec succeeded but payload is empty "
-               "for event '%s'", event_file);
+    /* Empty payload is valid — bus_publish allows empty payloads.
+     * Callers (check_typed) will not match @handle in empty string
+     * and will skip the event. Log for observability but do not abort. */
+    if (payload[0] == '\0') {
+        fprintf(stderr, "bus_client_read: payload is empty for event '%s' "
+                "(valid but unusual)\n", event_file);
+    }
 
     return 0;
 }
