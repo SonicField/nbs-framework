@@ -1203,11 +1203,17 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * Use the slug (e.g. "shepard") as the handle, not the unique name
      * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
      * handles in chat. The hex suffix remains on the task file and tmux
-     * session name to prevent file collisions. */
+     * session name to prevent file collisions.
+     *
+     * --force: ephemeral workers may not exit cleanly (Claude stays at
+     * prompt after task completion). The next spawn must override the
+     * stale handle lock from the previous worker. Without --force,
+     * all watchdog workers (librarian, shepard, pythia) block
+     * permanently after one worker fails to exit. */
     {
         char launch_cmd[PATH_BUF_SIZE];
         int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "NBS_HANDLE=%s bin/nbs-claude --dangerously-skip-permissions",
+                         "NBS_HANDLE=%s bin/nbs-claude --force",
                          slug);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
                    "cmd_spawn: launch_cmd too long");
