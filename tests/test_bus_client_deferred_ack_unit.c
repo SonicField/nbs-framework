@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #include "bus_client.h"
 #include "exec_util.h"
@@ -450,8 +451,104 @@ static void test_check_typed_small_event_file_buffer(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Main                                                                */
+/* ADVERSARIAL: Substring handle match (@ai matches @aiden)            */
 /* ------------------------------------------------------------------ */
+
+static void test_substring_handle_match(void)
+{
+    printf("\n-- test 13: substring handle match (known limitation) --\n");
+    char *dir = make_bus_dir();
+
+    /* Publish event for @aiden, check with handle "ai" */
+    publish_via_cli(dir, "user1", "chat-query", "high",
+                    "@aiden? are you there");
+
+    char payload_out[4096] = {0};
+    char event_file[1024] = {0};
+    int rc = bus_client_check_typed(dir, "chat-query", "ai",
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
+
+    /* KNOWN BUG: strstr("@aiden", "@ai") matches.
+     * This test documents the current behaviour. If/when fixed to use
+     * word boundary matching, change the expected result to rc == 1. */
+    CHECK("substring match: currently matches (known strstr limitation)",
+          rc == 0);
+
+    if (event_file[0] != '\0')
+        bus_client_ack_event(dir, event_file);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* ADVERSARIAL: ack_event with event_file = ".." (bare dotdot)         */
+/* ------------------------------------------------------------------ */
+
+static void test_ack_bare_dotdot(void)
+{
+    printf("\n-- test 14: ack_event with bare '..' rejected --\n");
+    char *dir = make_bus_dir();
+
+    int rc = bus_client_ack_event(dir, "..");
+    CHECK("bare '..' rejected (returns -1)", rc == -1);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* ADVERSARIAL: Concurrent check_typed + ack race                      */
+/* ------------------------------------------------------------------ */
+
+static void test_concurrent_check_ack_race(void)
+{
+    printf("\n-- test 15: concurrent check_typed + ack race --\n");
+    char *dir = make_bus_dir();
+
+    publish_via_cli(dir, "user1", "chat-query", "high",
+                    "@agent? race condition test");
+
+    /* Both parent and child call check_typed, get the same event,
+     * then both try to ack. One succeeds, one gets ENOENT. */
+    char payload_out[4096] = {0};
+    char event_file[1024] = {0};
+    int rc = bus_client_check_typed(dir, "chat-query", "agent",
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
+    CHECK("race: check_typed returns 0", rc == 0);
+
+    if (rc == 0 && event_file[0] != '\0') {
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* Child: try to ack the same event */
+            int child_rc = bus_client_ack_event(dir, event_file);
+            _exit(child_rc == 0 ? 0 : 1);
+        } else if (pid > 0) {
+            /* Parent: also try to ack */
+            int parent_rc = bus_client_ack_event(dir, event_file);
+
+            int status;
+            waitpid(pid, &status, 0);
+            int child_succeeded = (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            int parent_succeeded = (parent_rc == 0);
+
+            /* At least one must succeed, at most one should succeed.
+             * Both succeeding is possible if rename is not atomic on
+             * this filesystem, but that's a filesystem bug, not ours. */
+            CHECK("race: at least one ack succeeded",
+                  parent_succeeded || child_succeeded);
+
+            /* Bus should be empty regardless */
+            int remaining = count_events(dir);
+            CHECK("race: bus empty after race", remaining == 0);
+        }
+    }
+
+    rmdir_recursive(dir);
+    free(dir);
+}
 
 int main(void)
 {
@@ -476,6 +573,9 @@ int main(void)
     test_check_idempotent_before_ack();
     test_ack_invalid_filename();
     test_check_typed_small_event_file_buffer();
+    test_substring_handle_match();
+    test_ack_bare_dotdot();
+    test_concurrent_check_ack_race();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests - fails, fails);

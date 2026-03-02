@@ -67,6 +67,11 @@
  *   trigger_librarian_spawn:
  *   42. Lock acquired, spawn attempted
  *   43. Lock busy
+ *
+ *   Adversarial (librarian):
+ *   44. Corrupted timestamp file (non-numeric) — fires immediately
+ *   45. Future timestamp — suppresses until real time catches up
+ *   46. interval=0 — ASSERT fires (abort)
  */
 
 #include "../src/nbs-sidecar/triggers.h"
@@ -1587,6 +1592,83 @@ int main(void)
         }
 
         if (fd >= 0) close(fd);
+        rmrf(sub);
+    }
+
+    /* Test 44: ADVERSARIAL — corrupted timestamp file (non-numeric) */
+    {
+        char sub[] = "/tmp/nbs_trig_t44_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        write_file(ts_path, "not-a-number\n");
+
+        /* fscanf fails, returns 0 → treated as first-run → initialises without firing */
+        int rc = trigger_librarian_check(nbs_root, 900);
+        CHECK("T44: corrupted timestamp treated as first-run (returns 1)", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 45: ADVERSARIAL — future timestamp suppresses until real time catches up */
+    {
+        char sub[] = "/tmp/nbs_trig_t45_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now + 3600));
+        write_file(ts_path, ts_buf);
+
+        /* Future timestamp: now - future is negative → elapsed < interval */
+        int rc = trigger_librarian_check(nbs_root, 900);
+        CHECK("T45: future timestamp suppresses (returns 1)", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 46: ADVERSARIAL — interval=0 assertion fires */
+    {
+        char sub[] = "/tmp/nbs_trig_t46_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* interval=0 should trigger ASSERT_MSG (interval must be positive) */
+        pid_t pid = fork();
+        if (pid == 0) {
+            trigger_librarian_check(nbs_root, 0);
+            _exit(0); /* should not reach here */
+        } else if (pid > 0) {
+            int status;
+            waitpid(pid, &status, 0);
+            CHECK("T46: interval=0 aborts (SIGABRT)",
+                  WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+        } else {
+            CHECK("T46: fork failed", 0);
+        }
+
         rmrf(sub);
     }
 

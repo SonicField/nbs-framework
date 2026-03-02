@@ -7,7 +7,8 @@
 # Prints one argument per line to stdout.
 #
 # nbs-specific arguments (--root=, --force, --remote-host=, --remote-ssh-opts=,
-# --model=, --continue=) are consumed and not passed through.
+# --model, --continue) are consumed and not passed through.
+# Accepts both --model=VALUE and --model VALUE (space-separated) forms.
 # All other arguments are passed through to claude.
 #
 # Outputs (one per line):
@@ -27,7 +28,11 @@ NBS_MODEL="${NBS_MODEL-opus[1m]}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION-}"
 PASSTHROUGH_ARGS=()
 
-for arg in "$@"; do
+# Use indexed array for lookahead on space-separated flags
+ARGS=("$@")
+i=0
+while [[ $i -lt ${#ARGS[@]} ]]; do
+    arg="${ARGS[$i]}"
     case "$arg" in
         --root=*|--remote-host=*|--remote-ssh-opts=*|--force)
             # nbs-specific — consumed, not passed to claude
@@ -35,13 +40,28 @@ for arg in "$@"; do
         --model=*)
             NBS_MODEL="${arg#--model=}"
             ;;
+        --model)
+            # Space-separated: --model VALUE
+            if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+                i=$((i + 1))
+                NBS_MODEL="${ARGS[$i]}"
+            fi
+            ;;
         --continue=*)
             NBS_CONTINUE_SESSION="${arg#--continue=}"
+            ;;
+        --continue)
+            # Space-separated: --continue VALUE
+            if [[ $((i + 1)) -lt ${#ARGS[@]} ]]; then
+                i=$((i + 1))
+                NBS_CONTINUE_SESSION="${ARGS[$i]}"
+            fi
             ;;
         *)
             PASSTHROUGH_ARGS+=("$arg")
             ;;
     esac
+    i=$((i + 1))
 done
 
 # --- Build CLAUDE_ARGS ---

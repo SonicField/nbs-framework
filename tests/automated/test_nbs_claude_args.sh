@@ -180,6 +180,70 @@ else
     pass "T9: --model correctly omitted"
 fi
 
+# --- Test 10: --model sonnet (space-separated) works ---
+echo ""
+echo "10. --model sonnet (space-separated) works..."
+RESULT=$(NBS_MODEL="opus[1m]" NBS_CONTINUE_SESSION="" \
+    bash "$BUILDER" --model sonnet 2>/dev/null)
+if has_arg_pair "$RESULT" "--model" "sonnet"; then
+    pass "T10a: --model sonnet present"
+else
+    fail "T10a: --model sonnet missing"
+fi
+MODEL_COUNT=$(echo "$RESULT" | grep -c "^--model$")
+if [[ "$MODEL_COUNT" -eq 1 ]]; then
+    pass "T10b: exactly one --model flag (no duplicate from default)"
+else
+    fail "T10b: expected 1 --model flag, got $MODEL_COUNT"
+fi
+
+# --- Test 11: Shell injection via NBS_MODEL ---
+echo ""
+echo "11. Shell injection via NBS_MODEL is literal..."
+INJECT='opus"; rm -rf /tmp/test; echo "'
+RESULT=$(NBS_MODEL="$INJECT" NBS_CONTINUE_SESSION="" \
+    bash "$BUILDER" 2>/dev/null)
+if echo "$RESULT" | grep -qF 'rm -rf'; then
+    pass "T11: injection string passed literally (not executed)"
+else
+    fail "T11: injection string missing from output"
+fi
+
+# --- Test 12: Shell injection via --continue= ---
+echo ""
+echo "12. Shell injection via --continue= is literal..."
+RESULT=$(NBS_MODEL="opus[1m]" NBS_CONTINUE_SESSION="" \
+    bash "$BUILDER" '--continue=$(whoami)' 2>/dev/null)
+if echo "$RESULT" | grep -qF '$(whoami)'; then
+    pass "T12: \$(whoami) passed literally"
+else
+    fail "T12: \$(whoami) expanded or missing"
+fi
+
+# --- Test 13: --continue session (space-separated) ---
+echo ""
+echo "13. --continue session (space-separated) works..."
+RESULT=$(NBS_MODEL="opus[1m]" NBS_CONTINUE_SESSION="" \
+    bash "$BUILDER" --continue abc-456 2>/dev/null)
+if has_arg_pair "$RESULT" "--resume" "abc-456"; then
+    pass "T13: --continue abc-456 (space) produces --resume"
+else
+    fail "T13: --resume abc-456 missing"
+fi
+
+# --- Test 14: Very long NBS_MODEL ---
+echo ""
+echo "14. Very long NBS_MODEL handled..."
+LONG_MODEL=$(printf 'x%.0s' $(seq 1 4000))
+RESULT=$(NBS_MODEL="$LONG_MODEL" NBS_CONTINUE_SESSION="" \
+    bash "$BUILDER" 2>/dev/null)
+RESULT_LEN=$(echo "$RESULT" | grep -c "^x")
+if [[ "$RESULT_LEN" -ge 1 ]]; then
+    pass "T14: long model string present in output"
+else
+    fail "T14: long model string missing"
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed (of $TESTS tests) ==="
