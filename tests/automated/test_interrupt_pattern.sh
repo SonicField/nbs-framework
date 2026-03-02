@@ -120,9 +120,9 @@ check "12a. sidecar handles chat-mention events" "$R"
 R=$(grep -q 'mention_detected' "$SIDECAR_C" && echo pass || echo fail)
 check "12b. sidecar bypasses cooldown for mentions" "$R"
 
-# 12c. sidecar interrupt failure message uses URGENT @team format
-R=$(grep -qF 'URGENT: @team' "$SIDECAR_C" && echo pass || echo fail)
-check "12c. sidecar interrupt failure posts URGENT @team message" "$R"
+# 12c. sidecar interrupt failure message uses URGENT @supervisor format
+R=$(grep -qF 'URGENT: @supervisor' "$SIDECAR_C" && echo pass || echo fail)
+check "12c. sidecar interrupt failure posts URGENT @supervisor message" "$R"
 
 # 12d. sidecar enriches notify message with mention payload
 R=$(grep -qF 'MENTION: ' "$SIDECAR_C" && echo pass || echo fail)
