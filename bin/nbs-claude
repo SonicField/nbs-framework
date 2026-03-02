@@ -308,9 +308,24 @@ if [[ -n "${TMUX:-}" ]]; then
 
     SIDECAR_ARGS+=("--transport=tmux" "--pane-id=$PANE_ID")
 
-    # Start C sidecar monitoring this pane
+    # Start C sidecar monitoring this pane, with auto-restart.
+    # If the sidecar exits but the pane still exists, restart it.
+    # This prevents silent sidecar death from cutting agents off
+    # from notifications, which causes teams to self-terminate.
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        "${SIDECAR_ARGS[@]}" &
+        (
+            while true; do
+                "${SIDECAR_ARGS[@]}"
+                rc=$?
+                # Check if the pane still exists
+                if ! tmux list-panes -t "$PANE_ID" >/dev/null 2>&1; then
+                    break  # Pane gone — clean exit
+                fi
+                # Pane alive but sidecar died — log and restart
+                echo "warning: sidecar exited (rc=$rc) but pane $PANE_ID alive, restarting in 5s" >&2
+                sleep 5
+            done
+        ) &
         SIDECAR_PID=$!
         disown "$SIDECAR_PID"
         # V1.7: Postcondition — verify sidecar did not exit immediately
@@ -353,9 +368,20 @@ else
 
     SIDECAR_ARGS+=("--transport=pty" "--pty-path=$PTY_SESSION" "--session=$SESSION_NAME")
 
-    # Start C sidecar
+    # Start C sidecar with auto-restart (pty mode)
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        "${SIDECAR_ARGS[@]}" &
+        (
+            while true; do
+                "${SIDECAR_ARGS[@]}"
+                rc=$?
+                # Check if pty-session still exists
+                if ! "$PTY_SESSION" read "$SESSION_NAME" >/dev/null 2>&1; then
+                    break  # Session gone — clean exit
+                fi
+                echo "warning: sidecar exited (rc=$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
+                sleep 5
+            done
+        ) &
         SIDECAR_PID=$!
         disown "$SIDECAR_PID"
         # V1.7: Postcondition — verify sidecar did not exit immediately
