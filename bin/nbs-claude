@@ -161,6 +161,18 @@ for arg in "$@"; do
     esac
 done
 
+# Ensure --dangerously-skip-permissions is passed (agents run unattended)
+HAS_SKIP_PERMS=0
+for arg in "${CLAUDE_ARGS[@]}"; do
+    if [[ "$arg" == "--dangerously-skip-permissions" ]]; then
+        HAS_SKIP_PERMS=1
+        break
+    fi
+done
+if [[ "$HAS_SKIP_PERMS" -eq 0 ]]; then
+    CLAUDE_ARGS+=("--dangerously-skip-permissions")
+fi
+
 # Re-resolve NBS_ROOT to absolute if overridden by --root=
 NBS_ROOT="$(cd "$NBS_ROOT" && pwd)" || {
     echo "Error: NBS_ROOT directory does not exist: ${NBS_ROOT}" >&2
