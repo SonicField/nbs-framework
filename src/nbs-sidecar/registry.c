@@ -558,7 +558,27 @@ int registry_for_each(const char *registry_path, const char *type,
             line[len - 1] = '\0';
 
         if (strncmp(line, prefix, prefix_len) == 0) {
-            int rc = callback(line + prefix_len, user_data);
+            const char *path = line + prefix_len;
+
+            /* Skip entries where the file no longer exists.
+             * This prevents cascading errors when chat files are deleted
+             * but registry entries remain. Log once per missing file
+             * using a static counter to avoid spamming. */
+            if (access(path, F_OK) != 0) {
+                static int missing_logged = 0;
+                if (missing_logged < 5) {
+                    fprintf(stderr, "registry_for_each: skipping missing "
+                            "path '%s' (file deleted?)\n", path);
+                    missing_logged++;
+                    if (missing_logged == 5) {
+                        fprintf(stderr, "registry_for_each: suppressing "
+                                "further missing-path warnings\n");
+                    }
+                }
+                continue;
+            }
+
+            int rc = callback(path, user_data);
             count++;
             if (rc != 0) {
                 /* HARDENING #10: non-zero callback return is an early-exit
