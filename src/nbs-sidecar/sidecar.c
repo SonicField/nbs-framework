@@ -347,18 +347,6 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         if (bus_rc < 0) bus_rc = 1;
     }
 
-    /* Pythia trigger (side-effect: may publish event or spawn worker) */
-    if (has_bus) {
-        trigger_pythia_check(registry_path, cfg->nbs_root,
-                              &state->pythia_last_trigger_count);
-    }
-
-    /* Shepard trigger (side-effect: may spawn worker) */
-    if (has_bus) {
-        trigger_shepard_check(registry_path, cfg->nbs_root,
-                               &state->shepard_last_trigger_count);
-    }
-
     /* Standup trigger (side-effect: may post to chat) */
     trigger_standup_check(registry_path, cfg->nbs_root, cfg->handle,
                            cfg->standup_interval,
@@ -539,6 +527,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             state.last_poll_time = state.sidecar_start_time;
             state.last_fixup_check = state.sidecar_start_time;
             state.last_librarian_check = state.sidecar_start_time;
+            state.last_pythia_check = state.sidecar_start_time;
+            state.last_shepard_check = state.sidecar_start_time;
             free(content);
             break;
         }
@@ -556,6 +546,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         state.last_poll_time = state.sidecar_start_time;
         state.last_fixup_check = state.sidecar_start_time;
         state.last_librarian_check = state.sidecar_start_time;
+        state.last_pythia_check = state.sidecar_start_time;
+        state.last_shepard_check = state.sidecar_start_time;
     }
     ASSERT_MSG(state.sidecar_start_time > 0,
                "sidecar_run: sidecar_start_time invariant violated after init");
@@ -761,6 +753,27 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 (now_wc - state.last_librarian_check) >= 60) {
                 state.last_librarian_check = now_wc;
                 trigger_librarian_check(cfg->nbs_root, cfg->librarian_interval);
+            }
+
+            /* Wall-clock pythia trigger — trajectory & risk assessment.
+             * Event-count based (fires every N scribe decisions) but
+             * checked on wall-clock to decouple from notification injection.
+             * Previously tied to should_inject_notify which only ran when
+             * agents were idle at a prompt — pythia went silent for hours
+             * during active work. */
+            if ((now_wc - state.last_pythia_check) >= 60) {
+                state.last_pythia_check = now_wc;
+                trigger_pythia_check(registry_path, cfg->nbs_root,
+                                      &state.pythia_last_trigger_count);
+            }
+
+            /* Wall-clock shepard trigger — team effectiveness assessment.
+             * Event-count based (fires every N chat messages) but checked
+             * on wall-clock for the same reason as pythia. */
+            if ((now_wc - state.last_shepard_check) >= 60) {
+                state.last_shepard_check = now_wc;
+                trigger_shepard_check(registry_path, cfg->nbs_root,
+                                       &state.shepard_last_trigger_count);
             }
         }
 

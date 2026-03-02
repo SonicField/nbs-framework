@@ -95,6 +95,8 @@ typedef struct {
     time_t last_poll_time;
     time_t last_fixup_check;
     time_t last_librarian_check;
+    time_t last_pythia_check;
+    time_t last_shepard_check;
     int notify_fail_count;
     int pythia_last_trigger_count;
     int shepard_last_trigger_count;
