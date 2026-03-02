@@ -66,6 +66,8 @@ typedef struct {
     int poll_interval;          /* seconds between /nbs-poll injections (0=disabled) */
     int fixup_interval;         /* seconds between auto-fixup runs (0=disabled) */
     int librarian_interval;     /* seconds between librarian checks (0=disabled) */
+    int pythia_interval;        /* seconds between pythia checks (0=disabled) */
+    int shepard_interval;       /* seconds between shepard checks (0=disabled) */
 
     int is_remote;
     char remote_host[256];

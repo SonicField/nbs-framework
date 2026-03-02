@@ -9,16 +9,15 @@
 #include <time.h>
 
 /*
- * trigger_pythia_check — Deterministic Pythia checkpoint trigger.
+ * trigger_pythia_check — Wall-clock Pythia checkpoint trigger.
  *
- * Counts decision-logged events in processed/. When count crosses
- * a multiple of pythia-interval (from config.yaml, default 20),
- * spawns Pythia worker (Phase 2) or publishes bus event (Phase 1).
+ * Reads shared timestamp file. If interval_secs have elapsed since
+ * last run, spawns Pythia worker for trajectory & risk assessment.
+ * Cross-sidecar dedup via timestamp file + lock-guarded spawn.
  *
- * Returns: 0 = action taken, 1 = no action, -1 = error
+ * Returns: 0 = spawned, 1 = not time yet, -1 = error
  */
-int trigger_pythia_check(const char *registry_path, const char *nbs_root,
-                          int *last_trigger_count);
+int trigger_pythia_check(const char *nbs_root, int interval_secs);
 
 /*
  * trigger_standup_check — CSMA/CD team check-in via chat.
@@ -58,16 +57,15 @@ int trigger_heartbeat(const char *registry_path, const char *handle,
 int trigger_pythia_spawn(const char *nbs_root);
 
 /*
- * trigger_shepard_check — Deterministic Shepard checkpoint trigger.
+ * trigger_shepard_check — Wall-clock Shepard checkpoint trigger.
  *
- * Counts chat-message events in processed/. When count crosses
- * a multiple of shepard-interval (from config.yaml, default 100),
- * spawns Shepard worker for team effectiveness assessment.
+ * Reads shared timestamp file. If interval_secs have elapsed since
+ * last run, spawns Shepard worker for team effectiveness assessment.
+ * Cross-sidecar dedup via timestamp file + lock-guarded spawn.
  *
- * Returns: 0 = action taken, 1 = no action, -1 = error
+ * Returns: 0 = spawned, 1 = not time yet, -1 = error
  */
-int trigger_shepard_check(const char *registry_path, const char *nbs_root,
-                           int *last_trigger_count);
+int trigger_shepard_check(const char *nbs_root, int interval_secs);
 
 /*
  * trigger_shepard_spawn — Spawn Shepard worker via lock + fork+exec.

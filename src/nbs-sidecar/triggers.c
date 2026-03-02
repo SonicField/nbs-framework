@@ -71,269 +71,61 @@ static const char *resolve_nbs_workers(void)
     return nbs_workers_path;
 }
 
-/* --- Pythia trigger --- */
+/* --- Pythia timer helpers --- */
 
-/*
- * count_dir_by_type — Count files containing type_substr in name.
- */
-static int count_dir_by_type(const char *dir_path, const char *type_substr) {
-    ASSERT_MSG(dir_path != NULL, "count_dir_by_type: dir_path is NULL");
-    ASSERT_MSG(type_substr != NULL, "count_dir_by_type: type_substr is NULL");
-
-    DIR *d = opendir(dir_path);
-    if (!d) return 0;
-
-    int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
-        if (strstr(entry->d_name, type_substr) != NULL) {
-            count++;
-        }
-    }
-    int crc = closedir(d);
-    ASSERT_MSG(crc == 0, "count_dir_by_type: closedir failed: %s",
-               strerror(errno));
-    /* HARDENING #9: postcondition — count must not have overflowed */
-    ASSERT_MSG(count >= 0, "count_dir_by_type: count overflow: %d", count);
-    return count;
-}
-
-/*
- * count_bus_events_by_type — Total events of a given type across both
- * events/ and events/processed/.
- *
- * Some events end up as .ack files in events/ (created by agents
- * manually renaming instead of using nbs-bus ack). These are invisible
- * to scan_events (.event only) but still represent logged events.
- * Counting both directories ensures bucket counts are correct
- * regardless of how events were acknowledged.
- */
-static int count_bus_events_by_type(const char *bus_dir,
-                                     const char *type_substr) {
-    /* HARDENING #16 fix: check NULL before strlen dereference */
-    ASSERT_MSG(bus_dir != NULL, "count_bus_events_by_type: bus_dir is NULL");
-    ASSERT_MSG(type_substr != NULL, "count_bus_events_by_type: type_substr is NULL");
-    ASSERT_MSG(strlen(bus_dir) < 4000,
-           "count_bus_events_by_type: bus_dir too long: %zu", strlen(bus_dir));
-
-    int count = count_dir_by_type(bus_dir, type_substr);
-
-    char processed_path[4096];
-    int n = snprintf(processed_path, sizeof(processed_path),
-                     "%s/processed", bus_dir);
-    if (n >= 0 && (size_t)n < sizeof(processed_path))
-        count += count_dir_by_type(processed_path, type_substr);
-
-    return count;
-}
-
-/*
- * count_scribe_decisions — Count decision entries in the scribe log.
- *
- * Counts lines matching "^### D-" in .nbs/scribe/live-log.md.
- * This is the ground truth for decisions — the scribe always writes
- * to the log, even when it forgets to publish a bus event.
- * Falls back to 0 if the file does not exist.
- */
-static int count_scribe_decisions(const char *nbs_root) {
-    /* HARDENING #12 fix: precondition on nbs_root */
-    ASSERT_MSG(nbs_root != NULL, "count_scribe_decisions: nbs_root is NULL");
-
+static time_t read_pythia_last_run(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "read_pythia_last_run: nbs_root is NULL");
     char path[4096];
-    int n = snprintf(path, sizeof(path),
-                     "%s/.nbs/scribe/live-log.md", nbs_root);
+    int n = snprintf(path, sizeof(path), "%s/.nbs/pythia-last-run", nbs_root);
     if (n < 0 || (size_t)n >= sizeof(path)) return 0;
-
     FILE *f = fopen(path, "r");
     if (!f) return 0;
-
-    int count = 0;
-    char line[512];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "### D-", 6) == 0)
-            count++;
-    }
+    long long ts = 0;
+    if (fscanf(f, "%lld", &ts) != 1) ts = 0;
     fclose(f);
-    return count;
+    return (time_t)ts;
 }
 
-/*
- * read_pythia_interval — Read pythia-interval from config.yaml.
- */
-static int read_pythia_interval(const char *bus_dir) {
-    ASSERT_MSG(bus_dir != NULL, "read_pythia_interval: bus_dir is NULL");
-    ASSERT_MSG(strlen(bus_dir) < 4000,
-           "read_pythia_interval: bus_dir too long: %zu", strlen(bus_dir));
-    char config_path[4096];
-    int n = snprintf(config_path, sizeof(config_path),
-                     "%s/config.yaml", bus_dir);
-    if (n < 0 || (size_t)n >= sizeof(config_path)) return 20;
-
-    FILE *f = fopen(config_path, "r");
-    if (!f) return 20;
-
-    int interval = 20;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "pythia-interval:", 16) == 0) {
-            char *val = line + 16;
-            while (*val == ' ' || *val == '\t') val++;
-            char *endptr;
-            long parsed = strtol(val, &endptr, 10);
-            if (endptr != val && (*endptr == '\n' || *endptr == '\0') && parsed > 0 && parsed <= 100000)
-                interval = (int)parsed;
-            break;
-        }
-    }
-    fclose(f);
-    return interval;
-}
-
-/*
- * read_shared_pythia_bucket — Read last triggered bucket from shared file.
- *
- * Multiple sidecars run independently, each with their own in-memory
- * last_trigger_count. Without coordination, all sidecars independently
- * detect a bucket transition and fire — producing duplicate Pythia
- * assessments. This shared file records which bucket was last triggered
- * by ANY sidecar, preventing duplicates.
- *
- * Returns the last triggered bucket number, or -1 if the file does
- * not exist or is unreadable (first run).
- */
-static int read_shared_pythia_bucket(const char *nbs_root) {
-    /* HARDENING #14 fix: precondition on nbs_root */
-    ASSERT_MSG(nbs_root != NULL, "read_shared_pythia_bucket: nbs_root is NULL");
-
-    char path[4096];
-    int n = snprintf(path, sizeof(path),
-                     "%s/.nbs/pythia-last-bucket", nbs_root);
-    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
-
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
-
-    char buf[32];
-    int bucket = -1;
-    if (fgets(buf, sizeof(buf), f)) {
-        char *endptr;
-        long parsed = strtol(buf, &endptr, 10);
-        if (endptr != buf && parsed >= 0)
-            bucket = (int)parsed;
-    }
-    fclose(f);
-    return bucket;
-}
-
-/*
- * write_shared_pythia_bucket — Atomically write last triggered bucket.
- *
- * Uses tmp+rename for atomicity — same pattern as standup timestamp.
- */
-static void write_shared_pythia_bucket(const char *nbs_root, int bucket) {
-    /* HARDENING #14 fix: precondition on nbs_root */
-    ASSERT_MSG(nbs_root != NULL, "write_shared_pythia_bucket: nbs_root is NULL");
-
+static void write_pythia_last_run(const char *nbs_root, time_t when) {
+    ASSERT_MSG(nbs_root != NULL, "write_pythia_last_run: nbs_root is NULL");
     char path[4096], tmp_path[4096];
-    int n = snprintf(path, sizeof(path),
-                     "%s/.nbs/pythia-last-bucket", nbs_root);
+    int n = snprintf(path, sizeof(path), "%s/.nbs/pythia-last-run", nbs_root);
     if (n < 0 || (size_t)n >= sizeof(path)) return;
-    n = snprintf(tmp_path, sizeof(tmp_path),
-                 "%s/.nbs/pythia-last-bucket.tmp", nbs_root);
-    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return;
-
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (tn < 0 || (size_t)tn >= sizeof(tmp_path)) return;
     FILE *f = fopen(tmp_path, "w");
     if (f) {
-        if (fprintf(f, "%d\n", bucket) < 0) {
-            fclose(f);
-            unlink(tmp_path);
-            return;
-        }
-        if (fclose(f) == 0) {
-            if (rename(tmp_path, path) != 0) {
-                fprintf(stderr, "write_shared_pythia_bucket: rename failed: %s\n",
-                        strerror(errno));
-                unlink(tmp_path);
-            }
-        } else {
+        fprintf(f, "%lld\n", (long long)when);
+        fclose(f);
+        if (rename(tmp_path, path) != 0) {
+            fprintf(stderr, "write_pythia_last_run: rename failed: %s\n",
+                    strerror(errno));
             unlink(tmp_path);
         }
     }
 }
 
-int trigger_pythia_check(const char *registry_path, const char *nbs_root,
-                          int *last_trigger_count) {
-    ASSERT_MSG(registry_path != NULL, "trigger_pythia_check: registry_path is NULL");
+int trigger_pythia_check(const char *nbs_root, int interval_secs) {
     ASSERT_MSG(nbs_root != NULL, "trigger_pythia_check: nbs_root is NULL");
-    ASSERT_MSG(last_trigger_count != NULL, "trigger_pythia_check: last_trigger_count is NULL");
+    ASSERT_MSG(interval_secs > 0,
+               "trigger_pythia_check: interval_secs must be positive, got %d",
+               interval_secs);
 
-    /* Find bus directory from registry */
-    char bus_dir[4096];
-    if (registry_find_first(registry_path, "bus", bus_dir, sizeof(bus_dir)) != 0) {
-        return 1; /* No bus registered */
+    time_t now = time(NULL);
+    time_t last_run = read_pythia_last_run(nbs_root);
+
+    if (last_run == 0) {
+        write_pythia_last_run(nbs_root, now);
+        return 1;
     }
 
-    int interval = read_pythia_interval(bus_dir);
-
-    /* Count decisions from the scribe log (ground truth).
-     * The scribe always writes to the log; bus events are a secondary
-     * signal that the scribe sometimes forgets to publish.
-     * Fall back to bus event count if scribe log is empty/missing. */
-    int decision_count = count_scribe_decisions(nbs_root);
-    if (decision_count == 0)
-        decision_count = count_bus_events_by_type(bus_dir, "decision-logged");
-
-    /* Check if we've crossed a new threshold */
-    int current_bucket = decision_count / interval;
-    int last_bucket = *last_trigger_count / interval;
-
-    if (current_bucket > last_bucket && decision_count > 0) {
-        /*
-         * Cross-sidecar dedup: check shared file before triggering.
-         *
-         * Multiple sidecars each have independent in-memory state. When
-         * a bucket boundary is crossed, ALL sidecars detect it independently.
-         * The shared file records which bucket was last triggered by ANY
-         * sidecar. If another sidecar already triggered this bucket, skip.
-         *
-         * BUG #17 acknowledgement: the read-then-write of the shared
-         * bucket file is not atomic (TOCTOU). Two sidecars can both read
-         * the old bucket, both pass the check, and both write+spawn.
-         * The flock in trigger_pythia_spawn serialises the spawn command
-         * but releases before the spawned worker completes. The dedup is
-         * therefore best-effort, not guaranteed. Worst case: a duplicate
-         * Pythia assessment (expensive but not data-corrupting).
-         */
-        int shared_bucket = read_shared_pythia_bucket(nbs_root);
-        if (shared_bucket >= current_bucket) {
-            /* Another sidecar already triggered this bucket */
-            *last_trigger_count = decision_count;
-            return 1;
-        }
-
-        /* We are the first sidecar to see this bucket — claim it */
-        write_shared_pythia_bucket(nbs_root, current_bucket);
-        *last_trigger_count = decision_count;
-
-        /* Publish bus event for observability */
-        char payload[256];
-        snprintf(payload, sizeof(payload),
-                 "Decision count: %d. Sidecar-triggered Pythia assessment.",
-                 decision_count);
-        bus_client_publish(bus_dir, "sidecar", "pythia-checkpoint", "high",
-                           payload);
-
-        /* Spawn Pythia worker (lock-guarded, fire-and-forget) */
-        trigger_pythia_spawn(nbs_root);
-        return 0;
+    if ((now - last_run) < interval_secs) {
+        return 1;
     }
 
-    /* Sync counter on first run (catch-up without firing) */
-    if (*last_trigger_count == 0 && decision_count > 0) {
-        *last_trigger_count = decision_count;
-    }
-
-    return 1;
+    write_pythia_last_run(nbs_root, now);
+    trigger_pythia_spawn(nbs_root);
+    return 0;
 }
 
 /* --- Standup trigger --- */
@@ -592,140 +384,61 @@ int trigger_pythia_spawn(const char *nbs_root) {
 
 /* --- Shepard trigger --- */
 
-/*
- * read_shepard_interval — Read shepard-interval from config.yaml.
- */
-static int read_shepard_interval(const char *bus_dir) {
-    ASSERT_MSG(bus_dir != NULL, "read_shepard_interval: bus_dir is NULL");
-    ASSERT_MSG(strlen(bus_dir) < 4000,
-           "read_shepard_interval: bus_dir too long: %zu", strlen(bus_dir));
-    char config_path[4096];
-    int n = snprintf(config_path, sizeof(config_path),
-                     "%s/config.yaml", bus_dir);
-    if (n < 0 || (size_t)n >= sizeof(config_path)) return 100;
+/* --- Shepard timer helpers --- */
 
-    FILE *f = fopen(config_path, "r");
-    if (!f) return 100;
-
-    int interval = 100;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "shepard-interval:", 17) == 0) {
-            char *val = line + 17;
-            while (*val == ' ' || *val == '\t') val++;
-            char *endptr;
-            long parsed = strtol(val, &endptr, 10);
-            if (endptr != val && (*endptr == '\n' || *endptr == '\0') && parsed > 0 && parsed <= 100000)
-                interval = (int)parsed;
-            break;
-        }
-    }
-    fclose(f);
-    return interval;
-}
-
-static int read_shared_shepard_bucket(const char *nbs_root) {
-    /* HARDENING #15 fix: precondition on nbs_root */
-    ASSERT_MSG(nbs_root != NULL, "read_shared_shepard_bucket: nbs_root is NULL");
-
+static time_t read_shepard_last_run(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "read_shepard_last_run: nbs_root is NULL");
     char path[4096];
-    int n = snprintf(path, sizeof(path),
-                     "%s/.nbs/shepard-last-bucket", nbs_root);
-    if (n < 0 || (size_t)n >= sizeof(path)) return -1;
-
+    int n = snprintf(path, sizeof(path), "%s/.nbs/shepard-last-run", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
     FILE *f = fopen(path, "r");
-    if (!f) return -1;
-
-    char buf[32];
-    int bucket = -1;
-    if (fgets(buf, sizeof(buf), f)) {
-        char *endptr;
-        long parsed = strtol(buf, &endptr, 10);
-        if (endptr != buf && parsed >= 0)
-            bucket = (int)parsed;
-    }
+    if (!f) return 0;
+    long long ts = 0;
+    if (fscanf(f, "%lld", &ts) != 1) ts = 0;
     fclose(f);
-    return bucket;
+    return (time_t)ts;
 }
 
-static void write_shared_shepard_bucket(const char *nbs_root, int bucket) {
-    /* HARDENING #15 fix: precondition on nbs_root */
-    ASSERT_MSG(nbs_root != NULL, "write_shared_shepard_bucket: nbs_root is NULL");
-
+static void write_shepard_last_run(const char *nbs_root, time_t when) {
+    ASSERT_MSG(nbs_root != NULL, "write_shepard_last_run: nbs_root is NULL");
     char path[4096], tmp_path[4096];
-    int n = snprintf(path, sizeof(path),
-                     "%s/.nbs/shepard-last-bucket", nbs_root);
+    int n = snprintf(path, sizeof(path), "%s/.nbs/shepard-last-run", nbs_root);
     if (n < 0 || (size_t)n >= sizeof(path)) return;
-    n = snprintf(tmp_path, sizeof(tmp_path),
-                 "%s/.nbs/shepard-last-bucket.tmp", nbs_root);
-    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return;
-
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (tn < 0 || (size_t)tn >= sizeof(tmp_path)) return;
     FILE *f = fopen(tmp_path, "w");
     if (f) {
-        if (fprintf(f, "%d\n", bucket) < 0) {
-            fclose(f);
-            unlink(tmp_path);
-            return;
-        }
-        if (fclose(f) == 0) {
-            if (rename(tmp_path, path) != 0) {
-                fprintf(stderr, "write_shared_shepard_bucket: rename failed: %s\n",
-                        strerror(errno));
-                unlink(tmp_path);
-            }
-        } else {
+        fprintf(f, "%lld\n", (long long)when);
+        fclose(f);
+        if (rename(tmp_path, path) != 0) {
+            fprintf(stderr, "write_shepard_last_run: rename failed: %s\n",
+                    strerror(errno));
             unlink(tmp_path);
         }
     }
 }
 
-int trigger_shepard_check(const char *registry_path, const char *nbs_root,
-                           int *last_trigger_count) {
-    ASSERT_MSG(registry_path != NULL, "trigger_shepard_check: registry_path is NULL");
+int trigger_shepard_check(const char *nbs_root, int interval_secs) {
     ASSERT_MSG(nbs_root != NULL, "trigger_shepard_check: nbs_root is NULL");
-    ASSERT_MSG(last_trigger_count != NULL, "trigger_shepard_check: last_trigger_count is NULL");
+    ASSERT_MSG(interval_secs > 0,
+               "trigger_shepard_check: interval_secs must be positive, got %d",
+               interval_secs);
 
-    char bus_dir[4096];
-    if (registry_find_first(registry_path, "bus", bus_dir, sizeof(bus_dir)) != 0) {
+    time_t now = time(NULL);
+    time_t last_run = read_shepard_last_run(nbs_root);
+
+    if (last_run == 0) {
+        write_shepard_last_run(nbs_root, now);
         return 1;
     }
 
-    int interval = read_shepard_interval(bus_dir);
-    int message_count = count_bus_events_by_type(bus_dir, "chat-message");
-
-    int current_bucket = message_count / interval;
-    int last_bucket = *last_trigger_count / interval;
-
-    if (current_bucket > last_bucket && message_count > 0) {
-        /* Cross-sidecar dedup — best-effort via shared bucket file.
-         * Same TOCTOU limitation as Pythia (see BUG #17 comment there). */
-        int shared_bucket = read_shared_shepard_bucket(nbs_root);
-        if (shared_bucket >= current_bucket) {
-            *last_trigger_count = message_count;
-            return 1;
-        }
-
-        write_shared_shepard_bucket(nbs_root, current_bucket);
-        *last_trigger_count = message_count;
-
-        /* Publish bus event */
-        char payload[256];
-        snprintf(payload, sizeof(payload),
-                 "Message count: %d. Sidecar-triggered Shepard assessment.",
-                 message_count);
-        bus_client_publish(bus_dir, "sidecar", "shepard-checkpoint", "normal",
-                           payload);
-
-        trigger_shepard_spawn(nbs_root);
-        return 0;
+    if ((now - last_run) < interval_secs) {
+        return 1;
     }
 
-    /* Sync counter on first run */
-    if (*last_trigger_count == 0 && message_count > 0) {
-        *last_trigger_count = message_count;
-    }
-
-    return 1;
+    write_shepard_last_run(nbs_root, now);
+    trigger_shepard_spawn(nbs_root);
+    return 0;
 }
 
 int trigger_shepard_spawn(const char *nbs_root) {

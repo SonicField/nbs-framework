@@ -756,24 +756,21 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             }
 
             /* Wall-clock pythia trigger — trajectory & risk assessment.
-             * Event-count based (fires every N scribe decisions) but
-             * checked on wall-clock to decouple from notification injection.
-             * Previously tied to should_inject_notify which only ran when
-             * agents were idle at a prompt — pythia went silent for hours
-             * during active work. */
-            if ((now_wc - state.last_pythia_check) >= 60) {
+             * Timer-based, fires every pythia_interval seconds.
+             * Previously used decision-count buckets which silently broke. */
+            if (cfg->pythia_interval > 0 &&
+                (now_wc - state.last_pythia_check) >= 60) {
                 state.last_pythia_check = now_wc;
-                trigger_pythia_check(registry_path, cfg->nbs_root,
-                                      &state.pythia_last_trigger_count);
+                trigger_pythia_check(cfg->nbs_root, cfg->pythia_interval);
             }
 
             /* Wall-clock shepard trigger — team effectiveness assessment.
-             * Event-count based (fires every N chat messages) but checked
-             * on wall-clock for the same reason as pythia. */
-            if ((now_wc - state.last_shepard_check) >= 60) {
+             * Timer-based, fires every shepard_interval seconds.
+             * Previously used message-count buckets which had the same issue. */
+            if (cfg->shepard_interval > 0 &&
+                (now_wc - state.last_shepard_check) >= 60) {
                 state.last_shepard_check = now_wc;
-                trigger_shepard_check(registry_path, cfg->nbs_root,
-                                       &state.shepard_last_trigger_count);
+                trigger_shepard_check(cfg->nbs_root, cfg->shepard_interval);
             }
         }
 

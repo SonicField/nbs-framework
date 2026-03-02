@@ -126,6 +126,8 @@ int main(int argc, char **argv) {
     cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
     cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
     cfg.librarian_interval = env_int("NBS_LIBRARIAN_INTERVAL", 15) * 60;
+    cfg.pythia_interval = env_int("NBS_PYTHIA_INTERVAL", 30) * 60;
+    cfg.shepard_interval = env_int("NBS_SHEPARD_INTERVAL", 20) * 60;
 
     /* After all env_int calls, timing assertions are deferred until after
      * command-line parsing so that argv overrides are applied first. */

@@ -130,11 +130,6 @@ static void mkdirs(const char *path)
     mkdir(tmp, 0755);
 }
 
-static void touch(const char *path)
-{
-    FILE *f = fopen(path, "w");
-    if (f) fclose(f);
-}
 
 static void write_file(const char *path, const char *content)
 {
@@ -151,44 +146,6 @@ static void rmrf(const char *path)
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
     (void)system(cmd);
 }
-
-/*
- * create_pythia_env — Set up a temporary directory tree for pythia tests.
- *
- * Creates:
- *   <tmpdir>/project/.nbs/events/processed/   (bus dir + processed subdir)
- *   <tmpdir>/registry                          (registry file with bus: entry)
- *
- * Populates processed/ with n_events files named "decision-logged-<i>".
- */
-static void create_pythia_env(const char *tmpdir,
-                              char *nbs_root, size_t nr_size,
-                              char *registry_path, size_t rp_size,
-                              char *bus_dir, size_t bd_size,
-                              int n_events)
-{
-    snprintf(nbs_root, nr_size, "%s/project", tmpdir);
-    snprintf(bus_dir, bd_size, "%s/.nbs/events", nbs_root);
-
-    char processed[L2];
-    snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
-    mkdirs(processed);
-
-    /* Create decision-logged event files */
-    for (int i = 0; i < n_events; i++) {
-        char fpath[L3];
-        snprintf(fpath, sizeof(fpath), "%s/decision-logged-%04d",
-                 processed, i);
-        touch(fpath);
-    }
-
-    /* Write registry file with bus entry */
-    snprintf(registry_path, rp_size, "%s/registry", tmpdir);
-    char entry[L4];
-    snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
-    write_file(registry_path, entry);
-}
-
 /*
  * create_standup_env — Set up a temporary directory tree for standup tests.
  *
@@ -232,118 +189,95 @@ int main(void)
         return 1;
     }
 
+
     /* =================================================================
-     * trigger_pythia_check tests
+     * trigger_pythia_check tests (timer-based)
      * ================================================================= */
     printf("\n-- trigger_pythia_check --\n");
 
-    /* Test 1: Below threshold, no action */
+    /* Test 1: First run initialises timestamp */
     {
-        char sub[] = "/tmp/nbs_trig_t1_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_pt1_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 5);
+        int rc = trigger_pythia_check(nbs_root, 1800);
+        CHECK("T1: first run returns 1 (no fire)", rc == 1);
 
-        int last = 0;
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        /* 5 events, default interval=20: bucket 0/20 = 0, no crossing */
-        /* First run with last=0 and count=5 > 0: sync path sets last=5 */
-        CHECK("T1: below threshold returns 1", rc == 1);
-        /* After sync, last is set to 5 (first-run catch-up) */
-        /* Call again to verify no action */
-        rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T1: second call still returns 1", rc == 1);
-        CHECK("T1: last_trigger_count unchanged at 5", last == 5);
-
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/pythia-last-run", nbs_root);
+        struct stat st;
+        CHECK("T1: pythia-last-run file created", stat(ts_path, &st) == 0);
         rmrf(sub);
     }
 
-    /* Test 2: Crosses threshold, publishes */
+    /* Test 2: Interval not elapsed */
     {
-        char sub[] = "/tmp/nbs_trig_t2_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_pt2_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 20);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/pythia-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 10));
+        write_file(ts_path, ts_buf);
 
-        /*
-         * count=20, interval=20: current_bucket=1, last_bucket=0 => fires.
-         * Need last non-zero (to skip sync path) and in bucket 0.
-         */
-        int last = 1;  /* bucket 0 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T2: crosses threshold returns 0", rc == 0);
-        CHECK("T2: last_trigger_count updated to 20", last == 20);
-
+        int rc = trigger_pythia_check(nbs_root, 1800);
+        CHECK("T2: interval not elapsed returns 1", rc == 1);
         rmrf(sub);
     }
 
-    /* Test 3: First run syncs without firing */
+    /* Test 3: Interval elapsed, fires */
     {
-        char sub[] = "/tmp/nbs_trig_t3_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_pt3_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 15);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/pythia-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 2000));
+        write_file(ts_path, ts_buf);
 
-        int last = 0;
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T3: first run returns 1 (no fire)", rc == 1);
-        CHECK("T3: last_trigger_count synced to 15", last == 15);
-
+        int rc = trigger_pythia_check(nbs_root, 1800);
+        CHECK("T3: interval elapsed returns 0 (fires)", rc == 0);
         rmrf(sub);
     }
 
-    /* Test 4: Already past threshold, no re-fire */
+    /* Test 4: Double-fire suppression */
     {
-        char sub[] = "/tmp/nbs_trig_t4_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_pt4_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 25);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/pythia-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 2000));
+        write_file(ts_path, ts_buf);
 
-        /* last=25, count=25: same bucket, no crossing */
-        int last = 25;
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T4: already past threshold returns 1", rc == 1);
-        CHECK("T4: last_trigger_count unchanged at 25", last == 25);
-
+        int rc1 = trigger_pythia_check(nbs_root, 1800);
+        CHECK("T4: first call fires (returns 0)", rc1 == 0);
+        int rc2 = trigger_pythia_check(nbs_root, 1800);
+        CHECK("T4: second call suppressed (returns 1)", rc2 == 1);
         rmrf(sub);
     }
 
-    /* Test 5: Config file sets interval */
+    /* Test 5: Minimum valid interval (1 second) */
     {
-        char sub[] = "/tmp/nbs_trig_t5_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_pt5_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 10);
-
-        /* Write config.yaml with interval=10 into bus_dir */
-        char config_path[L3];
-        snprintf(config_path, sizeof(config_path), "%s/config.yaml", bus_dir);
-        write_file(config_path, "pythia-interval: 10\n");
-
-        /*
-         * count=10, interval=10: current_bucket=1, last_bucket=0 => fires.
-         * Need last non-zero and in bucket 0 to avoid sync path.
-         */
-        int last = 1;  /* bucket 0 for interval 10 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T5: config interval=10, 10 events fires", rc == 0);
-        CHECK("T5: last_trigger_count updated to 10", last == 10);
-
+        int rc = trigger_pythia_check(nbs_root, 1);
+        CHECK("T5: interval=1 first run returns 1", rc == 1);
         rmrf(sub);
     }
 
@@ -660,269 +594,93 @@ int main(void)
     }
 
     /* =================================================================
-     * Cross-sidecar Pythia dedup tests (D-1902 / D-1771840755d)
-     *
-     * The bug: multiple sidecars each have independent in-memory
-     * last_trigger_count. When a bucket boundary is crossed, ALL
-     * sidecars independently detect it and fire. The fix: a shared
-     * file (.nbs/pythia-last-bucket) records the last triggered
-     * bucket, preventing duplicate triggers across sidecars.
-     * ================================================================= */
-    printf("\n-- trigger_pythia_check (cross-sidecar dedup) --\n");
-
-    /* Test 17: Second sidecar suppressed by shared file */
-    {
-        char sub[] = "/tmp/nbs_trig_t17_XXXXXX";
-        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
-
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 20);
-
-        /*
-         * Simulate sidecar A having already triggered bucket 1:
-         * Write shared file with bucket=1, then call trigger_pythia_check
-         * as sidecar B with last=1 (bucket 0). Sidecar B sees the bucket
-         * crossing but the shared file says bucket 1 was already handled.
-         */
-        char shared_path[L3];
-        snprintf(shared_path, sizeof(shared_path),
-                 "%s/.nbs/pythia-last-bucket", nbs_root);
-        write_file(shared_path, "1\n");
-
-        int last = 1;  /* bucket 0 for interval 20 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T17: second sidecar suppressed by shared file, returns 1",
-              rc == 1);
-        CHECK("T17: last_trigger_count still updated to 20", last == 20);
-
-        rmrf(sub);
-    }
-
-    /* Test 18: New bucket after shared file triggers normally */
-    {
-        char sub[] = "/tmp/nbs_trig_t18_XXXXXX";
-        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
-
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 40);
-
-        /*
-         * Shared file says bucket 1 was triggered. Decision count is 40,
-         * so current_bucket=2 (40/20). Since 2 > 1, this is a new bucket
-         * that hasn't been handled — should fire.
-         */
-        char shared_path[L3];
-        snprintf(shared_path, sizeof(shared_path),
-                 "%s/.nbs/pythia-last-bucket", nbs_root);
-        write_file(shared_path, "1\n");
-
-        int last = 21;  /* bucket 1 for interval 20 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T18: new bucket fires despite shared file, returns 0",
-              rc == 0);
-        CHECK("T18: last_trigger_count updated to 40", last == 40);
-
-        /* Verify shared file was updated to bucket 2 */
-        FILE *f = fopen(shared_path, "r");
-        int stored_bucket = -1;
-        if (f) {
-            char buf[32];
-            if (fgets(buf, sizeof(buf), f)) {
-                stored_bucket = atoi(buf);
-            }
-            fclose(f);
-        }
-        CHECK("T18: shared file updated to bucket 2", stored_bucket == 2);
-
-        rmrf(sub);
-    }
-
-    /* Test 19: Missing shared file does not suppress (first trigger) */
-    {
-        char sub[] = "/tmp/nbs_trig_t19_XXXXXX";
-        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
-
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 20);
-
-        /* No shared file exists — first trigger should succeed */
-        char shared_path[L3];
-        snprintf(shared_path, sizeof(shared_path),
-                 "%s/.nbs/pythia-last-bucket", nbs_root);
-        unlink(shared_path);  /* ensure absent */
-
-        int last = 1;  /* bucket 0 for interval 20 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T19: missing shared file allows trigger, returns 0", rc == 0);
-        CHECK("T19: last_trigger_count updated to 20", last == 20);
-
-        /* Verify shared file was created with bucket 1 */
-        FILE *f = fopen(shared_path, "r");
-        CHECK("T19: shared file was created", f != NULL);
-        if (f) {
-            char buf[32];
-            int stored_bucket = -1;
-            if (fgets(buf, sizeof(buf), f)) {
-                stored_bucket = atoi(buf);
-            }
-            fclose(f);
-            CHECK("T19: shared file contains bucket 1", stored_bucket == 1);
-        }
-
-        rmrf(sub);
-    }
-
-    /* =================================================================
-     * trigger_shepard_check tests
-     *
-     * Structurally identical to trigger_pythia_check but counts
-     * "chat-message" events with default interval 100.
+     * trigger_shepard_check tests (timer-based)
      * ================================================================= */
     printf("\n-- trigger_shepard_check --\n");
 
-    /* Test 20: Below threshold, no action */
+    /* Test 1: First run initialises timestamp */
     {
-        char sub[] = "/tmp/nbs_trig_t20_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_st1_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        /* Reuse create_pythia_env but name events "chat-message-*" */
-        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
-        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
-        char processed[L3];
-        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
-        mkdirs(processed);
+        int rc = trigger_shepard_check(nbs_root, 1800);
+        CHECK("T20: first run returns 1 (no fire)", rc == 1);
 
-        /* Create 10 chat-message events (default interval=100) */
-        for (int i = 0; i < 10; i++) {
-            char fpath[L4];
-            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
-                     processed, i);
-            touch(fpath);
-        }
-
-        snprintf(registry, sizeof(registry), "%s/registry", sub);
-        char entry[L4];
-        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
-        write_file(registry, entry);
-
-        int last = 0;
-        int rc = trigger_shepard_check(registry, nbs_root, &last);
-        CHECK("T20: below threshold returns 1", rc == 1);
-        /* First run syncs: last should be set to 10 */
-        rc = trigger_shepard_check(registry, nbs_root, &last);
-        CHECK("T20: second call still returns 1", rc == 1);
-        CHECK("T20: last_trigger_count is 10", last == 10);
-
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/shepard-last-run", nbs_root);
+        struct stat st;
+        CHECK("T20: shepard-last-run file created", stat(ts_path, &st) == 0);
         rmrf(sub);
     }
 
-    /* Test 21: Crosses threshold, fires */
+    /* Test 2: Interval not elapsed */
     {
-        char sub[] = "/tmp/nbs_trig_t21_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_st2_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
-        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
-        char processed[L3];
-        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
-        mkdirs(processed);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/shepard-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 10));
+        write_file(ts_path, ts_buf);
 
-        /* Create 100 chat-message events — crosses bucket 0→1 */
-        for (int i = 0; i < 100; i++) {
-            char fpath[L4];
-            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
-                     processed, i);
-            touch(fpath);
-        }
-
-        snprintf(registry, sizeof(registry), "%s/registry", sub);
-        char entry[L4];
-        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
-        write_file(registry, entry);
-
-        int last = 1;  /* bucket 0 for interval 100 */
-        int rc = trigger_shepard_check(registry, nbs_root, &last);
-        CHECK("T21: crosses threshold returns 0", rc == 0);
-        CHECK("T21: last_trigger_count updated to 100", last == 100);
-
+        int rc = trigger_shepard_check(nbs_root, 1800);
+        CHECK("T21: interval not elapsed returns 1", rc == 1);
         rmrf(sub);
     }
 
-    /* Test 22: First run syncs without firing */
+    /* Test 3: Interval elapsed, fires */
     {
-        char sub[] = "/tmp/nbs_trig_t22_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_st3_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
-        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
-        char processed[L3];
-        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
-        mkdirs(processed);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/shepard-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 2000));
+        write_file(ts_path, ts_buf);
 
-        for (int i = 0; i < 50; i++) {
-            char fpath[L4];
-            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
-                     processed, i);
-            touch(fpath);
-        }
-
-        snprintf(registry, sizeof(registry), "%s/registry", sub);
-        char entry[L4];
-        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
-        write_file(registry, entry);
-
-        int last = 0;
-        int rc = trigger_shepard_check(registry, nbs_root, &last);
-        CHECK("T22: first run returns 1 (sync only)", rc == 1);
-        CHECK("T22: last_trigger_count synced to 50", last == 50);
-
+        int rc = trigger_shepard_check(nbs_root, 1800);
+        CHECK("T22: interval elapsed returns 0 (fires)", rc == 0);
         rmrf(sub);
     }
 
-    /* Test 23: Cross-sidecar dedup via shared file */
+    /* Test 4: Double-fire suppression */
     {
-        char sub[] = "/tmp/nbs_trig_t23_XXXXXX";
+        char sub[] = "/tmp/nbs_trig_st4_XXXXXX";
         if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
-        snprintf(bus_dir, sizeof(bus_dir), "%s/.nbs/events", nbs_root);
-        char processed[L3];
-        snprintf(processed, sizeof(processed), "%s/processed", bus_dir);
-        mkdirs(processed);
+        char ts_path[L3]; snprintf(ts_path, sizeof(ts_path), "%s/.nbs/shepard-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32]; snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 2000));
+        write_file(ts_path, ts_buf);
 
-        for (int i = 0; i < 100; i++) {
-            char fpath[L4];
-            snprintf(fpath, sizeof(fpath), "%s/chat-message-%04d",
-                     processed, i);
-            touch(fpath);
-        }
+        int rc1 = trigger_shepard_check(nbs_root, 1800);
+        CHECK("T23: first call fires (returns 0)", rc1 == 0);
+        int rc2 = trigger_shepard_check(nbs_root, 1800);
+        CHECK("T23: second call suppressed (returns 1)", rc2 == 1);
+        rmrf(sub);
+    }
 
-        snprintf(registry, sizeof(registry), "%s/registry", sub);
-        char entry[L4];
-        snprintf(entry, sizeof(entry), "bus:%s\n", bus_dir);
-        write_file(registry, entry);
+    /* Test 5: Minimum valid interval (1 second) */
+    {
+        char sub[] = "/tmp/nbs_trig_st5_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+        char nbs_root[L1]; snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2]; snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
 
-        /* Simulate another sidecar having already triggered bucket 1 */
-        char shared_path[L3];
-        snprintf(shared_path, sizeof(shared_path),
-                 "%s/.nbs/shepard-last-bucket", nbs_root);
-        write_file(shared_path, "1\n");
-
-        int last = 1;  /* bucket 0 */
-        int rc = trigger_shepard_check(registry, nbs_root, &last);
-        CHECK("T23: shared file suppresses duplicate, returns 1", rc == 1);
-        CHECK("T23: last_trigger_count still updated to 100", last == 100);
-
+        int rc = trigger_shepard_check(nbs_root, 1);
+        CHECK("T24: interval=1 first run returns 1", rc == 1);
         rmrf(sub);
     }
 
@@ -1262,29 +1020,6 @@ int main(void)
         rmrf(sub);
     }
 
-    /* Test 33: HARDENING #9 — count_dir_by_type returns non-negative.
-     *
-     * Verify count is correct for an empty directory and a populated one.
-     * The postcondition assert in count_dir_by_type fires if count < 0. */
-    {
-        char sub[] = "/tmp/nbs_trig_t33_XXXXXX";
-        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
-
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        /* Create env with 0 events — count should be 0, not negative */
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 0);
-
-        int last = 0;
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        /* No events, no bus events, no scribe decisions — should be clean */
-        CHECK("T33: zero events, no action", rc == 1);
-        CHECK("T33: last_trigger_count stays 0", last == 0);
-
-        rmrf(sub);
-    }
-
     /* Test 34: HARDENING #3 — heartbeat interval=0 returns 1 (disable).
      *
      * Verify that interval=0 is still the documented disable signal
@@ -1301,35 +1036,6 @@ int main(void)
         time_t last_hb = 1;
         int rc = trigger_heartbeat(registry, "test-handle", 0, &last_hb);
         CHECK("T34: heartbeat interval=0 returns 1 (disabled)", rc == 1);
-
-        rmrf(sub);
-    }
-
-    /* Test 35: Pythia falls back to bus events when scribe log is empty.
-     *
-     * count_scribe_decisions returns 0 when the log doesn't exist,
-     * so the code falls back to counting decision-logged bus events.
-     * Verify this fallback path works. */
-    {
-        char sub[] = "/tmp/nbs_trig_t35_XXXXXX";
-        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
-
-        char nbs_root[L1], registry[L1], bus_dir[L2];
-        /* Create 20 decision-logged events (crosses bucket 0→1) */
-        create_pythia_env(sub, nbs_root, sizeof(nbs_root),
-                          registry, sizeof(registry),
-                          bus_dir, sizeof(bus_dir), 20);
-
-        /* Ensure no scribe log exists — forces fallback to bus events */
-        char scribe_log[L3];
-        snprintf(scribe_log, sizeof(scribe_log),
-                 "%s/.nbs/scribe/live-log.md", nbs_root);
-        unlink(scribe_log);
-
-        int last = 1;  /* bucket 0 */
-        int rc = trigger_pythia_check(registry, nbs_root, &last);
-        CHECK("T35: pythia fires on bus events (scribe fallback)", rc == 0);
-        CHECK("T35: last_trigger_count updated to 20", last == 20);
 
         rmrf(sub);
     }
