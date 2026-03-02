@@ -131,30 +131,31 @@ static watchdog_state_t g_watchdog;
 
 /* Resolve project root by walking up from chat file to find .nbs/ directory */
 static int resolve_project_root(const char *chat_path, char *out, size_t out_size) {
+    /* Resolve to absolute path first — handles relative paths like
+     * .nbs/chat/live.chat which would otherwise fail the walk-up */
+    char *abs = realpath(chat_path, NULL);
+    if (!abs) return -1;
+
     /* Start from the directory containing the chat file */
     char dir[4096];
-    int n = snprintf(dir, sizeof(dir), "%s", chat_path);
+    int n = snprintf(dir, sizeof(dir), "%s", abs);
+    free(abs);
     if (n <= 0 || (size_t)n >= sizeof(dir)) return -1;
 
     /* Strip filename to get directory */
     char *slash = strrchr(dir, '/');
     if (slash) *slash = '\0';
-    else { dir[0] = '.'; dir[1] = '\0'; }
+    else return -1; /* absolute path always has a slash */
 
     /* Walk up looking for .nbs/ */
     for (int i = 0; i < 10; i++) {
-        char probe[4096];
+        char probe[4096 + 8];
         snprintf(probe, sizeof(probe), "%s/.nbs", dir);
         struct stat st;
         if (stat(probe, &st) == 0 && S_ISDIR(st.st_mode)) {
-            /* Resolve to absolute path */
-            char *real = realpath(dir, NULL);
-            if (real) {
-                int sn = snprintf(out, out_size, "%s", real);
-                free(real);
-                return (sn > 0 && (size_t)sn < out_size) ? 0 : -1;
-            }
-            return -1;
+            /* dir is already absolute (resolved at top) */
+            int sn = snprintf(out, out_size, "%s", dir);
+            return (sn > 0 && (size_t)sn < out_size) ? 0 : -1;
         }
         /* Go up one level */
         slash = strrchr(dir, '/');
