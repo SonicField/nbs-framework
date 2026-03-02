@@ -612,9 +612,7 @@ int bus_check(const char *events_dir, const char *handle)
         return -1;
     }
 
-    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
-     * Requires sufficient stack size (e.g. 8 MB default on Linux).
-     * Flagged for architect review — do not refactor to heap without approval. */
+    /* ~196 KB stack allocation (sizeof(bus_event_t) * 256). */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {
@@ -769,8 +767,7 @@ int bus_ack_all(const char *events_dir, const char *handle)
         return -1;
     }
 
-    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
-     * Requires sufficient stack size. See bus_check for details. */
+    /* ~196 KB stack allocation (sizeof(bus_event_t) * 256). */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {
@@ -909,8 +906,7 @@ int bus_status(const char *events_dir)
     }
 
     /* Count pending events by priority */
-    /* WARNING: ~3.1 MB stack allocation (sizeof(bus_event_t) * 4096).
-     * Requires sufficient stack size. See bus_check for details. */
+    /* ~196 KB stack allocation (sizeof(bus_event_t) * 256). */
     bus_event_t events[BUS_MAX_EVENTS];
     int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
     if (count < 0) {

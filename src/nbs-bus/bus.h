@@ -41,7 +41,7 @@
 #define BUS_MAX_HANDLE      128
 #define BUS_MAX_TYPE        128
 #define BUS_MAX_PAYLOAD   16384
-#define BUS_MAX_EVENTS     4096
+#define BUS_MAX_EVENTS      256
 #define BUS_MAX_FILENAME    512
 #define BUS_MAX_FULLPATH   (BUS_MAX_PATH + BUS_MAX_FILENAME + 64)
 
