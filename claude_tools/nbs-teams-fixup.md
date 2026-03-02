@@ -221,17 +221,19 @@ rm -f .nbs/pids/<handle>.pid
 
 Respawn with a fresh session. Use `NBS_INITIAL_PROMPT` to fold the role prompt into the sidecar's initial prompt when a custom role briefing is needed:
 
+**Do NOT set NBS_MODEL on respawn.** The default in `nbs-claude` is `opus[1m]` (1M context window). If you read a model from session metadata and pass it, you propagate stale values through restarts. Let the default work.
+
 ```bash
 NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" \
     tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude --dangerously-skip-permissions"
+    "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude"
 ```
 
 If no custom prompt is needed (the sidecar's default handle prompt is sufficient):
 
 ```bash
 tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions"
+    "NBS_HANDLE=<handle> bin/nbs-claude"
 ```
 
 Wait ~15 seconds for initialisation, then verify the agent is processing:
