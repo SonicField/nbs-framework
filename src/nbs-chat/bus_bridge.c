@@ -514,7 +514,10 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
     snprintf(payload, sizeof(payload), "%s: %s", handle, message);
 
     /* Publish chat-message event */
-    bus_publish(events_dir, "nbs-chat", "chat-message", "normal", payload);
+    if (bus_publish(events_dir, "nbs-chat", "chat-message", "normal", payload) != 0) {
+        fprintf(stderr, "bus_bridge_after_send: failed to publish chat-message "
+                "event for '%s'\n", handle);
+    }
 
     /* Check for @mentions */
     char mentions[MAX_MENTIONS][MAX_MENTION_HANDLE_LEN];
@@ -568,16 +571,23 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
                 char mention_payload[MAX_PAYLOAD_LEN];
                 snprintf(mention_payload, sizeof(mention_payload),
                          "@%s from %s: %s", participant, handle, message);
-                bus_publish(events_dir, "nbs-chat", event_type, priority,
-                            mention_payload);
+                if (bus_publish(events_dir, "nbs-chat", event_type, priority,
+                                mention_payload) != 0) {
+                    fprintf(stderr, "bus_bridge_after_send: failed to publish "
+                            "%s event for @%s (team expansion)\n",
+                            event_type, participant);
+                }
             }
         } else {
             /* Single-handle mention/interrupt/query */
             char mention_payload[MAX_PAYLOAD_LEN];
             snprintf(mention_payload, sizeof(mention_payload),
                      "@%s from %s: %s", mentions[i], handle, message);
-            bus_publish(events_dir, "nbs-chat", event_type, priority,
-                        mention_payload);
+            if (bus_publish(events_dir, "nbs-chat", event_type, priority,
+                            mention_payload) != 0) {
+                fprintf(stderr, "bus_bridge_after_send: failed to publish "
+                        "%s event for @%s\n", event_type, mentions[i]);
+            }
         }
     }
 
@@ -609,7 +619,10 @@ int bus_bridge_human_input(const char *chat_path, const char *handle,
     snprintf(payload, sizeof(payload), "%s: %s", handle, message);
 
     /* Publish human-input event at high priority */
-    bus_publish(events_dir, "nbs-chat-terminal", "human-input", "high", payload);
+    if (bus_publish(events_dir, "nbs-chat-terminal", "human-input", "high", payload) != 0) {
+        fprintf(stderr, "bus_bridge_human_input: failed to publish human-input "
+                "event for '%s'\n", handle);
+    }
 
     /* Postcondition: always returns 0 — bus bridge never fails */
     return 0;

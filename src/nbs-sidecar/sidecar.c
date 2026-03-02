@@ -130,9 +130,11 @@ static void build_recovery_prompt(const sidecar_config_t *cfg,
 /*
  * handle_interrupt — Send Escape every 10s for 60s, inject /nbs-notify
  * on success, post URGENT on failure.
+ *
+ * Returns 0 on success (interrupt delivered), -1 on failure.
  */
-static void handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
-                              const char *registry_path) {
+static int handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
+                             const char *registry_path) {
     ASSERT_MSG(tp != NULL, "handle_interrupt: tp is NULL");
     ASSERT_MSG(cfg != NULL, "handle_interrupt: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_interrupt: registry_path is NULL");
@@ -182,9 +184,17 @@ done:
             char msg[SIDECAR_MAX_MESSAGE];
             snprintf(msg, sizeof(msg),
                      "URGENT: @team - agent unresponsive %s", cfg->handle);
-            chat_client_send(chat_path, "sidecar", msg);
+            int rc = chat_client_send(chat_path, "sidecar", msg);
+            if (rc != 0) {
+                fprintf(stderr, "handle_interrupt: chat_client_send URGENT failed "
+                        "for '%s'\n", cfg->handle);
+            }
         }
+        fprintf(stderr, "handle_interrupt: failed to deliver interrupt "
+                "for '%s' within 60s\n", cfg->handle);
+        return -1;
     }
+    return 0;
 }
 
 /*
@@ -194,15 +204,20 @@ done:
  * agent's terminal after stripping ANSI escapes and truncating
  * each line to 80 characters. This keeps the output compact even
  * when tool calls wrap across multiple terminal columns.
+ *
+ * Returns 0 on success, -1 on any failure.
  */
-static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
-                           const char *registry_path) {
+static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
+                          const char *registry_path) {
     ASSERT_MSG(tp != NULL, "handle_query: tp is NULL");
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
     char *content = tp->capture(tp, 8);
-    if (!content) return;
+    if (!content) {
+        fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
+        return -1;
+    }
 
     strip_ansi(content);
 
@@ -232,23 +247,35 @@ static void handle_query(transport_t *tp, const sidecar_config_t *cfg,
     sanitise_at_signs(truncated);
     char *escaped = escape_mentions(truncated);
     if (!escaped) {
-        fprintf(stderr, "handle_query: escape_mentions returned NULL\n");
+        fprintf(stderr, "handle_query: escape_mentions returned NULL for '%s'\n",
+                cfg->handle);
         free(content);
-        return;
+        return -1;
     }
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
     if (registry_find_first(registry_path, "chat",
-                             chat_path, sizeof(chat_path)) == 0) {
-        char msg[SIDECAR_MAX_CONTENT];
-        snprintf(msg, sizeof(msg),
-                 "tmux pane for %s:\n%s", cfg->handle, escaped);
-        chat_client_send(chat_path, "sidecar", msg);
+                             chat_path, sizeof(chat_path)) != 0) {
+        fprintf(stderr, "handle_query: no chat registered for '%s'\n",
+                cfg->handle);
+        free(escaped);
+        free(content);
+        return -1;
+    }
+
+    char msg[SIDECAR_MAX_CONTENT];
+    snprintf(msg, sizeof(msg),
+             "tmux pane for %s:\n%s", cfg->handle, escaped);
+    int rc = chat_client_send(chat_path, "sidecar", msg);
+    if (rc != 0) {
+        fprintf(stderr, "handle_query: chat_client_send failed for '%s'\n",
+                cfg->handle);
     }
 
     free(escaped);
     free(content);
+    return rc;
 }
 
 /* --- Dialogue response --- */
@@ -560,17 +587,38 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
+                char event_file[1024];
+                int matched = 0;
                 if (bus_client_check_typed(bus_dir, "chat-interrupt",
                                             cfg->handle, payload,
-                                            sizeof(payload)) == 0 ||
-                    bus_client_check_typed(bus_dir, "chat-interrupt",
-                                            "team", payload,
-                                            sizeof(payload)) == 0) {
-                    handle_interrupt(tp, cfg, registry_path);
+                                            sizeof(payload),
+                                            event_file, sizeof(event_file)) == 0) {
+                    matched = 1;
+                } else if (bus_client_check_typed(bus_dir, "chat-interrupt",
+                                                   "team", payload,
+                                                   sizeof(payload),
+                                                   event_file, sizeof(event_file)) == 0) {
+                    matched = 1;
+                }
+                if (matched) {
+                    if (handle_interrupt(tp, cfg, registry_path) == 0) {
+                        bus_client_ack_event(bus_dir, event_file);
+                        state.interrupt_retry_count = 0;
+                    } else {
+                        state.interrupt_retry_count++;
+                        if (state.interrupt_retry_count >= 3) {
+                            fprintf(stderr, "sidecar: interrupt failed 3 times, "
+                                    "acking to clear\n");
+                            bus_client_ack_event(bus_dir, event_file);
+                            state.interrupt_retry_count = 0;
+                        }
+                    }
                     state.idle_seconds = 0;
                     state.last_content_hash = 0;
                     sleep(3);
                     continue;
+                } else {
+                    state.interrupt_retry_count = 0;
                 }
             }
         }
@@ -581,12 +629,22 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
+                char event_file[1024];
+                int matched = 0;
                 if (bus_client_check_typed(bus_dir, "chat-mention",
                                             cfg->handle, payload,
-                                            sizeof(payload)) == 0 ||
-                    bus_client_check_typed(bus_dir, "chat-mention",
-                                            "team", payload,
-                                            sizeof(payload)) == 0) {
+                                            sizeof(payload),
+                                            event_file, sizeof(event_file)) == 0) {
+                    matched = 1;
+                } else if (bus_client_check_typed(bus_dir, "chat-mention",
+                                                   "team", payload,
+                                                   sizeof(payload),
+                                                   event_file, sizeof(event_file)) == 0) {
+                    matched = 1;
+                }
+                if (matched) {
+                    /* Mentions are stored for later injection, not processed
+                     * immediately. Ack on successful storage. */
                     state.mention_detected = 1;
                     /* Cap payload */
                     if (strlen(payload) >= sizeof(state.mention_payload)) {
@@ -600,6 +658,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         snprintf(state.mention_payload,
                                  sizeof(state.mention_payload), "%s", payload);
                     }
+                    /* Mention storage always succeeds — ack immediately */
+                    bus_client_ack_event(bus_dir, event_file);
+                    state.mention_retry_count = 0;
+                } else {
+                    state.mention_retry_count = 0;
                 }
             }
         }
@@ -610,10 +673,25 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
+                char event_file[1024];
                 if (bus_client_check_typed(bus_dir, "chat-query",
                                             cfg->handle, payload,
-                                            sizeof(payload)) == 0) {
-                    handle_query(tp, cfg, registry_path);
+                                            sizeof(payload),
+                                            event_file, sizeof(event_file)) == 0) {
+                    if (handle_query(tp, cfg, registry_path) == 0) {
+                        bus_client_ack_event(bus_dir, event_file);
+                        state.query_retry_count = 0;
+                    } else {
+                        state.query_retry_count++;
+                        if (state.query_retry_count >= 3) {
+                            fprintf(stderr, "sidecar: query failed 3 times, "
+                                    "acking to clear\n");
+                            bus_client_ack_event(bus_dir, event_file);
+                            state.query_retry_count = 0;
+                        }
+                    }
+                } else {
+                    state.query_retry_count = 0;
                 }
             }
         }

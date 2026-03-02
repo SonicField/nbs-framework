@@ -346,14 +346,20 @@ static void test_check_typed_match(void)
                     "hey @testhandle check this out");
 
     char payload_out[4096] = {0};
+    char event_file[1024] = {0};
     int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
-                                    payload_out, sizeof(payload_out));
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
 
     CHECK("typed match: returns 0 (match found)", rc == 0);
     CHECK("typed match: payload_out contains published payload",
           strstr(payload_out, "@testhandle") != NULL);
     CHECK("typed match: payload_out contains full text",
           strstr(payload_out, "check this out") != NULL);
+    CHECK("typed match: event_file is non-empty", event_file[0] != '\0');
+
+    /* Ack the event so it doesn't leak */
+    bus_client_ack_event(dir, event_file);
 
     rmdir_recursive(dir);
     free(dir);
@@ -372,8 +378,10 @@ static void test_check_typed_wrong_handle(void)
                     "hey @other look here");
 
     char payload_out[4096] = {0};
+    char event_file[1024] = {0};
     int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
-                                    payload_out, sizeof(payload_out));
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
 
     CHECK("wrong handle: returns 1 (no match)", rc == 1);
 
@@ -394,8 +402,10 @@ static void test_check_typed_wrong_type(void)
                     "hello @testhandle");
 
     char payload_out[4096] = {0};
+    char event_file[1024] = {0};
     int rc = bus_client_check_typed(dir, "chat-mention", "testhandle",
-                                    payload_out, sizeof(payload_out));
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
 
     CHECK("wrong type: returns 1 (no match)", rc == 1);
 
@@ -404,7 +414,7 @@ static void test_check_typed_wrong_type(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Test 10: bus_client_check_typed acks matched events                 */
+/* Test 10: bus_client_check_typed + ack_event removes event           */
 /* ------------------------------------------------------------------ */
 
 static void test_check_typed_acks_match(void)
@@ -416,16 +426,28 @@ static void test_check_typed_acks_match(void)
                     "stop @agent right now");
 
     char payload_out[4096] = {0};
+    char event_file[1024] = {0};
     int rc = bus_client_check_typed(dir, "chat-interrupt", "agent",
-                                    payload_out, sizeof(payload_out));
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
     CHECK("typed ack: returns 0 (match found)", rc == 0);
     CHECK("typed ack: payload contains @agent",
           strstr(payload_out, "@agent") != NULL);
+    CHECK("typed ack: event_file is non-empty", event_file[0] != '\0');
 
-    /* Now check again -- event should have been acked */
+    /* Event should still be in bus (deferred ack) */
     int event_count = -1;
     char max_priority[64];
     char summary[256];
+    int rc_pre = bus_client_check(dir, &event_count, max_priority,
+                                   sizeof(max_priority), summary, sizeof(summary));
+    CHECK("typed ack: event still in bus before ack", rc_pre == 0 && event_count >= 1);
+
+    /* Now ack explicitly */
+    int ack_rc = bus_client_ack_event(dir, event_file);
+    CHECK("typed ack: ack_event returns 0", ack_rc == 0);
+
+    /* Now check again -- event should have been acked */
     int rc2 = bus_client_check(dir, &event_count, max_priority,
                                sizeof(max_priority), summary, sizeof(summary));
     CHECK("typed ack: check returns 1 (empty after ack)", rc2 == 1);
@@ -519,11 +541,16 @@ static void test_check_typed_multiple_matches(void)
     publish_via_cli(dir, "user2", "chat-mention", "normal",
                     "second @agent message");
 
-    /* First call should match and ack only the first event */
+    /* First call should match the first event (without acking) */
     char payload_out[4096] = {0};
+    char event_file[1024] = {0};
     int rc = bus_client_check_typed(dir, "chat-mention", "agent",
-                                    payload_out, sizeof(payload_out));
+                                    payload_out, sizeof(payload_out),
+                                    event_file, sizeof(event_file));
     CHECK("multi match: first call returns 0", rc == 0);
+
+    /* Ack the first event */
+    bus_client_ack_event(dir, event_file);
 
     /* Second event should still be pending */
     int event_count = -1;
@@ -536,9 +563,14 @@ static void test_check_typed_multiple_matches(void)
 
     /* Second call should find the remaining event */
     char payload_out2[4096] = {0};
+    char event_file2[1024] = {0};
     int rc3 = bus_client_check_typed(dir, "chat-mention", "agent",
-                                     payload_out2, sizeof(payload_out2));
+                                     payload_out2, sizeof(payload_out2),
+                                     event_file2, sizeof(event_file2));
     CHECK("multi match: second call returns 0", rc3 == 0);
+
+    /* Ack the second event */
+    bus_client_ack_event(dir, event_file2);
 
     rmdir_recursive(dir);
     free(dir);

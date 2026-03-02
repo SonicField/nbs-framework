@@ -109,6 +109,11 @@ typedef struct {
 
     /* Registry state */
     int control_inbox_line;
+
+    /* Deferred ack retry counters */
+    int query_retry_count;
+    int interrupt_retry_count;
+    int mention_retry_count;
 } sidecar_state_t;
 
 /*

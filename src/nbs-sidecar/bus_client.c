@@ -11,7 +11,8 @@
  *
  * Invariants:
  *   - All string construction uses snprintf with bounded buffers
- *   - bus_client_check_typed acks the first matching event before returning
+ *   - bus_client_check_typed does NOT ack — caller must use bus_client_ack_event
+ *   - bus_client_ack_event validates filename (no path traversal)
  *   - Priority extraction handles malformed output gracefully (defaults to "none")
  *
  * Threading:
@@ -28,7 +29,7 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#define CMD_BUF_SIZE 8192
+#define CMD_BUF_SIZE 65536
 
 /*
  * Cached absolute path to the nbs-bus binary.
@@ -190,7 +191,7 @@ int bus_client_ack(const char *bus_dir, const char *event_file)
     const char *argv[] = {resolve_nbs_bus(), "ack", bus_dir, event_file, NULL};
 
     int rc = exec_fire_and_forget(argv);
-    if (rc < 0)
+    if (rc != 0)
         return -1;
 
     return 0;
@@ -223,7 +224,8 @@ int bus_client_publish(const char *bus_dir, const char *source,
 
 int bus_client_check_typed(const char *bus_dir, const char *event_type,
                             const char *target_handle,
-                            char *payload_out, size_t payload_size)
+                            char *payload_out, size_t payload_size,
+                            char *event_file_out, size_t event_file_size)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_check_typed: bus_dir is NULL");
     ASSERT_MSG(bus_dir[0] != '\0', "bus_client_check_typed: bus_dir is empty");
@@ -237,6 +239,11 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                strlen(target_handle));
     ASSERT_MSG(payload_out != NULL, "bus_client_check_typed: payload_out is NULL");
     ASSERT_MSG(payload_size > 0, "bus_client_check_typed: payload_size is 0");
+    ASSERT_MSG(event_file_out != NULL, "bus_client_check_typed: event_file_out is NULL");
+    ASSERT_MSG(event_file_size > 0, "bus_client_check_typed: event_file_size is 0");
+
+    /* Initialise output */
+    event_file_out[0] = '\0';
 
     /* Run nbs-bus check to get the event listing */
     const char *argv[] = {resolve_nbs_bus(), "check", bus_dir, NULL};
@@ -269,7 +276,7 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
      * Parse output line by line. Each line is:
      *   [priority] filename (age)
      * Filter for lines containing event_type, extract filename,
-     * read payload, check for @handle, ack if match.
+     * read payload, check for @handle, return WITHOUT acking if match.
      */
     char *line_start = buf;
     while (line_start != NULL && *line_start != '\0') {
@@ -317,16 +324,22 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                                     payload_buf, sizeof(payload_buf)) == 0) {
                     /* Check if @handle appears in the payload */
                     if (strstr(payload_buf, at_handle) != NULL) {
-                        /* Ack the event */
-                        int ack_rc = bus_client_ack(bus_dir, event_file);
-                        if (ack_rc != 0) {
-                            fprintf(stderr, "bus_client_check_typed: ack failed for %s\n",
-                                    event_file);
-                        }
-
                         /* Copy payload to output */
                         snprintf(payload_out, payload_size, "%s", payload_buf);
-                        return 0; /* match found */
+
+                        /* Copy event filename to output for deferred ack.
+                         * If the caller's buffer is too small, leave it empty
+                         * — caller won't be able to ack but still gets payload. */
+                        if (fname_len < event_file_size) {
+                            memcpy(event_file_out, event_file, fname_len + 1);
+                        } else {
+                            fprintf(stderr, "bus_client_check_typed: event_file_out "
+                                    "buffer too small (%zu < %zu), cannot store filename\n",
+                                    event_file_size, fname_len + 1);
+                            event_file_out[0] = '\0';
+                        }
+
+                        return 0; /* match found, NOT acked */
                     }
                 } else {
                     fprintf(stderr, "bus_client_check_typed: failed to read "
@@ -344,4 +357,21 @@ next_line:
     }
 
     return 1; /* no matching event */
+}
+
+int bus_client_ack_event(const char *bus_dir, const char *event_file)
+{
+    ASSERT_MSG(bus_dir != NULL, "bus_client_ack_event: bus_dir is NULL");
+    ASSERT_MSG(bus_dir[0] != '\0', "bus_client_ack_event: bus_dir is empty");
+    ASSERT_MSG(event_file != NULL, "bus_client_ack_event: event_file is NULL");
+    ASSERT_MSG(event_file[0] != '\0', "bus_client_ack_event: event_file is empty");
+
+    /* Validate filename: reject path traversal (../) and slashes */
+    if (strstr(event_file, "..") != NULL || strchr(event_file, '/') != NULL) {
+        fprintf(stderr, "bus_client_ack_event: invalid event filename '%s' "
+                "(path traversal or slash detected)\n", event_file);
+        return -1;
+    }
+
+    return bus_client_ack(bus_dir, event_file);
 }

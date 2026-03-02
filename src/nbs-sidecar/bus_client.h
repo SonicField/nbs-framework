@@ -72,23 +72,46 @@ int bus_client_publish(const char *bus_dir, const char *source,
 
 /*
  * bus_client_check_typed — Check for events of a specific type targeting
- * a specific handle (via @handle in payload). Acks matching events.
+ * a specific handle (via @handle in payload). Does NOT ack the event.
  *
- * Used for interrupt and mention detection.
+ * Used for interrupt, mention, and query detection. The caller must
+ * explicitly ack via bus_client_ack_event() after successful processing.
+ * This prevents event loss when processing fails.
  *
  * Preconditions:
  *   - bus_dir != NULL
  *   - event_type != NULL
  *   - target_handle != NULL
  *   - payload_out != NULL, payload_size > 0
+ *   - event_file_out != NULL, event_file_size > 0
  *
  * Postconditions:
- *   - If matching event found: acked, payload_out populated, returns 0
+ *   - If matching event found: payload_out populated, event_file_out
+ *     populated (or empty if buffer too small), returns 0.
+ *     Event is NOT acked — caller must call bus_client_ack_event().
  *   - If no match: returns 1
  *   - On error: returns -1
  */
 int bus_client_check_typed(const char *bus_dir, const char *event_type,
                             const char *target_handle,
-                            char *payload_out, size_t payload_size);
+                            char *payload_out, size_t payload_size,
+                            char *event_file_out, size_t event_file_size);
+
+/*
+ * bus_client_ack_event — Ack (move to processed/) a specific event file.
+ *
+ * Call this after successfully processing an event returned by
+ * bus_client_check_typed(). If processing failed, do NOT call this —
+ * the event stays in the bus for retry on the next tick.
+ *
+ * Preconditions:
+ *   - bus_dir != NULL
+ *   - event_file != NULL, must not contain '/' or '..' (path traversal)
+ *
+ * Postconditions:
+ *   - On success: event moved to processed/, returns 0
+ *   - On error (ENOENT, path traversal, etc.): returns -1
+ */
+int bus_client_ack_event(const char *bus_dir, const char *event_file);
 
 #endif /* NBS_BUS_CLIENT_H */
