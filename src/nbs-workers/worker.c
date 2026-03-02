@@ -1202,34 +1202,112 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Allow shell to initialise */
     sleep(2);
 
-    /* Launch Claude in pipe mode for ephemeral workers.
-     *
-     * Interactive Claude never exits — it stays at its prompt after
-     * completing the task. This holds the handle flock forever, blocking
-     * all subsequent spawns of the same handle.
-     *
-     * claude -p runs non-interactively: processes the prompt, exits.
-     * No sidecar, no pidfile, no session metadata — ephemeral workers
-     * don't need any of that. They post to chat, publish a bus event,
-     * and die. The tmux session exits when claude -p completes.
-     *
-     * The task is already in task_file (.nbs/workers/<name>.md). */
+    /* Launch interactive Claude with NBS_HANDLE for sidecar identity.
+     * Use the slug (e.g. "shepard") as the handle, not the unique name
+     * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
+     * handles in chat. The hex suffix remains on the task file and tmux
+     * session name to prevent file collisions. */
     {
         char launch_cmd[PATH_BUF_SIZE];
         int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "claude -p 'Read %s and execute the task.' "
-                         "--dangerously-skip-permissions "
-                         "--model 'opus[1m]'; exit",
-                         task_file);
+                         "NBS_HANDLE=%s bin/nbs-claude "
+                         "--dangerously-skip-permissions",
+                         slug);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
                    "cmd_spawn: launch_cmd too long");
         tmux_send_keys(session, launch_cmd, 1);
     }
 
-    /* claude -p handles everything: reads task file, executes, exits.
-     * No need to wait for prompt, send task separately, or retry Enter.
-     * The tmux session exits when claude -p completes (via "; exit"). */
+    /* Allow Claude to start */
     sleep(3);
+
+    /* Send the task prompt. */
+    {
+        char prompt[PATH_BUF_SIZE * 2];
+        int n = snprintf(prompt, sizeof(prompt),
+                         "Read %s and execute the task. "
+                         "Update the Status and Log sections when complete.",
+                         task_file);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(prompt),
+                   "cmd_spawn: prompt too long");
+        tmux_send_keys(session, prompt, 1);
+    }
+
+    /* Wait for Claude to start processing (poll for prompt consumption) */
+    sleep(5);
+
+    /* Monitor for completion, then kill the session.
+     *
+     * Interactive Claude never exits on its own. The worker will post
+     * to chat and/or publish a bus event when done, then sit at its
+     * prompt forever. We poll for the completion signal (bus event
+     * with the worker name as source), then kill the tmux session
+     * and clean the pidfile.
+     *
+     * Poll every 10s for up to 10 minutes. If no completion signal,
+     * kill anyway — the worker is stuck. */
+    {
+        char events_dir[PATH_BUF_SIZE];
+        int n = snprintf(events_dir, sizeof(events_dir),
+                         "%s/.nbs/events", abs_project_dir);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(events_dir),
+                   "cmd_spawn: events_dir too long");
+
+        int completed = 0;
+        for (int poll = 0; poll < 60; poll++) {
+            sleep(10);
+
+            /* Check if tmux session still exists — if not, worker
+             * exited on its own (crashed or clean exit). Either way,
+             * nothing to kill. */
+            char check_cmd[PATH_BUF_SIZE];
+            snprintf(check_cmd, sizeof(check_cmd),
+                     "tmux has-session -t '%s' 2>/dev/null", session);
+            if (system(check_cmd) != 0) {
+                completed = 1;
+                break;
+            }
+
+            /* Check if the worker posted to chat (any message from
+             * the slug handle in the last 2 minutes means it ran) */
+            char chat_path[PATH_BUF_SIZE];
+            snprintf(chat_path, sizeof(chat_path),
+                     "%s/.nbs/chat/live.chat", abs_project_dir);
+            char search_cmd[PATH_BUF_SIZE * 2];
+            snprintf(search_cmd, sizeof(search_cmd),
+                     "nbs-chat search '%s' '' --handle=%s --after=2m "
+                     ">/dev/null 2>&1",
+                     chat_path, slug);
+            if (system(search_cmd) == 0) {
+                /* Worker posted — give it 30s to finish any follow-up */
+                sleep(30);
+                completed = 1;
+                break;
+            }
+        }
+
+        /* Kill the session and clean up */
+        {
+            char kill_cmd[PATH_BUF_SIZE];
+            snprintf(kill_cmd, sizeof(kill_cmd),
+                     "tmux kill-session -t '%s' 2>/dev/null", session);
+            (void)system(kill_cmd);
+        }
+
+        /* Clean pidfile */
+        {
+            char pidfile[PATH_BUF_SIZE];
+            snprintf(pidfile, sizeof(pidfile),
+                     "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
+            sleep(2);
+            unlink(pidfile);
+        }
+
+        if (!completed) {
+            fprintf(stderr, "Warning: worker %s did not complete within "
+                    "10 minutes, killed\n", name);
+        }
+    }
 
     /* Publish bus event */
     {
