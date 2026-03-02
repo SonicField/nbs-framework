@@ -290,6 +290,7 @@ int main(int argc, char **argv) {
      * sidecar with no log output (the signal arrives before any stderr
      * write can complete). */
     signal(SIGHUP, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
 
     /* Redirect stderr to log file if specified */
     if (cfg.log_file[0] != '\0') {

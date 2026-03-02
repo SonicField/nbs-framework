@@ -620,6 +620,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
         /* Check transport alive */
         if (!tp->is_alive(tp)) {
+            fprintf(stderr, "sidecar_run: transport not alive for '%s', exiting\n",
+                    cfg->handle);
             break;
         }
 
@@ -823,5 +825,6 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         free(content);
     }
 
+    fprintf(stderr, "sidecar_run: main loop exited for '%s'\n", cfg->handle);
     return SIDECAR_EXIT_OK;
 }
