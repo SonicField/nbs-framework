@@ -1,5 +1,6 @@
 /*
- * triggers.h — Periodic trigger functions (pythia, standup, heartbeat).
+ * triggers.h — Periodic trigger functions (pythia, standup, heartbeat,
+ *               shepard, fixup, librarian).
  */
 
 #ifndef NBS_TRIGGERS_H
@@ -97,5 +98,24 @@ int trigger_fixup_check(const char *nbs_root, int interval_secs);
  * Returns: 0 = spawned, 1 = lock busy, -1 = error
  */
 int trigger_fixup_spawn(const char *nbs_root);
+
+/*
+ * trigger_librarian_check — Wall-clock institutional memory watchdog.
+ *
+ * Reads shared timestamp file. If interval_secs have elapsed since
+ * last run, spawns a librarian worker that reads recent chat, searches
+ * the scribe log for answers, and posts findings with @team! tag.
+ * Cross-sidecar dedup via timestamp file + lock-guarded spawn.
+ *
+ * Returns: 0 = spawned, 1 = not time yet, -1 = error
+ */
+int trigger_librarian_check(const char *nbs_root, int interval_secs);
+
+/*
+ * trigger_librarian_spawn — Spawn librarian worker via lock + fork+exec.
+ *
+ * Returns: 0 = spawned, 1 = lock busy, -1 = error
+ */
+int trigger_librarian_spawn(const char *nbs_root);
 
 #endif /* NBS_TRIGGERS_H */

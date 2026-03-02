@@ -538,6 +538,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             state.last_flush_time = state.sidecar_start_time;
             state.last_poll_time = state.sidecar_start_time;
             state.last_fixup_check = state.sidecar_start_time;
+            state.last_librarian_check = state.sidecar_start_time;
             free(content);
             break;
         }
@@ -554,6 +555,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         state.last_flush_time = state.sidecar_start_time;
         state.last_poll_time = state.sidecar_start_time;
         state.last_fixup_check = state.sidecar_start_time;
+        state.last_librarian_check = state.sidecar_start_time;
     }
     ASSERT_MSG(state.sidecar_start_time > 0,
                "sidecar_run: sidecar_start_time invariant violated after init");
@@ -750,6 +752,15 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 (now_wc - state.last_fixup_check) >= 60) {
                 state.last_fixup_check = now_wc;
                 trigger_fixup_check(cfg->nbs_root, cfg->fixup_interval);
+            }
+
+            /* Wall-clock librarian trigger — institutional memory watchdog.
+             * Searches scribe log for answers to questions agents are stuck on.
+             * Checked once per minute to avoid excessive file I/O. */
+            if (cfg->librarian_interval > 0 &&
+                (now_wc - state.last_librarian_check) >= 60) {
+                state.last_librarian_check = now_wc;
+                trigger_librarian_check(cfg->nbs_root, cfg->librarian_interval);
             }
         }
 

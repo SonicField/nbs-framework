@@ -125,6 +125,7 @@ int main(int argc, char **argv) {
     cfg.flush_interval = env_int("NBS_FLUSH_INTERVAL", 60);
     cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
     cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
+    cfg.librarian_interval = env_int("NBS_LIBRARIAN_INTERVAL", 15) * 60;
 
     /* After all env_int calls, timing assertions are deferred until after
      * command-line parsing so that argv overrides are applied first. */

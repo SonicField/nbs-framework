@@ -927,3 +927,134 @@ int trigger_fixup_spawn(const char *nbs_root) {
 
     return (rc == 0) ? 0 : -1;
 }
+
+/* --- Librarian trigger --- */
+
+/*
+ * Librarian is a timer-based institutional memory watchdog.
+ * Same pattern as fixup: shared timestamp file + lock-guarded spawn.
+ * Reads recent chat, searches scribe log, posts findings with @team!.
+ */
+
+static time_t read_librarian_last_run(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "read_librarian_last_run: nbs_root is NULL");
+
+    char path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/librarian-last-run", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    long long ts = 0;
+    if (fscanf(f, "%lld", &ts) != 1) ts = 0;
+    fclose(f);
+
+    return (time_t)ts;
+}
+
+static void write_librarian_last_run(const char *nbs_root, time_t when) {
+    ASSERT_MSG(nbs_root != NULL, "write_librarian_last_run: nbs_root is NULL");
+
+    char path[4096], tmp_path[4096];
+    int n = snprintf(path, sizeof(path),
+                     "%s/.nbs/librarian-last-run", nbs_root);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (tn < 0 || (size_t)tn >= sizeof(tmp_path)) return;
+
+    FILE *f = fopen(tmp_path, "w");
+    if (f) {
+        fprintf(f, "%lld\n", (long long)when);
+        fclose(f);
+        if (rename(tmp_path, path) != 0) {
+            fprintf(stderr, "write_librarian_last_run: rename failed: %s\n",
+                    strerror(errno));
+            unlink(tmp_path);
+        }
+    } else {
+        unlink(tmp_path);
+    }
+}
+
+int trigger_librarian_check(const char *nbs_root, int interval_secs) {
+    ASSERT_MSG(nbs_root != NULL, "trigger_librarian_check: nbs_root is NULL");
+    ASSERT_MSG(interval_secs > 0,
+               "trigger_librarian_check: interval_secs must be positive, got %d",
+               interval_secs);
+
+    time_t now = time(NULL);
+    time_t last_run = read_librarian_last_run(nbs_root);
+
+    /* First run: initialise timestamp without firing */
+    if (last_run == 0) {
+        write_librarian_last_run(nbs_root, now);
+        return 1;
+    }
+
+    if ((now - last_run) < interval_secs) {
+        return 1;
+    }
+
+    /* Time elapsed — claim and spawn.
+     * Same TOCTOU acknowledgement as fixup: duplicate runs are possible
+     * but harmless (librarian posts are read-only assessments). */
+    write_librarian_last_run(nbs_root, now);
+    trigger_librarian_spawn(nbs_root);
+    return 0;
+}
+
+int trigger_librarian_spawn(const char *nbs_root) {
+    ASSERT_MSG(nbs_root != NULL, "trigger_librarian_spawn: nbs_root is NULL");
+
+    char lock_path[4096];
+    int n = snprintf(lock_path, sizeof(lock_path),
+                     "%s/.nbs/librarian.lock", nbs_root);
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(lock_path),
+               "trigger_librarian_spawn: lock path overflow");
+
+    int fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "trigger_librarian_spawn: open lock failed: %s\n",
+                strerror(errno));
+        return -1;
+    }
+
+    struct flock fl = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+
+    if (fcntl(fd, F_SETLK, &fl) < 0) {
+        close(fd);
+        return 1;
+    }
+
+    const char *task_desc =
+        "Load /nbs-librarian. Read last 100 chat messages via nbs-chat read. "
+        "Search scribe log for answers to questions or blockers the team is "
+        "stuck on. Post findings with @team! tag. If scribe has nothing "
+        "relevant, stay silent. Exit.";
+
+    const char *argv[] = {
+        resolve_nbs_workers(), "spawn", "librarian", nbs_root, task_desc, NULL
+    };
+    int rc = exec_fire_and_forget(argv);
+
+    struct flock unlock = {
+        .l_type = F_UNLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+    if (fcntl(fd, F_SETLK, &unlock) < 0) {
+        fprintf(stderr, "trigger_librarian_spawn: unlock failed: %s\n",
+                strerror(errno));
+    }
+    close(fd);
+
+    return (rc == 0) ? 0 : -1;
+}

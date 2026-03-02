@@ -56,6 +56,17 @@
  *   34. HARDENING #3: heartbeat interval=0 returns 1 (disable signal)
  *   35. Pythia scribe-log fallback to bus events
  *   36. Fixup double-fire detection (timestamp updated after first fire)
+ *
+ *   trigger_librarian_check:
+ *   37. First run initialises timestamp without firing
+ *   38. Interval not elapsed, no action
+ *   39. Interval elapsed, fires + timestamp updated
+ *   40. Double-fire suppression
+ *   41. Minimum valid interval (1 second)
+ *
+ *   trigger_librarian_spawn:
+ *   42. Lock acquired, spawn attempted
+ *   43. Lock busy
  */
 
 #include "../src/nbs-sidecar/triggers.h"
@@ -1350,6 +1361,232 @@ int main(void)
         int rc2 = trigger_fixup_check(nbs_root, 3600);
         CHECK("T36: second call suppressed (returns 1)", rc2 == 1);
 
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_librarian_check tests
+     * ================================================================= */
+    printf("\n-- trigger_librarian_check --\n");
+
+    /* Test 37: First run initialises timestamp without firing */
+    {
+        char sub[] = "/tmp/nbs_trig_t37_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        unlink(ts_path);
+
+        int rc = trigger_librarian_check(nbs_root, 900);
+        CHECK("T37: first run returns 1 (no fire)", rc == 1);
+
+        struct stat st;
+        CHECK("T37: librarian-last-run file created",
+              stat(ts_path, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 38: Interval not elapsed, no action */
+    {
+        char sub[] = "/tmp/nbs_trig_t38_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 10));
+        write_file(ts_path, ts_buf);
+
+        int rc = trigger_librarian_check(nbs_root, 900);
+        CHECK("T38: interval not elapsed returns 1", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 39: Interval elapsed, fires */
+    {
+        char sub[] = "/tmp/nbs_trig_t39_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 1000));
+        write_file(ts_path, ts_buf);
+
+        int rc = trigger_librarian_check(nbs_root, 900);
+        CHECK("T39: interval elapsed returns 0 (fires)", rc == 0);
+
+        /* Verify timestamp updated to ~now */
+        FILE *f = fopen(ts_path, "r");
+        long long new_ts = 0;
+        if (f) { fscanf(f, "%lld", &new_ts); fclose(f); }
+        CHECK("T39: librarian-last-run updated to ~now",
+              llabs(new_ts - (long long)now) < 5);
+
+        rmrf(sub);
+    }
+
+    /* Test 40: Double-fire suppression */
+    {
+        char sub[] = "/tmp/nbs_trig_t40_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        time_t now = time(NULL);
+        char ts_buf[32];
+        snprintf(ts_buf, sizeof(ts_buf), "%ld\n", (long)(now - 1000));
+        write_file(ts_path, ts_buf);
+
+        int rc1 = trigger_librarian_check(nbs_root, 900);
+        CHECK("T40: first call fires (returns 0)", rc1 == 0);
+
+        int rc2 = trigger_librarian_check(nbs_root, 900);
+        CHECK("T40: second call suppressed (returns 1)", rc2 == 1);
+
+        rmrf(sub);
+    }
+
+    /* Test 41: Minimum valid interval (1 second) */
+    {
+        char sub[] = "/tmp/nbs_trig_t41_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        char ts_path[L3];
+        snprintf(ts_path, sizeof(ts_path),
+                 "%s/.nbs/librarian-last-run", nbs_root);
+        unlink(ts_path);
+
+        int rc = trigger_librarian_check(nbs_root, 1);
+        CHECK("T41: interval=1 first run returns 1", rc == 1);
+
+        rmrf(sub);
+    }
+
+    /* =================================================================
+     * trigger_librarian_spawn tests
+     * ================================================================= */
+    printf("\n-- trigger_librarian_spawn --\n");
+
+    /* Test 42: Lock acquired, spawn attempted */
+    {
+        char sub[] = "/tmp/nbs_trig_t42_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        int rc = trigger_librarian_spawn(nbs_root);
+        /* nbs-workers may not be in PATH — spawn may fail (-1).
+         * The test is that the lock was acquired (not 1). */
+        CHECK("T42: lock acquired (rc != 1)", rc != 1);
+
+        /* Verify lock file was created */
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path), "%s/librarian.lock", nbs_dir);
+        struct stat st;
+        CHECK("T42: librarian.lock file created",
+              stat(lock_path, &st) == 0);
+
+        rmrf(sub);
+    }
+
+    /* Test 43: Lock busy — another holder blocks spawn */
+    {
+        char sub[] = "/tmp/nbs_trig_t43_XXXXXX";
+        if (!mkdtemp(sub)) { fprintf(stderr, "mkdtemp failed\n"); return 1; }
+
+        char nbs_root[L1];
+        snprintf(nbs_root, sizeof(nbs_root), "%s/project", sub);
+        char nbs_dir[L2];
+        snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", nbs_root);
+        mkdirs(nbs_dir);
+
+        /* Pre-acquire the lock from this process */
+        char lock_path[L3];
+        snprintf(lock_path, sizeof(lock_path),
+                 "%s/.nbs/librarian.lock", nbs_root);
+        int fd = open(lock_path, O_RDWR | O_CREAT, 0600);
+        struct flock fl = {
+            .l_type = F_WRLCK,
+            .l_whence = SEEK_SET,
+            .l_start = 0,
+            .l_len = 0,
+        };
+        int lock_ok = (fd >= 0 && fcntl(fd, F_SETLK, &fl) == 0);
+        CHECK("T43: parent acquires lock", lock_ok);
+
+        if (lock_ok) {
+            /* fcntl locks are per-process — must fork to test contention */
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(fd);
+                int rc = trigger_librarian_spawn(nbs_root);
+                _exit(rc);
+            } else if (pid > 0) {
+                int status;
+                waitpid(pid, &status, 0);
+                int child_rc = -99;
+                if (WIFEXITED(status))
+                    child_rc = WEXITSTATUS(status);
+                CHECK("T43: child gets lock busy (returns 1)",
+                      child_rc == 1);
+            } else {
+                CHECK("T43: fork failed", 0);
+            }
+
+            struct flock unlock = {
+                .l_type = F_UNLCK,
+                .l_whence = SEEK_SET,
+                .l_start = 0,
+                .l_len = 0,
+            };
+            fcntl(fd, F_SETLK, &unlock);
+        }
+
+        if (fd >= 0) close(fd);
         rmrf(sub);
     }
 
