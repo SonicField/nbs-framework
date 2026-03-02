@@ -44,6 +44,9 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <pthread.h>
+
+#include "watchdog.h"
 
 /* --- Configuration --- */
 
@@ -121,6 +124,78 @@ static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-emp
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
+
+/* --- Watchdog daemon --- */
+
+static watchdog_state_t g_watchdog;
+
+/* Resolve project root by walking up from chat file to find .nbs/ directory */
+static int resolve_project_root(const char *chat_path, char *out, size_t out_size) {
+    /* Start from the directory containing the chat file */
+    char dir[4096];
+    int n = snprintf(dir, sizeof(dir), "%s", chat_path);
+    if (n <= 0 || (size_t)n >= sizeof(dir)) return -1;
+
+    /* Strip filename to get directory */
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0';
+    else { dir[0] = '.'; dir[1] = '\0'; }
+
+    /* Walk up looking for .nbs/ */
+    for (int i = 0; i < 10; i++) {
+        char probe[4096];
+        snprintf(probe, sizeof(probe), "%s/.nbs", dir);
+        struct stat st;
+        if (stat(probe, &st) == 0 && S_ISDIR(st.st_mode)) {
+            /* Resolve to absolute path */
+            char *real = realpath(dir, NULL);
+            if (real) {
+                int sn = snprintf(out, out_size, "%s", real);
+                free(real);
+                return (sn > 0 && (size_t)sn < out_size) ? 0 : -1;
+            }
+            return -1;
+        }
+        /* Go up one level */
+        slash = strrchr(dir, '/');
+        if (!slash) break;
+        *slash = '\0';
+    }
+    return -1;
+}
+
+static void *watchdog_thread_fn(void *arg) {
+    watchdog_state_t *ws = (watchdog_state_t *)arg;
+
+    while (watchdog_is_enabled(ws)) {
+        sleep(WATCHDOG_POLL_INTERVAL_S);
+        if (!watchdog_is_enabled(ws)) break;
+
+        /* Count alive agent sessions via popen */
+        FILE *fp = popen(
+            "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
+            "grep -c 'nbs-.*-live' 2>/dev/null || echo 0", "r");
+        int count = 0;
+        if (fp) {
+            if (fscanf(fp, "%d", &count) != 1) count = 0;
+            pclose(fp);
+        }
+
+        watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
+        if (d == WATCHDOG_RESTART) {
+            char cmd[8192];
+            int sn = snprintf(cmd, sizeof(cmd),
+                     "bash '%s/bin/nbs-chat-terminal-restart.sh' '%s' '%s' &",
+                     ws->project_root, ws->project_root, ws->chat_path);
+            if (sn > 0 && (size_t)sn < sizeof(cmd)) {
+                (void)system(cmd);
+            }
+        }
+        /* WATCHDOG_RATE_LIMITED: evaluate already set enabled=0.
+         * Thread will exit on next loop iteration. */
+    }
+    return NULL;
+}
 
 /* --- Terminal width --- */
 
@@ -230,6 +305,8 @@ static void print_help(void) {
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
+    printf("  %s/shutdown%s   Send wrap-up message and disable auto-restart\n", DIM, RESET);
+    printf("  %s/restart%s    Manually restart the agent team\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
     printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
     printf("\n");
@@ -1006,6 +1083,23 @@ int main(int argc, char **argv) {
     /* Print initial prompt */
     print_prompt(g_handle);
 
+    /* --- Start watchdog daemon thread --- */
+    char wd_project_root[4096];
+    if (resolve_project_root(g_chat_file, wd_project_root,
+                              sizeof(wd_project_root)) == 0) {
+        watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
+        pthread_t watchdog_tid;
+        if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
+                           &g_watchdog) == 0) {
+            pthread_detach(watchdog_tid);
+        } else {
+            fprintf(stderr, "warning: failed to start watchdog thread\n");
+        }
+    } else {
+        fprintf(stderr, "warning: could not resolve project root from %s "
+                        "— watchdog disabled\n", g_chat_file);
+    }
+
     /* --- Event loop --- */
     while (!g_quit) {
         struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
@@ -1256,6 +1350,35 @@ int main(int argc, char **argv) {
                     }
                 } else {
                     printf("  %sNo filter active%s\n", DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /shutdown — send wrap-up message, disable watchdog */
+            if (strcmp(edit.buf, "/shutdown") == 0) {
+                do_send("@team Good work — time to wrap up. "
+                        "Please commit any uncommitted changes, "
+                        "post a final session summary, and shut down cleanly.");
+                watchdog_disable(&g_watchdog);
+                printf("  %sWatchdog disabled. Team will not be auto-restarted.%s\n",
+                       DIM, RESET);
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /restart — manual team restart (bypasses rate limit) */
+            if (strcmp(edit.buf, "/restart") == 0) {
+                printf("  %sTriggering manual restart...%s\n", DIM, RESET);
+                char rcmd[8192];
+                int rsn = snprintf(rcmd, sizeof(rcmd),
+                         "bash '%s/bin/nbs-chat-terminal-restart.sh' '%s' '%s' &",
+                         g_watchdog.project_root, g_watchdog.project_root,
+                         g_watchdog.chat_path);
+                if (rsn > 0 && (size_t)rsn < sizeof(rcmd)) {
+                    (void)system(rcmd);
                 }
                 line_state_reset(&edit);
                 print_prompt(g_handle);
