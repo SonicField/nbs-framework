@@ -119,6 +119,38 @@ Workers, testkeepers, and gatekeepers operate under the `/nbs-worker` contract. 
 
 Read `/nbs-worker` for the full contract if you need to understand what a worker will and won't do.
 
+## Spawning Workers
+
+Use `nbs-workers` to spawn workers. Do not use `pty-session`, `temp.sh`, or raw `tmux` commands.
+
+```bash
+# Spawn a worker (returns unique name, e.g. parser-a3f1)
+WORKER=$(nbs-workers spawn <slug> <project-dir> "<task-description>")
+
+# Example
+WORKER=$(nbs-workers spawn parser /home/alexturner/project "Complete the parser. Pass all 84 tests in test_parser.py.")
+```
+
+Three positional arguments:
+
+| Argument | Purpose | Example |
+|----------|---------|---------|
+| slug | Short task identifier (lowercase alphanumeric) | `parser` |
+| project-dir | Absolute path to project root | `/home/alexturner/project` |
+| task-description | What the worker must accomplish | `"Complete the parser. Pass all tests."` |
+
+`nbs-workers spawn` handles naming, task file creation, logging, and Claude session launch automatically. Do not create task files manually.
+
+### Monitoring
+
+```bash
+nbs-workers list                    # All workers and status
+nbs-workers status <name>           # Detailed status (running/completed/died)
+nbs-workers search <name> <regex>   # Search worker logs
+nbs-workers results <name>          # Read worker's log section
+nbs-workers dismiss <name>          # Kill session, mark dismissed
+```
+
 ## Coordination
 
 Use chat for all coordination. Chat is the record; Scribe captures decisions; Pythia assesses trajectory.
