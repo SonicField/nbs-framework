@@ -178,9 +178,60 @@ static void create_standup_env(const char *tmpdir,
 
 /* ---- Tests ---- */
 
+/*
+ * strip_nbs_from_path — Remove nbs-framework/bin from PATH.
+ *
+ * The spawn functions (trigger_pythia_spawn, etc.) fork+exec nbs-workers.
+ * If nbs-workers is in PATH (via make install or ~/.nbs/bin), the spawned
+ * worker runs forever and the test hangs. Stripping these directories
+ * ensures exec fails cleanly, which is what the tests expect.
+ */
+static void strip_nbs_from_path(void)
+{
+    const char *path = getenv("PATH");
+    if (!path) return;
+
+    /* Build new PATH excluding any component containing "nbs-framework/bin" */
+    char new_path[8192];
+    new_path[0] = '\0';
+    size_t off = 0;
+
+    const char *p = path;
+    while (*p) {
+        const char *colon = strchr(p, ':');
+        size_t len = colon ? (size_t)(colon - p) : strlen(p);
+
+        /* Copy component only if it does not contain nbs-workers */
+        char component[4096];
+        if (len < sizeof(component)) {
+            memcpy(component, p, len);
+            component[len] = '\0';
+            if (!strstr(component, "nbs-framework/bin") &&
+                !strstr(component, ".nbs/bin")) {
+                if (off > 0 && off < sizeof(new_path) - 1)
+                    new_path[off++] = ':';
+                size_t avail = sizeof(new_path) - off - 1;
+                if (len < avail) {
+                    memcpy(new_path + off, p, len);
+                    off += len;
+                }
+            }
+        }
+
+        p += len;
+        if (*p == ':') p++;
+    }
+    new_path[off] = '\0';
+    setenv("PATH", new_path, 1);
+}
+
 int main(void)
 {
     printf("test_sidecar_triggers_unit\n");
+
+    /* Prevent spawn functions from finding nbs-workers in PATH.
+     * Without this, spawned workers run forever and the test hangs. */
+    strip_nbs_from_path();
 
     /* Master temp directory */
     char master_tmp[] = "/tmp/nbs_trig_test_XXXXXX";
