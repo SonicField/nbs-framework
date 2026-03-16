@@ -729,9 +729,22 @@ int cmd_create(const char *name, const char *command)
         return EXIT_ERROR;
     }
 
-    /* tmux new-session -d -s pty_<name> <command> */
+    /*
+     * Session creation sequence: shell first, then pipe-pane, then command.
+     *
+     * If we create the session with the user's command directly, fast
+     * commands (e.g. curl) can complete and the session can exit before
+     * pipe-pane is attached. Result: empty log file, lost output.
+     *
+     * Fix: create session with a shell, attach pipe-pane (guaranteed to
+     * capture all subsequent output), then send `exec <command>` into the
+     * shell. `exec` replaces the shell with the command, preserving the
+     * original semantics: the session dies when the command exits.
+     */
+
+    /* Step 1: Create session with a shell */
     const char *create_argv[] = {
-        "tmux", "new-session", "-d", "-s", session, command, NULL
+        "tmux", "new-session", "-d", "-s", session, "bash", NULL
     };
     int rc = exec_fire_and_forget(create_argv);
     if (rc != 0) {
@@ -739,7 +752,7 @@ int cmd_create(const char *name, const char *command)
         return EXIT_ERROR;
     }
 
-    /* Set up persistent logging: tmux pipe-pane -t pty_<name> -o "cat >> <logfile>" */
+    /* Step 2: Attach pipe-pane logging before any command output */
     char log_dir[MAX_PATH_LEN];
     if (resolve_home_path(log_dir, sizeof(log_dir), ".pty-session/logs") < 0) {
         return EXIT_ERROR;
@@ -760,6 +773,38 @@ int cmd_create(const char *name, const char *command)
     if (pipe_rc != 0) {
         fprintf(stderr, "Warning: Failed to set up pipe-pane logging\n");
     }
+
+    /* Step 3: Send the command followed by `; exit $?`.
+     *
+     * This ensures the shell exits after the command completes,
+     * whether the command succeeds, fails, or is not found.
+     * Using `exec` instead would leave an orphan bash on exec
+     * failure (command not found) because interactive bash does
+     * not exit on exec failure. */
+    char exec_cmd[MAX_FILE_PATH];
+    n = snprintf(exec_cmd, sizeof(exec_cmd), "%s; exit $?", command);
+    ASSERT_MSG(n >= 0 && (size_t)n < sizeof(exec_cmd), "exec_cmd truncated");
+
+    const char *send_argv[] = {
+        "tmux", "send-keys", "-t", session, "-l", exec_cmd, NULL
+    };
+    rc = exec_fire_and_forget(send_argv);
+    if (rc != 0) {
+        fprintf(stderr, "Error: Failed to send command to session\n");
+        /* Kill the orphaned bash shell */
+        const char *kill_argv[] = {
+            "tmux", "kill-session", "-t", session, NULL
+        };
+        exec_fire_and_forget(kill_argv);
+        return EXIT_ERROR;
+    }
+
+    /* Send Enter to execute */
+    usleep(100000); /* 0.1s — match cmd_send timing */
+    const char *enter_argv[] = {
+        "tmux", "send-keys", "-t", session, "Enter", NULL
+    };
+    exec_fire_and_forget(enter_argv);
 
     printf("Created session: %s\n", name);
     return EXIT_SUCCESS_CODE;
