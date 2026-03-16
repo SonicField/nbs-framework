@@ -86,7 +86,7 @@ check "$TOTAL_EXPECTED messages present" "$( [[ "$MSG_COUNT" -eq "$TOTAL_EXPECTE
 
 # Verify each agent's messages are all present
 for agent in "${AGENT_NAMES[@]}"; do
-    AGENT_COUNT=$(echo "$OUTPUT" | grep -c "^${agent}:" || true)
+    AGENT_COUNT=$(echo "$OUTPUT" | grep -c "] ${agent}:" || true)
     check "$agent has $MSGS_PER_AGENT messages" "$( [[ "$AGENT_COUNT" -eq "$MSGS_PER_AGENT" ]] && echo pass || echo fail )"
 done
 
@@ -101,7 +101,7 @@ for agent in "${AGENT_NAMES[@]}"; do
             break
         fi
         PREV=$NUM
-    done < <(echo "$OUTPUT" | grep "^${agent}:")
+    done < <(echo "$OUTPUT" | grep "] ${agent}:")
 done
 check "Per-sender ordering is monotonic" "$( $ORDER_OK && echo pass || echo fail )"
 
@@ -169,7 +169,7 @@ check "$BURST_TOTAL messages after burst" "$( [[ "$BURST_COUNT" -eq "$BURST_TOTA
 
 # Each sender contributed equally
 for sender in "${SENDERS[@]}"; do
-    S_COUNT=$(echo "$OUTPUT" | grep -c "^${sender}:" || true)
+    S_COUNT=$(echo "$OUTPUT" | grep -c "] ${sender}:" || true)
     check "$sender sent $PER_SENDER" "$( [[ "$S_COUNT" -eq "$PER_SENDER" ]] && echo pass || echo fail )"
 done
 
@@ -184,7 +184,7 @@ for sender in "${SENDERS[@]}"; do
             break
         fi
         PREV=$NUM
-    done < <(echo "$OUTPUT" | grep "^${sender}:")
+    done < <(echo "$OUTPUT" | grep "] ${sender}:")
 done
 check "Per-sender burst ordering monotonic" "$( $BURST_ORDER_OK && echo pass || echo fail )"
 
@@ -215,7 +215,7 @@ for _ in $(seq 1 20); do
     fi
     # Check no partial/corrupt lines (every line must match "handle: message" format)
     if [[ -n "$READ_OUT" ]]; then
-        BAD_LINES=$(echo "$READ_OUT" | grep -cvE '^[a-zA-Z0-9_-]+: ' || true)
+        BAD_LINES=$(echo "$READ_OUT" | grep -cvE '^\[.*\] [a-zA-Z0-9_-]+: ' || true)
         if [[ "$BAD_LINES" -gt 0 ]]; then
             READ_ERRORS=$((READ_ERRORS + 1))
         fi

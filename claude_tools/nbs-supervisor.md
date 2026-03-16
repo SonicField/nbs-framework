@@ -128,7 +128,7 @@ Use `nbs-workers` to spawn workers. Do not use `pty-session`, `temp.sh`, or raw 
 WORKER=$(nbs-workers spawn <slug> <project-dir> "<task-description>")
 
 # Example
-WORKER=$(nbs-workers spawn parser /home/alexturner/project "Complete the parser. Pass all 84 tests in test_parser.py.")
+WORKER=$(nbs-workers spawn parser /path/to/project "Complete the parser. Pass all 84 tests in test_parser.py.")
 ```
 
 Three positional arguments:
@@ -136,7 +136,7 @@ Three positional arguments:
 | Argument | Purpose | Example |
 |----------|---------|---------|
 | slug | Short task identifier (lowercase alphanumeric) | `parser` |
-| project-dir | Absolute path to project root | `/home/alexturner/project` |
+| project-dir | Absolute path to project root | `/path/to/project` |
 | task-description | What the worker must accomplish | `"Complete the parser. Pass all tests."` |
 
 `nbs-workers spawn` handles naming, task file creation, logging, and Claude session launch automatically. Do not create task files manually.

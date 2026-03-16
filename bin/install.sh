@@ -157,8 +157,9 @@ done
     exit 1
 }
 
-# 3. Build binaries from source
+# 3. Build binaries from source (clean first to avoid stale object files)
 echo "Building from source..."
+make -C "$PROJECT_ROOT" clean 2>/dev/null || true
 BUILD_FAILED=false
 if ! make -C "$PROJECT_ROOT" install 2>&1; then
     BUILD_FAILED=true

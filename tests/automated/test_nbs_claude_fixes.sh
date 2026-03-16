@@ -1,5 +1,9 @@
 #!/bin/bash
-# Test nbs-claude audit fixes: verify all 19 violations are resolved
+# Test nbs-claude audit fixes: verify violations resolved in the bash wrapper.
+#
+# Tests only cover functionality that remains in the bash wrapper (bin/nbs-claude).
+# Features ported to the C sidecar (polling, content hashing, control inbox,
+# dialogue detection, etc.) are tested by the sidecar's own unit tests.
 #
 # Tests:
 #   1. set -euo pipefail is present
@@ -7,19 +11,10 @@
 #   3. Numeric config validation
 #   4. NBS_ROOT resolution to absolute
 #   5. SIDECAR_HANDLE validation
-#   6. SSH opts array expansion (no word splitting)
-#   7. No eval "$@" in local mode
-#   8. stderr redirected to log file, not /dev/null
-#   9. printf '%q' used for remote path sanitisation
-#  10. Unanchored grep fixed (grep -qxF)
-#  11. TOCTOU fix (atomic inbox read)
-#  12. Non-atomic registry update guarded
-#  13. Empty variable arithmetic guard
-#  14. Unknown commands logged to stderr
-#  15. sha256sum for change detection
-#  16. pty_ prefix session verified before attach
-#  17. Eval contract documented
-#  18. if ! command pattern (no fragile $? check)
+#   6. No eval "$@" in local mode
+#   7. stderr log file variable defined
+#   8. pty_ prefix session verified before attach
+#   9. if ! command pattern (no fragile $? check)
 
 set -uo pipefail
 
@@ -180,48 +175,20 @@ else
     fail "Empty handle accepted"
 fi
 
-# --- 6. SSH opts array expansion ---
-echo "6. SSH opts array expansion..."
-if grep -q "IFS=' ' read -ra ssh_opts" "$NBS_CLAUDE"; then
-    pass "SSH opts parsed into array via IFS read -ra"
-else
-    fail "SSH opts not parsed into array"
-fi
-
-if grep -q '"${ssh_opts\[@\]}"' "$NBS_CLAUDE"; then
-    pass "SSH opts expanded with proper quoting"
-else
-    fail "SSH opts not properly quoted on expansion"
-fi
-
-# --- 7. No eval "$@" in local mode ---
-echo "7. No eval in local mode..."
-# Check that the local branch does not use eval
+# --- 6. No eval "$@" in local mode ---
+echo "6. No eval in local mode..."
 if grep -A2 'else' "$NBS_CLAUDE" | grep -q 'eval "\$@"'; then
     fail "eval \"\$@\" still present in local mode"
 else
     pass "eval \"\$@\" removed from local mode"
 fi
 
-# Check that direct execution is used
-if grep -q '"\$@" 2>>"${NBS_LOG_FILE}"' "$NBS_CLAUDE"; then
-    pass "Direct execution used in local mode"
-else
-    fail "Direct execution not found in local mode"
-fi
-
-# --- 8. stderr to log file ---
-echo "8. stderr redirected to log file..."
+# --- 7. stderr log file variable ---
+echo "7. stderr log file variable..."
 if grep -q 'NBS_LOG_FILE=' "$NBS_CLAUDE"; then
     pass "NBS_LOG_FILE variable defined"
 else
     fail "NBS_LOG_FILE variable not defined"
-fi
-
-if grep -q '2>>"${NBS_LOG_FILE}"' "$NBS_CLAUDE"; then
-    pass "stderr redirected to log file"
-else
-    fail "stderr not redirected to log file"
 fi
 
 # Verify blanket 2>/dev/null removed from remote_cmd
@@ -231,90 +198,16 @@ else
     pass "remote_cmd no longer uses 2>/dev/null"
 fi
 
-# --- 9. Path sanitisation with printf '%q' ---
-echo "9. Remote path sanitisation..."
-PRINTF_Q_COUNT=$(grep -c "printf '%q'" "$NBS_CLAUDE")
-if [[ "$PRINTF_Q_COUNT" -ge 5 ]]; then
-    pass "printf '%q' used for path sanitisation ($PRINTF_Q_COUNT occurrences)"
-else
-    fail "Insufficient printf '%q' usage ($PRINTF_Q_COUNT occurrences, expected >= 5)"
-fi
-
-# --- 10. Anchored grep ---
-echo "10. Anchored grep for session matching..."
-if grep -q 'grep -qxF "\$session"' "$NBS_CLAUDE"; then
-    pass "grep -qxF used for exact session matching"
-else
-    fail "grep -qxF not found for session matching"
-fi
-
-# --- 11. TOCTOU fix ---
-echo "11. TOCTOU fix on control inbox..."
-# Atomic read into variable — uses $(cat ...) rather than $(<...) because
-# $(<file 2>/dev/null) is broken in bash <5.2
-if grep -q 'inbox_content=\$(cat "\$CONTROL_INBOX"' "$NBS_CLAUDE"; then
-    pass "Atomic file read into variable present"
-else
-    fail "Atomic file read not found"
-fi
-
-# --- 12. Non-atomic registry update ---
-echo "12. Non-atomic registry update guarded..."
-GUARDED_GREP=$(grep -c '{ grep -vF .* || true; }' "$NBS_CLAUDE" 2>/dev/null || echo 0)
-if grep -q 'grep -vF.*|| true' "$NBS_CLAUDE"; then
-    pass "grep -vF guarded with || true for set -e safety"
-else
-    fail "grep -vF not guarded against set -e"
-fi
-
-# --- 13. Empty variable arithmetic guard ---
-echo "13. Empty variable arithmetic guard..."
-if grep -q '\${total:-0}' "$NBS_CLAUDE"; then
-    pass "total guarded with \${total:-0}"
-else
-    fail "total not guarded with default value"
-fi
-
-# --- 14. Unknown commands logged ---
-echo "14. Unknown commands logged..."
-if grep -q 'Unknown control command' "$NBS_CLAUDE"; then
-    pass "Unknown commands logged to stderr"
-else
-    fail "Unknown commands not logged"
-fi
-
-# --- 15. sha256sum for change detection ---
-echo "15. sha256sum for change detection..."
-if grep -q 'sha256sum' "$NBS_CLAUDE"; then
-    pass "sha256sum used for change detection"
-else
-    fail "sha256sum not found"
-fi
-
-if grep -q 'md5sum' "$NBS_CLAUDE"; then
-    fail "md5sum still present"
-else
-    pass "md5sum fully replaced"
-fi
-
-# --- 16. pty_ prefix verified ---
-echo "16. pty_ prefix session verification..."
+# --- 8. pty_ prefix verified ---
+echo "8. pty_ prefix session verification..."
 if grep -q 'tmux has-session' "$NBS_CLAUDE"; then
     pass "tmux has-session check present before attach"
 else
     fail "tmux has-session check not found"
 fi
 
-# --- 17. Eval contract documented ---
-echo "17. Eval contract documented..."
-if grep -q 'EVAL CONTRACT' "$NBS_CLAUDE"; then
-    pass "Eval contract comment present"
-else
-    fail "Eval contract comment not found"
-fi
-
-# --- 18. if ! command pattern ---
-echo "18. if ! command pattern (no fragile \$? check)..."
+# --- 9. if ! command pattern ---
+echo "9. if ! command pattern (no fragile \$? check)..."
 if grep -q 'if ! "\$PTY_SESSION" create' "$NBS_CLAUDE"; then
     pass "if ! command pattern used for pty-session create"
 else

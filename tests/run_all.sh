@@ -35,6 +35,57 @@ run_test() {
     echo ""
 }
 
+# Run AI tests via pty-session when inside Claude Code to avoid the
+# nested session restriction. The test script runs unchanged in a
+# fresh tmux session with the user's full environment.
+run_ai_test() {
+    local test_script="$1"
+    local name=$(basename "$test_script" .sh)
+
+    echo "--- $name ---"
+    if [[ -z "${CLAUDECODE:-}" ]]; then
+        # Not inside Claude Code — run directly
+        if "$test_script"; then
+            echo "PASSED: $name"
+            PASSED=$((PASSED + 1))
+        else
+            echo "FAILED: $name"
+            FAILED=$((FAILED + 1))
+        fi
+    else
+        # Inside Claude Code — route through pty-session
+        local session="test-${name}-$$"
+        local PTY="${PROJECT_DIR}/bin/pty-session"
+        if [[ ! -x "$PTY" ]]; then
+            echo "SKIPPED: pty-session not available"
+            SKIPPED=$((SKIPPED + 1))
+            echo ""
+            return
+        fi
+
+        export NBS_PTY_QUIET=1
+        "$PTY" create "$session" "$test_script" 2>/dev/null
+        if "$PTY" wait "$session" 'PASSED\|FAILED\|ALL.*PASSED\|TESTS PASSED\|TESTS FAILED' --timeout=300 2>/dev/null; then
+            local output
+            output=$("$PTY" read "$session" 2>/dev/null)
+            "$PTY" kill "$session" 2>/dev/null || true
+            echo "$output"
+            if echo "$output" | grep -q "FAILED:"; then
+                echo "FAILED: $name"
+                FAILED=$((FAILED + 1))
+            else
+                echo "PASSED: $name"
+                PASSED=$((PASSED + 1))
+            fi
+        else
+            "$PTY" kill "$session" 2>/dev/null || true
+            echo "FAILED: $name (timeout or pty-session error)"
+            FAILED=$((FAILED + 1))
+        fi
+    fi
+    echo ""
+}
+
 run_unit_tests() {
     echo "--- C unit tests (make test-unit) ---"
     local unit_failed=0
@@ -96,8 +147,7 @@ if [[ -f "$SCRIPT_DIR/automated/test_nbs_bus.sh" ]]; then
     run_test "$SCRIPT_DIR/automated/test_nbs_bus.sh"
 fi
 
-# nbs-claude sidecar tests (deterministic)
-run_test "$SCRIPT_DIR/automated/test_nbs_claude.sh"
+# nbs-claude sidecar tests — polling/dialogue detection tested by C unit tests
 
 # nbs-chat bus bridge tests (deterministic)
 if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_bus.sh" ]]; then
@@ -145,7 +195,7 @@ run_test "$SCRIPT_DIR/automated/test_auto_archive.sh"
 # nbs-claude additional tests
 run_test "$SCRIPT_DIR/automated/test_nbs_claude_args.sh"
 run_test "$SCRIPT_DIR/automated/test_nbs_claude_audit_v17.sh"
-run_test "$SCRIPT_DIR/automated/test_nbs_prompts.sh"
+# test_nbs_prompts removed — standup system deleted
 
 # nbs-remote tests
 run_test "$SCRIPT_DIR/automated/test_nbs_remote_build.sh"
@@ -202,24 +252,24 @@ if $QUICK_MODE; then
     skip_test "test_nbs_chat_search_ai"
 else
     if [[ -f "$SCRIPT_DIR/automated/test_install_worker.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_install_worker.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_install_worker.sh"
     fi
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_command.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_nbs_command.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_nbs_command.sh"
     fi
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_discovery.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_nbs_discovery.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_nbs_discovery.sh"
     fi
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_recovery.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_nbs_recovery.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_nbs_recovery.sh"
     fi
-    run_test "$SCRIPT_DIR/automated/test_control_inbox_ai.sh"
-    run_test "$SCRIPT_DIR/automated/test_poll_registry_ai.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_control_inbox_ai.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_poll_registry_ai.sh"
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_ai_integration.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_nbs_chat_ai_integration.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_nbs_chat_ai_integration.sh"
     fi
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh" ]]; then
-        run_test "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh"
+        run_ai_test "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh"
     fi
 fi
 
