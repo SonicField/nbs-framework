@@ -60,8 +60,6 @@ typedef struct {
     int notify_cooldown;        /* min seconds between notifications */
     int startup_grace;          /* seconds before allowing notifications */
     int notify_fail_threshold;  /* failures before self-heal */
-    int standup_interval;       /* minutes between standups (0=disabled) */
-    int active_heartbeat;       /* seconds between heartbeats (0=disabled) */
     int flush_interval;         /* seconds between bare Enter flushes (0=disabled) */
     int poll_interval;          /* seconds between /nbs-poll injections (0=disabled) */
     int fixup_interval;         /* seconds between auto-fixup runs (0=disabled) */
@@ -91,8 +89,6 @@ typedef struct {
     uint64_t last_content_hash;
     time_t sidecar_start_time;
     time_t last_notify_time;
-    time_t last_standup_time;
-    time_t last_heartbeat_time;
     time_t last_flush_time;
     time_t last_poll_time;
     time_t last_fixup_check;
@@ -100,8 +96,6 @@ typedef struct {
     time_t last_pythia_check;
     time_t last_shepard_check;
     int notify_fail_count;
-    int pythia_last_trigger_count;
-    int shepard_last_trigger_count;
     int mention_detected;
     char mention_payload[SIDECAR_MAX_MESSAGE];
 

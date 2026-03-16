@@ -7,7 +7,7 @@
  *   - Mention events (every tick, sets flag)
  *   - Blocking dialogues (on content change and when idle)
  *   - Bus events and chat unreads (every BUS_CHECK_INTERVAL ticks)
- *   - Periodic triggers (pythia, standup, heartbeat)
+ *   - Periodic triggers (pythia, shepard, fixup, librarian)
  *   - Periodic Enter flush (every FLUSH_INTERVAL ticks)
  *
  * The transport vtable abstracts tmux vs pty-session interactions.
@@ -346,11 +346,6 @@ static int should_inject_notify(const sidecar_config_t *cfg,
                                   sizeof(state->bus_event_summary));
         if (bus_rc < 0) bus_rc = 1;
     }
-
-    /* Standup trigger (side-effect: may post to chat) */
-    trigger_standup_check(registry_path, cfg->nbs_root, cfg->handle,
-                           cfg->standup_interval,
-                           &state->last_standup_time);
 
     /* Check chat unreads */
     int chat_rc = chat_client_check_unread(registry_path, cfg->handle,
@@ -746,40 +741,32 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 }
             }
 
-            /* Wall-clock fixup trigger — spawns fixup worker hourly.
-             * Only one sidecar fires (shared timestamp + lock dedup).
-             * Checked once per minute to avoid excessive file I/O. */
+            /* Wall-clock periodic triggers — checked once per minute to
+             * avoid excessive file I/O on shared timestamp files.
+             * Each trigger uses shared timestamp + lock for cross-sidecar dedup. */
             if (cfg->fixup_interval > 0 &&
                 (now_wc - state.last_fixup_check) >= 60) {
                 state.last_fixup_check = now_wc;
-                trigger_fixup_check(cfg->nbs_root, cfg->fixup_interval);
+                trigger_periodic_check(cfg->nbs_root, cfg->fixup_interval,
+                                       &TRIGGER_FIXUP);
             }
-
-            /* Wall-clock librarian trigger — institutional memory watchdog.
-             * Searches scribe log for answers to questions agents are stuck on.
-             * Checked once per minute to avoid excessive file I/O. */
             if (cfg->librarian_interval > 0 &&
                 (now_wc - state.last_librarian_check) >= 60) {
                 state.last_librarian_check = now_wc;
-                trigger_librarian_check(cfg->nbs_root, cfg->librarian_interval);
+                trigger_periodic_check(cfg->nbs_root, cfg->librarian_interval,
+                                       &TRIGGER_LIBRARIAN);
             }
-
-            /* Wall-clock pythia trigger — trajectory & risk assessment.
-             * Timer-based, fires every pythia_interval seconds.
-             * Previously used decision-count buckets which silently broke. */
             if (cfg->pythia_interval > 0 &&
                 (now_wc - state.last_pythia_check) >= 60) {
                 state.last_pythia_check = now_wc;
-                trigger_pythia_check(cfg->nbs_root, cfg->pythia_interval);
+                trigger_periodic_check(cfg->nbs_root, cfg->pythia_interval,
+                                       &TRIGGER_PYTHIA);
             }
-
-            /* Wall-clock shepard trigger — team effectiveness assessment.
-             * Timer-based, fires every shepard_interval seconds.
-             * Previously used message-count buckets which had the same issue. */
             if (cfg->shepard_interval > 0 &&
                 (now_wc - state.last_shepard_check) >= 60) {
                 state.last_shepard_check = now_wc;
-                trigger_shepard_check(cfg->nbs_root, cfg->shepard_interval);
+                trigger_periodic_check(cfg->nbs_root, cfg->shepard_interval,
+                                       &TRIGGER_SHEPARD);
             }
         }
 
@@ -797,13 +784,6 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 state.last_content_hash = 0;
                 free(content);
                 continue;
-            }
-
-            /* Heartbeat */
-            if (cfg->active_heartbeat > 0) {
-                trigger_heartbeat(registry_path, cfg->handle,
-                                   cfg->active_heartbeat,
-                                   &state.last_heartbeat_time);
             }
 
             free(content);

@@ -47,8 +47,7 @@ static void print_usage(void) {
         "Environment (defaults, overridden by args):\n"
         "  NBS_HANDLE, NBS_ROOT, NBS_BUS_CHECK_INTERVAL (3),\n"
         "  NBS_NOTIFY_COOLDOWN (15), NBS_STARTUP_GRACE (30),\n"
-        "  NBS_NOTIFY_FAIL_THRESHOLD (5), NBS_STANDUP_INTERVAL (15),\n"
-        "  NBS_ACTIVE_HEARTBEAT (0), NBS_FLUSH_INTERVAL (60),\n"
+        "  NBS_NOTIFY_FAIL_THRESHOLD (5), NBS_FLUSH_INTERVAL (60),\n"
         "  NBS_INITIAL_PROMPT, NBS_REMOTE_HOST, NBS_REMOTE_SSH_OPTS\n");
 }
 
@@ -120,8 +119,6 @@ int main(int argc, char **argv) {
     cfg.notify_cooldown = env_int("NBS_NOTIFY_COOLDOWN", 15);
     cfg.startup_grace = env_int("NBS_STARTUP_GRACE", 30);
     cfg.notify_fail_threshold = env_int("NBS_NOTIFY_FAIL_THRESHOLD", 5);
-    cfg.standup_interval = env_int("NBS_STANDUP_INTERVAL", 15);
-    cfg.active_heartbeat = env_int("NBS_ACTIVE_HEARTBEAT", 0);
     cfg.flush_interval = env_int("NBS_FLUSH_INTERVAL", 60);
     cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
     cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
