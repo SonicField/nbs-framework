@@ -15,7 +15,7 @@ The Bash tool is one-shot: run a command, get output, done. This prevents:
 - Interacting with REPLs (python, node, gdb)
 - Controlling processes that require multi-step interaction
 - Monitoring long-running processes
-- Running commands that need the user's login environment (SSH keys, proxy credentials, authenticated git remotes, corporate tooling)
+- Running commands that need the user's login environment (SSH keys, proxy credentials, authenticated git remotes)
 
 ## The Solution
 
@@ -74,9 +74,8 @@ pty-session kill gitpush
 
 This is useful for:
 - **Git push/pull** to authenticated remotes
-- **Package installation** through corporate proxies
+- **Package installation** using the user's configured package sources
 - **SSH commands** that require the user's SSH agent
-- **Corporate tooling** that reads credentials from the user's environment
 
 ### REPL Interaction
 
@@ -159,7 +158,7 @@ This means output is never lost, regardless of how the session ends.
 
 ## When to Use This
 
-- Running commands that need the user's login environment (git push, SSH, corporate tools)
+- Running commands that need the user's login environment (git push, SSH)
 - Interacting with REPLs (Python, Node, GDB, psql)
 - Automating multi-step terminal workflows
 - Running processes that need monitoring and intervention
