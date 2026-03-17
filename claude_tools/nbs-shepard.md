@@ -35,8 +35,9 @@ You are spawned when a `shepard-checkpoint` event triggers (every 100 chat messa
 # List all agent sessions
 nbs-workers list
 
-# For each agent, check context level
-nbs-workers status
+# For each agent from the list, check status individually
+nbs-workers status <worker-slug>
+# e.g. nbs-workers status supervisor-e0fc
 ```
 
 Classify each agent:
