@@ -1,6 +1,6 @@
 # NBS Framework
 
-A framework for honest collaboration between humans and AI systems.
+**No Bull Shit.** AI systems are fluent, confident, and wrong often enough to be dangerous. NBS makes every claim carry its own falsifier — so the moment something breaks, you know it, instead of discovering it three decisions later when the damage is irreversible.
 
 ## Documentation
 
