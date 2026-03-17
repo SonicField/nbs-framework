@@ -769,12 +769,13 @@ static int do_send(const char *msg) {
         return -1;
     }
 
-    /* Guard against signed overflow on g_msg_count.  In practice
-     * MAX_MESSAGES is 10000 so this should never fire, but a corrupt
-     * or adversarial chat file could push the count toward INT_MAX. */
-    ASSERT_MSG(g_msg_count < INT_MAX,
-               "do_send: g_msg_count overflow: %d", g_msg_count);
-    g_msg_count++;
+    /* Do NOT increment g_msg_count here. Let poll_and_display read the
+     * actual file count on the next poll. If we increment here and another
+     * agent also sent a message between our chat_send and the next poll,
+     * our count is 1 behind reality and that agent's message is permanently
+     * skipped — the desync bug. poll_and_display will see our message as
+     * "new", skip it via the handle filter (line 715), and advance the
+     * count correctly. */
 
     /* Publish bus events: standard chat-message + human-input priority signal */
     bus_bridge_after_send(g_chat_file, g_handle, msg);
