@@ -719,27 +719,55 @@ int chat_read(const char *path, chat_state_t *state) {
             }
             decoded[decoded_len] = '\0';
 
-            /* Parse "handle|EPOCH: content" or legacy "handle: content" */
+            /* Parse wire formats:
+             *   handle|EPOCH|SIG: content  (signed, timestamped)
+             *   handle|EPOCH: content      (unsigned, timestamped)
+             *   handle: content            (legacy, unsigned)
+             */
             char *colon = strstr((char *)decoded, ": ");
             if (colon) {
                 size_t prefix_len = colon - (char *)decoded;
-                /* Check for pipe separator (timestamped format) */
-                char *pipe = memchr((char *)decoded, '|', prefix_len);
+                /* Check for pipe separator(s) */
+                char *pipe1 = memchr((char *)decoded, '|', prefix_len);
                 size_t handle_len;
                 time_t msg_timestamp = 0;
+                char parsed_sig[129] = "";
 
-                if (pipe) {
-                    /* New format: handle|EPOCH: content */
-                    handle_len = pipe - (char *)decoded;
-                    /* Parse epoch between pipe and colon */
-                    size_t epoch_len = colon - (pipe + 1);
-                    if (epoch_len > 0 && epoch_len < 20) {
-                        char epoch_buf[20];
-                        memcpy(epoch_buf, pipe + 1, epoch_len);
-                        epoch_buf[epoch_len] = '\0';
-                        int64_t parsed_epoch;
-                        if (safe_parse_int64(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
-                            msg_timestamp = (time_t)parsed_epoch;
+                if (pipe1) {
+                    handle_len = pipe1 - (char *)decoded;
+                    /* Look for second pipe between pipe1+1 and colon */
+                    size_t after_pipe1 = colon - (pipe1 + 1);
+                    char *pipe2 = memchr(pipe1 + 1, '|', after_pipe1);
+
+                    if (pipe2) {
+                        /* Signed format: handle|EPOCH|SIG: content */
+                        size_t epoch_len = pipe2 - (pipe1 + 1);
+                        if (epoch_len > 0 && epoch_len < 20) {
+                            char epoch_buf[20];
+                            memcpy(epoch_buf, pipe1 + 1, epoch_len);
+                            epoch_buf[epoch_len] = '\0';
+                            int64_t parsed_epoch;
+                            if (safe_parse_int64(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
+                                msg_timestamp = (time_t)parsed_epoch;
+                            }
+                        }
+                        /* Signature is between pipe2+1 and colon */
+                        size_t sig_len = colon - (pipe2 + 1);
+                        if (sig_len > 0 && sig_len <= 128) {
+                            memcpy(parsed_sig, pipe2 + 1, sig_len);
+                            parsed_sig[sig_len] = '\0';
+                        }
+                    } else {
+                        /* Unsigned timestamped: handle|EPOCH: content */
+                        size_t epoch_len = colon - (pipe1 + 1);
+                        if (epoch_len > 0 && epoch_len < 20) {
+                            char epoch_buf[20];
+                            memcpy(epoch_buf, pipe1 + 1, epoch_len);
+                            epoch_buf[epoch_len] = '\0';
+                            int64_t parsed_epoch;
+                            if (safe_parse_int64(epoch_buf, &parsed_epoch) == 0 && parsed_epoch > 0) {
+                                msg_timestamp = (time_t)parsed_epoch;
+                            }
                         }
                     }
                 } else {
@@ -766,6 +794,12 @@ int chat_read(const char *path, chat_state_t *state) {
                     }
                     msg->content_len = decoded_len - (colon + 2 - (char *)decoded);
                     msg->timestamp = msg_timestamp;
+                    /* Copy signature if present */
+                    if (parsed_sig[0] != '\0') {
+                        snprintf(msg->sig, sizeof(msg->sig), "%s", parsed_sig);
+                    } else {
+                        msg->sig[0] = '\0';
+                    }
                     /* Invariant: content_len == strlen(content) — no embedded NULs */
                     ASSERT_MSG(msg->content_len == strlen(msg->content),
                                "chat_read: content_len %zu != strlen(content) %zu for message %d"
@@ -799,7 +833,9 @@ int chat_read(const char *path, chat_state_t *state) {
     return 0;
 }
 
-int chat_send(const char *path, const char *handle, const char *message) {
+int chat_send_signed(const char *path, const char *handle,
+                     const char *message, const char *sig_hex,
+                     time_t send_time) {
     ASSERT_MSG(path != NULL, "chat_send: path is NULL");
     ASSERT_MSG(handle != NULL, "chat_send: handle is NULL");
     ASSERT_MSG(handle[0] != '\0', "chat_send: handle is empty");
@@ -817,20 +853,35 @@ int chat_send(const char *path, const char *handle, const char *message) {
         return -1;
     }
 
-    /* Build the message line: "handle|EPOCH: message" */
-    time_t now = time(NULL);
+    /* Build the message line:
+     *   "handle|EPOCH|SIG: message"  (if sig_hex is provided)
+     *   "handle|EPOCH: message"      (if sig_hex is NULL or empty)
+     */
+    time_t now = (send_time > 0) ? send_time : time(NULL);
     ASSERT_MSG(now != (time_t)-1, "chat_send: time() failed");
     char epoch_str[24];
     snprintf(epoch_str, sizeof(epoch_str), "%" PRId64, (int64_t)now);
-    /* Format: handle|epoch: message */
-    size_t raw_len = strlen(handle) + 1 + strlen(epoch_str) + 2 + strlen(message);
+
+    int has_sig = sig_hex && sig_hex[0] != '\0';
+    size_t raw_len;
+    if (has_sig) {
+        /* handle|epoch|sig: message */
+        raw_len = strlen(handle) + 1 + strlen(epoch_str) + 1 + strlen(sig_hex) + 2 + strlen(message);
+    } else {
+        /* handle|epoch: message */
+        raw_len = strlen(handle) + 1 + strlen(epoch_str) + 2 + strlen(message);
+    }
     char *raw = malloc(raw_len + 1);
     if (!raw) {
         chat_state_free(&state);
         chat_lock_release(lock_fd);
         return -1;
     }
-    snprintf(raw, raw_len + 1, "%s|%s: %s", handle, epoch_str, message);
+    if (has_sig) {
+        snprintf(raw, raw_len + 1, "%s|%s|%s: %s", handle, epoch_str, sig_hex, message);
+    } else {
+        snprintf(raw, raw_len + 1, "%s|%s: %s", handle, epoch_str, message);
+    }
 
     /* Postcondition: raw message was fully written */
     ASSERT_MSG(raw_len > 0,
@@ -1158,6 +1209,10 @@ int chat_send(const char *path, const char *handle, const char *message) {
     }
 
     return 0;
+}
+
+int chat_send(const char *path, const char *handle, const char *message) {
+    return chat_send_signed(path, handle, message, NULL, 0);
 }
 
 int chat_truncate(const char *path, int keep_count) {

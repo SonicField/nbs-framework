@@ -14,8 +14,10 @@ tests/automated/*_test_verdict.json
 # Python bytecache
 __pycache__/
 
-# Compiled test binaries
+# Compiled test binaries (source is tests/*.c, binaries are build artefacts)
 tests/test_*_unit
+tests/test_*_adversarial
+tests/test_*_audit
 
 # Compiled binaries in bin/ (built by make install, not committed)
 bin/nbs-bus

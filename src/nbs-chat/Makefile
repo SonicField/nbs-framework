@@ -21,7 +21,7 @@ CLI_OBJS = $(CLI_SRCS:.c=.o)
 CLI_TARGET = nbs-chat
 
 # nbs-chat-terminal
-TERM_SRCS = terminal.c watchdog.c
+TERM_SRCS = terminal.c watchdog.c auth.c
 TERM_OBJS = $(TERM_SRCS:.c=.o)
 TERM_TARGET = nbs-chat-terminal
 
@@ -54,7 +54,7 @@ $(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(TERM_TARGET): $(TERM_OBJS) $(LIB_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread -lcrypto
 
 $(REMOTE_TARGET): $(REMOTE_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -67,6 +67,7 @@ $(ASSERT_CHECK): assert_check.c
 
 install: all
 	mkdir -p $(BIN_DIR)
+	rm -f $(BIN_DIR)/$(CLI_TARGET) $(BIN_DIR)/$(TERM_TARGET) $(BIN_DIR)/$(REMOTE_TARGET)
 	cp $(CLI_TARGET) $(BIN_DIR)/
 	cp $(TERM_TARGET) $(BIN_DIR)/
 	cp $(REMOTE_TARGET) $(BIN_DIR)/
@@ -122,18 +123,21 @@ test: all install
 	./$(ASSERT_CHECK)
 	bash $(TEST_DIR)/test_nbs_chat_lifecycle.sh
 	bash $(TEST_DIR)/test_nbs_chat_terminal.sh
+	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 
 test-debug: debug install
 	./$(ASSERT_CHECK)
 	bash $(TEST_DIR)/test_nbs_chat_lifecycle.sh
 	bash $(TEST_DIR)/test_nbs_chat_terminal.sh
+	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 
 test-asan: asan install
 	./$(ASSERT_CHECK)
 	bash $(TEST_DIR)/test_nbs_chat_lifecycle.sh
 	bash $(TEST_DIR)/test_nbs_chat_terminal.sh
+	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 
 test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT) $(UNIT_TEST_WATCHDOG)
@@ -154,8 +158,9 @@ test-all: test-unit test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h time_parse.h
-terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h
+terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h auth.h
 watchdog.o: watchdog.c watchdog.h ../nbs-common/nbs_assert.h
+auth.o: auth.c auth.h ../nbs-common/nbs_assert.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h
 lock.o: lock.c lock.h chat_file.h
