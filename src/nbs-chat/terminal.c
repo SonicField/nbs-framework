@@ -48,7 +48,6 @@
 #include <pthread.h>
 
 #include "watchdog.h"
-#include "auth.h"
 
 /* --- Configuration --- */
 
@@ -128,10 +127,6 @@ static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-emp
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
-
-/* --- Authentication --- */
-
-static auth_state_t g_auth;
 
 /* --- Watchdog daemon --- */
 
@@ -285,8 +280,7 @@ typedef struct {
 /* --- Display functions --- */
 
 static void format_message(const char *handle, const char *content,
-                           const char *my_handle, time_t timestamp,
-                           const char *sig) {
+                           const char *my_handle, time_t timestamp) {
     /* Preconditions */
     ASSERT_MSG(handle != NULL, "format_message: handle is NULL");
     ASSERT_MSG(content != NULL, "format_message: content is NULL");
@@ -294,7 +288,6 @@ static void format_message(const char *handle, const char *content,
 
     /* Format timestamp prefix */
     char ts_prefix[32] = "";
-    char epoch_str[24] = "";
     if (timestamp > 0) {
         struct tm tm_buf;
         struct tm *tm = gmtime_r(&timestamp, &tm_buf);
@@ -303,48 +296,17 @@ static void format_message(const char *handle, const char *content,
             strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
             snprintf(ts_prefix, sizeof(ts_prefix), "[%s] ", ts);
         }
-        snprintf(epoch_str, sizeof(epoch_str), "%" PRId64, (int64_t)timestamp);
-    }
-
-    /* Auth verification marker */
-    const char *auth_marker = "";
-    if (auth_is_initialised(&g_auth) && g_auth.pubkey_dir[0] != '\0') {
-        if (sig && sig[0] != '\0' && epoch_str[0] != '\0') {
-            auth_verify_result_t r = auth_verify(g_auth.pubkey_dir,
-                                                  handle, epoch_str,
-                                                  content, sig);
-            if (r == AUTH_VERIFY_OK) {
-                auth_marker = " \033[32m[\xe2\x9c\x93]\033[0m";  /* green [✓] */
-            } else if (r == AUTH_VERIFY_BAD_SIG) {
-                auth_marker = " \033[31m[BAD SIG]\033[0m";  /* red [BAD SIG] */
-            }
-            /* NO_KEY, NO_SIG, ERROR: no marker */
-        } else if (strcmp(handle, my_handle) != 0) {
-            /* Unsigned message from a handle that has a pubkey on file
-             * should show [UNVERIFIED] — but only for human handles.
-             * Check if there's a pubkey for this handle. */
-            char pubkey_path[4096 + 256];
-            snprintf(pubkey_path, sizeof(pubkey_path), "%s/%s.pub",
-                     g_auth.pubkey_dir, handle);
-            FILE *check = fopen(pubkey_path, "r");
-            if (check) {
-                fclose(check);
-                auth_marker = " \033[33m[UNVERIFIED]\033[0m";  /* yellow */
-            }
-        }
     }
 
     const char *colour = get_colour(handle);
     if (strcmp(handle, my_handle) == 0) {
         /* Own messages slightly dimmer — timestamp dim, handle coloured+dim */
-        printf("  %s%s\033[%sm%s%s%s: %s%s%s\n",
-               DIM, ts_prefix, colour, handle, RESET, DIM, content, RESET,
-               auth_marker);
+        printf("  %s%s\033[%sm%s%s%s: %s%s\n",
+               DIM, ts_prefix, colour, handle, RESET, DIM, content, RESET);
     } else {
         /* Others — timestamp dim, handle bold+coloured */
-        printf("  %s%s%s\033[%sm%s%s%s: %s%s\n",
-               DIM, ts_prefix, RESET, colour, BOLD, handle, RESET, content,
-               auth_marker);
+        printf("  %s%s%s\033[%sm%s%s%s: %s\n",
+               DIM, ts_prefix, RESET, colour, BOLD, handle, RESET, content);
     }
 }
 
@@ -777,8 +739,7 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
             strcmp(state.messages[i].handle, g_filter_handle) != 0) continue;
         format_message(state.messages[i].handle,
                       state.messages[i].content, g_handle,
-                      state.messages[i].timestamp,
-                      state.messages[i].sig);
+                      state.messages[i].timestamp);
     }
 
     g_msg_count = state.message_count;
@@ -802,24 +763,7 @@ static int do_send(const char *msg) {
     ASSERT_MSG(g_chat_file != NULL, "do_send: g_chat_file is NULL");
     ASSERT_MSG(g_handle != NULL, "do_send: g_handle is NULL");
 
-    int send_rc;
-    if (auth_is_initialised(&g_auth)) {
-        /* Sign the message before sending — use same epoch for sig and wire */
-        time_t now = time(NULL);
-        char epoch_str[24];
-        snprintf(epoch_str, sizeof(epoch_str), "%" PRId64, (int64_t)now);
-        char sig_hex[AUTH_SIG_HEX_LEN];
-        if (auth_sign(&g_auth, epoch_str, g_handle, msg, sig_hex) == 0) {
-            send_rc = chat_send_signed(g_chat_file, g_handle, msg,
-                                       sig_hex, now);
-        } else {
-            /* Signing failed — send unsigned with warning */
-            fprintf(stderr, "warning: auth_sign failed, sending unsigned\n");
-            send_rc = chat_send(g_chat_file, g_handle, msg);
-        }
-    } else {
-        send_rc = chat_send(g_chat_file, g_handle, msg);
-    }
+    int send_rc = chat_send(g_chat_file, g_handle, msg);
 
     if (send_rc != 0) {
         int saved_errno = errno;
@@ -1135,61 +1079,6 @@ int main(int argc, char **argv) {
                 strerror(errno));
     }
 
-    /* --- Passphrase prompt for message signing (before raw mode) --- */
-    {
-        /* Resolve trusted-keys dir from chat file path */
-        char trusted_keys_dir[4096 + 64] = "";
-        char wd_root[4096];
-        if (resolve_project_root(g_chat_file, wd_root, sizeof(wd_root)) == 0) {
-            snprintf(trusted_keys_dir, sizeof(trusted_keys_dir),
-                     "%s/.nbs/chat/trusted-keys", wd_root);
-        }
-
-        if (isatty(STDIN_FILENO) && trusted_keys_dir[0] != '\0') {
-            printf("Passphrase for message signing (empty to skip): ");
-            fflush(stdout);
-
-            /* Disable echo for passphrase input */
-            struct termios pp_orig, pp_noecho;
-            int pp_have_termios = 0;
-            if (tcgetattr(STDIN_FILENO, &pp_orig) == 0) {
-                pp_have_termios = 1;
-                pp_noecho = pp_orig;
-                pp_noecho.c_lflag &= ~ECHO;
-                tcsetattr(STDIN_FILENO, TCSAFLUSH, &pp_noecho);
-            }
-
-            char passphrase[256];
-            if (fgets(passphrase, sizeof(passphrase), stdin)) {
-                /* Strip trailing newline */
-                size_t plen = strlen(passphrase);
-                if (plen > 0 && passphrase[plen - 1] == '\n')
-                    passphrase[--plen] = '\0';
-
-                if (plen > 0) {
-                    if (auth_init(&g_auth, passphrase, trusted_keys_dir) == 0) {
-                        auth_write_pubkey(&g_auth, g_handle);
-                        printf("\n  Message signing enabled.\n");
-                    } else {
-                        printf("\n  Warning: key derivation failed. Signing disabled.\n");
-                    }
-                } else {
-                    printf("\n  Signing disabled.\n");
-                }
-
-                /* Zero passphrase from stack */
-                memset(passphrase, 0, sizeof(passphrase));
-            } else {
-                printf("\n");
-            }
-
-            /* Restore echo */
-            if (pp_have_termios) {
-                tcsetattr(STDIN_FILENO, TCSAFLUSH, &pp_orig);
-            }
-        }
-    }
-
     /* Put terminal in raw-ish mode (disable echo and canonical mode,
      * but keep signal generation for Ctrl-C) */
     struct termios orig_termios, raw;
@@ -1229,8 +1118,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < init_state.message_count; i++) {
             format_message(init_state.messages[i].handle,
                           init_state.messages[i].content, g_handle,
-                          init_state.messages[i].timestamp,
-                          init_state.messages[i].sig);
+                          init_state.messages[i].timestamp);
         }
         g_msg_count = init_state.message_count;
         if (init_state.message_count > 0) printf("\n");
@@ -1374,7 +1262,7 @@ int main(int argc, char **argv) {
                 }
                 if (msg) {
                     if (do_send(msg) == 0) {
-                        format_message(g_handle, msg, g_handle, time(NULL), "");
+                        format_message(g_handle, msg, g_handle, time(NULL));
                     } else {
                         printf("  %s(send failed)%s\n", DIM, RESET);
                     }
@@ -1406,8 +1294,7 @@ int main(int argc, char **argv) {
                                 format_message(search_state.messages[si].handle,
                                               search_state.messages[si].content,
                                               g_handle,
-                                              search_state.messages[si].timestamp,
-                                              search_state.messages[si].sig);
+                                              search_state.messages[si].timestamp);
                                 match_count++;
                             }
                         }
@@ -1466,8 +1353,7 @@ int main(int argc, char **argv) {
                             int i = matches[j];
                             format_message(fstate.messages[i].handle,
                                           fstate.messages[i].content, g_handle,
-                                          fstate.messages[i].timestamp,
-                                          fstate.messages[i].sig);
+                                          fstate.messages[i].timestamp);
                         }
                         if (match_count == 0) {
                             printf("  %sNo messages from '%s'%s\n",
@@ -1508,8 +1394,7 @@ int main(int argc, char **argv) {
                         for (int i = start; i < ustate.message_count; i++) {
                             format_message(ustate.messages[i].handle,
                                           ustate.messages[i].content, g_handle,
-                                          ustate.messages[i].timestamp,
-                                          ustate.messages[i].sig);
+                                          ustate.messages[i].timestamp);
                         }
                         chat_state_free(&ustate);
                     }

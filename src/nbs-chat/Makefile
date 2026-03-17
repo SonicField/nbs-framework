@@ -21,7 +21,7 @@ CLI_OBJS = $(CLI_SRCS:.c=.o)
 CLI_TARGET = nbs-chat
 
 # nbs-chat-terminal
-TERM_SRCS = terminal.c watchdog.c auth.c
+TERM_SRCS = terminal.c watchdog.c
 TERM_OBJS = $(TERM_SRCS:.c=.o)
 TERM_TARGET = nbs-chat-terminal
 
@@ -54,7 +54,7 @@ $(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(TERM_TARGET): $(TERM_OBJS) $(LIB_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread -lcrypto
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
 $(REMOTE_TARGET): $(REMOTE_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -158,9 +158,8 @@ test-all: test-unit test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h time_parse.h
-terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h auth.h
+terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h
 watchdog.o: watchdog.c watchdog.h ../nbs-common/nbs_assert.h
-auth.o: auth.c auth.h ../nbs-common/nbs_assert.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h
 lock.o: lock.c lock.h chat_file.h

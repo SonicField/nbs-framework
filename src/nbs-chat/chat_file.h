@@ -42,14 +42,12 @@
  *   - content_len == strlen(content) when content is valid text
  *   - timestamp is 0 for legacy messages without embedded timestamps,
  *     or a positive epoch-seconds value for timestamped messages
- *   - sig is NUL-terminated; empty string means no signature
  */
 typedef struct {
     char handle[MAX_HANDLE_LEN];
     char *content;     /* Dynamically allocated */
     size_t content_len;
     time_t timestamp;  /* Epoch seconds, 0 = no timestamp (legacy message) */
-    char sig[129];     /* Hex-encoded Ed25519 signature (128 hex + NUL), empty = unsigned */
 } chat_message_t;
 
 /* Participant info
@@ -171,21 +169,6 @@ int chat_read(const char *path, chat_state_t *state);
  * Returns 0 on success, -1 on error, -2 on I/O flush error.
  */
 int chat_send(const char *path, const char *handle, const char *message);
-
-/*
- * chat_send_signed — Append a signed message to a chat file.
- *
- * Like chat_send but includes an Ed25519 signature in the wire format.
- * Wire format: handle|EPOCH|SIG: message
- *
- * sig_hex: hex-encoded signature, or NULL for unsigned.
- * send_time: timestamp to use (must match what was signed). 0 = use time().
- *
- * Returns 0 on success, -1 on error, -2 on I/O flush error.
- */
-int chat_send_signed(const char *path, const char *handle,
-                     const char *message, const char *sig_hex,
-                     time_t send_time);
 
 /*
  * chat_truncate — Remove messages beyond keep_count, rewrite atomically.
