@@ -33,6 +33,7 @@ $(ASSERT_CHECK): assert_check.c
 
 install: all
 	mkdir -p $(BIN_DIR)
+	rm -f $(BIN_DIR)/$(TARGET)
 	cp $(TARGET) $(BIN_DIR)/
 
 test: clean all install

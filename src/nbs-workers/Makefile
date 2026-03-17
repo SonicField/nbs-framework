@@ -30,6 +30,7 @@ $(ASSERT_CHECK): assert_check.c
 
 install: all
 	mkdir -p $(BIN_DIR)
+	rm -f $(BIN_DIR)/nbs-workers
 	cp $(TARGET) $(BIN_DIR)/nbs-workers
 
 test: all install
