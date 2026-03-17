@@ -207,7 +207,7 @@ run_test "$SCRIPT_DIR/automated/test_pty_session_wait_fallback.sh"
 
 # nbs-chat additional tests
 run_test "$SCRIPT_DIR/automated/test_nbs_chat_gaps.sh"
-run_test "$SCRIPT_DIR/automated/test_nbs_chat_web.sh"
+# test_nbs_chat_web removed — web client archived
 run_test "$SCRIPT_DIR/automated/test_auto_archive.sh"
 
 # nbs-claude additional tests
