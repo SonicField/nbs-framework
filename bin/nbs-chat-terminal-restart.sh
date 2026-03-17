@@ -51,7 +51,7 @@ sleep 2
 
 # 2. Run digest (preserves institutional memory across restarts)
 if [[ -x "$NBS_DIGEST" ]]; then
-    bash "$NBS_DIGEST" "$CHAT_FILE" --wait 2>&1 || {
+    bash "$NBS_DIGEST" "$CHAT_FILE" --wait >/dev/null 2>&1 || {
         echo "[watchdog] Warning: digest failed, continuing without it" >&2
     }
 else
