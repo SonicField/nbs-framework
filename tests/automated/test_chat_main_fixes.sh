@@ -135,13 +135,13 @@ set +e
 SINCE_ERR=$("$NBS_CHAT" read "$CHAT" --since= 2>&1)
 SINCE_RC=$?
 check "--since= empty warns" "$( echo "$SINCE_ERR" | grep -qi 'empty' && echo pass || echo fail )"
-check "--since= empty still exits 0" "$( [[ "$SINCE_RC" -eq 0 ]] && echo pass || echo fail )"
+check "--since= empty exits 4 (invalid arg)" "$( [[ "$SINCE_RC" -eq 4 ]] && echo pass || echo fail )"
 
 # --unread= with empty value should warn
 UNREAD_ERR=$("$NBS_CHAT" read "$CHAT" --unread= 2>&1)
 UNREAD_RC=$?
 check "--unread= empty warns" "$( echo "$UNREAD_ERR" | grep -qi 'empty' && echo pass || echo fail )"
-check "--unread= empty still exits 0" "$( [[ "$UNREAD_RC" -eq 0 ]] && echo pass || echo fail )"
+check "--unread= empty exits 4 (invalid arg)" "$( [[ "$UNREAD_RC" -eq 4 ]] && echo pass || echo fail )"
 
 # --handle= with empty value should warn
 HANDLE_ERR=$("$NBS_CHAT" search "$CHAT" "Hello" --handle= 2>&1)

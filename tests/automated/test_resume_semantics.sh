@@ -123,7 +123,9 @@ else
 fi
 
 # 8. Cleanup removes session metadata or updates it
-if grep -q 'sessions.*rm\|sessions.*cleanup\|session.*exit\|rm.*sessions' "$NBS_CLAUDE"; then
+# The cleanup function uses a variable: session_meta="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
+# then: rm -f "$session_meta". Match either the variable assignment or the rm.
+if grep -q 'session_meta\|rm.*session' "$NBS_CLAUDE"; then
     check "8. Cleanup handles session metadata" "pass"
 else
     check "8. Cleanup handles session metadata" "fail"

@@ -82,7 +82,7 @@ verify_chat_integrity() {
         [[ -z "$line" ]] && continue
         local decoded
         decoded=$(echo "$line" | base64 -d 2>/dev/null) || return 1
-        if ! echo "$decoded" | grep -qE '^[a-zA-Z0-9_-]+: '; then
+        if ! echo "$decoded" | grep -qE '^[a-zA-Z0-9_-]+(\|[0-9]+)?: '; then
             return 1
         fi
     done <<< "$raw_messages"
@@ -123,14 +123,14 @@ check "Chat file integrity after SIGKILL" "$( verify_chat_integrity "$CHAT" && e
 
 # Verify surviving agents wrote all their messages
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-AGENT_A_COUNT=$(echo "$OUTPUT" | grep -c '^agent-a:' || true)
-AGENT_D_COUNT=$(echo "$OUTPUT" | grep -c '^agent-d:' || true)
+AGENT_A_COUNT=$(echo "$OUTPUT" | grep -c 'agent-a:' || true)
+AGENT_D_COUNT=$(echo "$OUTPUT" | grep -c 'agent-d:' || true)
 check "Surviving agent-a wrote all 50" "$( [[ "$AGENT_A_COUNT" -eq 50 ]] && echo pass || echo fail )"
 check "Surviving agent-d wrote all 50" "$( [[ "$AGENT_D_COUNT" -eq 50 ]] && echo pass || echo fail )"
 
 # Killed agents may have written 0..50 messages — whatever landed must be valid
-AGENT_B_COUNT=$(echo "$OUTPUT" | grep -c '^agent-b:' || true)
-AGENT_C_COUNT=$(echo "$OUTPUT" | grep -c '^agent-c:' || true)
+AGENT_B_COUNT=$(echo "$OUTPUT" | grep -c 'agent-b:' || true)
+AGENT_C_COUNT=$(echo "$OUTPUT" | grep -c 'agent-c:' || true)
 check "Killed agent-b has 0-50 valid messages" "$( [[ "$AGENT_B_COUNT" -ge 0 && "$AGENT_B_COUNT" -le 50 ]] && echo pass || echo fail )"
 check "Killed agent-c has 0-50 valid messages" "$( [[ "$AGENT_C_COUNT" -ge 0 && "$AGENT_C_COUNT" -le 50 ]] && echo pass || echo fail )"
 echo ""
@@ -200,7 +200,7 @@ check "Integrity holds after 3 SIGKILL cycles" "$( $CYCLE_OK && echo pass || ech
 
 # All survivor messages must be present (20 per round = 60 total)
 OUTPUT2=$("$NBS_CHAT" read "$CHAT2")
-SURVIVOR_COUNT=$(echo "$OUTPUT2" | grep -c '^survivor:' || true)
+SURVIVOR_COUNT=$(echo "$OUTPUT2" | grep -c 'survivor:' || true)
 check "All 60 survivor messages present" "$( [[ "$SURVIVOR_COUNT" -eq 60 ]] && echo pass || echo fail )"
 
 # Per-round monotonic ordering for survivor
@@ -214,7 +214,7 @@ for round in 1 2 3; do
             break 2
         fi
         PREV=$NUM
-    done < <(echo "$OUTPUT2" | grep "^survivor: Round $round")
+    done < <(echo "$OUTPUT2" | grep "survivor: Round $round")
 done
 check "Survivor per-round ordering monotonic" "$( $ROUND_ORDER_OK && echo pass || echo fail )"
 echo ""
@@ -276,7 +276,7 @@ check "Header file-length matches actual after SIGKILL" "$( [[ "$POST_HEADER" -e
 check "Full integrity check after partial write" "$( verify_chat_integrity "$CHAT4" && echo pass || echo fail )"
 
 # All seed messages must survive
-POST_SEED=$("$NBS_CHAT" read "$CHAT4" | grep -c '^seed:' || true)
+POST_SEED=$("$NBS_CHAT" read "$CHAT4" | grep -c 'seed:' || true)
 check "All 10 seed messages survive SIGKILL" "$( [[ "$POST_SEED" -eq 10 ]] && echo pass || echo fail )"
 echo ""
 
@@ -307,7 +307,7 @@ for _ in $(seq 1 30); do
         READ_CRASH=$((READ_CRASH + 1))
     fi
     if [[ -n "$READ_OUT" ]]; then
-        BAD=$(echo "$READ_OUT" | grep -cvE '^[a-zA-Z0-9_-]+: ' || true)
+        BAD=$(echo "$READ_OUT" | grep -cvE '^\[.*\] [a-zA-Z0-9_-]+: ' || true)
         if [[ "$BAD" -gt 0 ]]; then
             READ_CRASH=$((READ_CRASH + 1))
         fi

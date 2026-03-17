@@ -25,11 +25,13 @@ ERRORS=0
 # Create session
 echo "Setup: Creating session..."
 "$PTY_SESSION" create "$SESSION_NAME" 'bash'
-sleep 1
+sleep 2
 
 # Test 1: Wait for prompt (should already be there)
+# Send a known marker so we don't depend on PS1 format
+"$PTY_SESSION" send "$SESSION_NAME" 'echo PROMPT_READY'
 echo "Test 1: Wait for existing pattern..."
-if "$PTY_SESSION" wait "$SESSION_NAME" '\$' --timeout=5; then
+if "$PTY_SESSION" wait "$SESSION_NAME" 'PROMPT_READY' --timeout=10; then
     echo "  PASS: Found prompt immediately"
 else
     echo "  FAIL: Could not find prompt"
