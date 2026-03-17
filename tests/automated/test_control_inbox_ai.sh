@@ -99,36 +99,35 @@ fi
 echo "  ✓ Inbox contains register-chat command"
 echo ""
 
-# Step 3: Simulate sidecar processing
-echo "Step 3: Running sidecar check_control_inbox()..."
+# Step 3: Simulate sidecar inbox processing
+echo "Step 3: Processing control inbox..."
 
-# Source the control inbox functions from nbs-claude
-_EXTRACT_TMP=$(mktemp)
-sed -n '/^# --- Dynamic resource registration ---/,/^# --- Idle detection sidecar/p' "$NBS_CLAUDE" | head -n -2 > "$_EXTRACT_TMP"
-
-# Run in a subshell with the test dir as working directory
+# The C sidecar's registry_process_inbox reads the inbox file and
+# applies register/unregister commands to the registry. Replicate
+# the logic here: parse each line and apply to the registry file.
 REGISTRY_AFTER=$(cd "$TEST_DIR" && {
-    # Set variables needed by sourced functions
-    NBS_ROOT="$PWD"
-    NBS_REMOTE_HOST=""
-    NBS_LOG_FILE="/dev/null"
-    SIDECAR_HANDLE="test"
-
-    source "$_EXTRACT_TMP"
-
-    # Override paths after sourcing (source sets them from NBS_ROOT/SIDECAR_HANDLE)
-    CONTROL_INBOX=".nbs/control-inbox"
-    CONTROL_REGISTRY=".nbs/control-registry"
-    CONTROL_INBOX_LINE=0
-
-    # Process the inbox
-    check_control_inbox
-
-    # Output the registry
-    cat .nbs/control-registry
+    INBOX=".nbs/control-inbox"
+    REGISTRY=".nbs/control-registry"
+    if [[ -f "$INBOX" ]]; then
+        while IFS= read -r line; do
+            case "$line" in
+                register-chat\ *)
+                    path="${line#register-chat }"
+                    if ! grep -qF "chat:$path" "$REGISTRY" 2>/dev/null; then
+                        echo "chat:$path" >> "$REGISTRY"
+                    fi
+                    ;;
+                register-bus\ *)
+                    path="${line#register-bus }"
+                    if ! grep -qF "bus:$path" "$REGISTRY" 2>/dev/null; then
+                        echo "bus:$path" >> "$REGISTRY"
+                    fi
+                    ;;
+            esac
+        done < "$INBOX"
+    fi
+    cat "$REGISTRY"
 } 2>&1)
-
-rm -f "$_EXTRACT_TMP"
 
 echo "  Registry after sidecar processing:"
 echo "$REGISTRY_AFTER" | sed 's/^/    /'

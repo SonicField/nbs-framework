@@ -85,7 +85,7 @@ Decision count: 5
 
 | Fact | Established | Session |
 |------|------------|---------|
-| build-host FQDN: `build-host Short hostname doesn't resolve from build-host — use FQDN or pty-session (session `build-host | 2026-02-20 | speculative-inlining |
+| build-host FQDN: `build-host.example.com`. Short hostname doesn't resolve — use FQDN or pty-session | 2026-02-20 | speculative-inlining |
 | CinderX build command: `bash build_cinderx.sh` in CinderX dir on build-host | 2026-02-21 | speculative-inlining |
 | benchmark_cinderx.py is the ONLY benchmark script | 2026-03-02 | vanilla-cpython |
 
@@ -97,9 +97,9 @@ Decision count: 5
 **Rationale:** Sockets add complexity without benefit at current scale.
 
 ### D-1772250655
-**Summary:** build-host accessible via FQDN build-host
+**Summary:** build-host accessible via FQDN build-host.example.com
 **Participants:** generalist, supervisor
-**Rationale:** Short hostname doesn't resolve from build-host FQDN works reliably.
+**Rationale:** Short hostname doesn't resolve. FQDN works reliably.
 
 ### D-1772414167
 **Summary:** Create AGENTS-README.md and build scripts in cinderx_dev
@@ -185,9 +185,9 @@ cd "$TEST_DIR"
 # B1: nbs-scribe-query finds decisions by topic
 echo ""
 echo "B1. nbs-scribe-query finds decisions by topic..."
-RESULT=$("$BIN/nbs-scribe-query" --chat=.nbs/chat/live.chat "build-host 2>/dev/null || echo "")
+RESULT=$("$BIN/nbs-scribe-query" --chat=.nbs/chat/live.chat "build-host" 2>/dev/null || echo "")
 if echo "$RESULT" | grep -q "D-1772250655"; then
-    pass "B1: found D-1772250655 for 'build-host query"
+    pass "B1: found D-1772250655 for 'build-host' query"
 else
     fail "B1: nbs-scribe-query did not find build-host decision (got: $RESULT)"
 fi
@@ -237,8 +237,8 @@ echo "C1. Chat about known topic → scribe has the answer..."
 "$BIN/nbs-chat" send .nbs/chat/live.chat generalist "hostname resolution fails for build-host — cannot scp files" 2>/dev/null
 "$BIN/nbs-chat" send .nbs/chat/live.chat supervisor "I cannot connect to build-host either. What is the full hostname?" 2>/dev/null
 
-# The librarian would search scribe for "build-host
-RESULT=$("$BIN/nbs-scribe-query" --chat=.nbs/chat/live.chat "build-host 2>/dev/null || echo "")
+# The librarian would search scribe for "build-host"
+RESULT=$("$BIN/nbs-scribe-query" --chat=.nbs/chat/live.chat "build-host" 2>/dev/null || echo "")
 if echo "$RESULT" | grep -q "D-1772250655"; then
     pass "C1: scribe has answer (D-1772250655) for hostname question"
 else

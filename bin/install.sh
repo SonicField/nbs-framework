@@ -158,14 +158,16 @@ done
 }
 
 # 3. Build binaries from source (clean first to avoid stale object files)
+# Install to PREFIX/bin via BIN_DIR override — avoids "Text file busy"
+# when live binaries are in use by running agents.
 echo "Building from source..."
 make -C "$PROJECT_ROOT" clean 2>/dev/null || true
 BUILD_FAILED=false
-if ! make -C "$PROJECT_ROOT" install 2>&1; then
+if ! make -C "$PROJECT_ROOT" install BIN_DIR="$PREFIX/bin" 2>&1; then
     BUILD_FAILED=true
-    echo "WARNING: Build failed (binaries may be in use by running agents)." >&2
+    echo "WARNING: Build failed." >&2
     echo "  Skills and symlinks will still be updated." >&2
-    echo "  Run 'make install' manually when agents are stopped." >&2
+    echo "  Run 'make install BIN_DIR=$PREFIX/bin' manually to retry." >&2
 fi
 
 # 4. Symlink supporting directories

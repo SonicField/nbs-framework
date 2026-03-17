@@ -742,7 +742,12 @@ int cmd_create(const char *name, const char *command)
      * original semantics: the session dies when the command exits.
      */
 
-    /* Step 1: Create session with a shell */
+    /* Step 1: Create session with a shell.
+     * Unset TMUX first — pty-session is designed to create independent
+     * sessions, and tmux refuses to nest when TMUX is set. Without this,
+     * pty-session called from inside a tmux session (e.g. from another
+     * pty-session or from a test runner) would always fail. */
+    unsetenv("TMUX");
     const char *create_argv[] = {
         "tmux", "new-session", "-d", "-s", session, "bash", NULL
     };
@@ -839,9 +844,64 @@ int cmd_send(const char *name, const char *text, int no_enter)
         return EXIT_NOT_FOUND;
     }
 
+    /*
+     * Fence marker protocol: prepend `echo __PTY_FENCE_<guid>__;` to
+     * the command. The fence output appears in the terminal before the
+     * command's output. `wait` searches for its pattern only after the
+     * most recent fence marker, preventing false matches on command echo.
+     *
+     * Each fence contains a GUID (from /dev/urandom) so the protocol
+     * is self-testing — literal fence text in commands won't collide,
+     * and concurrent send/wait pairs across callers are independent.
+     *
+     * The fence ID is written to ~/.pty-session/fence/<session> so
+     * `wait` can find the correct marker.
+     */
+    unsigned char uuid_bytes[16];
+    char fence_id[40];
+    int ufd = open("/dev/urandom", O_RDONLY);
+    if (ufd >= 0) {
+        ssize_t rn = read(ufd, uuid_bytes, sizeof(uuid_bytes));
+        close(ufd);
+        if (rn == (ssize_t)sizeof(uuid_bytes)) {
+            snprintf(fence_id, sizeof(fence_id),
+                     "%02x%02x%02x%02x%02x%02x%02x%02x",
+                     uuid_bytes[0], uuid_bytes[1], uuid_bytes[2], uuid_bytes[3],
+                     uuid_bytes[4], uuid_bytes[5], uuid_bytes[6], uuid_bytes[7]);
+        } else {
+            snprintf(fence_id, sizeof(fence_id), "%d", (int)getpid());
+        }
+    } else {
+        snprintf(fence_id, sizeof(fence_id), "%d", (int)getpid());
+    }
+
+    char fence_marker[64];
+    snprintf(fence_marker, sizeof(fence_marker), "__PTY_FENCE_%s__", fence_id);
+
+    /* Write fence ID to file so `wait` knows which marker to look for */
+    char fence_dir[MAX_PATH_LEN];
+    if (resolve_home_path(fence_dir, sizeof(fence_dir), ".pty-session/fence") == 0) {
+        ensure_dir(fence_dir);
+        char fence_path[MAX_PATH_LEN];
+        int fp = snprintf(fence_path, sizeof(fence_path), "%s/%s", fence_dir, name);
+        if (fp >= 0 && (size_t)fp < sizeof(fence_path)) {
+            FILE *ff = fopen(fence_path, "w");
+            if (ff) {
+                fprintf(ff, "%s\n", fence_marker);
+                fclose(ff);
+            }
+        }
+    }
+
+    char fenced[MAX_FILE_PATH];
+    int fn = snprintf(fenced, sizeof(fenced),
+                      "echo %s; %s", fence_marker, text);
+    const char *send_text = (fn >= 0 && (size_t)fn < sizeof(fenced))
+                            ? fenced : text;
+
     /* tmux send-keys -t pty_<name> -l <text> */
     const char *send_argv[] = {
-        "tmux", "send-keys", "-t", session, "-l", text, NULL
+        "tmux", "send-keys", "-t", session, "-l", send_text, NULL
     };
     int rc = exec_fire_and_forget(send_argv);
     if (rc != 0) {
@@ -1020,6 +1080,36 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
         return EXIT_ERROR;
     }
 
+    /*
+     * Fence marker protocol: `send` prepends `echo __PTY_FENCE_<guid>__`
+     * to every command and writes the marker to a fence file. `wait`
+     * reads the fence file and only matches the pattern if it appears
+     * AFTER the fence marker's output in the pane. This is deterministic:
+     * no timing, no offsets — the fence is a physical marker in the
+     * output stream.
+     *
+     * If no fence file exists (e.g. session was created with a command,
+     * not via send), fall back to searching the entire pane content.
+     */
+    char fence_marker[64] = "";
+    char fence_dir[MAX_PATH_LEN];
+    if (resolve_home_path(fence_dir, sizeof(fence_dir), ".pty-session/fence") == 0) {
+        char fence_path[MAX_PATH_LEN];
+        int fp = snprintf(fence_path, sizeof(fence_path), "%s/%s", fence_dir, name);
+        if (fp >= 0 && (size_t)fp < sizeof(fence_path)) {
+            FILE *ff = fopen(fence_path, "r");
+            if (ff) {
+                if (fgets(fence_marker, sizeof(fence_marker), ff)) {
+                    /* Strip trailing newline */
+                    size_t flen = strlen(fence_marker);
+                    if (flen > 0 && fence_marker[flen - 1] == '\n')
+                        fence_marker[flen - 1] = '\0';
+                }
+                fclose(ff);
+            }
+        }
+    }
+
     for (;;) {
         long now_ms = get_monotonic_ms();
         long elapsed_ms = (now_ms >= 0) ? (now_ms - start_ms) : timeout_ms;
@@ -1046,7 +1136,27 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
         }
 
         if (capture_pane(session, DEFAULT_SCROLLBACK, buf, CAPTURE_BUF_SIZE) == 0) {
-            if (strstr(buf, pattern) != NULL) {
+            const char *search_from = buf;
+
+            if (fence_marker[0] != '\0') {
+                /* Find the fence marker as a standalone output line.
+                 * The command echo contains the marker embedded in a
+                 * longer line (e.g. "echo __PTY_FENCE_xx__; cmd").
+                 * The actual output is the marker alone on its own line:
+                 * "\n__PTY_FENCE_xx__\n". Search for that. */
+                char fence_line[80];
+                snprintf(fence_line, sizeof(fence_line), "\n%s\n", fence_marker);
+                char *pos = strstr(buf, fence_line);
+                if (pos != NULL) {
+                    search_from = pos + strlen(fence_line);
+                } else {
+                    /* Fence output not yet visible — keep polling */
+                    usleep(POLL_INTERVAL_USEC);
+                    continue;
+                }
+            }
+
+            if (strstr(search_from, pattern) != NULL) {
                 printf("Pattern found after %ld.%lds\n",
                        elapsed_ms / 1000, (elapsed_ms % 1000) / 100);
                 free(buf);

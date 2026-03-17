@@ -1,18 +1,21 @@
 #!/bin/bash
 # Run all NBS Framework tests
 #
-# Usage: ./tests/run_all.sh [--quick]
-#   --quick: Skip slow tests (worker tests, AI evaluation tests)
+# Usage: ./tests/run_all.sh [--quick] [--target=NAME]
+#   --quick:        Skip slow tests (worker tests, AI evaluation tests)
+#   --target=NAME:  Run only the test matching NAME (substring match)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 QUICK_MODE=false
+TARGET=""
 
 for arg in "$@"; do
     case $arg in
         --quick) QUICK_MODE=true ;;
+        --target=*) TARGET="${arg#--target=}" ;;
     esac
 done
 
@@ -20,9 +23,15 @@ PASSED=0
 FAILED=0
 SKIPPED=0
 
+should_run() {
+    [[ -z "$TARGET" ]] || [[ "$1" == *"$TARGET"* ]]
+}
+
 run_test() {
     local test_script="$1"
     local name=$(basename "$test_script" .sh)
+
+    if ! should_run "$name"; then return; fi
 
     echo "--- $name ---"
     if "$test_script"; then
@@ -41,6 +50,8 @@ run_test() {
 run_ai_test() {
     local test_script="$1"
     local name=$(basename "$test_script" .sh)
+
+    if ! should_run "$name"; then return; fi
 
     echo "--- $name ---"
     if [[ -z "${CLAUDECODE:-}" ]]; then
@@ -64,22 +75,27 @@ run_ai_test() {
         fi
 
         export NBS_PTY_QUIET=1
-        "$PTY" create "$session" "$test_script" 2>/dev/null
-        if "$PTY" wait "$session" 'PASSED\|FAILED\|ALL.*PASSED\|TESTS PASSED\|TESTS FAILED' --timeout=300 2>/dev/null; then
-            local output
-            output=$("$PTY" read "$session" 2>/dev/null)
-            "$PTY" kill "$session" 2>/dev/null || true
-            echo "$output"
-            if echo "$output" | grep -q "FAILED:"; then
-                echo "FAILED: $name"
-                FAILED=$((FAILED + 1))
-            else
-                echo "PASSED: $name"
-                PASSED=$((PASSED + 1))
-            fi
+        # Write exit code to a temp file — avoids parsing terminal output
+        # which contains ANSI escapes and command echo.
+        local rc_file="/tmp/nbs-test-rc-${name}-$$"
+        rm -f "$rc_file"
+        "$PTY" create "$session" bash 2>/dev/null
+        # Unset TMUX so tests that use pty-session internally can create
+        # their own tmux sessions without tmux refusing to nest.
+        "$PTY" send "$session" "unset TMUX; $test_script; echo \$? > $rc_file; exit" 2>/dev/null
+        # Wait for session to exit (read --wait blocks until process dies)
+        "$PTY" read "$session" --wait --timeout=300 2>/dev/null || true
+        "$PTY" kill "$session" 2>/dev/null || true
+        local exit_code="1"
+        if [[ -f "$rc_file" ]]; then
+            exit_code=$(cat "$rc_file")
+            rm -f "$rc_file"
+        fi
+        if [[ "$exit_code" == "0" ]]; then
+            echo "PASSED: $name"
+            PASSED=$((PASSED + 1))
         else
-            "$PTY" kill "$session" 2>/dev/null || true
-            echo "FAILED: $name (timeout or pty-session error)"
+            echo "FAILED: $name"
             FAILED=$((FAILED + 1))
         fi
     fi
@@ -87,6 +103,7 @@ run_ai_test() {
 }
 
 run_unit_tests() {
+    if ! should_run "unit_tests"; then return; fi
     echo "--- C unit tests (make test-unit) ---"
     local unit_failed=0
 
@@ -118,6 +135,7 @@ run_unit_tests() {
 
 skip_test() {
     local name="$1"
+    if ! should_run "$name"; then return; fi
     echo "--- $name ---"
     echo "SKIPPED (--quick mode)"
     SKIPPED=$((SKIPPED + 1))
@@ -231,12 +249,23 @@ run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
 run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
 run_test "$SCRIPT_DIR/automated/test_librarian.sh"
 
-# nbs-chat remote tests (requires ssh localhost)
-if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh" ]]; then
+# nbs-chat remote tests (requires ssh localhost or mock server)
+if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh" ]] && should_run "test_nbs_chat_remote"; then
     if ssh -o BatchMode=yes -o ConnectTimeout=3 localhost true 2>/dev/null; then
         run_test "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh"
+    elif [[ -x "$HOME/local/nbs-ssh/venv/bin/python" ]]; then
+        # ssh localhost blocked — use mock SSH server
+        echo "--- test_nbs_chat_remote (via mock SSH) ---"
+        if "$HOME/local/nbs-ssh/venv/bin/python" "$SCRIPT_DIR/automated/test_nbs_chat_remote_mock.py"; then
+            echo "PASSED: test_nbs_chat_remote"
+            PASSED=$((PASSED + 1))
+        else
+            echo "FAILED: test_nbs_chat_remote"
+            FAILED=$((FAILED + 1))
+        fi
+        echo ""
     else
-        skip_test "test_nbs_chat_remote (ssh localhost unavailable)"
+        skip_test "test_nbs_chat_remote (ssh localhost unavailable, no mock server)"
     fi
 fi
 
@@ -257,6 +286,8 @@ else
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_command.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_nbs_command.sh"
     fi
+    # test_nbs_discovery: AI evaluator output is non-deterministic (sometimes
+    # produces conversation instead of JSON verdict). Accepted as flaky.
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_discovery.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_nbs_discovery.sh"
     fi

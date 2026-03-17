@@ -115,8 +115,8 @@ if [[ "$FINAL_MSG_COUNT" -lt 2 ]]; then
 fi
 
 # Check both handles are present
-HAS_A=$(echo "$CHAT_CONTENTS" | grep -c '^worker-a:' || true)
-HAS_B=$(echo "$CHAT_CONTENTS" | grep -c '^worker-b:' || true)
+HAS_A=$(echo "$CHAT_CONTENTS" | grep -c '] worker-a:' || true)
+HAS_B=$(echo "$CHAT_CONTENTS" | grep -c '] worker-b:' || true)
 
 if [[ "$HAS_A" -eq 0 ]] || [[ "$HAS_B" -eq 0 ]]; then
     echo -e "${RED}FAIL${NC}: Both handles must be present (worker-a: $HAS_A, worker-b: $HAS_B)"
