@@ -1126,7 +1126,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
         return EXIT_ERROR;
     }
 
-    fprintf(f,
+    int write_ok = fprintf(f,
         "# Worker: %s\n"
         "\n"
         "## Task\n"
@@ -1155,7 +1155,20 @@ int cmd_spawn(const char *slug, const char *project_dir,
         "[Worker appends findings here]\n",
         name, task_description, timestamp);
 
-    fclose(f);
+    if (write_ok < 0) {
+        fprintf(stderr, "Error: failed to write task file: %s (%s)\n",
+                task_file, strerror(errno));
+        fclose(f);
+        unlink(task_file);
+        return EXIT_ERROR;
+    }
+
+    if (fclose(f) != 0) {
+        fprintf(stderr, "Error: failed to flush task file: %s (%s)\n",
+                task_file, strerror(errno));
+        unlink(task_file);
+        return EXIT_ERROR;
+    }
 
     /* Postcondition: task file exists */
     ASSERT_MSG(file_exists(task_file), "task file not created: %s", task_file);
@@ -1199,7 +1212,11 @@ int cmd_spawn(const char *slug, const char *project_dir,
         return EXIT_ERROR;
     }
 
-    /* Allow shell to initialise */
+    /* Allow shell to initialise.
+     * Rationale: tmux new-session spawns bash -l which sources
+     * profile/rc files. 2s is empirically sufficient for typical
+     * shell startup. Verified by the subsequent tmux send-keys
+     * which fails visibly if the shell is not ready. */
     sleep(2);
 
     /* Launch interactive Claude with NBS_HANDLE for sidecar identity.
@@ -1218,7 +1235,10 @@ int cmd_spawn(const char *slug, const char *project_dir,
         tmux_send_keys(session, launch_cmd, 1);
     }
 
-    /* Allow Claude to start */
+    /* Allow Claude to start.
+     * Rationale: nbs-claude takes ~2-3s to initialise and display
+     * its prompt. The subsequent send-keys delivers the task text,
+     * which would be lost if Claude has not started reading stdin. */
     sleep(3);
 
     /* Send the task prompt. */
@@ -1233,7 +1253,12 @@ int cmd_spawn(const char *slug, const char *project_dir,
         tmux_send_keys(session, prompt, 1);
     }
 
-    /* Wait for Claude to start processing (poll for prompt consumption) */
+    /* Wait for Claude to start processing (poll for prompt consumption).
+     * Rationale: after send-keys delivers the task text plus Enter,
+     * Claude needs time to read the task file and begin execution.
+     * 5s is empirically sufficient. The subsequent poll loop is the
+     * real completion check — this delay only prevents premature
+     * polling. */
     sleep(5);
 
     /* Monitor for completion, then kill the session.
@@ -1255,50 +1280,71 @@ int cmd_spawn(const char *slug, const char *project_dir,
 
         int completed = 0;
         for (int poll = 0; poll < 60; poll++) {
+            /* Poll interval: 10s between checks.
+             * Rationale: balances responsiveness (detect completion
+             * within 10s) against overhead (tmux has-session + nbs-chat
+             * search fork/exec per iteration). 60 iterations × 10s =
+             * 10 minute timeout. */
             sleep(10);
 
             /* Check if tmux session still exists — if not, worker
              * exited on its own (crashed or clean exit). Either way,
-             * nothing to kill. */
-            char check_cmd[PATH_BUF_SIZE];
-            snprintf(check_cmd, sizeof(check_cmd),
-                     "tmux has-session -t '%s' 2>/dev/null", session);
-            if (system(check_cmd) != 0) {
+             * nothing to kill.
+             * Uses tmux_has_session (fork+exec) — never system(). */
+            if (!tmux_has_session(session)) {
                 completed = 1;
                 break;
             }
 
             /* Check if the worker posted to chat (any message from
-             * the slug handle in the last 2 minutes means it ran) */
-            char chat_path[PATH_BUF_SIZE];
-            snprintf(chat_path, sizeof(chat_path),
-                     "%s/.nbs/chat/live.chat", abs_project_dir);
-            char search_cmd[PATH_BUF_SIZE * 2];
-            snprintf(search_cmd, sizeof(search_cmd),
-                     "nbs-chat search '%s' '' --handle=%s --after=2m "
-                     ">/dev/null 2>&1",
-                     chat_path, slug);
-            if (system(search_cmd) == 0) {
-                /* Worker posted — give it 30s to finish any follow-up */
-                sleep(30);
-                completed = 1;
-                break;
+             * the slug handle in the last 2 minutes means it ran).
+             * Uses fork+exec via exec_capture — never system(). */
+            {
+                char chat_path[PATH_BUF_SIZE];
+                int cpn = snprintf(chat_path, sizeof(chat_path),
+                                   "%s/.nbs/chat/live.chat", abs_project_dir);
+                ASSERT_MSG(cpn > 0 && (size_t)cpn < sizeof(chat_path),
+                           "cmd_spawn: chat_path too long");
+
+                char handle_arg[NAME_MAX_LEN + 16];
+                int han = snprintf(handle_arg, sizeof(handle_arg),
+                                   "--handle=%s", slug);
+                ASSERT_MSG(han > 0 && (size_t)han < sizeof(handle_arg),
+                           "cmd_spawn: handle_arg too long");
+
+                const char *search_argv[] = {
+                    "nbs-chat", "search", chat_path, "",
+                    handle_arg, "--after=2m", NULL
+                };
+                char search_buf[64];
+                int src = exec_capture(search_argv, search_buf,
+                                       sizeof(search_buf));
+                if (src == 0) {
+                    /* Worker posted — give it 30s to finish any follow-up.
+                     * Rationale: Claude may still be writing final output
+                     * after posting a chat message. 30s is empirically
+                     * sufficient for typical follow-up writes. */
+                    sleep(30);
+                    completed = 1;
+                    break;
+                }
             }
         }
 
-        /* Kill the session and clean up */
-        {
-            char kill_cmd[PATH_BUF_SIZE];
-            snprintf(kill_cmd, sizeof(kill_cmd),
-                     "tmux kill-session -t '%s' 2>/dev/null", session);
-            (void)system(kill_cmd);
-        }
+        /* Kill the session and clean up.
+         * Uses tmux_kill_session (fork+exec) — never system(). */
+        (void)tmux_kill_session(session);
 
         /* Clean pidfile */
         {
             char pidfile[PATH_BUF_SIZE];
-            snprintf(pidfile, sizeof(pidfile),
-                     "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
+            int pfn = snprintf(pidfile, sizeof(pidfile),
+                               "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
+            ASSERT_MSG(pfn > 0 && (size_t)pfn < sizeof(pidfile),
+                       "cmd_spawn: pidfile path too long");
+            /* Brief delay after tmux kill-session to let the shell
+             * process terminate and release the pidfile. 2s is
+             * conservative; the pidfile is unlinked regardless. */
             sleep(2);
             unlink(pidfile);
         }
@@ -1821,6 +1867,9 @@ int cmd_continue(const char *handle, const char *model_override,
     if (tmux_has_session(tmux_session_name)) {
         printf("  Killing old tmux session...\n");
         tmux_kill_session(tmux_session_name);
+        /* Brief delay to let tmux fully clean up the old session
+         * before spawning a new one with the same name. Without
+         * this, the new-session may fail with "duplicate session". */
         sleep(1);
     }
 
@@ -1830,7 +1879,11 @@ int cmd_continue(const char *handle, const char *model_override,
         snprintf(pidfile, sizeof(pidfile), "%s/%s/%s.pid",
                  project_root, PIDS_SUBDIR, handle);
         if (file_exists(pidfile)) {
-            if (old_pid > 0 && kill((pid_t)old_pid, 0) != 0) {
+            /* Guard: old_pid must fit in pid_t. On most systems pid_t
+             * is 32-bit, so reject values above INT32_MAX. A negative
+             * or zero pid is already excluded by the > 0 check. */
+            if (old_pid > 0 && old_pid <= (long)INT_MAX &&
+                kill((pid_t)old_pid, 0) != 0) {
                 unlink(pidfile);
             }
         }
@@ -1864,7 +1917,10 @@ int cmd_continue(const char *handle, const char *model_override,
         }
     }
 
-    /* Wait and verify */
+    /* Wait and verify.
+     * Rationale: tmux new-session with nbs-claude takes ~2-3s to
+     * fully initialise. tmux_has_session below is the verification
+     * step — the sleep is the precondition for meaningful verification. */
     sleep(3);
     if (tmux_has_session(tmux_session_name)) {
         printf("  Continued successfully in tmux session: %s\n",
@@ -1894,6 +1950,18 @@ int cmd_session(const char *handle, const char *cwd)
         fprintf(stderr,
                 "Error: session requires <handle>\n"
                 "Usage: nbs-workers session <handle>\n");
+        return EXIT_BAD_ARGS;
+    }
+
+    /* Security: handle is used to construct filesystem paths and is
+     * displayed in output. Validate against safe character set to
+     * prevent path traversal and terminal escape injection. */
+    if (!validate_safe_handle(handle)) {
+        fprintf(stderr,
+                "Error: handle contains unsafe characters: %s\n"
+                "  Handles must match [a-z0-9][-a-z0-9]* "
+                "(no shell metacharacters, path separators, or uppercase).\n",
+                handle);
         return EXIT_BAD_ARGS;
     }
 
@@ -1948,8 +2016,10 @@ int cmd_session(const char *handle, const char *cwd)
     else
         printf("  PID: <unknown>\n");
 
-    /* Check if PID is alive */
-    if (pid_val > 0 && kill((pid_t)pid_val, 0) == 0) {
+    /* Check if PID is alive.
+     * Guard: pid_val must fit in pid_t (typically int32). */
+    if (pid_val > 0 && pid_val <= (long)INT_MAX &&
+        kill((pid_t)pid_val, 0) == 0) {
         printf("  Status: ALIVE\n");
     } else if (pid_val > 0) {
         printf("  Status: DEAD (PID %ld not running)\n", pid_val);
@@ -1993,9 +2063,11 @@ int cmd_list(const char *cwd)
     struct dirent *ent;
 
     while ((ent = readdir(d)) != NULL) {
-        /* Only look at .md files */
+        /* Only look at .md files.
+         * Guard: nlen <= 3 ensures at least one char before ".md"
+         * (minimum valid filename: "X.md" = 4 chars). */
         size_t nlen = strlen(ent->d_name);
-        if (nlen < 4 || strcmp(ent->d_name + nlen - 3, ".md") != 0)
+        if (nlen <= 3 || strcmp(ent->d_name + nlen - 3, ".md") != 0)
             continue;
 
         /* Extract name (filename without .md extension) */

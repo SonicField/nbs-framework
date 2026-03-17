@@ -65,6 +65,8 @@ static const char *COLOURS[] = {
     "38;5;147",  /* Lavender */
 };
 #define NUM_COLOURS 8
+_Static_assert(sizeof(COLOURS) / sizeof(COLOURS[0]) == NUM_COLOURS,
+               "NUM_COLOURS must match COLOURS array length");
 
 #define BOLD  "\033[1m"
 #define DIM   "\033[2m"
@@ -180,16 +182,29 @@ static void *watchdog_thread_fn(void *arg) {
         if (fp) {
             if (fscanf(fp, "%d", &count) != 1) count = 0;
             pclose(fp);
+        } else {
+            fprintf(stderr, "warning: watchdog popen failed: %s\n",
+                    strerror(errno));
         }
 
         watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
         if (d == WATCHDOG_RESTART) {
-            char cmd[8192];
-            int sn = snprintf(cmd, sizeof(cmd),
-                     "bash '%s/bin/nbs-chat-terminal-restart.sh' '%s' '%s' &",
-                     ws->project_root, ws->project_root, ws->chat_path);
-            if (sn > 0 && (size_t)sn < sizeof(cmd)) {
-                (void)system(cmd);
+            char script[4096 + 64];
+            int sn = snprintf(script, sizeof(script),
+                     "%s/bin/nbs-chat-terminal-restart.sh",
+                     ws->project_root);
+            if (sn > 0 && (size_t)sn < sizeof(script)) {
+                pid_t rpid = fork();
+                if (rpid == 0) {
+                    /* Child: exec restart script with project_root and chat_path */
+                    execlp("bash", "bash", script,
+                           ws->project_root, ws->chat_path, (char *)NULL);
+                    _exit(127);
+                } else if (rpid > 0) {
+                    /* Parent: do not wait — restart runs in background */
+                    (void)rpid;
+                }
+                /* fork failure: silently continue — next poll will retry */
             }
         }
         /* WATCHDOG_RATE_LIMITED: evaluate already set enabled=0.
@@ -295,6 +310,7 @@ static void format_message(const char *handle, const char *content,
 }
 
 static void print_prompt(const char *handle) {
+    ASSERT_MSG(handle != NULL, "print_prompt: handle is NULL");
     printf("%s%s>%s ", BOLD, handle, RESET);
     fflush(stdout);
 }
@@ -338,6 +354,7 @@ static void print_help(void) {
  *   \033[<N>C - move cursor right N columns
  */
 static void line_redraw(const line_state_t *ls, const char *handle) {
+    ASSERT_MSG(handle != NULL, "line_redraw: handle is NULL");
     ASSERT_MSG(ls != NULL, "line_redraw: ls is NULL");
     ASSERT_MSG(ls->buf != NULL, "line_redraw: buf is NULL");
     ASSERT_MSG(ls->cursor <= ls->len,
@@ -548,6 +565,7 @@ static void line_move_end(line_state_t *ls) {
  */
 static int handle_escape_input(line_state_t *ls, esc_parser_t *esc,
                                char c, const char *handle) {
+    ASSERT_MSG(handle != NULL, "handle_escape_input: handle is NULL");
     ASSERT_MSG(ls != NULL, "handle_escape_input: ls is NULL");
     ASSERT_MSG(esc != NULL, "handle_escape_input: esc is NULL");
 
@@ -660,6 +678,7 @@ static const char *strcasestr_portable(const char *haystack, const char *needle)
  * Only clears and redraws when messages from others actually arrive.
  */
 static void poll_and_display(line_state_t *ls, const char *handle) {
+    ASSERT_MSG(handle != NULL, "poll_and_display: handle is NULL");
     ASSERT_MSG(g_chat_file != NULL, "poll_and_display: g_chat_file is NULL");
     ASSERT_MSG(g_msg_count >= 0,
                "poll_and_display: g_msg_count negative: %d", g_msg_count);
@@ -744,6 +763,9 @@ static int do_send(const char *msg) {
     ASSERT_MSG(g_handle != NULL, "do_send: g_handle is NULL");
 
     if (chat_send(g_chat_file, g_handle, msg) != 0) {
+        int saved_errno = errno;
+        fprintf(stderr, "warning: chat_send failed: %s (errno=%d)\n",
+                strerror(saved_errno), saved_errno);
         return -1;
     }
 
@@ -809,8 +831,15 @@ static char *open_editor(void) {
     /* Create temp file with restricted permissions.
      * mkstemp creates the file, but POSIX does not guarantee 0600 —
      * the result depends on the process umask.  Explicitly set 0600
-     * to prevent other users from reading the draft message. */
-    char tmppath[] = "/tmp/nbs-chat-edit.XXXXXX";
+     * to prevent other users from reading the draft message.
+     * Use TMPDIR if set (allows user-private temp directories),
+     * falling back to /tmp. */
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0') tmpdir = "/tmp";
+    char tmppath[4096];
+    int tsn = snprintf(tmppath, sizeof(tmppath),
+                       "%s/nbs-chat-edit.XXXXXX", tmpdir);
+    if (tsn <= 0 || (size_t)tsn >= sizeof(tmppath)) return NULL;
     int fd = mkstemp(tmppath);
     if (fd < 0) return NULL;
     if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
@@ -1060,6 +1089,22 @@ int main(int argc, char **argv) {
         if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
             fprintf(stderr, "warning: tcsetattr(raw) failed: %s\n",
                     strerror(errno));
+        } else {
+            /* Postcondition: verify the terminal driver accepted our flags.
+             * POSIX permits tcsetattr to silently ignore unsupported flags. */
+            struct termios verify;
+            if (tcgetattr(STDIN_FILENO, &verify) == 0) {
+                if ((verify.c_lflag & (ECHO | ICANON)) != 0) {
+                    fprintf(stderr, "warning: tcsetattr postcondition failed: "
+                            "ECHO or ICANON still set (lflag=0x%lx)\n",
+                            (unsigned long)verify.c_lflag);
+                }
+                if ((verify.c_lflag & ISIG) == 0) {
+                    fprintf(stderr, "warning: tcsetattr postcondition failed: "
+                            "ISIG not set (lflag=0x%lx) — Ctrl-C may not work\n",
+                            (unsigned long)verify.c_lflag);
+                }
+            }
         }
     }
 
@@ -1372,14 +1417,29 @@ int main(int argc, char **argv) {
 
             /* /restart — manual team restart (bypasses rate limit) */
             if (strcmp(edit.buf, "/restart") == 0) {
-                printf("  %sTriggering manual restart...%s\n", DIM, RESET);
-                char rcmd[8192];
-                int rsn = snprintf(rcmd, sizeof(rcmd),
-                         "bash '%s/bin/nbs-chat-terminal-restart.sh' '%s' '%s' &",
-                         g_watchdog.project_root, g_watchdog.project_root,
-                         g_watchdog.chat_path);
-                if (rsn > 0 && (size_t)rsn < sizeof(rcmd)) {
-                    (void)system(rcmd);
+                if (!watchdog_is_enabled(&g_watchdog)) {
+                    printf("  %sWatchdog not initialised — cannot restart.%s\n",
+                           DIM, RESET);
+                } else {
+                    printf("  %sTriggering manual restart...%s\n", DIM, RESET);
+                    char rscript[4096 + 64];
+                    int rsn = snprintf(rscript, sizeof(rscript),
+                             "%s/bin/nbs-chat-terminal-restart.sh",
+                             g_watchdog.project_root);
+                    if (rsn > 0 && (size_t)rsn < sizeof(rscript)) {
+                        pid_t rpid = fork();
+                        if (rpid == 0) {
+                            /* Child: exec restart script */
+                            execlp("bash", "bash", rscript,
+                                   g_watchdog.project_root,
+                                   g_watchdog.chat_path, (char *)NULL);
+                            _exit(127);
+                        } else if (rpid < 0) {
+                            fprintf(stderr, "warning: fork for /restart failed: %s\n",
+                                    strerror(errno));
+                        }
+                        /* Parent: do not wait — restart runs in background */
+                    }
                 }
                 line_state_reset(&edit);
                 print_prompt(g_handle);

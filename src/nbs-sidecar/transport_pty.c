@@ -16,10 +16,14 @@
 /* Named constant for capture buffer size (Violation 1: HARDENING) */
 #define PTY_CAPTURE_BUF_SIZE 32768
 
+/* Named constants for context buffer sizes */
+#define PTY_PATH_MAX 4096
+#define PTY_SESSION_MAX 256
+
 /* Context for pty-session transport */
 typedef struct {
-    char pty_path[4096];
-    char session_name[256];
+    char pty_path[PTY_PATH_MAX];
+    char session_name[PTY_SESSION_MAX];
 } pty_ctx_t;
 
 static char *pty_capture(const transport_t *self, int scrollback) {
@@ -36,7 +40,11 @@ static char *pty_capture(const transport_t *self, int scrollback) {
     };
 
     char *buf = malloc(PTY_CAPTURE_BUF_SIZE);
-    if (!buf) return NULL;
+    if (!buf) {
+        fprintf(stderr, "pty_capture: malloc(%d) failed for session '%s'\n",
+                PTY_CAPTURE_BUF_SIZE, ctx->session_name);
+        return NULL;
+    }
 
     int rc = exec_capture(argv, buf, PTY_CAPTURE_BUF_SIZE);
     if (rc < 0) {
@@ -47,8 +55,8 @@ static char *pty_capture(const transport_t *self, int scrollback) {
         return NULL;
     }
 
-    /* Violation 3 (HARDENING): postcondition -- buffer is NUL-terminated */
-    ASSERT_MSG(buf[strlen(buf)] == '\0',
+    /* Postcondition: buffer is NUL-terminated within bounds */
+    ASSERT_MSG(memchr(buf, '\0', PTY_CAPTURE_BUF_SIZE) != NULL,
                "pty_capture: buffer not NUL-terminated after exec_capture");
     return buf;
 }
@@ -113,12 +121,16 @@ static int pty_is_alive(const transport_t *self) {
     ASSERT_MSG(self->ctx != NULL, "pty_is_alive: ctx is NULL");
     const pty_ctx_t *ctx = self->ctx;
 
-    char buf[4096];
+    char buf[PTY_PATH_MAX];
     const char *argv[] = {
         ctx->pty_path, "list", NULL
     };
 
     int rc = exec_capture(argv, buf, sizeof(buf));
+    /* Postcondition: rc must be less than buffer size (no truncation) */
+    ASSERT_MSG(rc < (int)sizeof(buf),
+               "pty_is_alive: exec_capture output truncated (rc=%d, buf=%zu)",
+               rc, sizeof(buf));
     /* Violation 6 (BUG): distinguish exec error from "session not found" */
     if (rc < 0) {
         fprintf(stderr, "pty_is_alive: exec_capture failed (rc=%d) for session '%s'\n",

@@ -30,10 +30,11 @@ typedef struct {
  *
  * Preconditions:
  *   - content != NULL
+ *   - response != NULL (required parameter)
  *
  * Postconditions:
  *   - Returns DIALOGUE_NONE if no dialogue detected
- *   - If response != NULL and return != DIALOGUE_NONE, *response is populated
+ *   - If return != DIALOGUE_NONE, *response is populated
  */
 dialogue_type_t detect_blocking_dialogue(const char *content,
                                           dialogue_response_t *response);

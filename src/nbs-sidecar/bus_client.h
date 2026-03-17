@@ -35,7 +35,8 @@ int bus_client_check(const char *bus_dir, int *event_count,
  *   - payload != NULL, payload_size > 0
  *
  * Postconditions:
- *   - On success (return 0): payload contains event data (NUL-terminated)
+ *   - On success (return 0): payload contains event data, NUL-terminated
+ *     within payload_size bytes (asserted)
  *   - On error (return -1): payload contents undefined
  */
 int bus_client_read(const char *bus_dir, const char *event_file,
@@ -46,10 +47,10 @@ int bus_client_read(const char *bus_dir, const char *event_file,
  *
  * Preconditions:
  *   - bus_dir != NULL
- *   - event_file != NULL
+ *   - event_file != NULL, must not contain '/' or '..' (path traversal)
  *
  * Postconditions:
- *   - Returns 0 on success, -1 on error
+ *   - Returns 0 on success, -1 on error (including path traversal rejection)
  */
 int bus_client_ack(const char *bus_dir, const char *event_file);
 
@@ -103,6 +104,10 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
  * Call this after successfully processing an event returned by
  * bus_client_check_typed(). If processing failed, do NOT call this —
  * the event stays in the bus for retry on the next tick.
+ *
+ * Trust boundary:
+ *   - bus_dir is trusted (validated at process startup by sidecar_config_validate)
+ *   - event_file is untrusted (derived from bus output parsing)
  *
  * Preconditions:
  *   - bus_dir != NULL

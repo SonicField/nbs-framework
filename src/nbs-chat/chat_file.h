@@ -55,6 +55,11 @@ typedef struct {
  * Invariants:
  *   - handle is always NUL-terminated, length < MAX_HANDLE_LEN
  *   - count >= 0 (number of messages sent by this participant)
+ *
+ * Note: count is signed int rather than unsigned because:
+ *   (a) it participates in arithmetic with signed values (e.g. snprintf return)
+ *   (b) the invariant count >= 0 is enforced by chat_state_check_invariants()
+ *   (c) signed overflow is UB and thus detectable by sanitisers
  */
 typedef struct {
     char handle[MAX_HANDLE_LEN];
@@ -69,6 +74,15 @@ typedef struct {
  *   - messages != NULL when message_count > 0
  *   - messages is heap-allocated and must be freed via chat_state_free()
  *   - file_length >= 0 when read from a valid chat file
+ *
+ * Note: message_count and participant_count are signed int rather than
+ * unsigned because:
+ *   (a) they participate in arithmetic with signed values (loop indices,
+ *       comparisons with snprintf return values, keep_count in truncate)
+ *   (b) the invariants >= 0 are enforced by chat_state_check_invariants()
+ *   (c) signed overflow is UB and thus detectable by sanitisers
+ *
+ * Use chat_state_check_invariants() to validate these invariants.
  */
 typedef struct {
     char last_writer[MAX_HANDLE_LEN];
@@ -80,6 +94,25 @@ typedef struct {
     int message_count;
     int skipped_count;  /* Messages skipped due to decode/alloc failure */
 } chat_state_t;
+
+/*
+ * chat_state_check_invariants — Validate struct invariants without aborting.
+ *
+ * Preconditions:
+ *   - state != NULL
+ *
+ * Postconditions:
+ *   - Returns 1 if all invariants hold, 0 if any are violated
+ *   - Does NOT abort on violation (unlike ASSERT_MSG)
+ *   - Logs which invariant failed to stderr
+ *
+ * Checks:
+ *   - message_count in [0, MAX_MESSAGES]
+ *   - participant_count in [0, MAX_PARTICIPANTS]
+ *   - messages != NULL when message_count > 0
+ *   - participant counts >= 0
+ */
+int chat_state_check_invariants(const chat_state_t *state);
 
 /*
  * chat_create — Create a new empty chat file.
@@ -125,8 +158,12 @@ int chat_read(const char *path, chat_state_t *state);
  *
  * Postconditions:
  *   - On success (returns 0): message is appended, headers updated,
- *     file-length header matches actual file size
- *   - On error (returns -1 or -2): file may or may not have been modified
+ *     file-length header matches actual file size, message_count
+ *     increased by exactly 1 relative to pre-call state, and the
+ *     sender's read cursor is updated to the new message index
+ *   - On -1: I/O or lock error; the original file is unchanged (writes
+ *     go to a .tmp file which is only renamed on success)
+ *   - On -2: fclose flush error; .tmp file was removed, original unchanged
  *
  * Acquires lock, reads file, appends message, updates headers, writes back.
  * Returns 0 on success, -1 on error, -2 on I/O flush error.
@@ -145,7 +182,9 @@ int chat_send(const char *path, const char *handle, const char *message);
  *     Header fields (last-writer, last-write, file-length, participants)
  *     are recomputed from the remaining messages. File permissions preserved.
  *   - If keep_count >= message_count: no-op, returns 0.
- *   - On error (returns -1): file may or may not have been modified.
+ *   - On -1 (error): the original file is unchanged (writes go to a
+ *     .tmp file which is only renamed on success). Falsifiable: read
+ *     the file after -1 return and verify message_count is unchanged.
  *
  * Acquires lock, reads file, keeps first keep_count messages, rewrites.
  * Returns 0 on success, -1 on error.
@@ -191,10 +230,10 @@ void chat_state_free(chat_state_t *state);
  * Postconditions:
  *   - Returns >= 0: the last-read message index for the given handle
  *   - Returns -1: no cursor exists for this handle, or cursor file
- *     does not exist, or parse error occurred
- *
- * Note: -1 is overloaded (no cursor vs error). Callers should treat
- * both cases identically (start reading from the beginning).
+ *     does not exist (benign: start reading from the beginning)
+ *   - Returns -2: cursor entry exists but value failed to parse
+ *     (indicates file corruption; callers should treat as -1 but
+ *     may choose to log a warning)
  *
  * The cursor file is <chat_path>.cursors.
  */

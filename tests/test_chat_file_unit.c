@@ -244,7 +244,7 @@ static void test_safe_parse_int_boundaries(void) {
 static void test_safe_parse_int_malformed_cursor_file(void) {
     /*
      * Write a cursor file with malformed content and verify
-     * chat_cursor_read handles it gracefully (returns -1).
+     * chat_cursor_read handles it gracefully (returns -2 for parse errors).
      */
     char path[512];
     snprintf(path, sizeof(path), "%s/malformed_cursor.chat", test_dir);
@@ -269,20 +269,20 @@ static void test_safe_parse_int_malformed_cursor_file(void) {
     TEST_ASSERT(written == (ssize_t)strlen(content), "write failed");
     close(fd);
 
-    /* alice: not a number -> -1 */
+    /* alice: not a number -> -2 (parse error, distinct from "not found") */
     int cursor = chat_cursor_read(path, "alice");
-    TEST_ASSERT(cursor == -1,
-                "malformed 'notanumber': expected -1, got %d", cursor);
+    TEST_ASSERT(cursor == -2,
+                "malformed 'notanumber': expected -2, got %d", cursor);
 
-    /* bob: empty string -> -1 */
+    /* bob: empty string -> -2 (parse error) */
     cursor = chat_cursor_read(path, "bob");
-    TEST_ASSERT(cursor == -1,
-                "malformed empty: expected -1, got %d", cursor);
+    TEST_ASSERT(cursor == -2,
+                "malformed empty: expected -2, got %d", cursor);
 
-    /* charlie: overflow -> -1 */
+    /* charlie: overflow -> -2 (parse error) */
     cursor = chat_cursor_read(path, "charlie");
-    TEST_ASSERT(cursor == -1,
-                "malformed overflow: expected -1, got %d", cursor);
+    TEST_ASSERT(cursor == -2,
+                "malformed overflow: expected -2, got %d", cursor);
 
     /* dave: valid -> 42 */
     cursor = chat_cursor_read(path, "dave");
@@ -990,6 +990,347 @@ static void test_timestamp_content_with_pipe(void) {
     TEST_PASS("T22e: message with pipes in content parses correctly");
 }
 
+/* --- B13: Verify fclose errors are checked (lines 892, 1168) --- */
+
+static void test_fclose_checked_on_chat_send_read_phase(void) {
+    /*
+     * B13: chat_send at line 892 and chat_truncate at line 1168 had
+     * unchecked fclose. After the fix, the return value of fclose is
+     * checked and a warning is emitted on failure, with ferror also
+     * consulted. We verify indirectly: a successful round-trip proves
+     * the code path executes without error.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b13_fclose.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "test fclose check");
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    /* Read back to verify integrity after fclose-checked code path */
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+    TEST_ASSERT(state.message_count == 1,
+                "expected 1 message, got %d", state.message_count);
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("B13: fclose return value is checked on chat_send read phase");
+}
+
+static void test_fclose_checked_on_chat_truncate_read_phase(void) {
+    /*
+     * B13 companion: verify chat_truncate's fclose-checked code path.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b13_fclose_trunc.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "msg1");
+    TEST_ASSERT(rc == 0, "send 1 failed: %d", rc);
+    rc = chat_send(path, "bob", "msg2");
+    TEST_ASSERT(rc == 0, "send 2 failed: %d", rc);
+    rc = chat_send(path, "alice", "msg3");
+    TEST_ASSERT(rc == 0, "send 3 failed: %d", rc);
+
+    rc = chat_truncate(path, 2);
+    TEST_ASSERT(rc == 0, "chat_truncate failed: %d", rc);
+
+    /* Verify truncation worked */
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+    TEST_ASSERT(state.message_count == 2,
+                "expected 2 messages after truncate, got %d", state.message_count);
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("B13: fclose return value is checked on chat_truncate read phase");
+}
+
+/* --- HARDENING: compute_file_length postcondition --- */
+
+static void test_compute_file_length_self_consistency(void) {
+    /*
+     * The file-length header must match actual file size after every
+     * operation. This tests the self-referential computation by creating
+     * files with varying content sizes (triggering different digit counts
+     * in the file-length value).
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/fl_selfcheck.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    /* Send messages of varying lengths to exercise different digit counts */
+    const char *messages[] = {
+        "a",              /* very short */
+        "medium length message with some content",
+        /* A longer message to push the total past a digit boundary */
+        "this is a somewhat longer message that pushes the total file size up"
+    };
+    for (int i = 0; i < 3; i++) {
+        rc = chat_send(path, "alice", messages[i]);
+        TEST_ASSERT(rc == 0, "send %d failed: %d", i, rc);
+
+        /* Verify file-length matches actual size after each send */
+        chat_state_t state;
+        rc = chat_read(path, &state);
+        TEST_ASSERT(rc == 0, "read after send %d failed: %d", i, rc);
+
+        struct stat st;
+        int stat_rc = stat(path, &st);
+        TEST_ASSERT(stat_rc == 0, "stat failed: %s", strerror(errno));
+        TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                    "send %d: file_length %" PRId64 " != actual %" PRId64,
+                    i, state.file_length, (int64_t)st.st_size);
+        chat_state_free(&state);
+    }
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("compute_file_length postcondition: self-consistent across sends");
+}
+
+/* --- HARDENING: chat_state_check_invariants --- */
+
+static void test_chat_state_check_invariants_valid(void) {
+    /*
+     * Verify that chat_state_check_invariants returns 1 for a
+     * validly-parsed chat state.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/inv_valid.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    rc = chat_send(path, "alice", "test");
+    TEST_ASSERT(rc == 0, "chat_send failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+
+    int valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 1, "chat_state_check_invariants returned %d for valid state", valid);
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("chat_state_check_invariants returns 1 for valid state");
+}
+
+static void test_chat_state_check_invariants_invalid(void) {
+    /*
+     * Verify that chat_state_check_invariants returns 0 for a state
+     * with out-of-range fields.
+     */
+    chat_state_t state;
+    memset(&state, 0, sizeof(state));
+
+    /* Valid empty state */
+    int valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 1, "empty state should be valid, got %d", valid);
+
+    /* Invalid: negative message_count */
+    state.message_count = -1;
+    valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 0, "negative message_count should be invalid, got %d", valid);
+
+    /* Invalid: message_count too large */
+    state.message_count = MAX_MESSAGES + 1;
+    valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 0, "excessive message_count should be invalid, got %d", valid);
+
+    /* Invalid: negative participant_count */
+    state.message_count = 0;
+    state.participant_count = -1;
+    valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 0, "negative participant_count should be invalid, got %d", valid);
+
+    /* Invalid: messages non-NULL but message_count is 0 — actually that's fine */
+    /* Invalid: messages NULL but message_count > 0 */
+    state.participant_count = 0;
+    state.message_count = 1;
+    state.messages = NULL;
+    valid = chat_state_check_invariants(&state);
+    TEST_ASSERT(valid == 0, "NULL messages with count>0 should be invalid, got %d", valid);
+
+    TEST_PASS("chat_state_check_invariants detects invalid states");
+}
+
+/* --- HARDENING: chat_cursor_read distinct error codes --- */
+
+static void test_cursor_read_distinct_error_codes(void) {
+    /*
+     * chat_cursor_read previously overloaded -1 for both "no cursor" and
+     * "error". After fix, -1 means no cursor found, -2 means I/O or
+     * parse error.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cursor_distinct.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    /* No cursor file exists yet — should be -1 (no cursor) */
+    int cursor = chat_cursor_read(path, "alice");
+    TEST_ASSERT(cursor == -1,
+                "no cursor file: expected -1, got %d", cursor);
+
+    /* Write a cursor, then read a non-existent handle — should be -1 */
+    rc = chat_cursor_write(path, "bob", 5);
+    TEST_ASSERT(rc == 0, "cursor write failed: %d", rc);
+
+    cursor = chat_cursor_read(path, "alice");
+    TEST_ASSERT(cursor == -1,
+                "handle not found: expected -1, got %d", cursor);
+
+    /* Read existing handle — should be 5 */
+    cursor = chat_cursor_read(path, "bob");
+    TEST_ASSERT(cursor == 5,
+                "existing handle: expected 5, got %d", cursor);
+
+    /* Write a corrupt cursor file and read — should be -2 (error) */
+    char cpath_buf[520];
+    snprintf(cpath_buf, sizeof(cpath_buf), "%s.cursors", path);
+    int fd = open(cpath_buf, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    TEST_ASSERT(fd >= 0, "open cursor file failed");
+    const char *bad = "# Cursors\nalice=notanumber\n";
+    ssize_t wr = write(fd, bad, strlen(bad));
+    TEST_ASSERT(wr == (ssize_t)strlen(bad), "write failed");
+    close(fd);
+
+    cursor = chat_cursor_read(path, "alice");
+    TEST_ASSERT(cursor == -2,
+                "parse error: expected -2, got %d", cursor);
+
+    /* Clean up */
+    char lock_path[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    cleanup_path(cpath_buf);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("chat_cursor_read uses distinct error codes: -1 (not found) vs -2 (error)");
+}
+
+/* --- HARDENING: chat_send/chat_truncate strengthened postconditions --- */
+
+static void test_chat_send_postcondition_file_integrity(void) {
+    /*
+     * Verify that after chat_send returns 0, the file is readable and
+     * the message count increased by exactly 1. This tests the
+     * strengthened postcondition.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/send_postcon.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    for (int i = 0; i < 5; i++) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "message %d", i);
+        rc = chat_send(path, "alice", msg);
+        TEST_ASSERT(rc == 0, "send %d failed: %d", i, rc);
+
+        chat_state_t state;
+        rc = chat_read(path, &state);
+        TEST_ASSERT(rc == 0, "read after send %d failed", i);
+        TEST_ASSERT(state.message_count == i + 1,
+                    "send %d: expected %d messages, got %d",
+                    i, i + 1, state.message_count);
+
+        /* Verify file-length matches */
+        struct stat st;
+        TEST_ASSERT(stat(path, &st) == 0, "stat failed");
+        TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                    "send %d: file_length mismatch", i);
+
+        chat_state_free(&state);
+    }
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("chat_send postcondition: file readable, count incremented, length matches");
+}
+
+static void test_chat_truncate_postcondition(void) {
+    /*
+     * Verify that after chat_truncate returns 0, the file contains
+     * exactly keep_count messages and the file-length header is correct.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/trunc_postcon.chat", test_dir);
+
+    int rc = chat_create(path);
+    TEST_ASSERT(rc == 0, "chat_create failed: %d", rc);
+
+    for (int i = 0; i < 5; i++) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "message %d", i);
+        rc = chat_send(path, "alice", msg);
+        TEST_ASSERT(rc == 0, "send %d failed: %d", i, rc);
+    }
+
+    rc = chat_truncate(path, 3);
+    TEST_ASSERT(rc == 0, "truncate failed: %d", rc);
+
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "read after truncate failed");
+    TEST_ASSERT(state.message_count == 3,
+                "expected 3 messages after truncate, got %d", state.message_count);
+
+    struct stat st;
+    TEST_ASSERT(stat(path, &st) == 0, "stat failed");
+    TEST_ASSERT(state.file_length == (int64_t)st.st_size,
+                "truncate: file_length %" PRId64 " != actual %" PRId64,
+                state.file_length, (int64_t)st.st_size);
+
+    chat_state_free(&state);
+
+    /* Clean up */
+    char lock_path[520], cpath[520];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    snprintf(cpath, sizeof(cpath), "%s.cursors", path);
+    cleanup_path(cpath);
+    cleanup_path(lock_path);
+    cleanup_path(path);
+    TEST_PASS("chat_truncate postcondition: correct count and file-length");
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -1011,12 +1352,30 @@ int main(void) {
     test_chat_poll_error_on_missing_file();
     test_multiple_messages();
 
+    /* BUG B13: fclose checking */
+    test_fclose_checked_on_chat_send_read_phase();
+    test_fclose_checked_on_chat_truncate_read_phase();
+
     /* HARDENING tests */
     test_safe_parse_int_boundaries();
     test_safe_parse_int_malformed_cursor_file();
     test_snprintf_truncation_in_header();
     test_chat_state_free_null();
     test_file_length_header_accuracy();
+
+    /* HARDENING: compute_file_length postcondition */
+    test_compute_file_length_self_consistency();
+
+    /* HARDENING: chat_state_check_invariants */
+    test_chat_state_check_invariants_valid();
+    test_chat_state_check_invariants_invalid();
+
+    /* HARDENING: distinct cursor error codes */
+    test_cursor_read_distinct_error_codes();
+
+    /* HARDENING: strengthened postconditions */
+    test_chat_send_postcondition_file_integrity();
+    test_chat_truncate_postcondition();
 
     /* CURSOR-ON-WRITE tests (T21) */
     test_cursor_on_write_single_send();

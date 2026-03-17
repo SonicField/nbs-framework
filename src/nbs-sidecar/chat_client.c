@@ -112,6 +112,10 @@ int chat_client_count_messages(const char *chat_path)
 
     free(line);
     fclose(f);
+
+    /* Postcondition: count is non-negative on success path */
+    ASSERT_MSG(count >= 0,
+               "chat_client_count_messages: count went negative: %d", count);
     return count;
 }
 
@@ -176,6 +180,10 @@ int chat_client_read_cursor(const char *chat_path, const char *handle)
     }
 
     fclose(f);
+
+    /* Postcondition: result is either -1 (not found) or in [0, INT_MAX-1] */
+    ASSERT_MSG(result >= -1 && result <= INT_MAX - 1,
+               "chat_client_read_cursor: result out of range: %d", result);
     return result;
 }
 
@@ -223,9 +231,18 @@ static int check_unread_cb(const char *path, void *user_data)
         cursor = 0;
 
     /* Unread if total > cursor + 1 (cursor is 0-indexed last-read index).
+     * Guard total <= 0 first (no messages → nothing unread).
      * Use `total - 1 > cursor` to avoid overflow when cursor is near INT_MAX. */
-    if (total - 1 > cursor) {
+    if (total <= 0 || total - 1 <= cursor)
+        return 0;
+
+    {
         int n_unread = total - cursor - 1;
+        ASSERT_MSG(n_unread > 0,
+                   "check_unread_cb: n_unread should be positive: %d", n_unread);
+        ASSERT_MSG(ctx->unread_count <= INT_MAX - n_unread,
+                   "check_unread_cb: unread_count would overflow: %d + %d",
+                   ctx->unread_count, n_unread);
         ctx->unread_count += n_unread;
 
         /* Extract basename for summary.
@@ -267,6 +284,8 @@ int chat_client_check_unread(const char *registry_path, const char *handle,
 {
     ASSERT_MSG(registry_path != NULL,
                "chat_client_check_unread: registry_path is NULL");
+    ASSERT_MSG(registry_path[0] != '\0',
+               "chat_client_check_unread: registry_path is empty");
     ASSERT_MSG(handle != NULL,
                "chat_client_check_unread: handle is NULL");
     ASSERT_MSG(unread_count != NULL,
@@ -423,6 +442,12 @@ static int sidecar_only_cb(const char *path, void *user_data)
     ssize_t line_len;
     int found_separator = 0;
     int msg_index = 0;          /* 0-based index of messages after --- */
+    /* Transitive invariant: read_cursor clamps to INT_MAX-1, so cursor+1
+     * cannot overflow. Assert this locally so the invariant is falsifiable
+     * even if the upstream contract changes. */
+    ASSERT_MSG(cursor < INT_MAX,
+               "sidecar_only_cb: cursor must be < INT_MAX for safe +1: %d",
+               cursor);
     int skip_count = cursor + 1; /* messages 0..cursor have been read */
 
     while ((line_len = getline(&line, &line_cap, f)) != -1) {
@@ -486,8 +511,17 @@ static int sidecar_only_cb(const char *path, void *user_data)
                                               msg_handle, sizeof(msg_handle));
         free(decoded);
 
-        if (rc != 0)
-            continue; /* Can't parse handle — skip */
+        if (rc != 0) {
+            /* Can't parse handle — conservatively treat as non-sidecar.
+             * Silently skipping would falsely report "sidecar only" when
+             * unparseable messages might be from a human. */
+            fprintf(stderr, "sidecar_only_cb: unparseable message %d in '%s' "
+                    "— treating as non-sidecar\n", msg_index, path);
+            ctx->found_non_sidecar = 1;
+            free(line);
+            fclose(f);
+            return 1; /* Stop iteration — found non-sidecar message */
+        }
 
         if (strcmp(msg_handle, "sidecar") != 0) {
             ctx->found_non_sidecar = 1;
@@ -509,6 +543,8 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
 {
     ASSERT_MSG(registry_path != NULL,
                "chat_client_are_unread_sidecar_only: registry_path is NULL");
+    ASSERT_MSG(registry_path[0] != '\0',
+               "chat_client_are_unread_sidecar_only: registry_path is empty");
     ASSERT_MSG(handle != NULL,
                "chat_client_are_unread_sidecar_only: handle is NULL");
     ASSERT_MSG(handle[0] != '\0',

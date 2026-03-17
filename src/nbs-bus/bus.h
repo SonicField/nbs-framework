@@ -89,7 +89,7 @@ typedef struct {
  * Postconditions:
  *   - cfg is populated with values from config.yaml or defaults
  *
- * Returns 0 always (missing config is not an error).
+ * Returns 0 on success (including missing config file), -1 on read error.
  */
 int bus_load_config(const char *events_dir, bus_config_t *cfg);
 
@@ -188,7 +188,7 @@ int bus_check(const char *events_dir, const char *handle);
  * Postconditions:
  *   - Event content printed to stdout
  *
- * Returns 0 on success, -1 if file not found or read error.
+ * Returns 0 on success, -1 on error, -2 if event file not found.
  */
 int bus_read(const char *events_dir, const char *event_file);
 
@@ -202,7 +202,7 @@ int bus_read(const char *events_dir, const char *event_file);
  * Postconditions (on success, return 0):
  *   - Event file moved from events_dir to events_dir/processed/
  *
- * Returns 0 on success, -1 on error.
+ * Returns 0 on success, -1 on error, -2 if event file not found.
  */
 int bus_ack(const char *events_dir, const char *event_file);
 

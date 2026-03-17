@@ -28,6 +28,27 @@
  * This bounds env_int values to a sane range for all config fields. */
 #define ENV_INT_MAX 100000
 
+/*
+ * sanitise_for_display — Copy src to dst, replacing non-printable and
+ * non-ASCII characters with '?'. Prevents terminal escape injection
+ * when printing untrusted input (e.g., handle from argv) to stderr.
+ *
+ * Preconditions: dst_size > 0, dst != NULL, src != NULL.
+ * Postcondition: dst is NUL-terminated, length <= dst_size-1.
+ */
+static void sanitise_for_display(char *dst, size_t dst_size, const char *src) {
+    ASSERT_MSG(dst != NULL, "sanitise_for_display: dst is NULL");
+    ASSERT_MSG(src != NULL, "sanitise_for_display: src is NULL");
+    ASSERT_MSG(dst_size > 0, "sanitise_for_display: dst_size is 0");
+
+    size_t i;
+    for (i = 0; i < dst_size - 1 && src[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)src[i];
+        dst[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+    }
+    dst[i] = '\0';
+}
+
 static void print_usage(void) {
     fprintf(stderr,
         "nbs-sidecar: Claude Code session monitor\n\n"
@@ -215,14 +236,26 @@ int main(int argc, char **argv) {
                "startup_grace (%d) must be 0 (disabled) or >= bus_check_interval (%d)",
                cfg.startup_grace, cfg.bus_check_interval);
 
+    /* Range assertions on scaled timing fields (lines 125-127 multiply by 60).
+     * env_int caps at ENV_INT_MAX=100000, so max scaled value is 6000000,
+     * which fits in int. Assert non-negative to catch any future changes. */
+    ASSERT_MSG(cfg.librarian_interval >= 0 && cfg.librarian_interval <= ENV_INT_MAX * 60,
+               "librarian_interval out of range: %d", cfg.librarian_interval);
+    ASSERT_MSG(cfg.pythia_interval >= 0 && cfg.pythia_interval <= ENV_INT_MAX * 60,
+               "pythia_interval out of range: %d", cfg.pythia_interval);
+    ASSERT_MSG(cfg.shepard_interval >= 0 && cfg.shepard_interval <= ENV_INT_MAX * 60,
+               "shepard_interval out of range: %d", cfg.shepard_interval);
+
     /* Validate required fields */
     if (cfg.handle[0] == '\0') {
         fprintf(stderr, "Error: --handle is required\n");
         return SIDECAR_EXIT_BAD_ARGS;
     }
     if (!is_valid_handle(cfg.handle)) {
+        char safe_handle[SIDECAR_MAX_HANDLE];
+        sanitise_for_display(safe_handle, sizeof(safe_handle), cfg.handle);
         fprintf(stderr, "Error: handle '%s' must match ^[a-zA-Z0-9_-]+$\n",
-                cfg.handle);
+                safe_handle);
         return SIDECAR_EXIT_BAD_ARGS;
     }
     if (cfg.nbs_root[0] == '\0') {
@@ -289,21 +322,34 @@ int main(int argc, char **argv) {
      * any session kill or shell exit sends SIGHUP and silently kills the
      * sidecar with no log output (the signal arrives before any stderr
      * write can complete). */
-    signal(SIGHUP, SIG_IGN);
-    signal(SIGPIPE, SIG_IGN);
+    {
+        void (*prev_hup)(int) = signal(SIGHUP, SIG_IGN);
+        ASSERT_MSG(prev_hup != SIG_ERR,
+                   "signal(SIGHUP, SIG_IGN) failed: %s", strerror(errno));
+        void (*prev_pipe)(int) = signal(SIGPIPE, SIG_IGN);
+        ASSERT_MSG(prev_pipe != SIG_ERR,
+                   "signal(SIGPIPE, SIG_IGN) failed: %s", strerror(errno));
+    }
 
     /* Redirect stderr to log file if specified */
     if (cfg.log_file[0] != '\0') {
         FILE *logf = freopen(cfg.log_file, "a", stderr);
         if (!logf) {
+            /* After failed freopen, stderr is in an indeterminate state
+             * (ISO C 7.21.5.4). Write to stdout as a last resort. */
             fprintf(stdout, "Error: could not open log file '%s', "
-                    "and stderr is now closed\n", cfg.log_file);
+                    "and stderr is now in indeterminate state\n", cfg.log_file);
             return SIDECAR_EXIT_ERROR;
         }
+        ASSERT_MSG(logf == stderr,
+                   "freopen returned non-stderr FILE* for log redirect");
     }
 
-    /* Validate config */
+    /* Validate config — sidecar_config_validate logs each failing field
+     * to stderr. Add a summary line so the exit path is never silent. */
     if (sidecar_config_validate(&cfg) != 0) {
+        fprintf(stderr, "Error: config validation failed "
+                "(see per-field errors above)\n");
         return SIDECAR_EXIT_BAD_ARGS;
     }
 

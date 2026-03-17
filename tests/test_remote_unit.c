@@ -653,6 +653,114 @@ static void test_build_ssh_argv_format_specifier_in_host(void) {
 }
 
 /*
+ * HARDENING test: SSH options beyond the 4th must emit a warning to stderr.
+ * Before the fix, options 5+ were silently dropped — the user had no
+ * indication that their configuration was being partially ignored.
+ *
+ * Adversarial approach: provide 6 options, verify only 4 appear in argv
+ * and that a warning is emitted to stderr containing the drop count.
+ */
+static void test_build_ssh_argv_warns_on_excess_opts(void) {
+    remote_config_t cfg = make_test_config();
+    cfg.ssh_opts = "Opt1=a,Opt2=b,Opt3=c,Opt4=d,Opt5=e,Opt6=f";
+
+    char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
+    char *opts_out = NULL;
+    char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
+
+    /* Redirect stderr to a temp file so we can inspect the warning */
+    FILE *orig_stderr = stderr;
+    char tmppath[] = "/tmp/test_remote_stderr_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    TEST_ASSERT(tmpfd >= 0, "mkstemp failed");
+    FILE *tmpf = fdopen(tmpfd, "w");
+    TEST_ASSERT(tmpf != NULL, "fdopen failed");
+    stderr = tmpf;
+
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+
+    fflush(stderr);
+    stderr = orig_stderr;
+    fclose(tmpf);
+
+    TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
+
+    /* Count -o options in argv — must be exactly 4 */
+    int o_count = 0;
+    for (int i = 0; result[i] != NULL; i++) {
+        if (strcmp(result[i], "-o") == 0) o_count++;
+    }
+    TEST_ASSERT(o_count == 4,
+                "expected 4 -o options in argv, got %d", o_count);
+
+    /* Read the captured stderr and verify the warning */
+    FILE *readf = fopen(tmppath, "r");
+    TEST_ASSERT(readf != NULL, "failed to reopen stderr capture file");
+    char stderr_buf[512];
+    memset(stderr_buf, 0, sizeof(stderr_buf));
+    size_t nread = fread(stderr_buf, 1, sizeof(stderr_buf) - 1, readf);
+    fclose(readf);
+    unlink(tmppath);
+
+    TEST_ASSERT(nread > 0,
+                "no warning emitted to stderr when 6 options provided (max 4)");
+    TEST_ASSERT(strstr(stderr_buf, "2 SSH option(s)") != NULL,
+                "warning should mention '2 SSH option(s)' dropped, got: %s", stderr_buf);
+    TEST_ASSERT(strstr(stderr_buf, "dropped") != NULL,
+                "warning should contain 'dropped', got: %s", stderr_buf);
+
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
+    TEST_PASS("build_ssh_argv: warns on excess SSH options beyond 4 (HARDENING)");
+}
+
+/*
+ * HARDENING test: exactly 4 options should NOT emit a warning.
+ * This is the boundary case — the warning must only fire for > 4.
+ */
+static void test_build_ssh_argv_no_warning_at_exactly_4_opts(void) {
+    remote_config_t cfg = make_test_config();
+    cfg.ssh_opts = "Opt1=a,Opt2=b,Opt3=c,Opt4=d";
+
+    char *argv_in[] = { "nbs-chat-remote", "read", "/tmp/chat.nbs", NULL };
+    char *opts_out = NULL;
+    char *port_str_out = NULL;
+    char *remote_cmd_out = NULL;
+
+    /* Redirect stderr to a temp file */
+    FILE *orig_stderr = stderr;
+    char tmppath[] = "/tmp/test_remote_stderr4_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    TEST_ASSERT(tmpfd >= 0, "mkstemp failed");
+    FILE *tmpf = fdopen(tmpfd, "w");
+    TEST_ASSERT(tmpf != NULL, "fdopen failed");
+    stderr = tmpf;
+
+    char **result = build_ssh_argv(&cfg, 3, argv_in, &opts_out, &port_str_out, &remote_cmd_out);
+
+    fflush(stderr);
+    stderr = orig_stderr;
+    fclose(tmpf);
+
+    TEST_ASSERT(result != NULL, "build_ssh_argv returned NULL");
+
+    /* Read the captured stderr — should be empty */
+    FILE *readf = fopen(tmppath, "r");
+    TEST_ASSERT(readf != NULL, "failed to reopen stderr capture file");
+    char stderr_buf[512];
+    memset(stderr_buf, 0, sizeof(stderr_buf));
+    size_t nread = fread(stderr_buf, 1, sizeof(stderr_buf) - 1, readf);
+    fclose(readf);
+    unlink(tmppath);
+
+    TEST_ASSERT(nread == 0,
+                "no warning should be emitted for exactly 4 options, got: %s", stderr_buf);
+
+    cleanup_ssh_argv(result, remote_cmd_out, opts_out, port_str_out);
+    TEST_PASS("build_ssh_argv: no warning at exactly 4 SSH options (boundary)");
+}
+
+/*
  * BUG test (Violation 4): remote_cmd_out must be the exact pointer
  * that was malloc'd for the remote command. Verify it is the same
  * pointer as the last non-NULL argv element, proving explicit tracking
@@ -816,6 +924,8 @@ int main(void) {
     test_build_ssh_argv_accepts_safe_opts();
     test_build_ssh_argv_with_key();
     test_build_ssh_argv_null_terminated();
+    test_build_ssh_argv_warns_on_excess_opts();
+    test_build_ssh_argv_no_warning_at_exactly_4_opts();
     test_build_ssh_argv_escapes_quotes_in_args();
     test_build_ssh_argv_format_specifier_in_host();
     test_build_ssh_argv_remote_cmd_tracked_explicitly();

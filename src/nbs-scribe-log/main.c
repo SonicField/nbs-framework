@@ -205,7 +205,9 @@ int main(int argc, char **argv)
                         val);
                 return SCRIBE_EXIT_BAD_ARGS;
             }
-            snprintf(entry.status, sizeof(entry.status), "%s", val);
+            ret = snprintf(entry.status, sizeof(entry.status), "%s", val);
+            trc = check_snprintf(ret, sizeof(entry.status), "status");
+            if (trc != 0) return trc;
         } else if (strncmp(argv[i], "--rationale=", 12) == 0) {
             const char *val = argv[i] + 12;
             nrc = check_no_newline(val, "rationale");
@@ -223,8 +225,12 @@ int main(int argc, char **argv)
             trc = check_snprintf(ret, sizeof(entry.supersedes), "supersedes");
             if (trc != 0) return trc;
         } else if (strncmp(argv[i], "--bus-dir=", 10) == 0) {
+            const char *val = argv[i] + 10;
+            /* SECURITY: Validate bus-dir for newline injection (S11) */
+            nrc = check_no_newline(val, "bus-dir");
+            if (nrc != 0) return nrc;
             ret = snprintf(entry.bus_dir, sizeof(entry.bus_dir),
-                           "%s", argv[i] + 10);
+                           "%s", val);
             trc = check_snprintf(ret, sizeof(entry.bus_dir), "bus-dir");
             if (trc != 0) return trc;
         } else {

@@ -62,8 +62,8 @@ static char *tmux_capture(const transport_t *self, int scrollback) {
         return NULL;
     }
 
-    /* Violation 4 (HARDENING): postcondition -- buffer is NUL-terminated */
-    ASSERT_MSG(buf[strlen(buf)] == '\0',
+    /* Postcondition: buffer is NUL-terminated within bounds */
+    ASSERT_MSG(memchr(buf, '\0', TMUX_CAPTURE_BUF_SIZE) != NULL,
                "tmux_capture: buffer not NUL-terminated after exec_capture");
     return buf;
 }

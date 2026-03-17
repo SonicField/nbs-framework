@@ -437,6 +437,108 @@ static void test_uuid_boundary_chars(void)
 }
 
 /* ================================================================== */
+/* Audit fix: cmd_session now validates handle (HARDENING)             */
+/* ================================================================== */
+
+static void test_cmd_session_rejects_unsafe_handle(void)
+{
+    /* Shell metacharacters */
+    int rc = cmd_session("a;rm -rf /", "/tmp");
+    TEST_ASSERT(rc == EXIT_BAD_ARGS,
+                "cmd_session should reject semicolon in handle, got %d", rc);
+
+    rc = cmd_session("`whoami`", "/tmp");
+    TEST_ASSERT(rc == EXIT_BAD_ARGS,
+                "cmd_session should reject backtick in handle, got %d", rc);
+
+    /* Path traversal */
+    rc = cmd_session("../etc/passwd", "/tmp");
+    TEST_ASSERT(rc == EXIT_BAD_ARGS,
+                "cmd_session should reject path traversal, got %d", rc);
+
+    /* Uppercase */
+    rc = cmd_session("Worker", "/tmp");
+    TEST_ASSERT(rc == EXIT_BAD_ARGS,
+                "cmd_session should reject uppercase, got %d", rc);
+
+    /* Leading hyphen (option injection) */
+    rc = cmd_session("-worker", "/tmp");
+    TEST_ASSERT(rc == EXIT_BAD_ARGS,
+                "cmd_session should reject leading hyphen, got %d", rc);
+
+    /* Valid handle should not return EXIT_BAD_ARGS
+     * (it will return EXIT_NOT_FOUND since the file does not exist) */
+    rc = cmd_session("valid-handle", "/tmp");
+    TEST_ASSERT(rc != EXIT_BAD_ARGS,
+                "cmd_session should accept valid handle, got %d", rc);
+
+    TEST_PASS("cmd_session: validates handle with validate_safe_handle (HARDENING fix)");
+}
+
+/* ================================================================== */
+/* Audit fix B3: .md extension check boundary                          */
+/* Verify cmd_list handles edge-case filenames correctly.              */
+/* We test indirectly: cmd_list on a directory with crafted filenames. */
+/* ================================================================== */
+
+static void test_list_md_extension_boundary(void)
+{
+    /* Create a temp directory with edge-case files */
+    char tmpdir[] = "/tmp/nbs_test_md_XXXXXX";
+    char *dir = mkdtemp(tmpdir);
+    TEST_ASSERT(dir != NULL, "mkdtemp failed: %s", strerror(errno));
+
+    /* Create .nbs/workers subdir.
+     * tmpdir is short (/tmp/nbs_test_md_XXXXXX ~28 chars) so
+     * workers_dir fits easily in 128 bytes. */
+    char workers_dir[128];
+    snprintf(workers_dir, sizeof(workers_dir), "%s/.nbs/workers", dir);
+
+    /* Ensure parent dir exists */
+    char nbs_dir[128];
+    snprintf(nbs_dir, sizeof(nbs_dir), "%s/.nbs", dir);
+    mkdir(nbs_dir, 0755);
+    mkdir(workers_dir, 0755);
+
+    /* Create edge-case files:
+     * ".md" (3 chars) — should be skipped (no base name)
+     * "a.md" (4 chars) — should be included
+     * "md" (2 chars, no dot) — should be skipped
+     * ".m" (2 chars) — should be skipped */
+    char path[256];
+
+    snprintf(path, sizeof(path), "%s/.md", workers_dir);
+    FILE *f = fopen(path, "w");
+    if (f) { fprintf(f, "State: test\n"); fclose(f); }
+
+    snprintf(path, sizeof(path), "%s/a.md", workers_dir);
+    f = fopen(path, "w");
+    if (f) { fprintf(f, "State: test\n"); fclose(f); }
+
+    snprintf(path, sizeof(path), "%s/md", workers_dir);
+    f = fopen(path, "w");
+    if (f) { fprintf(f, "State: test\n"); fclose(f); }
+
+    /* cmd_list should not crash on any of these */
+    int rc = cmd_list(dir);
+    TEST_ASSERT(rc == EXIT_SUCCESS_CODE,
+                "cmd_list should succeed with edge-case filenames, got %d", rc);
+
+    /* Clean up */
+    snprintf(path, sizeof(path), "%s/.md", workers_dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/a.md", workers_dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/md", workers_dir);
+    unlink(path);
+    rmdir(workers_dir);
+    rmdir(nbs_dir);
+    rmdir(dir);
+
+    TEST_PASS("cmd_list: .md extension boundary (nlen <= 3 guard, B3 fix)");
+}
+
+/* ================================================================== */
 /* Audit Violation 14: PID display for unknown values                  */
 /* (tested indirectly — the fix is in display code)                    */
 /* ================================================================== */
@@ -480,6 +582,12 @@ int main(void)
     test_cmd_continue_rejects_bad_handle();
     test_cmd_session_rejects_bad_handle();
     test_cmd_list_with_nonexistent_dir();
+
+    printf("\n[HARDENING] cmd_session handle validation:\n");
+    test_cmd_session_rejects_unsafe_handle();
+
+    printf("\n[BUG] .md extension boundary (B3):\n");
+    test_list_md_extension_boundary();
 
     printf("\n[HARDENING] Boundary values:\n");
     test_slug_boundary_length();

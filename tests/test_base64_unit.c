@@ -904,6 +904,129 @@ static void test_base64_is_valid_char_accessible(void) {
     TEST_PASS("HARDENING #6: base64_is_valid_char accessible from callers");
 }
 
+/* --- HARDENING: int return type documented limitation ---
+ *
+ * Violation: The header declared int return types without documenting
+ * that input_len must not cause output to exceed INT_MAX. The .c file
+ * had precondition assertions, but the header contract was silent.
+ *
+ * These tests verify:
+ *   1. The _Static_assert in base64.h catches the relationship at compile time
+ *   2. The precondition assertions fire for inputs that would overflow int
+ *   3. Inputs just below the threshold work correctly (return -1 for
+ *      buffer-too-small, not abort)
+ */
+
+/* Encode: input_len that would produce exactly INT_MAX+1 output bytes */
+static void encode_int_overflow_boundary_fn(void) {
+    /* output_len = ((input_len + 2) / 3) * 4
+     * For input_len = (INT_MAX / 4) * 3 + 1, output_len > INT_MAX.
+     * The precondition in base64_encode must abort. */
+    size_t bad_len = ((size_t)INT_MAX / 4) * 3 + 1;
+    char dummy[8];
+    base64_encode((const unsigned char *)"x", bad_len, dummy, sizeof(dummy));
+}
+
+static void test_int_return_type_encode_overflow(void) {
+    /* Adversarial: demonstrate that without the precondition, the cast
+     * (int)j at line 194 of base64.c would silently truncate. */
+    TEST_ASSERT(expect_abort(encode_int_overflow_boundary_fn),
+                "base64_encode must abort when output would exceed INT_MAX");
+
+    /* Boundary: input_len exactly at the limit should NOT abort.
+     * It should return -1 (buffer too small) because we pass a tiny buffer. */
+    size_t at_limit = ((size_t)INT_MAX / 4) * 3;
+    char small[8];
+    int ret = base64_encode((const unsigned char *)"x", at_limit, small,
+                            sizeof(small));
+    TEST_ASSERT(ret == -1,
+                "base64_encode at INT_MAX boundary: expected -1 (buffer too "
+                "small), got %d", ret);
+
+    TEST_PASS("HARDENING: int return type encode overflow guarded");
+}
+
+/* Decode: input_len that would produce output exceeding INT_MAX */
+static void decode_int_overflow_boundary_fn(void) {
+    /* Worst case (no padding): out_len = (input_len / 4) * 3.
+     * For input_len = (INT_MAX / 3) * 4 + 8 (aligned to 4), out_len > INT_MAX.
+     * The precondition in base64_decode must abort. */
+    size_t bad_len = (size_t)INT_MAX / 3 * 4 + 8;
+    unsigned char dummy[8];
+    base64_decode("AAAA", bad_len, dummy, sizeof(dummy));
+}
+
+static void test_int_return_type_decode_overflow(void) {
+    TEST_ASSERT(expect_abort(decode_int_overflow_boundary_fn),
+                "base64_decode must abort when output would exceed INT_MAX");
+
+    TEST_PASS("HARDENING: int return type decode overflow guarded");
+}
+
+/* --- HARDENING: base64_decoded_size upper bound derivation ---
+ *
+ * Violation: The comment "conservative upper bound" on line 86 of base64.h
+ * lacked a derivation explaining why +3.
+ *
+ * This test verifies the bound is correct: for every valid input_len
+ * (multiple of 4), decoded_size >= actual decoded length, and that the
+ * bound is tight enough (no more than 3 bytes over). */
+
+static void test_decoded_size_bound_correctness(void) {
+    /* For each valid input length (multiples of 4, 0 to 1024), encode
+     * random data of the corresponding plaintext size, then verify
+     * that base64_decoded_size(encoded_len) >= actual decoded length. */
+    for (size_t plain_len = 0; plain_len <= 768; plain_len++) {
+        unsigned char *plain = malloc(plain_len > 0 ? plain_len : 1);
+        TEST_ASSERT(plain != NULL, "malloc failed");
+        for (size_t i = 0; i < plain_len; i++)
+            plain[i] = (unsigned char)(i * 37 + 11);
+
+        size_t enc_size = base64_encoded_size(plain_len);
+        char *enc = malloc(enc_size);
+        TEST_ASSERT(enc != NULL, "malloc failed");
+
+        int enc_ret = base64_encode(plain, plain_len, enc, enc_size);
+        TEST_ASSERT(enc_ret >= 0, "encode failed for plain_len %zu", plain_len);
+
+        size_t enc_len = (size_t)enc_ret;
+        if (enc_len == 0) {
+            free(enc);
+            free(plain);
+            continue;
+        }
+
+        /* Verify decoded_size is an upper bound */
+        size_t estimated = base64_decoded_size(enc_len);
+        TEST_ASSERT(estimated >= plain_len,
+                    "base64_decoded_size(%zu) = %zu < actual %zu: "
+                    "upper bound violated",
+                    enc_len, estimated, plain_len);
+
+        /* Verify the bound is not absurdly loose (at most 3 bytes over).
+         * The formula is (n/4)*3 + 3. Actual is (n/4)*3 minus padding.
+         * So overhead is 3 + padding_bytes (0-2), i.e. 3 to 5 bytes. */
+        TEST_ASSERT(estimated - plain_len <= 5,
+                    "base64_decoded_size(%zu) = %zu, actual %zu: "
+                    "overhead %zu exceeds 5 bytes",
+                    enc_len, estimated, plain_len, estimated - plain_len);
+
+        /* Actually decode and verify */
+        unsigned char *dec = malloc(estimated);
+        TEST_ASSERT(dec != NULL, "malloc failed");
+        int dec_ret = base64_decode(enc, enc_len, dec, estimated);
+        TEST_ASSERT(dec_ret >= 0, "decode failed");
+        TEST_ASSERT((size_t)dec_ret == plain_len,
+                    "round-trip length mismatch: %d != %zu", dec_ret, plain_len);
+
+        free(dec);
+        free(enc);
+        free(plain);
+    }
+
+    TEST_PASS("HARDENING: decoded_size upper bound correct for all tested lengths");
+}
+
 /* --- HARDENING #3: CHAR_BIT == 8 static assertion ---
  *
  * This is a compile-time check (_Static_assert). If CHAR_BIT != 8,
@@ -940,6 +1063,9 @@ int main(void) {
     test_assertion_ordering_valid_inputs();
 
     /* Audit violation tests (SECURITY + HARDENING) */
+    test_int_return_type_encode_overflow();
+    test_int_return_type_decode_overflow();
+    test_decoded_size_bound_correctness();
     test_encode_intmax_precondition();
     test_decode_intmax_precondition();
     test_decoded_size_rejects_non_multiple_of_4();

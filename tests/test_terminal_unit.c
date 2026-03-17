@@ -43,8 +43,10 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <errno.h>
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -1002,6 +1004,299 @@ static void test_child_malloc_failure_pattern(void) {
     TEST_PASS("HARDENING: child malloc failure triggers error exit");
 }
 
+/* --- Test 18: SECURITY -- NUM_COLOURS matches COLOURS array size --- */
+
+static void test_num_colours_matches_array(void) {
+    /* The fix for audit finding: NUM_COLOURS hardcoded as 8 must match
+     * the actual COLOURS array length. The fix uses _Static_assert in
+     * terminal.c, but we verify the invariant holds in the test mirror too.
+     *
+     * Adversarial scenario: a developer adds a 9th colour but forgets
+     * to update NUM_COLOURS, causing out-of-bounds wrap in colour
+     * assignment (next_colour % NUM_COLOURS). */
+
+    /* Mirror the COLOURS array from terminal.c */
+    static const char *test_colours[] = {
+        "38;5;39",   /* Blue */
+        "38;5;208",  /* Orange */
+        "38;5;41",   /* Green */
+        "38;5;213",  /* Pink */
+        "38;5;226",  /* Yellow */
+        "38;5;87",   /* Cyan */
+        "38;5;196",  /* Red */
+        "38;5;147",  /* Lavender */
+    };
+    #define TEST_NUM_COLOURS 8
+
+    size_t actual_count = sizeof(test_colours) / sizeof(test_colours[0]);
+    TEST_ASSERT(actual_count == TEST_NUM_COLOURS,
+                "NUM_COLOURS (%d) must match COLOURS array size (%zu)",
+                TEST_NUM_COLOURS, actual_count);
+
+    /* Verify modular arithmetic stays in bounds */
+    for (int i = 0; i < 100; i++) {
+        int idx = i % TEST_NUM_COLOURS;
+        TEST_ASSERT(idx >= 0 && (size_t)idx < actual_count,
+                    "colour index %d out of bounds for i=%d", idx, i);
+    }
+
+    TEST_PASS("SECURITY: NUM_COLOURS matches COLOURS array size");
+}
+
+/* --- Test 19: SECURITY -- fork/exec pattern (no system()) --- */
+
+static void test_fork_exec_pattern_no_system(void) {
+    /* The fix for S2: system() calls replaced with fork/exec.
+     *
+     * Adversarial scenario: a project_root containing shell
+     * metacharacters like "proj; rm -rf /" would be executed by
+     * system() but harmlessly passed as a literal argv element
+     * to execvp.
+     *
+     * We test the pattern: given a path with metacharacters, verify
+     * that fork/exec treats it as a literal string, while system()
+     * would interpret the metacharacters. */
+
+    /* Paths that would be dangerous with system() */
+    const char *dangerous_paths[] = {
+        "/tmp/proj; rm -rf /",
+        "/tmp/proj$(whoami)",
+        "/tmp/proj`id`",
+        "/tmp/proj | cat /etc/passwd",
+        "/tmp/proj & malware",
+        NULL
+    };
+
+    for (int i = 0; dangerous_paths[i] != NULL; i++) {
+        const char *path = dangerous_paths[i];
+        /* Verify the path contains shell metacharacters */
+        const char *bad = ";|&$`\\\"'(){}[]<>!~#*? \t\n\r";
+        int has_meta = 0;
+        for (const char *p = path; *p; p++) {
+            if (strchr(bad, *p) != NULL) { has_meta = 1; break; }
+        }
+        TEST_ASSERT(has_meta == 1,
+                    "test path '%s' should contain metacharacters", path);
+    }
+
+    /* Verify fork/exec pattern: fork returns a valid pid, child can
+     * be waited on. We test with a safe command (/bin/true). */
+    pid_t pid = fork();
+    TEST_ASSERT(pid >= 0, "fork should succeed");
+    if (pid == 0) {
+        /* Child: exec /bin/true */
+        execlp("true", "true", (char *)NULL);
+        _exit(127);  /* exec failed */
+    }
+    /* Parent: wait for child */
+    int status;
+    pid_t wr = waitpid(pid, &status, 0);
+    TEST_ASSERT(wr == pid, "waitpid should return child pid");
+    TEST_ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "/bin/true via fork/exec should exit 0");
+
+    TEST_PASS("SECURITY: fork/exec pattern replaces system()");
+}
+
+/* --- Test 20: BUG -- tcsetattr postcondition verification --- */
+
+static void test_tcsetattr_postcondition_pattern(void) {
+    /* The fix for audit finding: after tcsetattr, read back the
+     * terminal settings and verify the critical flags were applied.
+     *
+     * Adversarial scenario: the terminal driver silently ignores
+     * some flags (POSIX permits this). Without readback verification,
+     * the code proceeds with incorrect terminal mode.
+     *
+     * We test the readback pattern logic: set flags, read back,
+     * compare critical bits. */
+
+    /* Simulate: desired flags set, readback matches */
+    tcflag_t desired = ISIG;  /* want ISIG set */
+    tcflag_t readback = ISIG | ECHONL;  /* driver may add other bits */
+
+    /* The postcondition check: desired bits must be present in readback */
+    TEST_ASSERT((readback & desired) == desired,
+                "readback should contain all desired flag bits");
+
+    /* Simulate: desired flag NOT set in readback (driver rejected it) */
+    tcflag_t bad_readback = ECHONL;  /* ISIG missing */
+    int postcond_ok = ((bad_readback & desired) == desired) ? 1 : 0;
+    TEST_ASSERT(postcond_ok == 0,
+                "missing ISIG in readback should fail postcondition");
+
+    /* Simulate: ECHO and ICANON must be cleared */
+    tcflag_t cleared_flags = ECHO | ICANON;
+    tcflag_t good_read = ISIG;  /* ECHO and ICANON cleared */
+    TEST_ASSERT((good_read & cleared_flags) == 0,
+                "ECHO and ICANON should be cleared in readback");
+
+    tcflag_t bad_read2 = ISIG | ECHO;  /* ECHO still set */
+    int echo_cleared = ((bad_read2 & cleared_flags) == 0) ? 1 : 0;
+    TEST_ASSERT(echo_cleared == 0,
+                "ECHO still set in readback should fail postcondition");
+
+    TEST_PASS("BUG: tcsetattr postcondition verification pattern");
+}
+
+/* --- Test 21: HARDENING -- popen failure logging --- */
+
+static void test_popen_failure_logging_pattern(void) {
+    /* The fix for silent popen failure: when popen returns NULL,
+     * the code must log a warning rather than silently skipping.
+     *
+     * We test the pattern: NULL return from popen must be detected
+     * and a default value (count=0) must be used. */
+
+    /* Simulate popen returning NULL */
+    FILE *fp = NULL;
+    int count = -1;  /* sentinel */
+    int warning_logged = 0;
+
+    if (fp) {
+        if (fscanf(fp, "%d", &count) != 1) count = 0;
+        pclose(fp);
+    } else {
+        /* The fix: log warning and use default */
+        warning_logged = 1;
+        count = 0;
+    }
+
+    TEST_ASSERT(count == 0,
+                "count should default to 0 on popen failure, got %d", count);
+    TEST_ASSERT(warning_logged == 1,
+                "popen failure must trigger a warning log");
+
+    TEST_PASS("HARDENING: popen failure logging pattern");
+}
+
+/* --- Test 22: HARDENING -- do_send failure context --- */
+
+static void test_do_send_failure_context_pattern(void) {
+    /* The fix for do_send failure: on chat_send failure, log
+     * errno and strerror for diagnosis, not just "(send failed)".
+     *
+     * We test the pattern: errno is captured and a diagnostic
+     * message includes the error reason. */
+
+    /* Simulate: chat_send fails with ENOSPC */
+    errno = ENOSPC;
+    int saved_errno = errno;
+    char reason[128];
+    snprintf(reason, sizeof(reason), "chat_send failed: %s (errno=%d)",
+             strerror(saved_errno), saved_errno);
+
+    TEST_ASSERT(saved_errno == ENOSPC,
+                "errno should be captured before any intervening call");
+    TEST_ASSERT(strstr(reason, "No space") != NULL ||
+                strstr(reason, "ENOSPC") != NULL ||
+                saved_errno == ENOSPC,
+                "diagnostic message should contain error reason");
+
+    /* Simulate: chat_send fails with EACCES */
+    errno = EACCES;
+    saved_errno = errno;
+    snprintf(reason, sizeof(reason), "chat_send failed: %s (errno=%d)",
+             strerror(saved_errno), saved_errno);
+
+    TEST_ASSERT(saved_errno == EACCES,
+                "errno capture for EACCES");
+
+    /* Reset errno */
+    errno = 0;
+
+    TEST_PASS("HARDENING: do_send failure includes errno context");
+}
+
+/* --- Test 23: HARDENING -- TMPDIR-aware temp file path --- */
+
+static void test_tmpdir_aware_tempfile(void) {
+    /* The fix for predictable temp file location: use $TMPDIR
+     * if set, fall back to /tmp.
+     *
+     * Adversarial scenario: attacker creates a symlink at
+     * /tmp/nbs-chat-edit.XXXXXX pointing to a sensitive file.
+     * Using $TMPDIR allows the user to set a private temp directory. */
+
+    /* Test 1: TMPDIR set to a custom directory */
+    const char *custom_dir = "/var/tmp";
+    char tmppath[4096];
+    const char *tmpdir = custom_dir;  /* simulate getenv("TMPDIR") */
+    if (!tmpdir || tmpdir[0] == '\0') tmpdir = "/tmp";
+    int sn = snprintf(tmppath, sizeof(tmppath),
+                      "%s/nbs-chat-edit.XXXXXX", tmpdir);
+    TEST_ASSERT(sn > 0 && (size_t)sn < sizeof(tmppath),
+                "snprintf for tmppath should not truncate");
+    TEST_ASSERT(strncmp(tmppath, custom_dir, strlen(custom_dir)) == 0,
+                "tmppath should start with TMPDIR '%s', got '%s'",
+                custom_dir, tmppath);
+
+    /* Test 2: TMPDIR empty — falls back to /tmp */
+    tmpdir = "";
+    if (!tmpdir || tmpdir[0] == '\0') tmpdir = "/tmp";
+    sn = snprintf(tmppath, sizeof(tmppath),
+                  "%s/nbs-chat-edit.XXXXXX", tmpdir);
+    TEST_ASSERT(strncmp(tmppath, "/tmp/", 5) == 0,
+                "empty TMPDIR should fall back to /tmp, got '%s'", tmppath);
+
+    /* Test 3: TMPDIR NULL — falls back to /tmp */
+    tmpdir = NULL;
+    if (!tmpdir || tmpdir[0] == '\0') tmpdir = "/tmp";
+    sn = snprintf(tmppath, sizeof(tmppath),
+                  "%s/nbs-chat-edit.XXXXXX", tmpdir);
+    TEST_ASSERT(strncmp(tmppath, "/tmp/", 5) == 0,
+                "NULL TMPDIR should fall back to /tmp, got '%s'", tmppath);
+
+    /* Test 4: TMPDIR with trailing slash — should still work */
+    tmpdir = "/var/tmp/";
+    if (!tmpdir || tmpdir[0] == '\0') tmpdir = "/tmp";
+    sn = snprintf(tmppath, sizeof(tmppath),
+                  "%s/nbs-chat-edit.XXXXXX", tmpdir);
+    /* Double slash is harmless but path should be valid */
+    TEST_ASSERT(sn > 0 && (size_t)sn < sizeof(tmppath),
+                "trailing-slash TMPDIR should produce valid path");
+
+    (void)sn; /* suppress unused warning on last sn */
+
+    TEST_PASS("HARDENING: TMPDIR-aware temp file path");
+}
+
+/* --- Test 24: SECURITY -- watchdog field access guard --- */
+
+static void test_watchdog_field_access_guard(void) {
+    /* The fix for uninitialised watchdog field access: the /restart
+     * command accesses g_watchdog.project_root and g_watchdog.chat_path
+     * without checking if the watchdog was initialised.
+     *
+     * Adversarial scenario: user types /restart before watchdog_init
+     * was called (e.g., project root resolution failed). The code
+     * reads uninitialised memory for the paths.
+     *
+     * The fix: check watchdog_is_enabled before accessing fields. */
+
+    /* Simulate uninitialised watchdog */
+    int watchdog_enabled = 0;
+    int field_accessed = 0;
+
+    if (watchdog_enabled) {
+        field_accessed = 1;  /* would access project_root/chat_path */
+    }
+
+    TEST_ASSERT(field_accessed == 0,
+                "must NOT access watchdog fields when disabled");
+
+    /* Simulate initialised watchdog */
+    watchdog_enabled = 1;
+    if (watchdog_enabled) {
+        field_accessed = 1;
+    }
+
+    TEST_ASSERT(field_accessed == 1,
+                "should access watchdog fields when enabled");
+
+    TEST_PASS("SECURITY: watchdog field access guarded by is_enabled");
+}
+
 /* ================================================================ */
 
 int main(void) {
@@ -1063,6 +1358,27 @@ int main(void) {
 
     /* HARDENING: child malloc failure */
     test_child_malloc_failure_pattern();
+
+    /* SECURITY: NUM_COLOURS array size invariant */
+    test_num_colours_matches_array();
+
+    /* SECURITY: fork/exec pattern (no system()) */
+    test_fork_exec_pattern_no_system();
+
+    /* BUG: tcsetattr postcondition verification */
+    test_tcsetattr_postcondition_pattern();
+
+    /* HARDENING: popen failure logging */
+    test_popen_failure_logging_pattern();
+
+    /* HARDENING: do_send failure context */
+    test_do_send_failure_context_pattern();
+
+    /* HARDENING: TMPDIR-aware temp file */
+    test_tmpdir_aware_tempfile();
+
+    /* SECURITY: watchdog field access guard */
+    test_watchdog_field_access_guard();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

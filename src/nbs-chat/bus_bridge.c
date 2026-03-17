@@ -414,8 +414,9 @@ static int bus_publish(const char *events_dir, const char *source,
      * We use fork+exec rather than system() to avoid shell injection.
      * The payload is passed as a single argv element, not parsed by a shell.
      *
-     * Payload truncation is done pre-fork so the child process only
-     * calls async-signal-safe functions (open, dup2, close, execlp, _exit).
+     * Payload truncation and bus binary resolution are done pre-fork so
+     * the child process only calls async-signal-safe functions
+     * (open, dup2, close, execlp, _exit).
      */
     char truncated_payload[MAX_PAYLOAD_LEN];
     if (payload != NULL) {
@@ -423,6 +424,14 @@ static int bus_publish(const char *events_dir, const char *source,
     } else {
         truncated_payload[0] = '\0';
     }
+
+    /*
+     * Resolve the nbs-bus binary path BEFORE fork(). resolve_nbs_bus()
+     * uses fprintf, readlink, access — none of which are guaranteed
+     * async-signal-safe. Calling them after fork() in the child is
+     * undefined behaviour in a multi-threaded process (B9 fix).
+     */
+    const char *bus_bin = resolve_nbs_bus();
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -442,13 +451,16 @@ static int bus_publish(const char *events_dir, const char *source,
             dup2(devnull_fd, STDERR_FILENO);
             close(devnull_fd);
         } else {
-            /* /dev/null unavailable (e.g. chroot). Close fds outright
-             * so the child doesn't write to the parent's terminal. */
-            close(STDOUT_FILENO);
-            close(STDERR_FILENO);
+            /* /dev/null unavailable (e.g. chroot). Cannot safely proceed:
+             * closing fds 1 and 2 leaves them unallocated, so any file
+             * opened by exec (shared libs, locale data) could claim those
+             * slots, causing the child to write to unexpected destinations.
+             * The only safe option is to exit immediately. */
+            _exit(1);
         }
 
-        const char *bus_bin = resolve_nbs_bus();
+        /* bus_bin was resolved pre-fork to avoid calling non-async-signal-safe
+         * functions (fprintf, readlink, access) after fork(). See B9 fix. */
         execlp(bus_bin, "nbs-bus", "publish",
               events_dir, source, type, priority,
               truncated_payload, "--dedup-window=0", (char *)NULL);

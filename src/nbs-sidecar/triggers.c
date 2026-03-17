@@ -7,6 +7,11 @@
  * captured in the trigger_periodic_t config struct.
  */
 
+/* _GNU_SOURCE required for SYS_gettid on Linux */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "triggers.h"
 #include "bus_client.h"
 #include "chat_client.h"
@@ -20,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -75,9 +81,14 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
  * Cached absolute path to the nbs-workers binary.
  * Resolved once via /proc/self/exe — sibling binary in same directory.
  *
- * HARDENING #8: Invariant: resolve_nbs_workers must only be called from
- * the main event loop thread. Not thread-safe by design — file-scope
- * statics have no synchronisation.
+ * Not thread-safe by design — file-scope statics have no synchronisation.
+ * Invariant enforced by ASSERT below: callers must be on the main thread
+ * (where gettid() == getpid() on Linux). This is falsifiable — calling
+ * from a spawned thread will fire the assertion.
+ *
+ * Architectural justification: sidecar.c:sidecar_run_loop() is the sole
+ * caller of trigger_periodic_check/spawn, and that loop runs exclusively
+ * on the main thread (no thread creation in sidecar event loop).
  */
 #define WORKERS_PATH_LEN 4096
 static char nbs_workers_path[WORKERS_PATH_LEN] = "";
@@ -85,6 +96,10 @@ static int nbs_workers_path_resolved = 0;
 
 static const char *resolve_nbs_workers(void)
 {
+    ASSERT_MSG((pid_t)syscall(SYS_gettid) == getpid(),
+               "resolve_nbs_workers: called from non-main thread (tid=%ld, pid=%d) "
+               "— file-scope statics are not synchronised",
+               (long)syscall(SYS_gettid), (int)getpid());
     if (nbs_workers_path_resolved)
         return nbs_workers_path[0] ? nbs_workers_path : "nbs-workers";
 
@@ -123,10 +138,18 @@ static time_t read_last_run(const char *nbs_root, const char *ts_filename) {
 
     char path[4096];
     int n = snprintf(path, sizeof(path), "%s/.nbs/%s", nbs_root, ts_filename);
-    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(path),
+               "read_last_run(%s): timestamp path overflow (%d >= %zu)",
+               ts_filename, n, sizeof(path));
 
     FILE *f = fopen(path, "r");
-    if (!f) return 0;
+    if (!f) {
+        if (errno != ENOENT) {
+            fprintf(stderr, "read_last_run(%s): fopen failed: %s\n",
+                    ts_filename, strerror(errno));
+        }
+        return 0;
+    }
 
     long long ts = 0;
     if (fscanf(f, "%lld", &ts) != 1) ts = 0;
@@ -142,9 +165,13 @@ static void write_last_run(const char *nbs_root, const char *ts_filename,
 
     char path[4096], tmp_path[4096];
     int n = snprintf(path, sizeof(path), "%s/.nbs/%s", nbs_root, ts_filename);
-    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    ASSERT_MSG(n > 0 && (size_t)n < sizeof(path),
+               "write_last_run(%s): timestamp path overflow (%d >= %zu)",
+               ts_filename, n, sizeof(path));
     int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-    if (tn < 0 || (size_t)tn >= sizeof(tmp_path)) return;
+    ASSERT_MSG(tn > 0 && (size_t)tn < sizeof(tmp_path),
+               "write_last_run(%s): tmp path overflow (%d >= %zu)",
+               ts_filename, tn, sizeof(tmp_path));
 
     FILE *f = fopen(tmp_path, "w");
     if (f) {

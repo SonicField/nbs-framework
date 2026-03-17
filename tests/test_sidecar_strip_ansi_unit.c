@@ -17,11 +17,17 @@
  *  13. DEL character (0x7F) is stripped (BUG fix).
  *  14. DEL mixed with text and escapes is stripped (BUG fix).
  *  15. C1 control codes (0x80-0x9F) are stripped (HARDENING).
- *  16. C1 codes mixed with valid UTF-8 continuation bytes (HARDENING).
+ *  16. C1 codes vs byte above C1 range (0xA0+) passes through.
  *  17. Bare control chars (CR, BEL, NUL-adjacent) stripped, newlines/tabs kept.
  *  18. UTF-8 multibyte characters pass through unchanged.
  *  19. Postcondition: output length <= input length for all-escape input.
  *  20. String of only control characters produces empty output.
+ *  21. B16 adversarial: U+0100 (Ā, 0xC4 0x80) passes through unchanged.
+ *  22. B16 adversarial: standalone C1 control 0x85 is still stripped.
+ *  23. B16 adversarial: U+0080 (0xC2 0x80) — valid UTF-8 2-byte seq preserved.
+ *  24. B16 adversarial: mixed UTF-8 multi-byte and standalone C1 controls.
+ *  25. B16 adversarial: 3-byte UTF-8 (U+4E16, 0xE4 0xB8 0x96) preserved.
+ *  26. B16 adversarial: 4-byte UTF-8 (U+1F600, 0xF0 0x9F 0x98 0x80) preserved.
  */
 
 #include "../src/nbs-sidecar/strip_ansi.h"
@@ -174,17 +180,8 @@ int main(void) {
         CHECK("C1 controls length", len == 6);
     }
 
-    /* 16. C1 codes vs valid UTF-8 multibyte sequences.
-     * 0xC2 0x80 is U+0080 (a C1 control in Unicode, but encoded as UTF-8).
-     * As two bytes, 0xC2 passes through (>= 0xA0... wait, 0xC2 >= 0xC0 > 0x9F),
-     * and 0x80 alone would be a C1 control. But in the context of a valid
-     * UTF-8 sequence, 0x80 follows 0xC2 as a continuation byte.
-     * strip_ansi processes bytes sequentially without UTF-8 awareness,
-     * so 0xC2 passes through (> 0x9F) and 0x80 is stripped (in 0x80-0x9F range).
-     * This is documented behaviour: C1 stripping is byte-level, not
-     * Unicode-aware. Testing that this is consistent. */
+    /* 16. Byte 0xA0 (first byte above C1 range) passes through */
     {
-        /* 0xA0 is first byte above C1 range — should pass through */
         char buf[] = "a\xA0" "b";
         size_t len = strip_ansi(buf);
         CHECK("0xA0 passes through", len == 3);
@@ -226,6 +223,75 @@ int main(void) {
         size_t len = strip_ansi(buf);
         CHECK("all control chars stripped", len == 0);
         CHECK("all control chars empty", buf[0] == '\0');
+    }
+
+    /* --- Adversarial tests for B16: UTF-8 vs C1 control stripping --- */
+
+    /* 21. U+0100 (Ā) = 0xC4 0x80 — must pass through unchanged.
+     * This is the primary adversarial test for B16. The continuation byte
+     * 0x80 falls in the C1 range but must NOT be stripped when it follows
+     * a valid UTF-8 leading byte. */
+    {
+        char buf[] = "Hello \xC4\x80 world";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: U+0100 unchanged", strcmp(buf, "Hello \xC4\x80 world") == 0);
+        CHECK("B16: U+0100 length", len == strlen("Hello \xC4\x80 world"));
+    }
+
+    /* 22. Standalone C1 control 0x85 (NEL) is still stripped.
+     * Without a preceding UTF-8 leading byte, 0x85 is a C1 control. */
+    {
+        char buf[] = "before\x85" "after";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: standalone 0x85 stripped", strcmp(buf, "beforeafter") == 0);
+        CHECK("B16: standalone 0x85 length", len == 11);
+    }
+
+    /* 23. U+0080 = 0xC2 0x80 — valid 2-byte UTF-8 sequence preserved.
+     * 0xC2 is a valid leading byte; 0x80 is the continuation byte. */
+    {
+        char buf[] = "x\xC2\x80y";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: U+0080 (0xC2 0x80) preserved", len == 4);
+        CHECK("B16: U+0080 content",
+              buf[0] == 'x' && (unsigned char)buf[1] == 0xC2 &&
+              (unsigned char)buf[2] == 0x80 && buf[3] == 'y');
+    }
+
+    /* 24. Mixed: valid UTF-8 multi-byte + standalone C1 controls.
+     * U+0100 (0xC4 0x80) should be preserved, standalone 0x90 stripped. */
+    {
+        char buf[] = "\xC4\x80\x90\xC4\x80";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: mixed UTF-8 and C1",
+              len == 4 && (unsigned char)buf[0] == 0xC4 &&
+              (unsigned char)buf[1] == 0x80 && (unsigned char)buf[2] == 0xC4 &&
+              (unsigned char)buf[3] == 0x80);
+    }
+
+    /* 25. 3-byte UTF-8: U+4E16 (世) = 0xE4 0xB8 0x96.
+     * Continuation bytes 0xB8 and 0x96 are both in 0x80-0xBF range;
+     * 0x96 is in C1 range. Must be preserved. */
+    {
+        char buf[] = "\xE4\xB8\x96";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: 3-byte UTF-8 (世) preserved", len == 3);
+        CHECK("B16: 3-byte content",
+              (unsigned char)buf[0] == 0xE4 && (unsigned char)buf[1] == 0xB8 &&
+              (unsigned char)buf[2] == 0x96);
+    }
+
+    /* 26. 4-byte UTF-8: U+1F600 (😀) = 0xF0 0x9F 0x98 0x80.
+     * All three continuation bytes (0x9F, 0x98, 0x80) are in C1 range.
+     * This is the worst case — all continuations would be stripped by
+     * the old code. */
+    {
+        char buf[] = "\xF0\x9F\x98\x80";
+        size_t len = strip_ansi(buf);
+        CHECK("B16: 4-byte UTF-8 (U+1F600) preserved", len == 4);
+        CHECK("B16: 4-byte content",
+              (unsigned char)buf[0] == 0xF0 && (unsigned char)buf[1] == 0x9F &&
+              (unsigned char)buf[2] == 0x98 && (unsigned char)buf[3] == 0x80);
     }
 
     printf("%d/%d passed\n", tests - fails, tests);

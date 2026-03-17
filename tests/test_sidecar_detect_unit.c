@@ -364,19 +364,43 @@ static void test_ask_modal_digit_at_end(void)
 }
 
 /*
- * V3 (HARDENING): detect_blocking_dialogue with NULL response — type
- * detected but response not populated. Verify this doesn't crash and
- * still returns the correct type.
+ * HARDENING: detect_blocking_dialogue — response is now a required parameter.
+ * Passing a valid response pointer when a dialogue is detected must populate
+ * both option and settle_secs. This replaces the old NULL-response test.
  */
-static void test_blocking_dialogue_null_response(void)
+static void test_blocking_dialogue_response_required(void)
 {
-    const char *content = "Would you like to proceed?\n1. Yes";
-    dialogue_type_t type = detect_blocking_dialogue(content, NULL);
+    dialogue_response_t resp = {0, 0};
+    dialogue_type_t type = detect_blocking_dialogue(
+        "Would you like to proceed?\n1. Yes", &resp);
 
     TEST_ASSERT(type == DIALOGUE_PLAN_MODE,
-                "null response: expected DIALOGUE_PLAN_MODE, got %d", type);
+                "response required: expected DIALOGUE_PLAN_MODE, got %d", type);
+    TEST_ASSERT(resp.option == 2,
+                "response required: expected option=2, got %d", resp.option);
+    TEST_ASSERT(resp.settle_secs == 5,
+                "response required: expected settle=5, got %d", resp.settle_secs);
 
-    TEST_PASS("blocking_dialogue: NULL response accepted");
+    TEST_PASS("blocking_dialogue: response is required and populated");
+}
+
+/*
+ * HARDENING: detect_blocking_dialogue — when no dialogue detected,
+ * response fields must remain untouched (caller's values preserved).
+ */
+static void test_blocking_dialogue_no_detection_preserves_response(void)
+{
+    dialogue_response_t resp = {42, 99};
+    dialogue_type_t type = detect_blocking_dialogue("no dialogue here", &resp);
+
+    TEST_ASSERT(type == DIALOGUE_NONE,
+                "no detection: expected DIALOGUE_NONE, got %d", type);
+    TEST_ASSERT(resp.option == 42,
+                "no detection: expected option preserved as 42, got %d", resp.option);
+    TEST_ASSERT(resp.settle_secs == 99,
+                "no detection: expected settle preserved as 99, got %d", resp.settle_secs);
+
+    TEST_PASS("blocking_dialogue: no detection preserves response fields");
 }
 
 /*
@@ -479,7 +503,8 @@ int main(void)
     test_prompt_visible_exactly_6_lines_prompt_at_start();
     test_prompt_visible_trailing_newlines();
     test_ask_modal_digit_at_end();
-    test_blocking_dialogue_null_response();
+    test_blocking_dialogue_response_required();
+    test_blocking_dialogue_no_detection_preserves_response();
     test_context_stress_empty();
     test_skill_failure_empty();
     test_blocking_dialogue_empty();

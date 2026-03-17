@@ -224,9 +224,10 @@ static int validate_event_filename(const char *event_file)
                 event_file);
         return -1;
     }
-    if (strlen(event_file) >= BUS_MAX_FILENAME) {
+    size_t ef_len = strlen(event_file);
+    if (ef_len >= BUS_MAX_FILENAME) {
         fprintf(stderr, "Error: event-file name too long (%zu >= %d): '%s'\n",
-                strlen(event_file), BUS_MAX_FILENAME, event_file);
+                ef_len, BUS_MAX_FILENAME, event_file);
         return -1;
     }
     return 0;
@@ -308,9 +309,6 @@ static int cmd_publish(int argc, char **argv)
         return BUS_EXIT_BAD_ARGS;
 
     if (dedup_window_us > 0) {
-        ASSERT_MSG(dedup_window_us > 0,
-                   "cmd_publish: dedup_window_us must be positive when calling "
-                   "bus_publish_dedup, got %lld", dedup_window_us);
         rc = bus_publish_dedup(dir, source, type, priority, payload, dedup_window_us);
         if (rc == BUS_EXIT_DEDUP)
             return BUS_EXIT_DEDUP;
@@ -464,9 +462,6 @@ static int cmd_prune(int argc, char **argv)
         fprintf(stderr, "Error: max-bytes must be positive (got 0 from config)\n");
         return BUS_EXIT_BAD_ARGS;
     }
-
-    ASSERT_MSG(max_bytes > 0,
-               "cmd_prune: max_bytes must be positive, got %lld", max_bytes);
 
     if (bus_prune(dir, max_bytes) != 0)
         return BUS_EXIT_ERROR;

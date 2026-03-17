@@ -1,7 +1,7 @@
 /*
  * watchdog.c — Terminal watchdog daemon state machine
  *
- * Pure decision logic for detecting team death and rate-limiting
+ * Deterministic decision logic for detecting team death and rate-limiting
  * restarts. No threads, no I/O — all side effects are the caller's
  * responsibility.
  */
@@ -32,6 +32,14 @@ void watchdog_init(watchdog_state_t *ws,
     sn = snprintf(ws->project_root, sizeof(ws->project_root), "%s", project_root);
     ASSERT_MSG(sn > 0 && (size_t)sn < sizeof(ws->project_root),
                "watchdog_init: project_root truncated");
+
+    /* Postconditions */
+    ASSERT_MSG(atomic_load(&ws->enabled) == 1,
+               "watchdog_init postcondition: enabled must be 1, got %d",
+               atomic_load(&ws->enabled));
+    ASSERT_MSG(ws->restart_count == 0,
+               "watchdog_init postcondition: restart_count must be 0, got %d",
+               ws->restart_count);
 }
 
 watchdog_decision_t watchdog_evaluate(watchdog_state_t *ws,
@@ -42,9 +50,12 @@ watchdog_decision_t watchdog_evaluate(watchdog_state_t *ws,
                "watchdog_evaluate: negative alive_count: %d", alive_count);
     ASSERT_MSG(now > 0, "watchdog_evaluate: invalid timestamp: %ld", (long)now);
 
+    watchdog_decision_t decision;
+
     /* Check enabled flag (atomic — safe across threads) */
     if (!atomic_load(&ws->enabled)) {
-        return WATCHDOG_DISABLED;
+        decision = WATCHDOG_DISABLED;
+        goto postconditions;
     }
 
     /* Team alive — reset rate counter if window has elapsed */
@@ -54,13 +65,15 @@ watchdog_decision_t watchdog_evaluate(watchdog_state_t *ws,
             ws->restart_count = 0;
             ws->window_start = now;
         }
-        return WATCHDOG_NO_ACTION;
+        decision = WATCHDOG_NO_ACTION;
+        goto postconditions;
     }
 
     /* Team dead — check cooldown */
     if (ws->last_restart > 0 &&
         now - ws->last_restart < WATCHDOG_COOLDOWN_S) {
-        return WATCHDOG_NO_ACTION;
+        decision = WATCHDOG_NO_ACTION;
+        goto postconditions;
     }
 
     /* Reset window if expired or not yet opened */
@@ -73,13 +86,25 @@ watchdog_decision_t watchdog_evaluate(watchdog_state_t *ws,
     /* Rate limit check */
     if (ws->restart_count >= WATCHDOG_MAX_RESTARTS) {
         atomic_store(&ws->enabled, 0);
-        return WATCHDOG_RATE_LIMITED;
+        decision = WATCHDOG_RATE_LIMITED;
+        goto postconditions;
     }
 
     /* Trigger restart */
     ws->restart_count++;
     ws->last_restart = now;
-    return WATCHDOG_RESTART;
+    decision = WATCHDOG_RESTART;
+
+postconditions:
+    /* Postcondition: restart_count must never exceed MAX_RESTARTS */
+    ASSERT_MSG(ws->restart_count <= WATCHDOG_MAX_RESTARTS,
+               "watchdog_evaluate postcondition: restart_count %d exceeds MAX %d",
+               ws->restart_count, WATCHDOG_MAX_RESTARTS);
+    /* Postcondition: if rate-limited, enabled must be 0 */
+    ASSERT_MSG(decision != WATCHDOG_RATE_LIMITED || atomic_load(&ws->enabled) == 0,
+               "watchdog_evaluate postcondition: RATE_LIMITED returned but enabled=%d",
+               atomic_load(&ws->enabled));
+    return decision;
 }
 
 void watchdog_disable(watchdog_state_t *ws) {

@@ -173,6 +173,14 @@ int bus_client_read(const char *bus_dir, const char *event_file,
     if (rc < 0)
         return -1;
 
+    /* Postcondition: on success, payload must be NUL-terminated.
+     * exec_capture guarantees this, but we assert to catch any future
+     * regression in exec_capture or buffer handling. */
+    ASSERT_MSG(memchr(payload, '\0', payload_size) != NULL,
+               "bus_client_read: payload not NUL-terminated within buffer "
+               "(payload_size=%zu). exec_capture contract violated.",
+               payload_size);
+
     /* Empty payload is valid — bus_publish allows empty payloads.
      * Callers (check_typed) will not match @handle in empty string
      * and will skip the event. Log for observability but do not abort. */
@@ -190,6 +198,15 @@ int bus_client_ack(const char *bus_dir, const char *event_file)
     ASSERT_MSG(bus_dir[0] != '\0', "bus_client_ack: bus_dir is empty");
     ASSERT_MSG(event_file != NULL, "bus_client_ack: event_file is NULL");
     ASSERT_MSG(event_file[0] != '\0', "bus_client_ack: event_file is empty");
+
+    /* S8 fix: validate event_file against path traversal.
+     * bus_client_ack is public API — callers may pass untrusted filenames.
+     * Reject '..' (directory traversal) and '/' (absolute/relative path). */
+    if (strstr(event_file, "..") != NULL || strchr(event_file, '/') != NULL) {
+        fprintf(stderr, "bus_client_ack: invalid event filename '%s' "
+                "(path traversal or slash detected)\n", event_file);
+        return -1;
+    }
 
     const char *argv[] = {resolve_nbs_bus(), "ack", bus_dir, event_file, NULL};
 
@@ -219,7 +236,7 @@ int bus_client_publish(const char *bus_dir, const char *source,
                           source, type, priority, payload, NULL};
 
     int rc = exec_fire_and_forget(argv);
-    if (rc < 0)
+    if (rc != 0)
         return -1;
 
     return 0;
@@ -281,6 +298,11 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
      * Filter for lines containing event_type, extract filename,
      * read payload, check for @handle, return WITHOUT acking if match.
      */
+    /* payload_buf declared outside loop to avoid 64KB stack allocation
+     * per iteration. Total stack for this function: ~128KB (buf + payload_buf),
+     * allocated once rather than per-line. */
+    char payload_buf[CMD_BUF_SIZE];
+
     char *line_start = buf;
     while (line_start != NULL && *line_start != '\0') {
         /* Find end of current line */
@@ -322,7 +344,6 @@ int bus_client_check_typed(const char *bus_dir, const char *event_type,
                 event_file[fname_len] = '\0';
 
                 /* Read the event payload */
-                char payload_buf[CMD_BUF_SIZE];
                 if (bus_client_read(bus_dir, event_file,
                                     payload_buf, sizeof(payload_buf)) == 0) {
                     /* Check if @handle appears in the payload */
@@ -366,6 +387,11 @@ int bus_client_ack_event(const char *bus_dir, const char *event_file)
 {
     ASSERT_MSG(bus_dir != NULL, "bus_client_ack_event: bus_dir is NULL");
     ASSERT_MSG(bus_dir[0] != '\0', "bus_client_ack_event: bus_dir is empty");
+
+    /* Trust boundary: bus_dir is trusted (set at startup from config/CLI).
+     * It is validated once at process initialisation in sidecar_config_validate().
+     * event_file is untrusted (derived from bus output parsing) and is
+     * validated below against path traversal. */
     ASSERT_MSG(event_file != NULL, "bus_client_ack_event: event_file is NULL");
     ASSERT_MSG(event_file[0] != '\0', "bus_client_ack_event: event_file is empty");
 

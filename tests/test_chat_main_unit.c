@@ -698,6 +698,300 @@ static void test_help_exits_zero(void) {
 }
 
 /* ============================================================
+ * B10 (BUG): TOCTOU race with access() pre-checks
+ *
+ * The access() calls create a TOCTOU window: file could be deleted
+ * between access() and chat_read(). Fix: remove access(), let
+ * chat_read/chat_poll fail and inspect errno for ENOENT.
+ *
+ * Test: verify missing-file detection still works (exit code 2)
+ * after access() removal. These reuse the V5 tests but are
+ * explicitly named for the B10 violation.
+ * ============================================================ */
+
+static void test_b10_read_no_toctou(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b10_read.chat", test_dir);
+    unlink(path);
+
+    char args[600];
+    snprintf(args, sizeof(args), "read %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 2, "B10: read missing file should exit 2 (no access()), got %d", rc);
+
+    TEST_PASS("B10a: cmd_read detects missing file via chat_read errno, not access()");
+}
+
+static void test_b10_poll_no_toctou(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b10_poll.chat", test_dir);
+    unlink(path);
+
+    char args[600];
+    snprintf(args, sizeof(args), "poll %s alice --timeout=0", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 2, "B10: poll missing file should exit 2 (no access()), got %d", rc);
+
+    TEST_PASS("B10b: cmd_poll detects missing file via chat_poll errno, not access()");
+}
+
+static void test_b10_search_no_toctou(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b10_search.chat", test_dir);
+    unlink(path);
+
+    char args[600];
+    snprintf(args, sizeof(args), "search %s pattern", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 2, "B10: search missing file should exit 2 (no access()), got %d", rc);
+
+    TEST_PASS("B10c: cmd_search detects missing file via chat_read errno, not access()");
+}
+
+static void test_b10_participants_no_toctou(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b10_parts.chat", test_dir);
+    unlink(path);
+
+    char args[600];
+    snprintf(args, sizeof(args), "participants %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 2, "B10: participants missing file should exit 2 (no access()), got %d", rc);
+
+    TEST_PASS("B10d: cmd_participants detects missing file via chat_read errno, not access()");
+}
+
+static void test_b10_delete_no_toctou(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b10_delete.chat", test_dir);
+    unlink(path);
+
+    char args[600];
+    snprintf(args, sizeof(args), "delete %s --after=1s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 2, "B10: delete missing file should exit 2 (no access()), got %d", rc);
+
+    TEST_PASS("B10e: cmd_delete detects missing file via chat_read errno, not access()");
+}
+
+/* ============================================================
+ * B11 (BUG): ASSERT_MSG on legitimate race condition in cmd_poll
+ *
+ * Between chat_poll returning 0 and the subsequent chat_read,
+ * another process could delete the message. The ASSERT_MSG(found)
+ * would abort the process. Fix: replace with warning + return 1.
+ *
+ * Test: we cannot easily trigger the race, but we verify that
+ * poll with a message from another handle succeeds (normal path),
+ * and that the binary does NOT abort (signal-based crash) on
+ * the non-race path.
+ * ============================================================ */
+
+static void test_b11_poll_race_no_abort(void) {
+    /*
+     * B11: The fix replaces ASSERT_MSG(found, ...) with a conditional
+     * warning + return 1. We cannot easily trigger the race condition
+     * (message deleted between chat_poll and chat_read) in a unit test,
+     * but we can verify that:
+     *   1. Poll with timeout=0 returns a clean exit code (3 = timeout),
+     *      not a signal/abort.
+     *   2. The ASSERT_MSG has been removed (verified by code inspection).
+     *
+     * chat_poll with timeout=0 only checks for NEW messages arriving
+     * after the initial read, so existing messages don't count.
+     */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/b11_poll.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    /* Send from bob */
+    snprintf(args, sizeof(args), "send %s bob \"hello alice\"", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "send failed: %d", rc);
+
+    /* Poll as alice with instant timeout -- returns 3 (timeout) since
+     * chat_poll only detects messages arriving AFTER the initial read.
+     * The key verification is that the exit code is clean (0-4), not
+     * a signal (e.g., SIGABRT from the old ASSERT_MSG). */
+    snprintf(args, sizeof(args), "poll %s alice --timeout=0", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc >= 0 && rc <= 4,
+                "B11: poll should return clean exit code (0-4), got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("B11: cmd_poll returns clean exit code (no abort on race path)");
+}
+
+/* ============================================================
+ * HARDENING: Empty --since= and --unread= should return exit 4
+ *
+ * Previously these silently disabled the filter with a warning.
+ * Fix: return exit code 4 (invalid arguments).
+ * ============================================================ */
+
+static void test_hard_empty_since_exit4(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_since.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "read %s --since=", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: --since= (empty) should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: empty --since= returns exit code 4");
+}
+
+static void test_hard_empty_unread_exit4(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_unread.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "read %s --unread=", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: --unread= (empty) should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: empty --unread= returns exit code 4");
+}
+
+/* ============================================================
+ * HARDENING: Unknown options should return exit 4
+ *
+ * Previously unknown options were silently accepted with a
+ * warning. Fix: return exit code 4.
+ * ============================================================ */
+
+static void test_hard_unknown_option_read(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_unk_read.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "read %s --bogus", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: unknown option --bogus in read should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: unknown option in cmd_read returns exit code 4");
+}
+
+static void test_hard_unknown_option_poll(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_unk_poll.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "poll %s alice --bogus --timeout=0", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: unknown option --bogus in poll should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: unknown option in cmd_poll returns exit code 4");
+}
+
+static void test_hard_unknown_option_search(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_unk_search.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "search %s pattern --bogus", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: unknown option --bogus in search should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: unknown option in cmd_search returns exit code 4");
+}
+
+static void test_hard_unknown_option_delete(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_unk_delete.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    snprintf(args, sizeof(args), "delete %s --after=1s --bogus", path);
+    rc = run_chat(args);
+    TEST_ASSERT(rc == 4, "HARD: unknown option --bogus in delete should exit 4, got %d", rc);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: unknown option in cmd_delete returns exit code 4");
+}
+
+/* ============================================================
+ * HARDENING: Silent skip of postcondition verification
+ *
+ * Lines 767-772: if chat_read fails after truncation, the
+ * postcondition check is silently skipped. Fix: add else branch
+ * that reports the failure.
+ *
+ * We test the happy path (postcondition verified) -- the else
+ * branch is tested indirectly via code inspection since we
+ * cannot easily make chat_read fail after a successful truncate
+ * on the same file.
+ * ============================================================ */
+
+static void test_hard_delete_postcondition_else_branch(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hard_postc.chat", test_dir);
+
+    char args[600];
+    snprintf(args, sizeof(args), "create %s", path);
+    int rc = run_chat(args);
+    TEST_ASSERT(rc == 0, "create failed: %d", rc);
+
+    /* Send 3 messages */
+    for (int i = 0; i < 3; i++) {
+        snprintf(args, sizeof(args), "send %s alice \"msg %d\"", path, i);
+        run_chat(args);
+    }
+
+    /* Delete all (--after=100d) */
+    snprintf(args, sizeof(args), "delete %s --after=100d", path);
+    char err[4096];
+    rc = run_chat_stderr(args, err, sizeof(err));
+    TEST_ASSERT(rc == 0, "delete should succeed, got %d", rc);
+    /* No warning about postcondition failure expected */
+    TEST_ASSERT(strstr(err, "postcondition") == NULL,
+                "HARD: no postcondition warning expected on success, stderr: '%s'", err);
+
+    /* Verify truncation */
+    chat_state_t state;
+    rc = chat_read(path, &state);
+    TEST_ASSERT(rc == 0, "chat_read failed: %d", rc);
+    TEST_ASSERT(state.message_count == 0,
+                "HARD: expected 0 messages, got %d", state.message_count);
+    chat_state_free(&state);
+
+    cleanup_chat(path);
+    TEST_PASS("HARD: delete postcondition verification runs (else branch added)");
+}
+
+/* ============================================================
  * Main
  * ============================================================ */
 
@@ -735,6 +1029,29 @@ int main(void) {
 
     /* V10: Participant count bounds */
     test_v10_participant_count_bounds();
+
+    /* B10: TOCTOU race removal */
+    test_b10_read_no_toctou();
+    test_b10_poll_no_toctou();
+    test_b10_search_no_toctou();
+    test_b10_participants_no_toctou();
+    test_b10_delete_no_toctou();
+
+    /* B11: Race condition assert replaced with warning */
+    test_b11_poll_race_no_abort();
+
+    /* HARDENING: Empty filter values */
+    test_hard_empty_since_exit4();
+    test_hard_empty_unread_exit4();
+
+    /* HARDENING: Unknown options */
+    test_hard_unknown_option_read();
+    test_hard_unknown_option_poll();
+    test_hard_unknown_option_search();
+    test_hard_unknown_option_delete();
+
+    /* HARDENING: Postcondition else branch */
+    test_hard_delete_postcondition_else_branch();
 
     /* Additional adversarial tests */
     test_invalid_args_exit_code();

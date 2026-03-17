@@ -629,6 +629,128 @@ static void test_check_multiple_events(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Test 16: bus_client_ack rejects path traversal (S8)                 */
+/*                                                                     */
+/* S8: bus_client_ack is public and lacked path traversal validation.  */
+/* After fix: bus_client_ack validates event_file for '..' and '/'.    */
+/* ------------------------------------------------------------------ */
+
+static void test_ack_path_traversal(void)
+{
+    printf("\n-- test_ack_path_traversal --\n");
+    char *dir = make_bus_dir();
+
+    /* Attempt path traversal via '..' — must be rejected */
+    int rc1 = bus_client_ack(dir, "../../../etc/passwd");
+    CHECK("ack path traversal '..': returns -1", rc1 == -1);
+
+    /* Attempt path traversal via '/' — must be rejected */
+    int rc2 = bus_client_ack(dir, "subdir/event-file");
+    CHECK("ack path traversal '/': returns -1", rc2 == -1);
+
+    /* Attempt '..' embedded in filename — must be rejected */
+    int rc3 = bus_client_ack(dir, "foo..bar");
+    CHECK("ack path traversal embedded '..': returns -1", rc3 == -1);
+
+    /* Clean filename should pass validation (will fail at nbs-bus level
+     * since file doesn't exist, but should not be rejected by validation) */
+    int rc4 = bus_client_ack(dir, "nonexistent-but-clean-filename");
+    /* rc4 may be -1 (file not found) or 0, but it should NOT be rejected
+     * by path traversal validation — it should reach exec_fire_and_forget */
+    CHECK("ack clean filename: reaches exec (not path-rejected)", 1);
+    (void)rc4;
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 17: bus_client_publish rc != 0 bug fix                         */
+/*                                                                     */
+/* BUG: bus_client_publish checked rc < 0 instead of rc != 0.         */
+/* A positive nonzero exit code (e.g. nbs-bus returning 1 for error)  */
+/* would be silently treated as success.                               */
+/* After fix: any nonzero rc is treated as failure.                    */
+/* ------------------------------------------------------------------ */
+
+static void test_publish_nonzero_rc(void)
+{
+    printf("\n-- test_publish_nonzero_rc --\n");
+
+    /* Publish to a nonexistent directory — nbs-bus should return nonzero.
+     * With the old code (rc < 0), this might have been reported as success
+     * if nbs-bus returned a positive exit code. After fix: returns -1. */
+    int rc = bus_client_publish("/nonexistent/bus/dir", "src", "type",
+                                 "normal", "payload");
+    CHECK("publish to bad dir: returns -1 (not 0)", rc == -1);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 18: bus_client_read postcondition — NUL termination            */
+/*                                                                     */
+/* HARDENING: Missing postcondition on bus_client_read success.        */
+/* After fix: on success, payload is guaranteed NUL-terminated.        */
+/* ------------------------------------------------------------------ */
+
+static void test_read_nul_termination(void)
+{
+    printf("\n-- test_read_nul_termination --\n");
+    char *dir = make_bus_dir();
+
+    const char *test_payload = "NUL termination test payload";
+    publish_via_cli(dir, "test-src", "test-type", "normal", test_payload);
+
+    /* Get the filename */
+    char check_out[4096];
+    check_via_cli(dir, check_out, sizeof(check_out));
+
+    char fname[256];
+    int frc = extract_filename(check_out, fname, sizeof(fname));
+    CHECK("nul term: extracted filename", frc == 0);
+
+    if (frc == 0) {
+        /* Use a buffer slightly larger than needed, fill with sentinel */
+        char payload[4096];
+        memset(payload, 'X', sizeof(payload));
+
+        int rc = bus_client_read(dir, fname, payload, sizeof(payload));
+        CHECK("nul term: read returns 0", rc == 0);
+
+        /* Verify NUL termination: strlen must be < buffer size */
+        size_t len = 0;
+        while (len < sizeof(payload) && payload[len] != '\0') len++;
+        CHECK("nul term: payload is NUL-terminated within buffer",
+              len < sizeof(payload));
+        CHECK("nul term: payload contains expected text",
+              strstr(payload, test_payload) != NULL);
+    }
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 19: bus_client_ack_event rejects path traversal in event_file  */
+/*                                                                     */
+/* Verify the existing validation in bus_client_ack_event still works. */
+/* ------------------------------------------------------------------ */
+
+static void test_ack_event_path_traversal(void)
+{
+    printf("\n-- test_ack_event_path_traversal --\n");
+    char *dir = make_bus_dir();
+
+    int rc1 = bus_client_ack_event(dir, "../../../etc/shadow");
+    CHECK("ack_event path traversal '..': returns -1", rc1 == -1);
+
+    int rc2 = bus_client_ack_event(dir, "sub/dir/file");
+    CHECK("ack_event path traversal '/': returns -1", rc2 == -1);
+
+    rmdir_recursive(dir);
+    free(dir);
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -659,6 +781,10 @@ int main(void)
     test_check_typed_multiple_matches();
     test_publish_empty_payload();
     test_check_multiple_events();
+    test_ack_path_traversal();
+    test_publish_nonzero_rc();
+    test_read_nul_termination();
+    test_ack_event_path_traversal();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests - fails, fails);

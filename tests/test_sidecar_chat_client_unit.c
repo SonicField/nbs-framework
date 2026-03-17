@@ -27,6 +27,11 @@
  *  21.  check_unread: large cursor does not cause overflow in unread count
  *  22.  check_unread: postconditions hold on return 0 (summary non-empty)
  *  23.  read_cursor: chat_path emptiness precondition (via assertion)
+ *  24.  check_unread: empty chat (total=0) no spurious unreads (B15 fix)
+ *  25.  are_unread_sidecar_only: unparseable message treated as non-sidecar
+ *  26.  count_messages postcondition: returns >= 0 for valid file
+ *  27.  read_cursor postcondition: return in [-1, INT_MAX-1]
+ *  28.  check_unread: multi-chat accumulation without overflow (B14 fix)
  */
 
 #include "../src/nbs-sidecar/chat_client.h"
@@ -807,6 +812,170 @@ int main(void)
         CHECK("postcond: summary non-empty", summary[0] != '\0');
         CHECK("postcond: summary contains count",
               strstr(summary, "2 unread") != NULL);
+    }
+
+    /* ============================================================
+     * 24. check_unread: empty chat (total=0) does not produce
+     *     spurious unreads (B15 fix).
+     *
+     * Before the fix, check_unread_cb had no total <= 0 guard.
+     * With total=0 and cursor=0: total - 1 > cursor → -1 > 0 → false,
+     * which happened to work, but total=0 with cursor=-1 (no cursor file)
+     * would give: cursor clamped to 0, total-1=-1 > 0 → false.
+     * The explicit guard makes the invariant falsifiable.
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t24", tmpdir);
+        mkdirs(sub);
+
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/empty.chat", sub);
+        write_chat_file(chat_path, NULL); /* 0 messages */
+        /* No cursor file — cursor will be -1, clamped to 0 */
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3];
+        snprintf(entry, sizeof(entry), "chat:%s\n", chat_path);
+        write_file(registry_path, entry);
+
+        int unread_count = -1;
+        char summary[L3] = {0};
+        int rc = chat_client_check_unread(registry_path, "agent",
+                                          &unread_count, summary,
+                                          sizeof(summary));
+        CHECK("B15: empty chat returns 1 (caught up)", rc == 1);
+        CHECK("B15: empty chat unread_count=0", unread_count == 0);
+    }
+
+    /* ============================================================
+     * 25. are_unread_sidecar_only: unparseable message treated as
+     *     non-sidecar (hardening fix).
+     *
+     * A message whose decoded content has no ": " delimiter cannot
+     * have its handle extracted. Before the fix, such messages were
+     * silently skipped — allowing false "sidecar-only" results.
+     * After the fix, they are conservatively treated as non-sidecar.
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t25", tmpdir);
+        mkdirs(sub);
+
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/live.chat", sub);
+
+        /* Encode a message with no ": " delimiter — unparseable */
+        char b64_bad[B64_BUF];
+        encode_msg("no_delimiter_here", b64_bad, sizeof(b64_bad));
+
+        const char *msgs[] = { b64_sc1, b64_bad, NULL };
+        write_chat_file(chat_path, msgs);
+
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=0\n");
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3];
+        snprintf(entry, sizeof(entry), "chat:%s\n", chat_path);
+        write_file(registry_path, entry);
+
+        int rc = chat_client_are_unread_sidecar_only(registry_path, "agent");
+        CHECK("unparseable msg: treated as non-sidecar, returns 0", rc == 0);
+    }
+
+    /* ============================================================
+     * 26. count_messages postcondition: returns >= 0 for valid file
+     *
+     * Verify the postcondition assertion (count >= 0) holds for
+     * a chat file with known content.
+     * ============================================================ */
+    {
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/postcond.chat", tmpdir);
+
+        const char *msgs[] = { b64_msg1, NULL };
+        write_chat_file(chat_path, msgs);
+
+        int count = chat_client_count_messages(chat_path);
+        CHECK("postcond: count_messages >= 0 for valid file", count >= 0);
+        CHECK("postcond: count_messages == 1", count == 1);
+    }
+
+    /* ============================================================
+     * 27. read_cursor postcondition: return in [-1, INT_MAX-1]
+     *
+     * Verify the postcondition assertion on read_cursor holds for
+     * various cursor values.
+     * ============================================================ */
+    {
+        char chat_path[L2];
+        snprintf(chat_path, sizeof(chat_path), "%s/postcond_cursor.chat",
+                 tmpdir);
+        write_chat_file(chat_path, NULL);
+
+        /* Normal case */
+        char cursor_path[L3];
+        snprintf(cursor_path, sizeof(cursor_path), "%s.cursors", chat_path);
+        write_file(cursor_path, "agent=100\n");
+
+        int cursor = chat_client_read_cursor(chat_path, "agent");
+        CHECK("postcond: read_cursor in range [-1, INT_MAX-1]",
+              cursor >= -1 && cursor <= 2147483646);
+        CHECK("postcond: read_cursor == 100", cursor == 100);
+
+        /* Missing handle case */
+        int missing = chat_client_read_cursor(chat_path, "nonexistent");
+        CHECK("postcond: missing handle returns -1", missing == -1);
+    }
+
+    /* ============================================================
+     * 28. check_unread: multiple chats accumulate unread correctly
+     *     without overflow (B14 fix verification).
+     *
+     * Two chat files each with 3 messages, cursor at 0 in both.
+     * Total unread = 2 + 2 = 4 (not overflowed).
+     * ============================================================ */
+    {
+        char sub[L1];
+        snprintf(sub, sizeof(sub), "%s/t28", tmpdir);
+        mkdirs(sub);
+
+        char chat1[L2], chat2[L2];
+        snprintf(chat1, sizeof(chat1), "%s/chat1.chat", sub);
+        snprintf(chat2, sizeof(chat2), "%s/chat2.chat", sub);
+
+        const char *msgs[] = { b64_msg1, b64_msg2, b64_msg3, NULL };
+        write_chat_file(chat1, msgs);
+        write_chat_file(chat2, msgs);
+
+        char cur1[L3], cur2[L3];
+        snprintf(cur1, sizeof(cur1), "%s.cursors", chat1);
+        snprintf(cur2, sizeof(cur2), "%s.cursors", chat2);
+        write_file(cur1, "agent=0\n");
+        write_file(cur2, "agent=0\n");
+
+        char registry_path[L2];
+        snprintf(registry_path, sizeof(registry_path), "%s/registry", sub);
+
+        char entry[L3 * 2];
+        snprintf(entry, sizeof(entry), "chat:%s\nchat:%s\n", chat1, chat2);
+        write_file(registry_path, entry);
+
+        int unread_count = -1;
+        char summary[L3] = {0};
+        int rc = chat_client_check_unread(registry_path, "agent",
+                                          &unread_count, summary,
+                                          sizeof(summary));
+        CHECK("B14: multi-chat returns 0 (unread)", rc == 0);
+        CHECK("B14: multi-chat unread_count=4", unread_count == 4);
+        CHECK("B14: multi-chat summary contains '4 unread'",
+              strstr(summary, "4 unread") != NULL);
     }
 
     /* Clean up */

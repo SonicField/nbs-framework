@@ -60,12 +60,38 @@ size_t strip_ansi(char *text) {
              * DEL (0x7F) is a control character that appears in terminal
              * captures and must not pass through to chat output. */
             rd++;
+        } else if ((unsigned char)*rd >= 0xC2 && (unsigned char)*rd <= 0xF4) {
+            /* UTF-8 multi-byte sequence. Copy the entire sequence as a
+             * unit so that continuation bytes (0x80-0xBF) are not
+             * mistakenly stripped by the C1 branch below.
+             *
+             * Leading byte ranges per RFC 3629:
+             *   0xC2-0xDF: 2-byte sequence (1 continuation byte)
+             *   0xE0-0xEF: 3-byte sequence (2 continuation bytes)
+             *   0xF0-0xF4: 4-byte sequence (3 continuation bytes)
+             *
+             * 0xC0-0xC1 are overlong encodings and excluded.
+             * If continuation bytes are missing or invalid, the leading
+             * byte is still copied (garbage in, garbage out — but we
+             * do not corrupt the stream). */
+            int expected;
+            if ((unsigned char)*rd <= 0xDF)      expected = 1;
+            else if ((unsigned char)*rd <= 0xEF) expected = 2;
+            else                                  expected = 3;
+
+            *wr++ = *rd++;  /* copy leading byte */
+            for (int i = 0; i < expected && *rd != '\0' &&
+                 ((unsigned char)*rd & 0xC0) == 0x80; i++) {
+                *wr++ = *rd++;  /* copy continuation byte */
+            }
         } else if ((unsigned char)*rd >= 0x80 && (unsigned char)*rd <= 0x9F) {
-            /* Strip C1 control codes (0x80-0x9F).
+            /* Strip standalone C1 control codes (0x80-0x9F).
              * These are the 8-bit equivalents of ESC-initiated sequences.
-             * Applications inside tmux may emit these. They are not valid
-             * in UTF-8 text (0x80-0x9F are continuation bytes in UTF-8,
-             * but standalone they are C1 controls per ISO 8859-1).
+             * Applications inside tmux may emit these.
+             * This branch is only reached for bytes 0x80-0x9F that are NOT
+             * preceded by a valid UTF-8 leading byte (those are handled
+             * above). Standalone bytes in this range are C1 controls per
+             * ISO 8859-1 and are stripped.
              * 0x9B (CSI) and 0x9D (OSC) could introduce sequences, but
              * stripping the introducer byte is sufficient since the
              * remaining bytes are either printable or caught by other

@@ -16,12 +16,21 @@
 #define NBS_PTY_SESSION_H
 
 #include <stddef.h>  /* size_t */
+#include <stdint.h>  /* int64_t */
+#include <stdio.h>   /* FILE */
+#include <stdlib.h>  /* EXIT_SUCCESS */
 
 #define PTY_PREFIX       "pty_"
 #define PTY_PREFIX_LEN   4
 
+_Static_assert(sizeof(PTY_PREFIX) - 1 == PTY_PREFIX_LEN,
+               "PTY_PREFIX_LEN must match length of PTY_PREFIX");
+
 #define EXIT_SUCCESS_CODE  0
 #define EXIT_ERROR         1
+
+_Static_assert(EXIT_SUCCESS_CODE == EXIT_SUCCESS,
+               "EXIT_SUCCESS_CODE must equal EXIT_SUCCESS");
 #define EXIT_NOT_FOUND     2
 #define EXIT_TIMEOUT       3
 #define EXIT_BAD_ARGS      4
@@ -71,6 +80,9 @@ int cmd_send(const char *name, const char *text, int no_enter);
  *
  * Preconditions:
  *   - name is non-NULL, non-empty
+ *   - scrollback > 0 (number of lines; default DEFAULT_SCROLLBACK)
+ *   - timeout > 0 when wait_mode is set (seconds; default DEFAULT_READ_TIMEOUT)
+ *   - wait_mode is 0 or 1
  *
  * Postconditions:
  *   - On success (returns 0): output printed to stdout
@@ -85,6 +97,7 @@ int cmd_read(const char *name, int scrollback, int wait_mode, int timeout);
  * Preconditions:
  *   - name is non-NULL, non-empty
  *   - pattern is non-NULL, non-empty
+ *   - timeout > 0 (seconds; default DEFAULT_WAIT_TIMEOUT)
  *   - Session pty_<name> exists
  *
  * Postconditions:
@@ -148,6 +161,8 @@ int test_dispatch_wait(int argc, char *argv[]);
 /* From session.c */
 int test_is_safe_name(const char *name);
 int test_is_safe_home_path(const char *path);
+FILE *test_open_secure(const char *path, int flags);
+int64_t test_get_monotonic_ms(void);
 
 #endif /* TEST_BUILD */
 

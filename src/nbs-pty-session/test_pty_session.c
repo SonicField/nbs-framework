@@ -24,6 +24,11 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* ── Test infrastructure ─────────────────────────────────────────── */
 
@@ -240,39 +245,38 @@ static void test_sanitise_for_display_null_bytes(void)
 static void test_is_safe_name_valid(void)
 {
     TEST(is_safe_name_valid_names);
+    const char *valid[] = {"myrepl", "test-session", "build_123", "A", "a-b-c_1-2-3"};
     int ok = 1;
-    ok &= (test_is_safe_name("myrepl") == 1);
-    ok &= (test_is_safe_name("test-session") == 1);
-    ok &= (test_is_safe_name("build_123") == 1);
-    ok &= (test_is_safe_name("A") == 1);
-    ok &= (test_is_safe_name("a-b-c_1-2-3") == 1);
+    for (size_t i = 0; i < sizeof(valid)/sizeof(valid[0]); i++) {
+        if (test_is_safe_name(valid[i]) != 1) {
+            FAIL("valid name rejected: '%s' (index %zu)", valid[i], i);
+            ok = 0;
+            break;
+        }
+    }
     if (ok) {
         PASS();
-    } else {
-        FAIL("Some valid names rejected");
     }
 }
 
 static void test_is_safe_name_injection(void)
 {
     TEST(is_safe_name_rejects_injection_chars);
+    const char *bad[] = {
+        "", "foo;bar", "foo|bar", "foo&bar", "foo`bar", "foo$bar",
+        "foo'bar", "../etc/passwd", "foo bar", "foo\tbar", "foo\nbar",
+        "\x1b[2J"
+    };
     int ok = 1;
-    ok &= (test_is_safe_name("") == 0);
-    ok &= (test_is_safe_name("foo;bar") == 0);
-    ok &= (test_is_safe_name("foo|bar") == 0);
-    ok &= (test_is_safe_name("foo&bar") == 0);
-    ok &= (test_is_safe_name("foo`bar") == 0);
-    ok &= (test_is_safe_name("foo$bar") == 0);
-    ok &= (test_is_safe_name("foo'bar") == 0);
-    ok &= (test_is_safe_name("../etc/passwd") == 0);
-    ok &= (test_is_safe_name("foo bar") == 0);
-    ok &= (test_is_safe_name("foo\tbar") == 0);
-    ok &= (test_is_safe_name("foo\nbar") == 0);
-    ok &= (test_is_safe_name("\x1b[2J") == 0);
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
+        if (test_is_safe_name(bad[i]) != 0) {
+            FAIL("injection input not rejected at index %zu: '%s'", i, bad[i]);
+            ok = 0;
+            break;
+        }
+    }
     if (ok) {
         PASS();
-    } else {
-        FAIL("Some injection chars not rejected");
     }
 }
 
@@ -283,34 +287,40 @@ static void test_is_safe_name_injection(void)
 static void test_is_safe_home_path_normal(void)
 {
     TEST(is_safe_home_path_accepts_normal_paths);
+    const char *valid[] = {
+        "/home/user", "/Users/alex", "/root",
+        "/home/user-name_123", "/home/user.name"
+    };
     int ok = 1;
-    ok &= (test_is_safe_home_path("/home/user") == 1);
-    ok &= (test_is_safe_home_path("/Users/alex") == 1);
-    ok &= (test_is_safe_home_path("/root") == 1);
-    ok &= (test_is_safe_home_path("/home/user-name_123") == 1);
-    ok &= (test_is_safe_home_path("/home/user.name") == 1);
+    for (size_t i = 0; i < sizeof(valid)/sizeof(valid[0]); i++) {
+        if (test_is_safe_home_path(valid[i]) != 1) {
+            FAIL("valid path rejected: '%s' (index %zu)", valid[i], i);
+            ok = 0;
+            break;
+        }
+    }
     if (ok) {
         PASS();
-    } else {
-        FAIL("Some normal paths rejected");
     }
 }
 
 static void test_is_safe_home_path_injection(void)
 {
     TEST(is_safe_home_path_rejects_shell_injection);
+    const char *bad[] = {
+        "/tmp/x'; rm -rf /", "/tmp/x`whoami`", "/tmp/$HOME",
+        "/tmp/x;id", "/tmp/x|cat", "/tmp/x&bg", ""
+    };
     int ok = 1;
-    ok &= (test_is_safe_home_path("/tmp/x'; rm -rf /") == 0);
-    ok &= (test_is_safe_home_path("/tmp/x`whoami`") == 0);
-    ok &= (test_is_safe_home_path("/tmp/$HOME") == 0);
-    ok &= (test_is_safe_home_path("/tmp/x;id") == 0);
-    ok &= (test_is_safe_home_path("/tmp/x|cat") == 0);
-    ok &= (test_is_safe_home_path("/tmp/x&bg") == 0);
-    ok &= (test_is_safe_home_path("") == 0);
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
+        if (test_is_safe_home_path(bad[i]) != 0) {
+            FAIL("injection path not rejected at index %zu: '%s'", i, bad[i]);
+            ok = 0;
+            break;
+        }
+    }
     if (ok) {
         PASS();
-    } else {
-        FAIL("Some injection paths not rejected");
     }
 }
 
@@ -323,42 +333,43 @@ static void test_is_safe_home_path_injection(void)
 
 /*
  * Violation S3 (BUG): read() error silently swallowed in exec_capture.
- * This is hard to test directly without a mock, but we test the
- * postcondition: if exec_capture returns >= 0, the buffer should be
- * NUL-terminated with the correct content.
- *
- * We test via cmd_* functions that use exec_capture.
+ * NOT TESTED — requires mock of read() syscall; cannot be exercised
+ * without fault injection infrastructure.
  */
 
 /*
  * Violation S4 (BUG): fputs return unchecked in cmd_read.
- * Tested indirectly: the fix is a code change, verified by inspection.
+ * NOT TESTED — requires mock of fputs() to force write failure.
  */
 
 /*
  * Violation S5 (BUG): exec_capture non-zero exit treated as success in read_log.
- * Tested indirectly via code review of the fix.
+ * NOT TESTED — requires a controlled subprocess that exits non-zero
+ * while producing partial output.
  */
 
 /*
  * Violation S6 (BUG): Timeout measured by accumulated sleep, not wall clock.
- * This is verified by code inspection of the CLOCK_MONOTONIC fix.
+ * NOT TESTED — requires wall-clock vs accumulated-sleep timing
+ * comparison under load; not feasible in unit tests.
  */
 
 /*
  * Violation S7 (HARDENING): No overflow postcondition on timeout * 1000.
- * Test that the assertion fires for extreme values.
- * (Covered by the assertion in the code; we test valid range here.)
+ * NOT TESTED — the assertion in the code guards this at runtime;
+ * triggering it in a test would abort the test process.
  */
 
 /*
  * Violation S8 (HARDENING): Duplicated log-search block.
- * Verified by code inspection: extracted to search_log_for_pattern().
+ * NOT TESTED — this is a refactoring (structural, not behavioural).
+ * Functional coverage comes from cmd_wait tests.
  */
 
 /*
  * Violation S13 (BUG): ferror() not checked after fgets loop.
- * Tested indirectly: the fix is verified by code review.
+ * NOT TESTED — requires mock of fgets() to inject I/O error
+ * mid-stream.
  */
 
 /*
@@ -370,8 +381,8 @@ static void test_dispatch_read_rejects_unknown_option(void)
 {
     TEST(dispatch_read_rejects_unknown_option);
     /* Construct argv for: pty-session read mysession --typo=5 */
-    char *argv[] = {"pty-session", "read", "testsession", "--typo=5", NULL};
-    int rc = test_dispatch_read(4, argv);
+    const char *argv[] = {"pty-session", "read", "testsession", "--typo=5", NULL};
+    int rc = test_dispatch_read(4, (char **)argv);
     if (rc == EXIT_BAD_ARGS) {
         PASS();
     } else {
@@ -382,8 +393,8 @@ static void test_dispatch_read_rejects_unknown_option(void)
 static void test_dispatch_wait_rejects_unknown_option(void)
 {
     TEST(dispatch_wait_rejects_unknown_option);
-    char *argv[] = {"pty-session", "wait", "testsession", "pattern", "--bogus=1", NULL};
-    int rc = test_dispatch_wait(5, argv);
+    const char *argv[] = {"pty-session", "wait", "testsession", "pattern", "--bogus=1", NULL};
+    int rc = test_dispatch_wait(5, (char **)argv);
     if (rc == EXIT_BAD_ARGS) {
         PASS();
     } else {
@@ -396,23 +407,27 @@ static void test_dispatch_read_accepts_valid_options(void)
     TEST(dispatch_read_accepts_valid_options);
     /* These should NOT return EXIT_BAD_ARGS (they may fail for other
      * reasons like no tmux session, but not due to option parsing) */
-    char *argv1[] = {"pty-session", "read", "testsession", "--scrollback=50", NULL};
-    int rc1 = test_dispatch_read(4, argv1);
+    const char *argv1[] = {"pty-session", "read", "testsession", "--scrollback=50", NULL};
+    int rc1 = test_dispatch_read(4, (char **)argv1);
 
-    char *argv2[] = {"pty-session", "read", "testsession", "--wait", NULL};
-    int rc2 = test_dispatch_read(4, argv2);
+    const char *argv2[] = {"pty-session", "read", "testsession", "--wait", NULL};
+    int rc2 = test_dispatch_read(4, (char **)argv2);
 
-    char *argv3[] = {"pty-session", "read", "testsession", "--timeout=30", NULL};
-    int rc3 = test_dispatch_read(4, argv3);
+    const char *argv3[] = {"pty-session", "read", "testsession", "--timeout=30", NULL};
+    int rc3 = test_dispatch_read(4, (char **)argv3);
 
-    char *argv4[] = {"pty-session", "read", "testsession", "--last=20", NULL};
-    int rc4 = test_dispatch_read(4, argv4);
+    const char *argv4[] = {"pty-session", "read", "testsession", "--last=20", NULL};
+    int rc4 = test_dispatch_read(4, (char **)argv4);
+
+    /* Log actual return codes so failures are diagnosable */
+    printf("[rc: %d, %d, %d, %d] ", rc1, rc2, rc3, rc4);
 
     if (rc1 != EXIT_BAD_ARGS && rc2 != EXIT_BAD_ARGS &&
         rc3 != EXIT_BAD_ARGS && rc4 != EXIT_BAD_ARGS) {
         PASS();
     } else {
-        FAIL("Valid options incorrectly rejected: rc1=%d rc2=%d rc3=%d rc4=%d",
+        FAIL("Valid options incorrectly rejected: "
+             "--scrollback=50 rc=%d, --wait rc=%d, --timeout=30 rc=%d, --last=20 rc=%d",
              rc1, rc2, rc3, rc4);
     }
 }
@@ -421,12 +436,190 @@ static void test_dispatch_read_bad_parse_returns_error(void)
 {
     TEST(dispatch_read_bad_option_value_returns_bad_args);
     /* Violation M1: parse failure should propagate EXIT_BAD_ARGS */
-    char *argv[] = {"pty-session", "read", "testsession", "--scrollback=banana", NULL};
-    int rc = test_dispatch_read(4, argv);
+    const char *argv[] = {"pty-session", "read", "testsession", "--scrollback=banana", NULL};
+    int rc = test_dispatch_read(4, (char **)argv);
     if (rc == EXIT_BAD_ARGS) {
         PASS();
     } else {
         FAIL("Expected EXIT_BAD_ARGS (4) for bad parse, got %d", rc);
+    }
+}
+
+/* ── Adversarial tests for session.c/session.h audit violations ──── */
+
+/*
+ * B4 (BUG): O_RDONLY is 0; (flags & O_RDONLY) always false.
+ * After fix: open_secure with O_RDONLY must select "r" mode.
+ * Falsification: create a file, open it read-only via open_secure,
+ * verify we can read but not write.
+ */
+static void test_open_secure_rdonly_mode(void)
+{
+    TEST(B4_open_secure_rdonly_selects_read_mode);
+
+    /* Create a temp file with known content */
+    char tmppath[] = "/tmp/nbs_test_b4_XXXXXX";
+    int fd = mkstemp(tmppath);
+    if (fd < 0) {
+        FAIL("mkstemp failed: %s", strerror(errno));
+        return;
+    }
+    const char *content = "test_content\n";
+    ssize_t wr = write(fd, content, strlen(content));
+    close(fd);
+    if (wr < 0) {
+        unlink(tmppath);
+        FAIL("write to temp file failed");
+        return;
+    }
+
+    /* Open read-only via open_secure */
+    FILE *f = test_open_secure(tmppath, O_RDONLY);
+    if (!f) {
+        unlink(tmppath);
+        FAIL("open_secure O_RDONLY returned NULL");
+        return;
+    }
+
+    /* Verify we can read the content */
+    char buf[64];
+    char *got = fgets(buf, sizeof(buf), f);
+    fclose(f);
+    unlink(tmppath);
+
+    if (got && strcmp(buf, content) == 0) {
+        PASS();
+    } else {
+        FAIL("open_secure O_RDONLY did not read correctly, got: %s",
+             got ? buf : "(null)");
+    }
+}
+
+/*
+ * B4 (BUG): Verify open_secure with O_WRONLY selects "w" mode.
+ * Falsification: open for write, write, re-read, verify content.
+ */
+static void test_open_secure_wronly_mode(void)
+{
+    TEST(B4_open_secure_wronly_selects_write_mode);
+
+    char tmppath[] = "/tmp/nbs_test_b4w_XXXXXX";
+    int fd = mkstemp(tmppath);
+    close(fd);
+
+    FILE *f = test_open_secure(tmppath, O_WRONLY | O_TRUNC);
+    if (!f) {
+        unlink(tmppath);
+        FAIL("open_secure O_WRONLY returned NULL");
+        return;
+    }
+    fprintf(f, "written\n");
+    fclose(f);
+
+    /* Re-read and verify */
+    FILE *rf = fopen(tmppath, "r");
+    char buf[64];
+    char *got = rf ? fgets(buf, sizeof(buf), rf) : NULL;
+    if (rf) fclose(rf);
+    unlink(tmppath);
+
+    if (got && strcmp(buf, "written\n") == 0) {
+        PASS();
+    } else {
+        FAIL("open_secure O_WRONLY did not write correctly");
+    }
+}
+
+/*
+ * S9 (SECURITY): Fence file must be created with 0600 permissions.
+ * Falsification: create via open_secure, check mode bits.
+ */
+static void test_open_secure_permissions(void)
+{
+    TEST(S9_open_secure_creates_file_with_0600);
+
+    char tmppath[] = "/tmp/nbs_test_s9_XXXXXX";
+    /* Remove the file mkstemp creates so open_secure creates it fresh */
+    int fd = mkstemp(tmppath);
+    close(fd);
+    unlink(tmppath);
+
+    /* Set permissive umask to prove open_secure enforces 0600 */
+    mode_t old_umask = umask(0000);
+
+    FILE *f = test_open_secure(tmppath, O_WRONLY | O_CREAT | O_TRUNC);
+    umask(old_umask);
+
+    if (!f) {
+        FAIL("open_secure O_WRONLY|O_CREAT returned NULL");
+        return;
+    }
+    fprintf(f, "secret\n");
+    fclose(f);
+
+    struct stat st;
+    int rc = stat(tmppath, &st);
+    unlink(tmppath);
+
+    if (rc != 0) {
+        FAIL("stat failed on created file");
+        return;
+    }
+
+    mode_t perms = st.st_mode & 0777;
+    if (perms == 0600) {
+        PASS();
+    } else {
+        FAIL("Expected 0600, got %04o", perms);
+    }
+}
+
+/*
+ * Hardening: get_monotonic_ms returns int64_t, not long.
+ * Falsification: verify the value is positive and plausible
+ * (> 0, fits in int64_t range).
+ */
+static void test_get_monotonic_ms_returns_positive(void)
+{
+    TEST(get_monotonic_ms_returns_positive_int64);
+    int64_t ms = test_get_monotonic_ms();
+    if (ms > 0) {
+        PASS();
+    } else {
+        FAIL("Expected positive int64_t, got %" PRId64, ms);
+    }
+}
+
+/*
+ * Hardening (session.h): PTY_PREFIX_LEN verified against PTY_PREFIX.
+ * Falsification: the _Static_assert in session.h would fail at compile
+ * time if they disagree. This test verifies at runtime too.
+ */
+static void test_pty_prefix_len_matches(void)
+{
+    TEST(pty_prefix_len_matches_pty_prefix);
+    size_t actual = strlen(PTY_PREFIX);
+    if (actual == PTY_PREFIX_LEN) {
+        PASS();
+    } else {
+        FAIL("PTY_PREFIX_LEN=%d but strlen(PTY_PREFIX)=%zu",
+             PTY_PREFIX_LEN, actual);
+    }
+}
+
+/*
+ * Hardening (session.h): EXIT_SUCCESS_CODE == EXIT_SUCCESS.
+ * Falsification: the _Static_assert in session.h would fail at compile
+ * time if they disagree. Runtime check for belt-and-braces.
+ */
+static void test_exit_success_code_matches(void)
+{
+    TEST(exit_success_code_equals_exit_success);
+    if (EXIT_SUCCESS_CODE == EXIT_SUCCESS) {
+        PASS();
+    } else {
+        FAIL("EXIT_SUCCESS_CODE=%d != EXIT_SUCCESS=%d",
+             EXIT_SUCCESS_CODE, EXIT_SUCCESS);
     }
 }
 
@@ -470,8 +663,27 @@ int main(void)
     test_is_safe_home_path_normal();
     test_is_safe_home_path_injection();
 
+    /* B4: open_secure O_RDONLY fix */
+    test_open_secure_rdonly_mode();
+    test_open_secure_wronly_mode();
+
+    /* S9: fence file permissions */
+    test_open_secure_permissions();
+
+    /* Hardening: get_monotonic_ms int64_t */
+    test_get_monotonic_ms_returns_positive();
+
+    /* Hardening: session.h compile-time checks (runtime verification) */
+    test_pty_prefix_len_matches();
+    test_exit_success_code_matches();
+
     printf("\n=== Results: %d/%d passed, %d failed ===\n",
            tests_passed, tests_run, tests_failed);
+
+    /* Postcondition: every test must be accounted for as pass or fail */
+    ASSERT_MSG(tests_run == tests_passed + tests_failed,
+               "test counter invariant: run=%d != passed=%d + failed=%d",
+               tests_run, tests_passed, tests_failed);
 
     return tests_failed > 0 ? 1 : 0;
 }

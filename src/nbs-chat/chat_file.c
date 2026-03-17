@@ -80,6 +80,18 @@ static int64_t compute_file_length(const char *content_without_length) {
         candidate = base_size + 14 + (int64_t)strlen(size_str);
     }
 
+    /* Postcondition: self-referential consistency check.
+     * "file-length: N\n" = 14 + digits_of(N) chars.
+     * candidate must equal base_size + 14 + digits_of(candidate). */
+    snprintf(size_str, sizeof(size_str), "%" PRId64, candidate);
+    int64_t final_digits = (int64_t)strlen(size_str);
+    ASSERT_MSG(candidate == base_size + 14 + final_digits,
+               "compute_file_length: self-referential check failed: "
+               "candidate=%" PRId64 " != base_size=%" PRId64 " + 14 + digits=%" PRId64,
+               candidate, base_size, final_digits);
+    ASSERT_MSG(candidate > 0,
+               "compute_file_length: result must be positive, got %" PRId64, candidate);
+
     return candidate;
 }
 
@@ -146,17 +158,26 @@ static void format_participants(const participant_t *parts, int count,
         int written;
         if (i > 0) {
             written = snprintf(buf + offset, buf_size - offset, ", ");
-            if (written > 0 && (size_t)written < buf_size - offset)
+            if (written > 0 && (size_t)written < buf_size - offset) {
                 offset += (size_t)written;
-            else if (written > 0)
-                offset = buf_size - 1;  /* truncated */
+            } else if (written > 0) {
+                fprintf(stderr, "warning: format_participants: separator truncated at "
+                        "participant %d (offset %zu, buf_size %zu)\n", i, offset, buf_size);
+                offset = buf_size - 1;
+                break;  /* Stop: further writes would also truncate */
+            }
         }
         written = snprintf(buf + offset, buf_size - offset,
                            "%s(%d)", parts[i].handle, parts[i].count);
-        if (written > 0 && (size_t)written < buf_size - offset)
+        if (written > 0 && (size_t)written < buf_size - offset) {
             offset += (size_t)written;
-        else if (written > 0)
-            offset = buf_size - 1;  /* truncated */
+        } else if (written > 0) {
+            fprintf(stderr, "warning: format_participants: entry truncated at "
+                    "participant %d '%s' (offset %zu, buf_size %zu)\n",
+                    i, parts[i].handle, offset, buf_size);
+            offset = buf_size - 1;
+            break;  /* Stop: further writes would also truncate */
+        }
     }
     /* Postcondition: buffer is null-terminated within bounds */
     ASSERT_MSG(offset < buf_size,
@@ -333,12 +354,12 @@ static int chat_auto_archive(const char *path, char **all_lines,
 
     int aw_err = 0;
     if (fprintf(af, "=== nbs-chat ===\n") < 0) aw_err = 1;
-    if (fprintf(af, "last-writer: system\n") < 0) aw_err = 1;
-    if (fprintf(af, "last-write: %s\n", archive_ts) < 0) aw_err = 1;
-    if (fprintf(af, "file-length: %" PRId64 "\n", archive_file_len) < 0) aw_err = 1;
-    if (fprintf(af, "participants: (archived)\n") < 0) aw_err = 1;
-    if (fprintf(af, "---\n") < 0) aw_err = 1;
-    for (int i = 0; i < archive_count; i++) {
+    if (!aw_err && fprintf(af, "last-writer: system\n") < 0) aw_err = 1;
+    if (!aw_err && fprintf(af, "last-write: %s\n", archive_ts) < 0) aw_err = 1;
+    if (!aw_err && fprintf(af, "file-length: %" PRId64 "\n", archive_file_len) < 0) aw_err = 1;
+    if (!aw_err && fprintf(af, "participants: (archived)\n") < 0) aw_err = 1;
+    if (!aw_err && fprintf(af, "---\n") < 0) aw_err = 1;
+    for (int i = 0; i < archive_count && !aw_err; i++) {
         if (fprintf(af, "%s\n", all_lines[i]) < 0) aw_err = 1;
     }
     free(archive_content);
@@ -417,12 +438,12 @@ static int chat_auto_archive(const char *path, char **all_lines,
 
     int mw_err = 0;
     if (fprintf(mf, "=== nbs-chat ===\n") < 0) mw_err = 1;
-    if (fprintf(mf, "last-writer: %s\n", state->last_writer) < 0) mw_err = 1;
-    if (fprintf(mf, "last-write: %s\n", state->last_write) < 0) mw_err = 1;
-    if (fprintf(mf, "file-length: %" PRId64 "\n", main_file_len) < 0) mw_err = 1;
-    if (fprintf(mf, "participants: %s\n", parts_str) < 0) mw_err = 1;
-    if (fprintf(mf, "---\n") < 0) mw_err = 1;
-    for (int i = archive_count; i < total_count; i++) {
+    if (!mw_err && fprintf(mf, "last-writer: %s\n", state->last_writer) < 0) mw_err = 1;
+    if (!mw_err && fprintf(mf, "last-write: %s\n", state->last_write) < 0) mw_err = 1;
+    if (!mw_err && fprintf(mf, "file-length: %" PRId64 "\n", main_file_len) < 0) mw_err = 1;
+    if (!mw_err && fprintf(mf, "participants: %s\n", parts_str) < 0) mw_err = 1;
+    if (!mw_err && fprintf(mf, "---\n") < 0) mw_err = 1;
+    for (int i = archive_count; i < total_count && !mw_err; i++) {
         if (fprintf(mf, "%s\n", all_lines[i]) < 0) mw_err = 1;
     }
 
@@ -510,6 +531,37 @@ static int chat_auto_archive(const char *path, char **all_lines,
     return 0;
 }
 
+/* --- Invariant validation --- */
+
+int chat_state_check_invariants(const chat_state_t *state) {
+    ASSERT_MSG(state != NULL, "chat_state_check_invariants: state is NULL");
+
+    if (state->message_count < 0 || state->message_count > MAX_MESSAGES) {
+        fprintf(stderr, "invariant violation: message_count %d out of [0, %d]\n",
+                state->message_count, MAX_MESSAGES);
+        return 0;
+    }
+    if (state->participant_count < 0 || state->participant_count > MAX_PARTICIPANTS) {
+        fprintf(stderr, "invariant violation: participant_count %d out of [0, %d]\n",
+                state->participant_count, MAX_PARTICIPANTS);
+        return 0;
+    }
+    if (state->message_count > 0 && state->messages == NULL) {
+        fprintf(stderr, "invariant violation: messages is NULL but message_count is %d\n",
+                state->message_count);
+        return 0;
+    }
+    /* Check participant counts are non-negative */
+    for (int i = 0; i < state->participant_count; i++) {
+        if (state->participants[i].count < 0) {
+            fprintf(stderr, "invariant violation: participant %d '%s' has negative count %d\n",
+                    i, state->participants[i].handle, state->participants[i].count);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* --- Public API --- */
 
 int chat_create(const char *path) {
@@ -544,11 +596,11 @@ int chat_create(const char *path) {
 
     int write_err = 0;
     if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
-    if (fprintf(f, "last-writer: system\n") < 0) write_err = 1;
-    if (fprintf(f, "last-write: %s\n", timestamp) < 0) write_err = 1;
-    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
-    if (fprintf(f, "participants: \n") < 0) write_err = 1;
-    if (fprintf(f, "---\n") < 0) write_err = 1;
+    if (!write_err && fprintf(f, "last-writer: system\n") < 0) write_err = 1;
+    if (!write_err && fprintf(f, "last-write: %s\n", timestamp) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "participants: \n") < 0) write_err = 1;
+    if (!write_err && fprintf(f, "---\n") < 0) write_err = 1;
     if (write_err) {
         fclose(f);
         unlink(path);
@@ -889,7 +941,25 @@ int chat_send(const char *path, const char *handle, const char *message) {
             encoded_line_count++;
         }
     }
-    fclose(f);
+    if (ferror(f)) {
+        fprintf(stderr, "warning: chat_send: I/O error reading encoded lines from %s\n", path);
+        fclose(f);
+        for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+        free(encoded_lines);
+        free(encoded);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        fprintf(stderr, "warning: chat_send: fclose failed reading %s: %s\n", path, strerror(errno));
+        for (int j = 0; j < encoded_line_count; j++) free(encoded_lines[j]);
+        free(encoded_lines);
+        free(encoded);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
 
     /* Invariant: encoded_line_count must be non-negative */
     ASSERT_MSG(encoded_line_count >= 0,
@@ -965,15 +1035,15 @@ int chat_send(const char *path, const char *handle, const char *message) {
 
     int write_err = 0;
     if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
-    if (fprintf(f, "last-writer: %s\n", state.last_writer) < 0) write_err = 1;
-    if (fprintf(f, "last-write: %s\n", state.last_write) < 0) write_err = 1;
-    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
-    if (fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
-    if (fprintf(f, "---\n") < 0) write_err = 1;
-    for (int i = 0; i < encoded_line_count; i++) {
+    if (!write_err && fprintf(f, "last-writer: %s\n", state.last_writer) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "last-write: %s\n", state.last_write) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "---\n") < 0) write_err = 1;
+    for (int i = 0; i < encoded_line_count && !write_err; i++) {
         if (fprintf(f, "%s\n", encoded_lines[i]) < 0) write_err = 1;
     }
-    if (fprintf(f, "%s\n", encoded) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "%s\n", encoded) < 0) write_err = 1;
     if (write_err) {
         fprintf(stderr, "error: chat_send: write failed for %s: %s\n",
                 tmp_path, strerror(errno));
@@ -1036,6 +1106,10 @@ int chat_send(const char *path, const char *handle, const char *message) {
     if (total_after_send > ARCHIVE_THRESHOLD) {
         /* Build combined array: existing lines + new encoded message */
         char **all_lines = malloc((size_t)total_after_send * sizeof(char *));
+        if (!all_lines) {
+            fprintf(stderr, "warning: chat_send: malloc failed for archive line array "
+                    "(%d entries) — archiving skipped\n", total_after_send);
+        }
         if (all_lines) {
             for (int i = 0; i < encoded_line_count; i++) {
                 all_lines[i] = encoded_lines[i];
@@ -1165,7 +1239,23 @@ int chat_truncate(const char *path, int keep_count) {
             stored_line_count++;
         }
     }
-    fclose(f);
+    if (ferror(f)) {
+        fprintf(stderr, "warning: chat_truncate: I/O error reading %s\n", path);
+        fclose(f);
+        for (int j = 0; j < stored_line_count; j++) free(encoded_lines[j]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        fprintf(stderr, "warning: chat_truncate: fclose failed reading %s: %s\n", path, strerror(errno));
+        for (int j = 0; j < stored_line_count; j++) free(encoded_lines[j]);
+        free(encoded_lines);
+        chat_state_free(&state);
+        chat_lock_release(lock_fd);
+        return -1;
+    }
 
     /* Postcondition: stored_line_count <= keep_count and <= total_line_count */
     ASSERT_MSG(stored_line_count <= keep_count,
@@ -1281,12 +1371,12 @@ int chat_truncate(const char *path, int keep_count) {
 
     int write_err = 0;
     if (fprintf(f, "=== nbs-chat ===\n") < 0) write_err = 1;
-    if (fprintf(f, "last-writer: %s\n", last_writer) < 0) write_err = 1;
-    if (fprintf(f, "last-write: %s\n", last_write) < 0) write_err = 1;
-    if (fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
-    if (fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
-    if (fprintf(f, "---\n") < 0) write_err = 1;
-    for (int i = 0; i < stored_line_count; i++) {
+    if (!write_err && fprintf(f, "last-writer: %s\n", last_writer) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "last-write: %s\n", last_write) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "file-length: %" PRId64 "\n", file_len) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "participants: %s\n", parts_str) < 0) write_err = 1;
+    if (!write_err && fprintf(f, "---\n") < 0) write_err = 1;
+    for (int i = 0; i < stored_line_count && !write_err; i++) {
         if (fprintf(f, "%s\n", encoded_lines[i]) < 0) write_err = 1;
     }
     if (write_err) {
@@ -1430,7 +1520,7 @@ int chat_cursor_read(const char *chat_path, const char *handle) {
         if (strcmp(key, handle) == 0) {
             if (safe_parse_int(eq + 1, &result) != 0) {
                 fprintf(stderr, "warning: chat_cursor_read: invalid cursor value for handle '%s'\n", handle);
-                result = -1;
+                result = -2;  /* Parse error: distinct from -1 (not found) */
             }
             break;
         }
@@ -1517,7 +1607,7 @@ int chat_cursor_write(const char *chat_path, const char *handle, int index) {
 
     int write_err = 0;
     if (fprintf(f, "# Read cursors — last-read message index per handle\n") < 0) write_err = 1;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count && !write_err; i++) {
         if (fprintf(f, "%s=%d\n", handles[i], indices[i]) < 0) write_err = 1;
     }
     if (write_err || fclose(f) != 0) {

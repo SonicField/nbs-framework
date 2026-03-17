@@ -9,7 +9,7 @@
  *       -O2 -I ../src/nbs-chat \
  *       -o test_watchdog_unit test_watchdog_unit.c ../src/nbs-chat/watchdog.c
  *
- * 26 tests across 7 groups:
+ * 30 tests across 8 groups:
  *   A: Initialisation (3)
  *   B: Team alive (3)
  *   C: Team dead (6)
@@ -17,6 +17,7 @@
  *   E: Cooldown (3)
  *   F: Enable/disable (4)
  *   G: Adversarial (2)
+ *   H: Postcondition invariants (4)
  */
 
 #include "watchdog.h"
@@ -438,6 +439,100 @@ static void test_time_zero_aborts(void) {
 }
 
 /* ================================================================
+ * Group H: Postcondition invariants
+ *
+ * These tests verify the postcondition assertions added per the
+ * HARDENING audit findings. They exercise the state invariants
+ * that must hold after watchdog_init and watchdog_evaluate return.
+ * ================================================================ */
+
+static void test_init_postconditions_hold(void) {
+    watchdog_state_t ws;
+    /* Deliberately poison ws to ensure init overwrites everything */
+    memset(&ws, 0xFF, sizeof(ws));
+    watchdog_init(&ws, "/tmp/c.chat", "/tmp/p");
+
+    /* Postcondition: enabled == 1 */
+    TEST_ASSERT(atomic_load(&ws.enabled) == 1,
+                "postcondition: enabled must be 1 after init, got %d",
+                atomic_load(&ws.enabled));
+    /* Postcondition: restart_count == 0 */
+    TEST_ASSERT(ws.restart_count == 0,
+                "postcondition: restart_count must be 0 after init, got %d",
+                ws.restart_count);
+    TEST_PASS("init postconditions hold on poisoned memory");
+}
+
+static void test_evaluate_restart_count_bounded(void) {
+    watchdog_state_t ws;
+    watchdog_init(&ws, "/tmp/c.chat", "/tmp/p");
+
+    /* Drive through all 5 restarts plus the rate-limit trigger */
+    time_t t = 10000;
+    for (int i = 0; i < 5; i++) {
+        watchdog_evaluate(&ws, 0, t);
+        t += WATCHDOG_COOLDOWN_S;
+    }
+    /* After 5 restarts, restart_count must be exactly MAX */
+    TEST_ASSERT(ws.restart_count == WATCHDOG_MAX_RESTARTS,
+                "postcondition: restart_count should be %d, got %d",
+                WATCHDOG_MAX_RESTARTS, ws.restart_count);
+
+    /* 6th call triggers RATE_LIMITED — restart_count must not exceed MAX */
+    watchdog_decision_t d = watchdog_evaluate(&ws, 0, t);
+    TEST_ASSERT(d == WATCHDOG_RATE_LIMITED,
+                "expected RATE_LIMITED, got %d", d);
+    TEST_ASSERT(ws.restart_count <= WATCHDOG_MAX_RESTARTS,
+                "postcondition: restart_count %d exceeds MAX %d",
+                ws.restart_count, WATCHDOG_MAX_RESTARTS);
+    TEST_PASS("evaluate postcondition: restart_count <= MAX_RESTARTS");
+}
+
+static void test_evaluate_rate_limit_disables(void) {
+    watchdog_state_t ws;
+    watchdog_init(&ws, "/tmp/c.chat", "/tmp/p");
+
+    time_t t = 10000;
+    for (int i = 0; i < 5; i++) {
+        watchdog_evaluate(&ws, 0, t);
+        t += WATCHDOG_COOLDOWN_S;
+    }
+    watchdog_decision_t d = watchdog_evaluate(&ws, 0, t);
+    TEST_ASSERT(d == WATCHDOG_RATE_LIMITED,
+                "expected RATE_LIMITED, got %d", d);
+    /* Postcondition: enabled must be 0 when RATE_LIMITED is returned */
+    TEST_ASSERT(atomic_load(&ws.enabled) == 0,
+                "postcondition: enabled must be 0 after RATE_LIMITED, got %d",
+                atomic_load(&ws.enabled));
+    TEST_PASS("evaluate postcondition: enabled == 0 on RATE_LIMITED");
+}
+
+static void test_evaluate_restart_count_invariant_across_window_reset(void) {
+    watchdog_state_t ws;
+    watchdog_init(&ws, "/tmp/c.chat", "/tmp/p");
+
+    /* 4 restarts in first window */
+    time_t t = 10000;
+    for (int i = 0; i < 4; i++) {
+        watchdog_evaluate(&ws, 0, t);
+        t += WATCHDOG_COOLDOWN_S;
+    }
+    TEST_ASSERT(ws.restart_count == 4, "expected 4 restarts");
+
+    /* Window expires, then restart — counter must reset then increment to 1 */
+    t = 10000 + WATCHDOG_RATE_WINDOW_S + 1;
+    watchdog_decision_t d = watchdog_evaluate(&ws, 0, t);
+    TEST_ASSERT(d == WATCHDOG_RESTART, "expected RESTART after window reset");
+    TEST_ASSERT(ws.restart_count == 1,
+                "postcondition: after window reset + restart, count should be 1, got %d",
+                ws.restart_count);
+    TEST_ASSERT(ws.restart_count <= WATCHDOG_MAX_RESTARTS,
+                "postcondition: restart_count %d exceeds MAX %d",
+                ws.restart_count, WATCHDOG_MAX_RESTARTS);
+    TEST_PASS("evaluate postcondition: restart_count bounded across window reset");
+}
+
+/* ================================================================
  * Main
  * ================================================================ */
 
@@ -483,6 +578,12 @@ int main(void) {
     /* Group G: Adversarial */
     test_negative_alive_aborts();
     test_time_zero_aborts();
+
+    /* Group H: Postcondition invariants */
+    test_init_postconditions_hold();
+    test_evaluate_restart_count_bounded();
+    test_evaluate_rate_limit_disables();
+    test_evaluate_restart_count_invariant_across_window_reset();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

@@ -14,12 +14,32 @@
 #include "../nbs-common/nbs_assert.h"
 
 /*
+ * Return type limitation: both base64_encode and base64_decode return int.
+ * This limits the maximum representable output length to INT_MAX.
+ *
+ * For base64_encode: output_len = ((input_len + 2) / 3) * 4, so the
+ * maximum safe input_len is (INT_MAX / 4) * 3.
+ *
+ * For base64_decode: output_len = (input_len / 4) * 3 - padding, so the
+ * maximum safe input_len is (INT_MAX / 3) * 4 + 4.
+ *
+ * Both functions enforce these bounds via precondition assertions that
+ * abort before any work is done (not post-hoc). This is a deliberate
+ * design choice: changing the return type to size_t would alter the
+ * error-signalling convention (currently -1 for errors).
+ */
+_Static_assert(sizeof(int) >= 4,
+               "base64 encode/decode return int; at least 32-bit int required "
+               "to support useful input sizes");
+
+/*
  * base64_encode — Encode binary data to base64 string.
  *
  * Preconditions:
  *   - input != NULL (or input_len == 0)
  *   - output != NULL
  *   - output_size >= base64_encoded_size(input_len)
+ *   - input_len <= (INT_MAX / 4) * 3  [output must fit in int return type]
  *
  * Postconditions:
  *   - output contains null-terminated base64 string
@@ -36,6 +56,7 @@ int base64_encode(const unsigned char *input, size_t input_len,
  *   - input != NULL
  *   - output != NULL
  *   - output_size >= base64_decoded_size(input_len)
+ *   - input_len <= (INT_MAX / 3) * 4 + 4  [output must fit in int return type]
  *
  * Postconditions:
  *   - output contains decoded binary data
@@ -83,7 +104,18 @@ static inline size_t base64_decoded_size(size_t input_len) {
     ASSERT_MSG(input_len <= SIZE_MAX - 3,
                "base64_decoded_size: input_len %zu would cause arithmetic "
                "overflow in size calculation", input_len);
-    return (input_len / 4) * 3 + 3; /* conservative upper bound */
+    /* Upper bound derivation:
+     *   Exact decoded length = (input_len / 4) * 3 - padding_bytes.
+     *   padding_bytes is 0, 1, or 2 depending on trailing '=' characters,
+     *   but we cannot know padding without inspecting the input data.
+     *   So exact = (input_len / 4) * 3 - {0,1,2}.
+     *   The maximum is (input_len / 4) * 3 (no padding).
+     *   We add 3 to guarantee the buffer is always sufficient even if
+     *   the caller passes input_len == 0 (yielding 0 + 3 = 3, enough
+     *   for the degenerate case). The +3 also absorbs any off-by-one
+     *   from integer division. Worst-case waste: 5 bytes (3 headroom
+     *   + 2 from maximum padding subtraction). */
+    return (input_len / 4) * 3 + 3;
 }
 
 #endif /* NBS_BASE64_H */

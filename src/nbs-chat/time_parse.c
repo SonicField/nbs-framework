@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -32,7 +33,7 @@ int parse_timespec(const char *spec, time_t *out) {
     ASSERT_MSG(spec != NULL,
                "parse_timespec: spec is NULL, out=%p", (void *)out);
     ASSERT_MSG(out != NULL,
-               "parse_timespec: out is NULL, spec='%s'", spec);
+               "parse_timespec: out is NULL, spec=%p", (const void *)spec);
 
     size_t len = strlen(spec);
 
@@ -60,10 +61,16 @@ int parse_timespec(const char *spec, time_t *out) {
         if (all_digits) {
             char *endptr;
             long long val = strtoll(spec, &endptr, 10);
-            if (endptr != spec + len - 1 || val < 0) return -1;
+            if (endptr != spec + len - 1 || val < 0) {
+                fprintf(stderr, "parse_timespec: relative parse failed for '%s'\n", spec);
+                return -1;
+            }
 
             /* V2: Reject zero offset — "0s" is degenerate */
-            if (val == 0) return -1;
+            if (val == 0) {
+                fprintf(stderr, "parse_timespec: zero offset is degenerate: '%s'\n", spec);
+                return -1;
+            }
 
             long long multiplier = 1;
             switch (suffix) {
@@ -74,17 +81,32 @@ int parse_timespec(const char *spec, time_t *out) {
             }
 
             /* Overflow check */
-            if (val > 0 && multiplier > LLONG_MAX / val) return -1;
+            if (val > 0 && multiplier > LLONG_MAX / val) {
+                fprintf(stderr, "parse_timespec: multiplication overflow for '%s' "
+                        "(val=%lld, multiplier=%lld)\n", spec, val, multiplier);
+                return -1;
+            }
             long long offset = val * multiplier;
 
             /* V4: Range check before casting offset to time_t */
-            if (offset > TIME_T_MAX) return -1;
+            if (offset > TIME_T_MAX) {
+                fprintf(stderr, "parse_timespec: offset %lld exceeds time_t range for '%s'\n",
+                        offset, spec);
+                return -1;
+            }
 
             /* V8: time(NULL) can fail — check for (time_t)-1 */
             time_t now = time(NULL);
-            if (now == (time_t)-1) return -1;
+            if (now == (time_t)-1) {
+                fprintf(stderr, "parse_timespec: time(NULL) failed for '%s'\n", spec);
+                return -1;
+            }
 
-            if (now < (time_t)offset) return -1;  /* Would go negative */
+            if (now < (time_t)offset) {
+                fprintf(stderr, "parse_timespec: offset %lld exceeds current time for '%s'\n",
+                        offset, spec);
+                return -1;  /* Would go negative */
+            }
 
             result = now - (time_t)offset;
 
@@ -112,10 +134,18 @@ int parse_timespec(const char *spec, time_t *out) {
             char *endptr;
             errno = 0;
             long long val = strtoll(spec, &endptr, 10);
-            if (*endptr != '\0' || val <= 0 || errno == ERANGE) return -1;
+            if (*endptr != '\0' || val <= 0 || errno == ERANGE) {
+                fprintf(stderr, "parse_timespec: epoch parse failed for '%s' "
+                        "(errno=%d)\n", spec, errno);
+                return -1;
+            }
 
             /* V3: Range check before casting val to time_t */
-            if (val > TIME_T_MAX) return -1;
+            if (val > TIME_T_MAX) {
+                fprintf(stderr, "parse_timespec: epoch %lld exceeds time_t range for '%s'\n",
+                        val, spec);
+                return -1;
+            }
 
             result = (time_t)val;
 
@@ -139,8 +169,16 @@ int parse_timespec(const char *spec, time_t *out) {
         /* V5: Disambiguate mktime error from valid (time_t)-1 */
         errno = 0;
         time_t t = mktime(&tm);  /* Interprets as local time */
-        if (t == (time_t)-1 && errno != 0) return -1;
-        if (t <= 0) return -1;  /* Reject pre-epoch dates */
+        if (t == (time_t)-1 && errno != 0) {
+            fprintf(stderr, "parse_timespec: mktime failed for '%s' (errno=%d)\n",
+                    spec, errno);
+            return -1;
+        }
+        if (t <= 0) {
+            fprintf(stderr, "parse_timespec: pre-epoch date rejected for '%s' "
+                    "(mktime returned %lld)\n", spec, (long long)t);
+            return -1;  /* Reject pre-epoch dates */
+        }
 
         result = t;
 
@@ -154,5 +192,6 @@ int parse_timespec(const char *spec, time_t *out) {
         return 0;
     }
 
+    fprintf(stderr, "parse_timespec: unrecognised format '%s'\n", spec);
     return -1;
 }

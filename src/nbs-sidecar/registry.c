@@ -15,9 +15,9 @@
  *   - All string construction uses snprintf with bounded buffers
  *
  * Buffer sizing rationale (satisfies -Werror=format-truncation):
- *   MAX_PATH  (4096) — individual path components, nbs_root, inbox lines
- *   MAX_FPATH (4608) — assembled file paths (dir + "/" + filename)
- *   MAX_ENTRY (4624) — registry entries ("chat:" + full path)
+ *   NBS_MAX_PATH  (4096) — individual path components, nbs_root, inbox lines
+ *   NBS_MAX_FPATH (4608) — assembled file paths (dir + "/" + filename)
+ *   NBS_MAX_ENTRY (4624) — registry entries ("chat:" + full path)
  */
 
 #include "registry.h"
@@ -31,9 +31,9 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define MAX_PATH  4096
-#define MAX_FPATH (MAX_PATH + 512)
-#define MAX_ENTRY (MAX_FPATH + 16)
+#define NBS_MAX_PATH  4096
+#define NBS_MAX_FPATH (NBS_MAX_PATH + 512)
+#define NBS_MAX_ENTRY (NBS_MAX_FPATH + 16)
 
 /* ---- Static helpers ---- */
 
@@ -52,7 +52,7 @@ static int registry_contains(const char *registry_path, const char *entry)
     if (!f)
         return 0;
 
-    char line[MAX_ENTRY];
+    char line[NBS_MAX_ENTRY];
     while (fgets(line, sizeof(line), f)) {
         /* Strip trailing newline */
         size_t len = strlen(line);
@@ -109,7 +109,7 @@ static int registry_remove(const char *registry_path, const char *entry)
         return (errno == ENOENT) ? 0 : -1;
 
     /* Use mkstemp for atomic tmp file — prevents symlink attacks (SECURITY #9) */
-    char tmp_path[MAX_FPATH];
+    char tmp_path[NBS_MAX_FPATH];
     int n = snprintf(tmp_path, sizeof(tmp_path), "%s.XXXXXX", registry_path);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(tmp_path),
                "registry_remove: tmp_path truncated for '%s'", registry_path);
@@ -127,11 +127,11 @@ static int registry_remove(const char *registry_path, const char *entry)
         return -1;
     }
 
-    char line[MAX_ENTRY];
+    char line[NBS_MAX_ENTRY];
     while (fgets(line, sizeof(line), f)) {
         /* Strip trailing newline for comparison */
         size_t len = strlen(line);
-        char stripped[MAX_ENTRY];
+        char stripped[NBS_MAX_ENTRY];
         memcpy(stripped, line, len + 1);
         if (len > 0 && stripped[len - 1] == '\n')
             stripped[len - 1] = '\0';
@@ -249,7 +249,17 @@ static int get_line_n(const char *buf, int n, char *out, size_t out_size)
         p++;
     }
 
-    if (current != n || *p == '\0')
+    if (current != n)
+        return -1;
+    /* B20 fix: accept last line even without trailing newline.
+     * If we skipped past n newlines and landed on '\0', the nth line
+     * doesn't exist. But if current == n and *p == '\0', that means
+     * we never entered the skip loop (n == 0) and the buffer is empty,
+     * OR we reached the position right after the nth newline and there's
+     * nothing left. In both cases, for n > 0 the old code was wrong:
+     * it rejected the last line of a file without trailing newline.
+     * Now we only reject if we're at '\0' AND n > 0 (already past end). */
+    if (*p == '\0' && n > 0)
         return -1;
 
     /* Copy until newline or end of string */
@@ -275,7 +285,7 @@ static int process_control_command(const char *line, const char *registry_path)
     ASSERT_MSG(registry_path != NULL, "process_control_command: registry_path is NULL");
 
     char verb[256];
-    char path[MAX_PATH];
+    char path[NBS_MAX_PATH];
 
     /* sscanf format widths must match buffer sizes (one less for NUL) */
     _Static_assert(sizeof(verb) == 256, "sscanf format width must match verb buffer");
@@ -283,10 +293,14 @@ static int process_control_command(const char *line, const char *registry_path)
 
     /* Extract verb and path */
     int matched = sscanf(line, "%255s %4095s", verb, path);
-    if (matched < 2)
-        return 0; /* Incomplete line — ignore, matching bash behaviour */
+    if (matched < 2) {
+        /* HARDENING: log incomplete lines rather than silently ignoring */
+        fprintf(stderr, "registry: incomplete control line (need verb + path): '%s'\n",
+                line);
+        return 0;
+    }
 
-    char entry[MAX_ENTRY];
+    char entry[NBS_MAX_ENTRY];
     int en; /* snprintf return for entry construction — BUG #2 fix */
 
     if (strcmp(verb, "register-chat") == 0) {
@@ -312,7 +326,8 @@ static int process_control_command(const char *line, const char *registry_path)
                    "process_control_command: entry truncated for bus:'%s'", path);
         return registry_remove(registry_path, entry);
     }
-    /* Unknown verb — silently ignore, matching bash behaviour */
+    /* HARDENING: unknown verb — log to stderr rather than silently ignoring */
+    fprintf(stderr, "registry: unknown verb '%s' in control inbox\n", verb);
 
     return 0;
 }
@@ -331,7 +346,7 @@ int registry_seed(const char *nbs_root, const char *registry_path)
     fclose(f);
 
     /* Scan <nbs_root>/.nbs/chat/ for .chat files */
-    char chat_dir[MAX_PATH];
+    char chat_dir[NBS_MAX_PATH];
     int n = snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", nbs_root);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(chat_dir),
                "registry_seed: chat_dir path truncated");
@@ -348,8 +363,8 @@ int registry_seed(const char *nbs_root, const char *registry_path)
             if (strstr(ent->d_name, "-archive.") != NULL)
                 continue;
 
-            /* chat_dir (<=4095) + "/" + d_name (<=255) fits in MAX_FPATH */
-            char full_path[MAX_FPATH];
+            /* chat_dir (<=4095) + "/" + d_name (<=255) fits in NBS_MAX_FPATH */
+            char full_path[NBS_MAX_FPATH];
             int fp_n = snprintf(full_path, sizeof(full_path), "%s/%s",
                      chat_dir, ent->d_name);
             /* BUG #3 fix: assert snprintf did not truncate */
@@ -362,8 +377,8 @@ int registry_seed(const char *nbs_root, const char *registry_path)
             if (stat(full_path, &st) != 0 || !S_ISREG(st.st_mode))
                 continue;
 
-            /* "chat:" (5) + full_path (<=MAX_FPATH-1) fits in MAX_ENTRY */
-            char entry[MAX_ENTRY];
+            /* "chat:" (5) + full_path (<=NBS_MAX_FPATH-1) fits in NBS_MAX_ENTRY */
+            char entry[NBS_MAX_ENTRY];
             int e_n = snprintf(entry, sizeof(entry), "chat:%s", full_path);
             /* BUG #3 fix: assert snprintf did not truncate */
             ASSERT_MSG(e_n >= 0 && (size_t)e_n < sizeof(entry),
@@ -380,14 +395,14 @@ int registry_seed(const char *nbs_root, const char *registry_path)
     }
 
     /* Check <nbs_root>/.nbs/events directory */
-    char events_dir[MAX_PATH];
+    char events_dir[NBS_MAX_PATH];
     n = snprintf(events_dir, sizeof(events_dir), "%s/.nbs/events", nbs_root);
     ASSERT_MSG(n >= 0 && (size_t)n < sizeof(events_dir),
                "registry_seed: events_dir path truncated");
 
     struct stat st;
     if (stat(events_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
-        char entry[MAX_ENTRY];
+        char entry[NBS_MAX_ENTRY];
         int ev_n = snprintf(entry, sizeof(entry), "bus:%s", events_dir);
         /* BUG #4 fix: assert snprintf did not truncate */
         ASSERT_MSG(ev_n >= 0 && (size_t)ev_n < sizeof(entry),
@@ -459,9 +474,13 @@ int registry_process_inbox(const char *inbox_path, const char *registry_path,
     int commands_processed = 0;
 
     for (int i = *inbox_line; i < total_lines; i++) {
-        char line[MAX_PATH];
-        if (get_line_n(buf, i, line, sizeof(line)) != 0)
+        char line[NBS_MAX_PATH];
+        if (get_line_n(buf, i, line, sizeof(line)) != 0) {
+            /* HARDENING: log get_line_n failure rather than silently skipping */
+            fprintf(stderr, "registry: get_line_n failed for line %d of '%s'\n",
+                    i, inbox_path);
             continue;
+        }
 
         char *stripped = strip_whitespace(line);
 
@@ -482,6 +501,11 @@ int registry_process_inbox(const char *inbox_path, const char *registry_path,
             commands_processed++;
     }
 
+    /* HARDENING: monotonicity assertion — inbox_line must only advance.
+     * This makes the "forward-only" claim in the header falsifiable. */
+    ASSERT_MSG(total_lines >= *inbox_line,
+               "registry_process_inbox: inbox_line would go backwards "
+               "(was %d, total_lines is %d)", *inbox_line, total_lines);
     *inbox_line = total_lines;
 
     free(buf);
@@ -508,7 +532,7 @@ int registry_find_first(const char *registry_path, const char *type,
                "registry_find_first: type prefix truncated for '%s'", type);
     size_t prefix_len = strlen(prefix);
 
-    char line[MAX_ENTRY];
+    char line[NBS_MAX_ENTRY];
     while (fgets(line, sizeof(line), f)) {
         /* Strip trailing newline */
         size_t len = strlen(line);
@@ -516,15 +540,23 @@ int registry_find_first(const char *registry_path, const char *type,
             line[len - 1] = '\0';
 
         if (strncmp(line, prefix, prefix_len) == 0) {
-            snprintf(out, out_size, "%s", line + prefix_len);
+            /* B19 fix: check snprintf for truncation — a truncated path
+             * would silently give the caller a corrupted/partial path. */
+            int sn = snprintf(out, out_size, "%s", line + prefix_len);
+            if (sn < 0 || (size_t)sn >= out_size) {
+                fclose(f);
+                return -1;
+            }
             fclose(f);
             return 0;
         }
     }
 
     fclose(f);
-    /* HARDENING #11 fix: distinguish "not found" from I/O error */
-    errno = 0;
+    /* B23 fix: removed errno=0 hack. Using errno as out-of-band signalling
+     * is fragile — fclose() above may itself set errno. The header now
+     * documents that -1 means "not found or error" without errno distinction.
+     * Callers needing to distinguish should check file existence beforehand. */
     return -1;
 }
 
@@ -548,7 +580,7 @@ int registry_for_each(const char *registry_path, const char *type,
                "registry_for_each: type prefix truncated for '%s'", type);
     size_t prefix_len = strlen(prefix);
 
-    char line[MAX_ENTRY];
+    char line[NBS_MAX_ENTRY];
     int count = 0;
 
     while (fgets(line, sizeof(line), f)) {
@@ -563,7 +595,14 @@ int registry_for_each(const char *registry_path, const char *type,
             /* Skip entries where the file no longer exists.
              * This prevents cascading errors when chat files are deleted
              * but registry entries remain. Log once per missing file
-             * using a static counter to avoid spamming. */
+             * using a static counter to avoid spamming.
+             *
+             * LIMITATION: missing_logged is a static counter that never
+             * resets across calls. After 5 missing-path warnings over the
+             * lifetime of the process, all further warnings are suppressed.
+             * This is intentional to prevent log flooding, but means that
+             * if the sidecar runs for a long time, later missing paths
+             * will not be logged. A process restart resets the counter. */
             if (access(path, F_OK) != 0) {
                 static int missing_logged = 0;
                 if (missing_logged < 5) {

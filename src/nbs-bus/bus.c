@@ -9,16 +9,6 @@
 
 #include "bus.h"
 
-/*
- * GCC's -Wformat-truncation warns when snprintf might truncate output.
- * In this file, snprintf is used only for path construction (combining
- * directory + filename into BUS_MAX_FULLPATH buffers). Truncation there
- * is the desired behaviour — it's a bounded write, not an error.
- * YAML event content is written via fprintf/fwrite (not snprintf), so
- * this pragma does not mask truncation in the data path.
- */
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -76,7 +66,9 @@ static void format_iso8601(char *buf, size_t len)
     time_t now = time(NULL);
     ASSERT_MSG(now != (time_t)-1, "format_iso8601: time() failed: %s", strerror(errno));
     struct tm tm;
-    gmtime_r(&now, &tm);
+    struct tm *gmrc = gmtime_r(&now, &tm);
+    ASSERT_MSG(gmrc != NULL, "format_iso8601: gmtime_r failed for time_t %lld",
+               (long long)now);
     size_t rc = strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", &tm);
     ASSERT_MSG(rc != 0, "format_iso8601: strftime failed (buffer size %zu)", len);
 }
@@ -256,6 +248,8 @@ static int read_event_fields(const char *filepath, int *priority,
     if (found != 7) {
         fprintf(stderr, "Warning: incomplete event file %s (found mask=%d)\n",
                 filepath, found);
+        fclose(fp);
+        return -1;
     }
 
     fclose(fp);
@@ -306,7 +300,11 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
     ASSERT_MSG(max_events > 0, "scan_events: max_events <= 0: %d", max_events);
 
     DIR *dir = opendir(events_dir);
-    if (!dir) return -1;
+    if (!dir) {
+        fprintf(stderr, "Error: cannot open events directory %s: %s\n",
+                events_dir, strerror(errno));
+        return -1;
+    }
 
     int count = 0;
     struct dirent *entry;
@@ -479,15 +477,11 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
     ASSERT_MSG(priority >= 0 && priority <= 3,
                "bus_publish: invalid priority %d", priority);
 
-    /* Validate no whitespace in source/type */
-    if (has_whitespace(source)) {
-        fprintf(stderr, "Error: source handle must not contain whitespace\n");
-        return -1;
-    }
-    if (has_whitespace(type)) {
-        fprintf(stderr, "Error: event type must not contain whitespace\n");
-        return -1;
-    }
+    /* Validate no whitespace in source/type — documented precondition */
+    ASSERT_MSG(!has_whitespace(source),
+               "bus_publish: source contains whitespace: '%s'", source);
+    ASSERT_MSG(!has_whitespace(type),
+               "bus_publish: type contains whitespace: '%s'", type);
 
     /* Verify events directory exists */
     struct stat st;
@@ -646,12 +640,12 @@ int bus_check(const char *events_dir, const char *handle)
     return 0;
 }
 
-int bus_read(const char *events_dir, const char *event_file)
+/* SECURITY: shared path traversal and suffix validation for event filenames.
+ * Returns 0 if valid, -1 if rejected. */
+static int validate_event_filename(const char *event_file)
 {
-    ASSERT_MSG(events_dir != NULL, "bus_read: events_dir is NULL");
-    ASSERT_MSG(event_file != NULL, "bus_read: event_file is NULL");
+    ASSERT_MSG(event_file != NULL, "validate_event_filename: event_file is NULL");
 
-    /* SECURITY: reject path traversal — event_file must be a bare filename */
     if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
         strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
         fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
@@ -659,13 +653,23 @@ int bus_read(const char *events_dir, const char *event_file)
         return -1;
     }
 
-    /* Validate .event suffix */
     size_t elen = strlen(event_file);
     if (elen < 7 || strcmp(event_file + elen - 6, ".event") != 0) {
         fprintf(stderr, "Error: invalid event filename (must end in .event): %s\n",
                 event_file);
         return -1;
     }
+
+    return 0;
+}
+
+int bus_read(const char *events_dir, const char *event_file)
+{
+    ASSERT_MSG(events_dir != NULL, "bus_read: events_dir is NULL");
+    ASSERT_MSG(event_file != NULL, "bus_read: event_file is NULL");
+
+    if (validate_event_filename(event_file) != 0)
+        return -1;
 
     char filepath[BUS_MAX_FULLPATH];
     int n_filepath = snprintf(filepath, sizeof(filepath), "%s/%s", events_dir, event_file);
@@ -703,21 +707,8 @@ int bus_ack(const char *events_dir, const char *event_file)
     ASSERT_MSG(events_dir != NULL, "bus_ack: events_dir is NULL");
     ASSERT_MSG(event_file != NULL, "bus_ack: event_file is NULL");
 
-    /* SECURITY: reject path traversal — event_file must be a bare filename */
-    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
-        strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
-        fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
-                event_file);
+    if (validate_event_filename(event_file) != 0)
         return -1;
-    }
-
-    /* Validate .event suffix */
-    size_t elen = strlen(event_file);
-    if (elen < 7 || strcmp(event_file + elen - 6, ".event") != 0) {
-        fprintf(stderr, "Error: invalid event filename (must end in .event): %s\n",
-                event_file);
-        return -1;
-    }
 
     char src_path[BUS_MAX_FULLPATH];
     char dst_path[BUS_MAX_FULLPATH];
@@ -976,8 +967,12 @@ int bus_status(const char *events_dir)
         time_t oldest_sec = (time_t)(oldest_ts / 1000000);
         struct tm tm;
         char oldest_str[32];
-        gmtime_r(&oldest_sec, &tm);
-        strftime(oldest_str, sizeof(oldest_str), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        struct tm *gmrc2 = gmtime_r(&oldest_sec, &tm);
+        ASSERT_MSG(gmrc2 != NULL, "bus_status: gmtime_r failed for time_t %lld",
+                   (long long)oldest_sec);
+        size_t sfrc = strftime(oldest_str, sizeof(oldest_str), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        ASSERT_MSG(sfrc != 0, "bus_status: strftime failed (buffer size %zu)",
+                   sizeof(oldest_str));
         if (printf("Oldest pending: %s\n", oldest_str) < 0) {
             fprintf(stderr, "Error: failed to write status to stdout\n");
             return -1;
@@ -993,7 +988,11 @@ int bus_status(const char *events_dir)
     /* Check for stale events if ack-timeout is configured */
     bus_config_t cfg;
     int cfg_rc = bus_load_config(events_dir, &cfg);
-    ASSERT_MSG(cfg_rc == 0, "bus_status: bus_load_config failed for %s", events_dir);
+    if (cfg_rc != 0) {
+        fprintf(stderr, "Warning: failed to load config from %s, skipping stale event check\n",
+                events_dir);
+        return 0;
+    }
     if (cfg.ack_timeout_s > 0 && count > 0) {
         ASSERT_MSG(cfg.ack_timeout_s <= LLONG_MAX / 1000000LL,
                    "bus_status: ack_timeout_s too large for us conversion: %lld",

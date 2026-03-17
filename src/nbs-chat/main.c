@@ -240,14 +240,14 @@ static int cmd_read(int argc, char **argv) {
         } else if (strncmp(argv[i], "--since=", 8) == 0) {
             since_handle = argv[i] + 8;
             if (since_handle[0] == '\0') {
-                fprintf(stderr, "Warning: --since= value is empty, ignoring\n");
-                since_handle = NULL;
+                fprintf(stderr, "Error: --since= requires a non-empty handle value\n");
+                return 4;
             }
         } else if (strncmp(argv[i], "--unread=", 9) == 0) {
             unread_handle = argv[i] + 9;
             if (unread_handle[0] == '\0') {
-                fprintf(stderr, "Warning: --unread= value is empty, ignoring\n");
-                unread_handle = NULL;
+                fprintf(stderr, "Error: --unread= requires a non-empty handle value\n");
+                return 4;
             }
         } else if (strncmp(argv[i], "--after=", 8) == 0) {
             if (parse_timespec(argv[i] + 8, &after_time) < 0) {
@@ -260,19 +260,20 @@ static int cmd_read(int argc, char **argv) {
                 return 4;
             }
         } else {
-            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
+            return 4;
         }
     }
 
-    /* V5 fix: check file existence before chat_read to avoid stale errno */
-    if (access(path, F_OK) != 0 && errno == ENOENT) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-
+    /* B10 fix: removed access() TOCTOU pre-check. Let chat_read fail and
+     * inspect errno to distinguish file-not-found from other errors. */
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
@@ -296,6 +297,11 @@ static int cmd_read(int argc, char **argv) {
     /* Apply --unread filter (takes precedence over --since) */
     if (unread_handle) {
         int cursor = chat_cursor_read(path, unread_handle);
+        /* Treat any negative value (no cursor or parse error) as "show all" */
+        if (cursor < -1) cursor = -1;
+        /* HARDENING: guard against integer overflow on cursor + 1 */
+        ASSERT_MSG(cursor < INT_MAX,
+                   "cmd_read: cursor value %d would overflow on increment", cursor);
         /* cursor is last-read index; show messages after it */
         start = cursor + 1;  /* -1 + 1 = 0 if no cursor exists (show all) */
         /* Clamp: if file shrunk since cursor was written, start may exceed
@@ -421,19 +427,20 @@ static int cmd_poll(int argc, char **argv) {
             timeout = (int)val;
             /* Note: --timeout=0 is valid and means "check once, return immediately" */
         } else {
-            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
+            return 4;
         }
     }
 
-    /* V5 fix: check file existence before chat_poll to avoid stale errno */
-    if (access(path, F_OK) != 0 && errno == ENOENT) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-
+    /* B10 fix: removed access() TOCTOU pre-check. Let chat_poll fail and
+     * inspect errno to distinguish file-not-found from other errors. */
     int result = chat_poll(path, handle, timeout);
     if (result == 3) return 3; /* Timeout */
     if (result < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
         fprintf(stderr, "Error: Poll failed on '%s' (chat_poll returned %d, errno=%d: %s)\n",
                 path, result, errno, strerror(errno));
         return 1;
@@ -482,9 +489,17 @@ static int cmd_poll(int argc, char **argv) {
             break;
         }
     }
-    ASSERT_MSG(found,
-               "cmd_poll: chat_poll returned 0 but no message from another handle found in '%s'",
-               path);
+    /* B11 fix: replaced ASSERT_MSG with conditional warning + return.
+     * Between chat_poll returning 0 and the subsequent chat_read, another
+     * process could delete the message (legitimate race). Aborting via
+     * assert on a race condition is a bug, not a safety net. */
+    if (!found) {
+        fprintf(stderr, "warning: cmd_poll: chat_poll returned 0 but no message from another "
+                "handle found in '%s' (possible race: message deleted between poll and read)\n",
+                path);
+        chat_state_free(&state);
+        return 1;
+    }
     chat_state_free(&state);
 
     return 0;
@@ -509,15 +524,15 @@ static int cmd_participants(int argc, char **argv) {
     }
     path = abs_path;
 
-    /* V5 fix: check file existence before chat_read to avoid stale errno */
-    if (access(path, F_OK) != 0 && errno == ENOENT) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-
+    /* B10 fix: removed access() TOCTOU pre-check. Let chat_read fail and
+     * inspect errno to distinguish file-not-found from other errors. */
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
@@ -604,19 +619,20 @@ static int cmd_search(int argc, char **argv) {
                 return 4;
             }
         } else {
-            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
+            return 4;
         }
     }
 
-    /* V5 fix: check file existence before chat_read to avoid stale errno */
-    if (access(path, F_OK) != 0 && errno == ENOENT) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
-
+    /* B10 fix: removed access() TOCTOU pre-check. Let chat_read fail and
+     * inspect errno to distinguish file-not-found from other errors. */
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
         fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
                 path, read_rc, errno, strerror(errno));
         return 1;
@@ -702,7 +718,8 @@ static int cmd_delete(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dry-run") == 0) {
             dry_run = 1;
         } else {
-            fprintf(stderr, "Warning: Unknown option: %s\n", argv[i]);
+            fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
+            return 4;
         }
     }
 
@@ -711,16 +728,17 @@ static int cmd_delete(int argc, char **argv) {
         return 4;
     }
 
-    /* V5 fix: check file existence before chat_read to avoid stale errno */
-    if (access(path, F_OK) != 0 && errno == ENOENT) {
-        fprintf(stderr, "Error: Chat file not found: %s\n", path);
-        return 2;
-    }
+    /* B10 fix: removed access() TOCTOU pre-check. Let chat_read fail and
+     * inspect errno to distinguish file-not-found from other errors. */
 
     /* Read file to find truncation point */
     chat_state_t state;
     int read_rc = chat_read(path, &state);
     if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
         fprintf(stderr, "Error: Failed to read chat file: %s\n", path);
         return 1;
     }
@@ -769,6 +787,13 @@ static int cmd_delete(int argc, char **argv) {
                    "cmd_delete: postcondition failed: expected <= %d messages after truncate, got %d",
                    truncate_at, verify_state.message_count);
         chat_state_free(&verify_state);
+    } else {
+        /* HARDENING: postcondition verification failed — do not silently skip.
+         * The truncation itself succeeded, so we report success but warn that
+         * we could not verify the result. */
+        fprintf(stderr, "warning: cmd_delete: postcondition verification failed "
+                "(chat_read returned error after successful truncate, errno=%d: %s)\n",
+                errno, strerror(errno));
     }
 
     printf("Deleted %d message(s) (kept %d)\n", to_delete, truncate_at);

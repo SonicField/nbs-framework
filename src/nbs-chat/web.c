@@ -56,6 +56,15 @@
 #define MAX_JSON_BUF       (4 * 1024 * 1024)  /* 4 MB response buffer */
 #define LISTEN_BACKLOG     8
 
+/*
+ * MAX_REQUEST_SIZE must be strictly less than MAX_MESSAGE_LEN so that
+ * a POST body parsed from an HTTP request can never exceed the maximum
+ * message length accepted by chat_send.  If this relationship is violated,
+ * a request could construct a message that overflows downstream buffers.
+ */
+_Static_assert(MAX_REQUEST_SIZE < MAX_MESSAGE_LEN,
+               "MAX_REQUEST_SIZE must be less than MAX_MESSAGE_LEN");
+
 /* --- Globals --- */
 
 static const char *g_chat_path = NULL;
@@ -217,7 +226,10 @@ done:
  * Returns default_val if key not found or invalid.
  */
 static int parse_query_int(const char *query, const char *key, int default_val) {
-    if (!query || !key || query[0] == '\0') return default_val;
+    ASSERT_MSG(key != NULL,
+               "parse_query_int: key must not be NULL. "
+               "A NULL key indicates a programming error in the caller.");
+    if (!query || query[0] == '\0') return default_val;
 
     size_t klen = strlen(key);
     const char *p = query;
@@ -319,7 +331,7 @@ static int parse_request(int fd, http_request_t *req) {
     }
     if (found && found < buf + total) {
         found += strlen(hdr);
-        while (*found == ' ') found++;
+        while (found < buf + total && *found == ' ') found++;
         char *endptr;
         errno = 0;
         long val = strtol(found, &endptr, 10);
@@ -340,7 +352,7 @@ static int parse_request(int fd, http_request_t *req) {
     }
     if (cl_found && cl_found < buf + total) {
         cl_found += strlen(cl_hdr);
-        while (*cl_found == ' ') cl_found++;
+        while (cl_found < buf + total && *cl_found == ' ') cl_found++;
         char *endptr;
         errno = 0;
         long val = strtol(cl_found, &endptr, 10);
@@ -400,11 +412,26 @@ static void send_response(int fd, int status, const char *status_text,
     ASSERT_MSG(content_type != NULL, "send_response: content_type is NULL");
     ASSERT_MSG(body != NULL || body_len == 0,
                "send_response: body is NULL but body_len is %zu", body_len);
+    ASSERT_MSG(strchr(status_text, '\r') == NULL && strchr(status_text, '\n') == NULL,
+               "send_response: status_text contains CR/LF — HTTP header injection risk");
+    ASSERT_MSG(strchr(content_type, '\r') == NULL && strchr(content_type, '\n') == NULL,
+               "send_response: content_type contains CR/LF — HTTP header injection risk");
 
+    /*
+     * CORS: Access-Control-Allow-Origin is included on all responses.
+     * This server binds to localhost by default (::1) and serves a
+     * single-user browser UI. The CORS header permits fetch() from
+     * any origin, which is required when the page is served from a
+     * different port or via a reverse proxy. The threat model accepts
+     * this: the server already listens on a user-chosen interface and
+     * all mutations (POST /api/send) require constructing a valid
+     * request body — CORS does not weaken this.
+     */
     int hdr_n = dprintf(fd,
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
         "Cache-Control: no-cache\r\n"
         "Connection: close\r\n"
         "\r\n",
@@ -551,6 +578,16 @@ static void serve_json(int fd, const http_request_t *req) {
  * Minimal JSON parser: finds "key":"value" and copies value to out_buf.
  * Handles \" escapes within values. Does NOT handle nested objects.
  * Returns 0 on success, -1 if key not found or value too long.
+ *
+ * KNOWN LIMITATION (S5): This uses naive strstr matching on untrusted
+ * POST body data. It does not implement a proper JSON parser and can be
+ * confused by keys appearing inside string values (e.g. a message
+ * containing the text '"handle":"injected"'). This is acceptable for
+ * our threat model: the worst outcome is a garbled message written to
+ * the chat file, not privilege escalation or code execution. The first
+ * match wins, so an attacker cannot override the real key if it appears
+ * before any injected content. A full JSON parser (e.g. cJSON) would
+ * eliminate this limitation but adds a dependency.
  */
 static int json_extract_string(const char *json, const char *key,
                                 char *out_buf, size_t out_size) {
@@ -663,6 +700,12 @@ static int send_sse_event(int fd, const char *event, int id,
     ASSERT_MSG(fd >= 0, "send_sse_event: invalid fd %d", fd);
     ASSERT_MSG(event != NULL, "send_sse_event: event is NULL");
     ASSERT_MSG(data != NULL, "send_sse_event: data is NULL");
+    ASSERT_MSG(strchr(data, '\n') == NULL,
+               "send_sse_event: data contains newline which would corrupt "
+               "SSE framing. SSE uses newlines as field delimiters; embedded "
+               "newlines split the data across multiple fields.");
+    ASSERT_MSG(strchr(event, '\n') == NULL,
+               "send_sse_event: event name contains newline");
 
     int n = dprintf(fd, "id: %d\nevent: %s\ndata: %s\n\n", id, event, data);
     return (n > 0) ? 0 : -1;
@@ -777,12 +820,17 @@ static void server_loop(int listen_fd) {
                             close(client_fd);
                         } else {
                             /* Send SSE headers */
-                            dprintf(client_fd,
+                            int sse_hdr_rc = dprintf(client_fd,
                                 "HTTP/1.1 200 OK\r\n"
                                 "Content-Type: text/event-stream\r\n"
                                 "Cache-Control: no-cache\r\n"
+                                "Access-Control-Allow-Origin: *\r\n"
                                 "Connection: keep-alive\r\n"
                                 "\r\n");
+                            if (sse_hdr_rc < 0) {
+                                close(client_fd);
+                                goto next_poll;
+                            }
 
                             /* Send initial messages */
                             chat_state_t state;

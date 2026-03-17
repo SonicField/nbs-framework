@@ -73,6 +73,14 @@ static int ensure_parent_dirs(const char *file_path)
         return SCRIBE_EXIT_ERROR;
     }
 
+    /* POSTCONDITION: Parent directory must exist and be a directory.
+     * This makes the "idempotent" claim falsifiable — if the directory
+     * does not exist after our work, the claim is violated. */
+    struct stat dir_st;
+    ASSERT_MSG(stat(dir, &dir_st) == 0 && S_ISDIR(dir_st.st_mode),
+               "ensure_parent_dirs: postcondition failed — '%s' is not a directory "
+               "after creation attempt", dir);
+
     return SCRIBE_EXIT_OK;
 }
 
@@ -255,9 +263,10 @@ int scribe_log_init(const char *log_path)
 {
     ASSERT_MSG(log_path != NULL, "scribe_log_init: log_path is NULL");
 
-    /* Check if file already exists */
-    if (access(log_path, F_OK) == 0)
-        return SCRIBE_EXIT_OK;
+    /* HARDENING: Removed redundant access() pre-check (TOCTOU).
+     * write_log_header uses O_CREAT|O_EXCL for atomic create-or-fail,
+     * returning SCRIBE_EXIT_OK if the file already exists (EEXIST).
+     * The access() call was redundant and introduced a TOCTOU window. */
 
     /* Create parent directories (idempotent) */
     int drc = ensure_parent_dirs(log_path);
@@ -292,6 +301,10 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
                "scribe_log_append: participants contains newline (injection risk)");
     ASSERT_MSG(strchr(entry->rationale, '\n') == NULL,
                "scribe_log_append: rationale contains newline (injection risk)");
+    if (entry->status[0] != '\0') {
+        ASSERT_MSG(strchr(entry->status, '\n') == NULL,
+                   "scribe_log_append: status contains newline (injection risk)");
+    }
     if (entry->chat_ref[0] != '\0') {
         ASSERT_MSG(strchr(entry->chat_ref, '\n') == NULL,
                    "scribe_log_append: chat_ref contains newline (injection risk)");
@@ -382,9 +395,19 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
     ASSERT_MSG(n > 0 && (size_t)n < sizeof(entry_text),
                "scribe_log_append: entry too long (%d chars)", n);
 
-    /* Append to log file */
-    FILE *f = fopen(log_path, "a");
+    /* Append to log file.
+     * SECURITY (S10): Use open()+fdopen() with explicit mode 0644 instead
+     * of fopen("a") which inherits umask-dependent permissions. */
+    int append_fd = open(log_path, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (append_fd < 0) {
+        fprintf(stderr, "Error: cannot open log file %s: %s\n",
+                log_path, strerror(errno));
+        lock_release(lock_fd);
+        return SCRIBE_EXIT_ERROR;
+    }
+    FILE *f = fdopen(append_fd, "a");
     if (!f) {
+        close(append_fd);
         fprintf(stderr, "Error: cannot open log file %s: %s\n",
                 log_path, strerror(errno));
         lock_release(lock_fd);

@@ -32,6 +32,10 @@
  *   - participants is NUL-terminated, non-empty
  *   - rationale is NUL-terminated, non-empty
  *   - All other fields may be empty (defaults applied)
+ *   - SECURITY: All fields must be newline-free. Each field maps to a
+ *     single Markdown line; embedded newlines would allow injection of
+ *     fake decision entries. Enforced by ASSERT_MSG in scribe_log_append
+ *     and by check_no_newline at CLI parse time.
  */
 typedef struct {
     char summary[SCRIBE_MAX_SUMMARY];

@@ -378,6 +378,23 @@ static char **build_ssh_argv(const remote_config_t *cfg,
                 }
                 opt = strtok_r(NULL, ",", &saveptr);
             }
+            /* Warn if options were silently dropped (HARDENING fix) */
+            if (opt != NULL) {
+                int dropped = 0;
+                do {
+                    /* Skip leading whitespace */
+                    const char *trimmed = opt;
+                    while (*trimmed == ' ') trimmed++;
+                    if (*trimmed != '\0')
+                        dropped++;
+                    opt = strtok_r(NULL, ",", &saveptr);
+                } while (opt != NULL);
+                if (dropped > 0) {
+                    fprintf(stderr, "Warning: %d SSH option(s) beyond the "
+                            "maximum of 4 were dropped from NBS_CHAT_OPTS\n",
+                            dropped);
+                }
+            }
         } else {
             /* Violation 1 fix: strdup failure is allocation failure, not soft fallback.
              * Silently dropping SSH options under memory pressure is a bug. */

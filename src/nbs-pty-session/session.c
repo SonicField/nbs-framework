@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <time.h>
+#include <stdint.h>
 
 /*
  * MAX_FILE_PATH — Buffer size for fully-qualified file paths.
@@ -379,13 +380,13 @@ static int capture_pane(const char *session_name, int scrollback,
  *
  * Returns milliseconds since some fixed epoch, or -1 on failure.
  */
-static long get_monotonic_ms(void)
+static int64_t get_monotonic_ms(void)
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
         return -1;
     }
-    return (long)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 /* ── Cache operations ─────────────────────────────────────────────── */
@@ -403,7 +404,7 @@ static FILE *open_secure(const char *path, int flags)
     if (fd < 0) {
         return NULL;
     }
-    const char *mode = (flags & O_RDONLY) ? "r" : "w";
+    const char *mode = ((flags & O_ACCMODE) == O_RDONLY) ? "r" : "w";
     FILE *f = fdopen(fd, mode);
     if (!f) {
         close(fd);
@@ -667,6 +668,9 @@ static int search_log_for_pattern(const char *name, const char *pattern)
             return EXIT_SUCCESS_CODE;
         }
     }
+    if (ferror(f)) {
+        fprintf(stderr, "Warning: I/O error reading log %s\n", full_log);
+    }
     fclose(f);
 
     return EXIT_NOT_FOUND;
@@ -809,7 +813,10 @@ int cmd_create(const char *name, const char *command)
     const char *enter_argv[] = {
         "tmux", "send-keys", "-t", session, "Enter", NULL
     };
-    exec_fire_and_forget(enter_argv);
+    int enter_rc = exec_fire_and_forget(enter_argv);
+    if (enter_rc != 0) {
+        fprintf(stderr, "Warning: Failed to send Enter to session %s\n", name);
+    }
 
     printf("Created session: %s\n", name);
     return EXIT_SUCCESS_CODE;
@@ -885,10 +892,16 @@ int cmd_send(const char *name, const char *text, int no_enter)
         char fence_path[MAX_PATH_LEN];
         int fp = snprintf(fence_path, sizeof(fence_path), "%s/%s", fence_dir, name);
         if (fp >= 0 && (size_t)fp < sizeof(fence_path)) {
-            FILE *ff = fopen(fence_path, "w");
-            if (ff) {
-                fprintf(ff, "%s\n", fence_marker);
-                fclose(ff);
+            int fence_fd = open(fence_path,
+                                O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (fence_fd >= 0) {
+                FILE *ff = fdopen(fence_fd, "w");
+                if (ff) {
+                    fprintf(ff, "%s\n", fence_marker);
+                    fclose(ff);
+                } else {
+                    close(fence_fd);
+                }
             }
         }
     }
@@ -896,6 +909,10 @@ int cmd_send(const char *name, const char *text, int no_enter)
     char fenced[MAX_FILE_PATH];
     int fn = snprintf(fenced, sizeof(fenced),
                       "echo %s; %s", fence_marker, text);
+    if (fn < 0 || (size_t)fn >= sizeof(fenced)) {
+        fprintf(stderr, "Warning: fenced command truncated for session %s, "
+                "sending without fence marker\n", name);
+    }
     const char *send_text = (fn >= 0 && (size_t)fn < sizeof(fenced))
                             ? fenced : text;
 
@@ -957,17 +974,16 @@ int cmd_read(const char *name, int scrollback, int wait_mode, int timeout)
     /* Wait mode: poll until session exits, then read cache */
     if (wait_mode) {
         /* Violation S6 fix: use CLOCK_MONOTONIC for timeout */
-        long timeout_ms = (long)timeout * 1000;
+        int64_t timeout_ms = (int64_t)timeout * 1000;
         /* Violation S7 fix: postcondition on multiplication */
-        ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (long)timeout,
-                   "timeout_ms overflow: timeout=%d, timeout_ms=%ld",
-                   timeout, timeout_ms);
+        ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (int64_t)timeout,
+                   "timeout_ms overflow: timeout=%d", timeout);
 
-        long start_ms = get_monotonic_ms();
+        int64_t start_ms = get_monotonic_ms();
         ASSERT_MSG(start_ms >= 0, "clock_gettime(CLOCK_MONOTONIC) failed");
 
         while (session_exists(session)) {
-            long now_ms = get_monotonic_ms();
+            int64_t now_ms = get_monotonic_ms();
             if (now_ms < 0 || (now_ms - start_ms) >= timeout_ms) {
                 fprintf(stderr, "Error: Timeout after %ds waiting for session to exit\n",
                         timeout);
@@ -1064,13 +1080,12 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     }
 
     /* Violation S6 fix: use CLOCK_MONOTONIC for timeout */
-    long timeout_ms = (long)timeout * 1000;
+    int64_t timeout_ms = (int64_t)timeout * 1000;
     /* Violation S7 fix: postcondition on multiplication */
-    ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (long)timeout,
-               "timeout_ms overflow: timeout=%d, timeout_ms=%ld",
-               timeout, timeout_ms);
+    ASSERT_MSG(timeout_ms > 0 && timeout_ms / 1000 == (int64_t)timeout,
+               "timeout_ms overflow: timeout=%d", timeout);
 
-    long start_ms = get_monotonic_ms();
+    int64_t start_ms = get_monotonic_ms();
     ASSERT_MSG(start_ms >= 0, "clock_gettime(CLOCK_MONOTONIC) failed");
 
     char *buf = malloc(CAPTURE_BUF_SIZE);
@@ -1111,8 +1126,8 @@ int cmd_wait(const char *name, const char *pattern, int timeout)
     }
 
     for (;;) {
-        long now_ms = get_monotonic_ms();
-        long elapsed_ms = (now_ms >= 0) ? (now_ms - start_ms) : timeout_ms;
+        int64_t now_ms = get_monotonic_ms();
+        int64_t elapsed_ms = (now_ms >= 0) ? (now_ms - start_ms) : timeout_ms;
 
         if (elapsed_ms >= timeout_ms) {
             fprintf(stderr, "Timeout after %ds waiting for pattern: %s\n",
@@ -1428,6 +1443,16 @@ int test_is_safe_name(const char *name)
 int test_is_safe_home_path(const char *path)
 {
     return is_safe_home_path(path);
+}
+
+FILE *test_open_secure(const char *path, int flags)
+{
+    return open_secure(path, flags);
+}
+
+int64_t test_get_monotonic_ms(void)
+{
+    return get_monotonic_ms();
 }
 
 #endif /* TEST_BUILD */

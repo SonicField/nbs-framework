@@ -403,19 +403,22 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         char parts[SIDECAR_MAX_MESSAGE];
         parts[0] = '\0';
         size_t off = 0;
+        int sn;
 
         if (state->bus_event_summary[0] != '\0') {
-            off += (size_t)snprintf(parts + off, sizeof(parts) - off,
-                                     "%s", state->bus_event_summary);
+            sn = snprintf(parts + off, sizeof(parts) - off,
+                          "%s", state->bus_event_summary);
+            if (sn > 0) off += (size_t)sn;
         }
         if (state->chat_unread_summary[0] != '\0') {
             if (off > 0) {
-                off += (size_t)snprintf(parts + off, sizeof(parts) - off,
-                                         ". %s", state->chat_unread_summary);
+                sn = snprintf(parts + off, sizeof(parts) - off,
+                              ". %s", state->chat_unread_summary);
             } else {
-                off += (size_t)snprintf(parts + off, sizeof(parts) - off,
-                                         "%s", state->chat_unread_summary);
+                sn = snprintf(parts + off, sizeof(parts) - off,
+                              "%s", state->chat_unread_summary);
             }
+            if (sn > 0) off += (size_t)sn;
         }
         (void)off; /* suppress unused warning */
 
@@ -476,6 +479,21 @@ int sidecar_config_validate(const sidecar_config_t *cfg) {
         fprintf(stderr, "config error: startup_grace must be >= 0\n");
         ok = 0;
     }
+    if (cfg->librarian_interval < 0) {
+        fprintf(stderr, "config error: librarian_interval must be >= 0 (got %d)\n",
+                cfg->librarian_interval);
+        ok = 0;
+    }
+    if (cfg->pythia_interval < 0) {
+        fprintf(stderr, "config error: pythia_interval must be >= 0 (got %d)\n",
+                cfg->pythia_interval);
+        ok = 0;
+    }
+    if (cfg->shepard_interval < 0) {
+        fprintf(stderr, "config error: shepard_interval must be >= 0 (got %d)\n",
+                cfg->shepard_interval);
+        ok = 0;
+    }
 
     return ok ? 0 : -1;
 }
@@ -485,7 +503,10 @@ int sidecar_config_validate(const sidecar_config_t *cfg) {
 int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     ASSERT_MSG(cfg != NULL, "sidecar_run: cfg is NULL");
     ASSERT_MSG(tp != NULL, "sidecar_run: tp is NULL");
-    ASSERT_MSG(tp->capture != NULL, "sidecar_run: transport not initialised");
+    ASSERT_MSG(tp->capture != NULL, "sidecar_run: transport capture not initialised");
+    ASSERT_MSG(tp->send_key != NULL, "sidecar_run: transport send_key not initialised");
+    ASSERT_MSG(tp->send_text != NULL, "sidecar_run: transport send_text not initialised");
+    ASSERT_MSG(tp->is_alive != NULL, "sidecar_run: transport is_alive not initialised");
 
     /* Build paths */
     char registry_path[SIDECAR_EXT_PATH];
@@ -556,6 +577,9 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     ASSERT_MSG(state.sidecar_start_time > 0,
                "sidecar_run: sidecar_start_time invariant violated after init");
 
+    /* Heartbeat interval: log self-health every 300 seconds (5 minutes) */
+    time_t last_heartbeat_time = state.sidecar_start_time;
+
     /* Main loop */
     while (1) {
         sleep(1);
@@ -572,6 +596,21 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                    "invariant: notify_fail_count went negative: %d",
                    state.notify_fail_count);
 
+        /* Periodic self-health heartbeat (every 300s).
+         * Logs key state to stderr so operators can verify the loop is alive
+         * and detect anomalies (stuck idle, accumulating failures). */
+        {
+            time_t hb_now = time(NULL);
+            if ((hb_now - last_heartbeat_time) >= 300) {
+                fprintf(stderr, "sidecar heartbeat: handle=%s idle=%d "
+                        "bus_checks=%d notify_fails=%d uptime=%lds\n",
+                        cfg->handle, state.idle_seconds,
+                        state.bus_check_counter, state.notify_fail_count,
+                        (long)(hb_now - state.sidecar_start_time));
+                last_heartbeat_time = hb_now;
+            }
+        }
+
         /* Check control inbox */
         int inbox_rc = registry_process_inbox(inbox_path, registry_path,
                                 &state.control_inbox_line);
@@ -585,7 +624,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
-                char event_file[1024];
+                char event_file[SIDECAR_MAX_PATH];
                 int matched = 0;
                 if (bus_client_check_typed(bus_dir, "chat-interrupt",
                                             cfg->handle, payload,
@@ -627,7 +666,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
-                char event_file[1024];
+                char event_file[SIDECAR_MAX_PATH];
                 int matched = 0;
                 if (bus_client_check_typed(bus_dir, "chat-mention",
                                             cfg->handle, payload,
@@ -671,7 +710,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             if (registry_find_first(registry_path, "bus",
                                      bus_dir, sizeof(bus_dir)) == 0) {
                 char payload[SIDECAR_MAX_MESSAGE];
-                char event_file[1024];
+                char event_file[SIDECAR_MAX_PATH];
                 if (bus_client_check_typed(bus_dir, "chat-query",
                                             cfg->handle, payload,
                                             sizeof(payload),
@@ -716,8 +755,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             time_t now_wc = time(NULL);
             if (cfg->flush_interval > 0 &&
                 (now_wc - state.last_flush_time) >= cfg->flush_interval) {
-                if (detect_blocking_dialogue(content, NULL) == DIALOGUE_NONE) {
-                    tp->send_key(tp, "Enter");
+                dialogue_response_t flush_resp = {0, 0};
+                if (detect_blocking_dialogue(content, &flush_resp) == DIALOGUE_NONE) {
+                    if (tp->send_key(tp, "Enter") != 0) {
+                        fprintf(stderr, "sidecar_run: flush send_key Enter failed\n");
+                    }
                     state.last_flush_time = now_wc;
                 }
             }
@@ -727,11 +769,16 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
              * Only suppressed during blocking dialogues and context stress. */
             if (cfg->poll_interval > 0 &&
                 (now_wc - state.last_poll_time) >= cfg->poll_interval) {
-                if (detect_blocking_dialogue(content, NULL) == DIALOGUE_NONE &&
+                dialogue_response_t poll_resp = {0, 0};
+                if (detect_blocking_dialogue(content, &poll_resp) == DIALOGUE_NONE &&
                     !detect_context_stress(content)) {
-                    tp->send_text(tp, "/nbs-poll");
+                    if (tp->send_text(tp, "/nbs-poll") != 0) {
+                        fprintf(stderr, "sidecar_run: poll send_text failed\n");
+                    }
                     usleep(300000);
-                    tp->send_key(tp, "Enter");
+                    if (tp->send_key(tp, "Enter") != 0) {
+                        fprintf(stderr, "sidecar_run: poll send_key Enter failed\n");
+                    }
                     state.last_poll_time = now_wc;
                     state.idle_seconds = 0;
                     state.last_content_hash = 0;
@@ -825,9 +872,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         char recovery[SIDECAR_MAX_PROMPT];
                         build_recovery_prompt(cfg, registry_path,
                                                recovery, sizeof(recovery));
-                        tp->send_text(tp, recovery);
+                        if (tp->send_text(tp, recovery) != 0) {
+                            fprintf(stderr, "sidecar_run: recovery send_text failed\n");
+                        }
                         usleep(300000);
-                        tp->send_key(tp, "Enter");
+                        if (tp->send_key(tp, "Enter") != 0) {
+                            fprintf(stderr, "sidecar_run: recovery send_key Enter failed\n");
+                        }
 
                         sleep(5);
                         char *rc_content = tp->capture(tp, 5);

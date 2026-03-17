@@ -107,6 +107,7 @@ dialogue_type_t detect_blocking_dialogue(const char *content,
                                           dialogue_response_t *response)
 {
     ASSERT_MSG(content != NULL, "detect_blocking_dialogue: content is NULL");
+    ASSERT_MSG(response != NULL, "detect_blocking_dialogue: response is NULL (required parameter)");
 
     dialogue_type_t type = DIALOGUE_NONE;
     int option = 0;
@@ -131,13 +132,13 @@ dialogue_type_t detect_blocking_dialogue(const char *content,
         settle = 2;
     }
 
-    if (type != DIALOGUE_NONE && response != NULL) {
+    if (type != DIALOGUE_NONE) {
         response->option = option;
         response->settle_secs = settle;
     }
 
     /* Postcondition: if dialogue detected, response fields must be set */
-    if (type != DIALOGUE_NONE && response != NULL) {
+    if (type != DIALOGUE_NONE) {
         ASSERT_MSG(response->option > 0,
                    "detect_blocking_dialogue postcondition: option not set for type %d", (int)type);
         ASSERT_MSG(response->settle_secs > 0,

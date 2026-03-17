@@ -349,14 +349,17 @@ body {
     function updateParticipants(participants) {
         if (!participants) return;
         var el = document.getElementById('participants');
-        el.innerHTML = '';
+        el.replaceChildren();
         for (var i = 0; i < participants.length; i++) {
             var p = participants[i];
             var span = document.createElement('span');
             span.className = 'participant';
             span.style.color = getColourHex(p.handle);
-            span.innerHTML = escapeHtml(p.handle) +
-                '<span class="count">(' + p.count + ')</span>';
+            span.textContent = p.handle;
+            var countSpan = document.createElement('span');
+            countSpan.className = 'count';
+            countSpan.textContent = '(' + p.count + ')';
+            span.appendChild(countSpan);
             el.appendChild(span);
         }
     }
@@ -381,6 +384,7 @@ body {
                 renderMessage(msg);
             } catch (err) {
                 console.error('SSE parse error:', err, e.data);
+                setStatus('Parse error (SSE)', 'error');
             }
         });
 
@@ -412,6 +416,7 @@ body {
                     scrollToBottom();
                 } catch (err) {
                     console.error('API parse error:', err);
+                    setStatus('Parse error (API)', 'error');
                 }
             }
             /* Connect SSE for live updates after initial load */
@@ -435,10 +440,12 @@ body {
         xhr.onload = function() {
             if (xhr.status !== 200) {
                 console.error('Send failed:', xhr.status, xhr.responseText);
+                setStatus('Send failed (' + xhr.status + ')', 'error');
             }
         };
         xhr.onerror = function() {
             console.error('Send error');
+            setStatus('Send error (network)', 'error');
         };
         xhr.send(JSON.stringify({ handle: handle, message: message }));
     }

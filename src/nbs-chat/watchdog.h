@@ -83,7 +83,8 @@ void watchdog_init(watchdog_state_t *ws,
 /*
  * Evaluate whether to restart given current alive count and time.
  *
- * Pure function of (state, alive_count, now). Does NOT perform I/O.
+ * Deterministic function of (state, alive_count, now). Mutates ws.
+ * Does NOT perform I/O.
  *
  * Preconditions:
  *   ws != NULL
