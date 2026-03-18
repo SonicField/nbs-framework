@@ -37,8 +37,9 @@ const trigger_periodic_t TRIGGER_PYTHIA = {
     .lock_filename = "pythia.lock",
     .role = "pythia",
     .task_desc =
-        "Load /nbs-pythia. Read .nbs/scribe/live-log.md. "
-        "Run the checkpoint procedure. Post assessment to chat. Exit.",
+        "Load /nbs-pythia. Read the last 500 lines of .nbs/scribe/live-log.md "
+        "(do NOT read the full file). Run the checkpoint procedure. "
+        "Post assessment to chat. Then stop — do not do anything else.",
 };
 
 const trigger_periodic_t TRIGGER_SHEPARD = {
