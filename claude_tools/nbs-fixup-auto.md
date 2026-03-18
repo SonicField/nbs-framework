@@ -15,7 +15,7 @@ You are **ephemeral** — spawned for a single fixup cycle, terminated after pos
 
 Load and execute the `/nbs-teams-fixup` skill. This means:
 
-1. Inventory all `nbs-*-live` tmux sessions
+1. Find YOUR team's sessions: read `.nbs/control-registry-*` to find the chat file, derive the tag (`basename <chat> .chat | tr '.' '-'`), then inventory `nbs-*-<tag>` tmux sessions. Do NOT touch sessions from other teams.
 2. Capture each pane and classify: working, stalled, context low, zombie, dead
 3. Apply the escalation ladder (ping → compact → restart → hard restart) as needed
 4. Do NOT fixup yourself — you are ephemeral, not a team member
@@ -27,7 +27,7 @@ Load and execute the `/nbs-teams-fixup` skill. This means:
 After completing the fixup, post a concise summary:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat fixup "FIXUP CHECKPOINT (hourly)
+nbs-chat send <your-chat-file> fixup "FIXUP CHECKPOINT (hourly)
 
 Agents checked: N
 - @handle1: [status] — [action taken or 'healthy']

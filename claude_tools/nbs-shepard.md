@@ -32,15 +32,25 @@ You are spawned when a `shepard-checkpoint` event triggers (every 100 chat messa
 **Before reading chat**, check whether agents are actually alive. A dead agent produces no chat messages — Shepard must detect this directly, not infer it from silence.
 
 ```bash
-# List live team agent sessions (these are the REAL agents, not ephemeral workers)
-tmux list-sessions -F '#{session_name}' 2>/dev/null | grep 'nbs-.*-live'
+# Step 0a: Find YOUR team's session tag.
+# Multiple teams can run on the same machine (live.chat, nn.Module.chat, etc).
+# Each team's sessions are named nbs-<handle>-<tag> where tag is derived from
+# the chat filename (dots replaced with dashes).
+#
+# Find the chat file from the registry, derive the tag:
+CHAT_FILE=$(cat .nbs/control-registry-* 2>/dev/null | grep '^chat:' | head -1 | cut -d: -f2-)
+CHAT_TAG=$(basename "$CHAT_FILE" .chat | tr '.' '-')
+echo "Team tag: $CHAT_TAG"
 
-# For each live session, capture the last few lines to check for activity
+# Step 0b: List THIS team's agent sessions only
+tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "nbs-.*-${CHAT_TAG}"
+
+# For each session, capture the last few lines to check for activity
 tmux capture-pane -t <session-name> -p -S -5 2>/dev/null
 # e.g. tmux capture-pane -t nbs-supervisor-live -p -S -5
-
-# Expected live sessions: nbs-supervisor-live, nbs-generalist-live,
-# nbs-scribe-live, nbs-gatekeeper-live, nbs-testkeeper-live, nbs-theologian-live
+# (for nn.Module.chat: tmux capture-pane -t nbs-supervisor-nn-Module -p -S -5)
+#
+# IMPORTANT: Only check sessions matching YOUR tag. Do NOT touch other teams.
 #
 # Also check ephemeral workers (periodic triggers, digest workers):
 nbs-workers list

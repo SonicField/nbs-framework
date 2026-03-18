@@ -31,7 +31,7 @@ tmux list-sessions
 tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index} #{pane_pid} #{pane_current_command}'
 ```
 
-Agent sessions follow the naming convention `nbs-<handle>-live`.
+Agent sessions follow the naming convention `nbs-<handle>-<tag>` where `<tag>` is derived from the chat filename (e.g. `live` for `live.chat`, `nn-Module` for `nn.Module.chat`). Find YOUR team's tag first: read `.nbs/control-registry-*` to find the chat file, then `basename <chat> .chat | tr '.' '-'`. Only operate on sessions matching your tag.
 
 ### Step 2: Diagnose Each Agent
 
