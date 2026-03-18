@@ -195,6 +195,54 @@ check "no project root: no wrap-up sent" "$( [[ $MSG_COUNT -eq 0 ]] && echo pass
 
 echo ""
 
+# --- Test 12: --restart flag prints "Restarting team" ---
+echo "12. --restart flag triggers restart..."
+PROJ_DIR="$TEST_DIR/test12_proj"
+mkdir -p "$PROJ_DIR/.nbs/chat" "$PROJ_DIR/.nbs/events/processed" "$PROJ_DIR/bin"
+CHAT="$PROJ_DIR/.nbs/chat/test.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+# Create a stub restart script that exits immediately
+cat > "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh" << 'STUB'
+#!/bin/bash
+exit 0
+STUB
+chmod +x "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh"
+TERM_OUTPUT=$(printf '/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" --restart 2>/dev/null || true)
+check "--restart prints Restarting team" "$( echo "$TERM_OUTPUT" | grep -qF 'Restarting team' && echo pass || echo fail )"
+check "--restart prints restart complete" "$( echo "$TERM_OUTPUT" | grep -qF 'restart complete' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 13: --restart without project root is harmless ---
+echo "13. --restart without project root does not crash..."
+CHAT="$TEST_DIR/test13.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+set +e
+TERM_OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" --restart 2>/dev/null)
+RC=$?
+set -e
+check "--restart without project root exits cleanly" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+# Should NOT print "Restarting team" since no project root found
+check "--restart without project root: no restart attempted" "$( echo "$TERM_OUTPUT" | grep -qF 'Restarting team' && echo fail || echo pass )"
+
+echo ""
+
+# --- Test 14: usage text mentions --restart flag ---
+echo "14. usage text mentions --restart..."
+USAGE_OUTPUT=$(timeout 5 "$NBS_TERMINAL" 2>&1 || true)
+check "usage mentions --restart" "$( echo "$USAGE_OUTPUT" | grep -qF -- '--restart' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 15: terminal works normally without --restart ---
+echo "15. terminal without --restart works normally..."
+CHAT=$(create_project_chat test15)
+TERM_OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "no --restart: exits cleanly" "$( [[ $? -eq 0 ]] && echo pass || echo fail )"
+check "no --restart: no restart attempted" "$( echo "$TERM_OUTPUT" | grep -qF 'Restarting team' && echo fail || echo pass )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Results: $PASS_COUNT passed, $ERRORS failed ==="
 if [[ $ERRORS -eq 0 ]]; then
