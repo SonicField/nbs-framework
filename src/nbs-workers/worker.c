@@ -1313,15 +1313,43 @@ int cmd_spawn(const char *slug, const char *project_dir,
                 break;
             }
 
-            /* Check if the worker posted to chat (any message from
-             * the slug handle in the last 2 minutes means it ran).
-             * Uses fork+exec via exec_capture — never system(). */
+            /* Check if the worker marked itself complete in the task file.
+             * The task file has "State: running" initially. If the worker
+             * (or its Claude session) updates it to "completed", "failed",
+             * or "escalated", we know it's done. */
             {
-                char chat_path[PATH_BUF_SIZE];
-                int cpn = snprintf(chat_path, sizeof(chat_path),
-                                   "%s/.nbs/chat/live.chat", abs_project_dir);
-                ASSERT_MSG(cpn > 0 && (size_t)cpn < sizeof(chat_path),
-                           "cmd_spawn: chat_path too long");
+                FILE *tf = fopen(task_file, "r");
+                if (tf) {
+                    char line[256];
+                    while (fgets(line, sizeof(line), tf)) {
+                        if (strncmp(line, "State:", 6) == 0) {
+                            char *val = line + 6;
+                            while (*val == ' ') val++;
+                            if (strncmp(val, "completed", 9) == 0 ||
+                                strncmp(val, "failed", 6) == 0 ||
+                                strncmp(val, "escalated", 9) == 0) {
+                                fclose(tf);
+                                sleep(5); /* Brief settle */
+                                completed = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (completed) break;
+                    fclose(tf);
+                }
+            }
+
+            /* Check if the worker posted to chat (any message from the
+             * slug handle in the last 2 minutes means it ran).
+             * Search ALL .chat files in the project, not just live.chat,
+             * because the worker may be on a different team's chat. */
+            {
+                char chat_dir[PATH_BUF_SIZE];
+                int cdn = snprintf(chat_dir, sizeof(chat_dir),
+                                   "%s/.nbs/chat", abs_project_dir);
+                ASSERT_MSG(cdn > 0 && (size_t)cdn < sizeof(chat_dir),
+                           "cmd_spawn: chat_dir too long");
 
                 char handle_arg[NAME_MAX_LEN + 16];
                 int han = snprintf(handle_arg, sizeof(handle_arg),
@@ -1329,21 +1357,36 @@ int cmd_spawn(const char *slug, const char *project_dir,
                 ASSERT_MSG(han > 0 && (size_t)han < sizeof(handle_arg),
                            "cmd_spawn: handle_arg too long");
 
-                const char *search_argv[] = {
-                    "nbs-chat", "search", chat_path, "",
-                    handle_arg, "--after=2m", NULL
-                };
-                char search_buf[64];
-                int src = exec_capture(search_argv, search_buf,
-                                       sizeof(search_buf));
-                if (src == 0) {
-                    /* Worker posted — give it 30s to finish any follow-up.
-                     * Rationale: Claude may still be writing final output
-                     * after posting a chat message. 30s is empirically
-                     * sufficient for typical follow-up writes. */
-                    sleep(30);
-                    completed = 1;
-                    break;
+                /* Try each .chat file in the directory */
+                DIR *cdir = opendir(chat_dir);
+                if (cdir) {
+                    struct dirent *ent;
+                    while ((ent = readdir(cdir)) != NULL) {
+                        size_t nlen = strlen(ent->d_name);
+                        if (nlen < 6 || strcmp(ent->d_name + nlen - 5, ".chat") != 0)
+                            continue;
+                        char chat_path[PATH_BUF_SIZE + 256];
+                        int cpn2 = snprintf(chat_path, sizeof(chat_path),
+                                 "%s/%s", chat_dir, ent->d_name);
+                        if (cpn2 < 0 || (size_t)cpn2 >= sizeof(chat_path))
+                            continue;
+                        const char *search_argv[] = {
+                            "nbs-chat", "search", chat_path, "",
+                            handle_arg, "--after=2m", NULL
+                        };
+                        char search_buf[64];
+                        int src = exec_capture(search_argv, search_buf,
+                                               sizeof(search_buf));
+                        if (src == 0) {
+                            closedir(cdir);
+                            /* Worker posted — brief settle then kill. */
+                            sleep(10);
+                            completed = 1;
+                            break;
+                        }
+                    }
+                    if (completed) break;
+                    closedir(cdir);
                 }
             }
         }
