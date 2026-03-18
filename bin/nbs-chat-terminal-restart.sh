@@ -49,7 +49,11 @@ echo "[watchdog] Restarting team for ${CHAT_TAG}..."
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
     tmux kill-session -t "nbs-${h}-${CHAT_TAG}" 2>/dev/null || true
 done
-pkill -f 'nbs-sidecar.*--handle=' 2>/dev/null || true
+# Only kill sidecars attached to THIS team's sessions (by pane ID)
+for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+    pane=$(tmux display-message -t "nbs-${h}-${CHAT_TAG}" -p '#{pane_id}' 2>/dev/null) || continue
+    pkill -f "nbs-sidecar.*--pane-id=${pane}" 2>/dev/null || true
+done
 rm -f .nbs/pids/*.pid 2>/dev/null || true
 
 sleep 2
