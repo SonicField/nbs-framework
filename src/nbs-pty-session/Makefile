@@ -29,7 +29,7 @@ $(TEST_TARGET): test_pty_session.c main.c session.c session.h
 install: all
 	mkdir -p $(BIN_DIR)
 	rm -f $(BIN_DIR)/pty-session
-	cp $(TARGET) $(BIN_DIR)/pty-session
+	install $(TARGET) $(BIN_DIR)/pty-session
 
 test: all install $(TEST_TARGET)
 	./$(ASSERT_CHECK)

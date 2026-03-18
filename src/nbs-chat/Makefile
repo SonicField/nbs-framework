@@ -68,9 +68,9 @@ $(ASSERT_CHECK): assert_check.c
 install: all
 	mkdir -p $(BIN_DIR)
 	rm -f $(BIN_DIR)/$(CLI_TARGET) $(BIN_DIR)/$(TERM_TARGET) $(BIN_DIR)/$(REMOTE_TARGET)
-	cp $(CLI_TARGET) $(BIN_DIR)/
-	cp $(TERM_TARGET) $(BIN_DIR)/
-	cp $(REMOTE_TARGET) $(BIN_DIR)/
+	install $(CLI_TARGET) $(BIN_DIR)/
+	install $(TERM_TARGET) $(BIN_DIR)/
+	install $(REMOTE_TARGET) $(BIN_DIR)/
 
 # --- Build modes ---
 

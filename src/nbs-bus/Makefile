@@ -39,7 +39,7 @@ $(ASSERT_CHECK): assert_check.c
 install: all
 	mkdir -p $(BIN_DIR)
 	rm -f $(BIN_DIR)/$(BUS_TARGET)
-	cp $(BUS_TARGET) $(BIN_DIR)/
+	install $(BUS_TARGET) $(BIN_DIR)/
 
 # --- Build modes ---
 
