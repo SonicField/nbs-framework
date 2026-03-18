@@ -1292,6 +1292,23 @@ int cmd_spawn(const char *slug, const char *project_dir,
              * nothing to kill.
              * Uses tmux_has_session (fork+exec) — never system(). */
             if (!tmux_has_session(session)) {
+                /* Session died — write death summary to log.
+                 * The pipe-pane log has ANSI noise; append a clean
+                 * human-readable summary for easy diagnosis. */
+                FILE *death_log = fopen(log_file, "a");
+                if (death_log) {
+                    fprintf(death_log,
+                            "\n\n=== WORKER DEATH SUMMARY ===\n"
+                            "Worker %s exited after ~%d seconds.\n"
+                            "Session: %s\n"
+                            "Elapsed polls: %d (of 60 max)\n"
+                            "Cause: session exited unexpectedly "
+                            "(check above for API errors, crashes, "
+                            "or 'Terminated' messages)\n"
+                            "============================\n",
+                            name, (poll + 1) * 10, session, poll + 1);
+                    fclose(death_log);
+                }
                 completed = 1;
                 break;
             }
@@ -1352,6 +1369,18 @@ int cmd_spawn(const char *slug, const char *project_dir,
         if (!completed) {
             fprintf(stderr, "Warning: worker %s did not complete within "
                     "10 minutes, killed\n", name);
+            FILE *timeout_log = fopen(log_file, "a");
+            if (timeout_log) {
+                fprintf(timeout_log,
+                        "\n\n=== WORKER TIMEOUT ===\n"
+                        "Worker %s killed after 10 minutes (600s).\n"
+                        "Session: %s\n"
+                        "The worker did not complete its task within "
+                        "the allowed time.\n"
+                        "======================\n",
+                        name, session);
+                fclose(timeout_log);
+            }
         }
     }
 
@@ -1437,6 +1466,40 @@ int cmd_status(const char *name, const char *cwd)
         snprintf(payload, sizeof(payload),
                  "Worker %s: tmux dead but state still running", name);
         bus_publish(cwd, name, "worker-died", "high", payload);
+
+        /* Show death summary from log tail if available */
+        char log_path[PATH_BUF_SIZE];
+        int lpn = snprintf(log_path, sizeof(log_path),
+                           "%s/.nbs/workers/%s.log", cwd, name);
+        if (lpn > 0 && (size_t)lpn < sizeof(log_path)) {
+            FILE *lf = fopen(log_path, "r");
+            if (lf) {
+                /* Seek to last 500 bytes for the death summary */
+                fseek(lf, -500, SEEK_END);
+                char tail[512];
+                size_t n = fread(tail, 1, sizeof(tail) - 1, lf);
+                tail[n] = '\0';
+                fclose(lf);
+                /* Find the death summary marker */
+                char *marker = strstr(tail, "=== WORKER");
+                if (marker) {
+                    printf("  death info:\n");
+                    /* Print each line indented */
+                    char *line = marker;
+                    while (*line) {
+                        char *nl = strchr(line, '\n');
+                        if (nl) {
+                            *nl = '\0';
+                            printf("    %s\n", line);
+                            line = nl + 1;
+                        } else {
+                            printf("    %s\n", line);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return EXIT_SUCCESS_CODE;
