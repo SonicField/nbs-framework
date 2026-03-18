@@ -128,6 +128,40 @@ static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-emp
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
 
+/* --- Input history (bash-style) --- */
+
+#define HISTORY_MAX 50
+
+static char *g_history[HISTORY_MAX];  /* Ring buffer of sent messages (strdup'd) */
+static int g_history_count = 0;       /* Total entries stored (0..HISTORY_MAX) */
+static int g_history_pos = -1;        /* Current browse position (-1 = not browsing) */
+
+static void history_add(const char *msg) {
+    if (!msg || msg[0] == '\0') return;
+    /* Don't add duplicates of the most recent entry */
+    if (g_history_count > 0 &&
+        strcmp(g_history[g_history_count - 1], msg) == 0) return;
+    if (g_history_count >= HISTORY_MAX) {
+        /* Ring full — shift everything down, freeing oldest */
+        free(g_history[0]);
+        memmove(g_history, g_history + 1, (HISTORY_MAX - 1) * sizeof(char *));
+        g_history_count = HISTORY_MAX - 1;
+    }
+    g_history[g_history_count] = strdup(msg);
+    if (g_history[g_history_count]) g_history_count++;
+}
+
+static void history_free(void) {
+    for (int i = 0; i < g_history_count; i++) {
+        free(g_history[i]);
+        g_history[i] = NULL;
+    }
+    g_history_count = 0;
+    g_history_pos = -1;
+}
+
+/* history_load defined after line_state_t and line_ensure_cap (see below) */
+
 /* --- Watchdog daemon --- */
 
 static watchdog_state_t g_watchdog;
@@ -481,6 +515,18 @@ static void line_ensure_cap(line_state_t *ls, size_t needed) {
     }
 }
 
+/* Load a history entry into the line editor.
+ * Placed here because it needs line_state_t, line_ensure_cap, and line_redraw. */
+static void history_load(line_state_t *ls, int pos, const char *handle) {
+    if (pos < 0 || pos >= g_history_count) return;
+    size_t hlen = strlen(g_history[pos]);
+    line_ensure_cap(ls, hlen + 1);
+    memcpy(ls->buf, g_history[pos], hlen + 1);
+    ls->len = hlen;
+    ls->cursor = hlen;
+    line_redraw(ls, handle);
+}
+
 static void line_insert_char(line_state_t *ls, char c) {
     ASSERT_MSG(ls != NULL, "line_insert_char: ls is NULL");
     ASSERT_MSG(ls->cursor <= ls->len,
@@ -609,9 +655,29 @@ static int handle_escape_input(line_state_t *ls, esc_parser_t *esc,
 
         /* Dispatch on final character */
         switch (c) {
-        case 'A': /* Up arrow — ignore */
+        case 'A': /* Up arrow — history browse (only when buffer is empty or already browsing) */
+            if (g_history_count > 0 && (ls->len == 0 || g_history_pos >= 0)) {
+                if (g_history_pos < 0) {
+                    /* Start browsing from most recent */
+                    g_history_pos = g_history_count - 1;
+                } else if (g_history_pos > 0) {
+                    g_history_pos--;
+                }
+                history_load(ls, g_history_pos, handle);
+            }
             break;
-        case 'B': /* Down arrow — ignore */
+        case 'B': /* Down arrow — history forward (only when browsing) */
+            if (g_history_pos >= 0) {
+                if (g_history_pos < g_history_count - 1) {
+                    g_history_pos++;
+                    history_load(ls, g_history_pos, handle);
+                } else {
+                    /* Past end of history — clear to empty */
+                    g_history_pos = -1;
+                    line_state_reset(ls);
+                    line_redraw(ls, handle);
+                }
+            }
             break;
         case 'C': /* Right arrow */
             line_move_right(ls);
@@ -768,6 +834,11 @@ static int do_send(const char *msg) {
     ASSERT_MSG(g_handle != NULL, "do_send: g_handle is NULL");
 
     int send_rc = chat_send(g_chat_file, g_handle, msg);
+
+    if (send_rc == 0) {
+        history_add(msg);
+        g_history_pos = -1;
+    }
 
     if (send_rc != 0) {
         int saved_errno = errno;
@@ -1210,6 +1281,7 @@ int main(int argc, char **argv) {
         if (c == '\n' || c == '\r') {
             printf("\n");
             g_cursor_row = 0;  /* Newline resets cursor to fresh line */
+            g_history_pos = -1;  /* Exit history browse mode */
 
             if (edit.len == 0) {
                 /* Empty line: just reprint prompt, also poll */
@@ -1507,6 +1579,7 @@ int main(int argc, char **argv) {
 
     /* Cleanup */
     line_state_free(&edit);
+    history_free();
     if (have_termios) {
         if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) != 0) {
             fprintf(stderr, "warning: tcsetattr(final restore) failed: %s\n",
