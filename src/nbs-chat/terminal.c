@@ -1114,9 +1114,10 @@ static void handle_signal(int sig) {
 static void print_usage(void) {
     printf("nbs-chat-terminal: Interactive terminal client for nbs-chat\n\n");
     printf("Usage:\n");
-    printf("  nbs-chat-terminal <file> <handle>\n\n");
-    printf("  <file>    Path to chat file (must exist)\n");
-    printf("  <handle>  Your display name in the chat\n\n");
+    printf("  nbs-chat-terminal <file> <handle> [--restart]\n\n");
+    printf("  <file>      Path to chat file (must exist)\n");
+    printf("  <handle>    Your display name in the chat\n");
+    printf("  --restart   Start/restart the agent team immediately\n\n");
     printf("Controls:\n");
     printf("  Type a message and press Enter to send.\n");
     printf("  Use arrow keys, Home, End, Delete for line editing.\n");
@@ -1134,6 +1135,14 @@ int main(int argc, char **argv) {
 
     g_chat_file = argv[1];
     g_handle = argv[2];
+
+    /* Check for --restart flag */
+    int restart_immediately = 0;
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "--restart") == 0) {
+            restart_immediately = 1;
+        }
+    }
 
     /* Preconditions: args validated from argv */
     ASSERT_MSG(g_chat_file != NULL, "main: chat_file path is NULL");
@@ -1233,6 +1242,26 @@ int main(int argc, char **argv) {
     char wd_project_root[4096];
     if (resolve_project_root(g_chat_file, wd_project_root,
                               sizeof(wd_project_root)) == 0) {
+        /* --restart: run restart script immediately, no cooldown */
+        if (restart_immediately) {
+            char script[4096 + 64];
+            int rsn = snprintf(script, sizeof(script),
+                     "%s/bin/nbs-chat-terminal-restart.sh", wd_project_root);
+            if (rsn > 0 && (size_t)rsn < sizeof(script)) {
+                printf("%sRestarting team...%s\n", DIM, RESET);
+                pid_t rpid = fork();
+                if (rpid == 0) {
+                    execlp("bash", "bash", script,
+                           wd_project_root, g_chat_file, (char *)NULL);
+                    _exit(127);
+                } else if (rpid > 0) {
+                    int wstatus;
+                    waitpid(rpid, &wstatus, 0);
+                    printf("%sTeam restart complete.%s\n", DIM, RESET);
+                }
+            }
+        }
+
         watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
         pthread_t watchdog_tid;
         if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
