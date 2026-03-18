@@ -129,6 +129,19 @@ Don't use when:
 - Deep context is the asset (investigation, debugging)
 - Task is trivial
 
+## Limitations
+
+**One team per project directory.** The sidecar registry, bus events, cursor files, and trigger timestamps are all stored in `.nbs/` and keyed by agent handle — not by chat file. Running two teams in the same project directory causes cross-talk: sidecars monitor the wrong chat, cursors collide, triggers fire for the wrong team.
+
+To run multiple teams, use separate project directories with separate `.nbs/` state. For example:
+
+```
+~/local/cinderx-work/     → live.chat team (CinderX benchmarks)
+~/local/pytorch-source/   → live.chat team (nn.Module work)
+```
+
+Each directory gets its own `bin/install.sh` run, its own `.nbs/`, its own chat file, and its own independent team.
+
 ## Coordination Bus
 
 For projects where multiple agents need to react to each other's events (task completion, chat mentions, human input), the coordination bus provides event-driven notification. Instead of polling chat files and worker directories repeatedly, agents check a priority-ordered event queue.
