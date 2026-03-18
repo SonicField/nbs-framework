@@ -74,7 +74,7 @@ CHAT_LINES=$(wc -l < "$CHAT_FILE" 2>/dev/null || echo 0)
 if [[ "$CHAT_LINES" -le 10 ]]; then
     echo "[watchdog] New chat ($CHAT_LINES lines) — skipping digest" >&2
 elif [[ -x "$NBS_DIGEST" ]]; then
-    bash "$NBS_DIGEST" "$CHAT_FILE" --wait >/dev/null 2>&1 || {
+    bash "$NBS_DIGEST" "$CHAT_FILE" >/dev/null 2>&1 || {
         echo "[watchdog] Warning: digest failed, continuing without it" >&2
     }
 else
