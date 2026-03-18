@@ -132,6 +132,12 @@ echo "  Source: $PROJECT_ROOT"
 
 # 1. Create prefix directory structure
 mkdir -p "$PREFIX/commands"
+mkdir -p "$PREFIX/chat"
+mkdir -p "$PREFIX/events/processed"
+mkdir -p "$PREFIX/scribe"
+mkdir -p "$PREFIX/workers"
+mkdir -p "$PREFIX/pids"
+mkdir -p "$PREFIX/sessions"
 
 # 2. Process command templates
 # V7.2: Check claude_tools directory exists before globbing

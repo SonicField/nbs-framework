@@ -72,6 +72,22 @@ else
     echo "[watchdog] Warning: nbs-digest-spawn not found, skipping digest" >&2
 fi
 
+# 2b. Ensure bus events directory and registry entries exist
+CHAT_ABS=$(cd "$(dirname "$CHAT_FILE")" && pwd)/$(basename "$CHAT_FILE")
+EVENTS_DIR="${PROJECT_ROOT}/.nbs/events"
+mkdir -p "${EVENTS_DIR}/processed"
+for handle in scribe gatekeeper testkeeper supervisor generalist theologian; do
+    REG="${PROJECT_ROOT}/.nbs/control-registry-${handle}"
+    # Ensure chat entry
+    if ! grep -qF "chat:${CHAT_ABS}" "$REG" 2>/dev/null; then
+        echo "chat:${CHAT_ABS}" >> "$REG"
+    fi
+    # Ensure bus entry
+    if ! grep -qF "bus:${EVENTS_DIR}" "$REG" 2>/dev/null; then
+        echo "bus:${EVENTS_DIR}" >> "$REG"
+    fi
+done
+
 # 3. Reset cursors to current end
 HEADER_LINES=6
 MESSAGE_COUNT=$(( $(wc -l < "$CHAT_FILE") - HEADER_LINES ))
