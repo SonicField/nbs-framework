@@ -202,8 +202,12 @@ static void *watchdog_thread_fn(void *arg) {
                            ws->project_root, ws->chat_path, (char *)NULL);
                     _exit(127);
                 } else if (rpid > 0) {
-                    /* Parent: do not wait — restart runs in background */
-                    (void)rpid;
+                    /* Wait for restart to complete before resuming polling.
+                     * Without this, the watchdog fires again while the
+                     * restart script is still running (digest takes minutes),
+                     * spawning concurrent restarts that kill each other. */
+                    int wstatus;
+                    waitpid(rpid, &wstatus, 0);
                 }
                 /* fork failure: silently continue — next poll will retry */
             }
