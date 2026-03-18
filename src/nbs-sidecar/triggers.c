@@ -48,10 +48,10 @@ const trigger_periodic_t TRIGGER_SHEPARD = {
     .lock_filename = "shepard.lock",
     .role = "shepard",
     .task_desc =
-        "Load /nbs-shepard. Check agent liveness via nbs-workers list and "
-        "nbs-workers status — classify each as healthy/stressed/zombie/dead. "
-        "Read recent chat via sub-agents. Assess team effectiveness. "
-        "Post recommendations to supervisor (agent status FIRST). Exit.",
+        "Load /nbs-shepard. Check agent liveness by listing tmux sessions "
+        "and capturing panes. Read the last 20 chat messages directly "
+        "(do NOT launch sub-agents). Post a brief assessment to chat. "
+        "Then stop — do not do anything else after posting.",
 };
 
 const trigger_periodic_t TRIGGER_FIXUP = {
@@ -61,7 +61,7 @@ const trigger_periodic_t TRIGGER_FIXUP = {
     .role = "fixup",
     .task_desc =
         "Load /nbs-fixup-auto. Run /nbs-teams-fixup on all agents. "
-        "Post summary to chat. Exit.",
+        "Post summary to chat. Then stop — do not do anything else after posting.",
 };
 
 const trigger_periodic_t TRIGGER_LIBRARIAN = {
@@ -73,7 +73,7 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
         "Load /nbs-librarian. Read last 100 chat messages via nbs-chat read. "
         "Search scribe log for answers to questions or blockers the team is "
         "stuck on. Post findings with @team! tag. If scribe has nothing "
-        "relevant, stay silent. Exit.",
+        "relevant, stay silent. Then stop — do not do anything else.",
 };
 
 /* --- nbs-workers path resolution --- */
