@@ -247,7 +247,7 @@ static void *watchdog_thread_fn(void *arg) {
         if (d == WATCHDOG_RESTART) {
             char script[4096 + 64];
             int sn = snprintf(script, sizeof(script),
-                     "%s/bin/nbs-chat-terminal-restart.sh",
+                     "%s/.nbs/bin/nbs-chat-terminal-restart.sh",
                      ws->project_root);
             if (sn > 0 && (size_t)sn < sizeof(script)) {
                 pid_t rpid = fork();
@@ -1246,7 +1246,7 @@ int main(int argc, char **argv) {
         if (restart_immediately) {
             char script[4096 + 64];
             int rsn = snprintf(script, sizeof(script),
-                     "%s/bin/nbs-chat-terminal-restart.sh", wd_project_root);
+                     "%s/.nbs/bin/nbs-chat-terminal-restart.sh", wd_project_root);
             if (rsn > 0 && (size_t)rsn < sizeof(script)) {
                 printf("%sRestarting team...%s\n", DIM, RESET);
                 pid_t rpid = fork();
@@ -1558,7 +1558,7 @@ int main(int argc, char **argv) {
                     printf("  %sTriggering manual restart...%s\n", DIM, RESET);
                     char rscript[4096 + 64];
                     int rsn = snprintf(rscript, sizeof(rscript),
-                             "%s/bin/nbs-chat-terminal-restart.sh",
+                             "%s/.nbs/bin/nbs-chat-terminal-restart.sh",
                              g_watchdog.project_root);
                     if (rsn > 0 && (size_t)rsn < sizeof(rscript)) {
                         pid_t rpid = fork();
