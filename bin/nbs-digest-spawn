@@ -19,9 +19,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 NBS_WORKERS="${SCRIPT_DIR}/nbs-workers"
 NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
+
+# Project root is the current working directory, NOT the script's parent.
+# The script may be in the framework's bin/ (via symlink) while the project
+# is elsewhere (e.g. ~/local/pytorch-source). The caller (restart script)
+# cd's to the project root before invoking us.
+PROJECT_ROOT="$(pwd)"
 
 # [HARDENING #5] Assert required external tools exist and are executable
 for tool in "$NBS_WORKERS" "$NBS_CHAT"; do

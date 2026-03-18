@@ -55,7 +55,12 @@ rm -f .nbs/pids/*.pid 2>/dev/null || true
 sleep 2
 
 # 2. Run digest (preserves institutional memory across restarts)
-if [[ -x "$NBS_DIGEST" ]]; then
+# Skip for empty/new chats — nothing to digest, and the digest worker
+# would hang waiting for a completion signal that never comes.
+CHAT_LINES=$(wc -l < "$CHAT_FILE" 2>/dev/null || echo 0)
+if [[ "$CHAT_LINES" -le 10 ]]; then
+    echo "[watchdog] New chat ($CHAT_LINES lines) — skipping digest" >&2
+elif [[ -x "$NBS_DIGEST" ]]; then
     bash "$NBS_DIGEST" "$CHAT_FILE" --wait >/dev/null 2>&1 || {
         echo "[watchdog] Warning: digest failed, continuing without it" >&2
     }
