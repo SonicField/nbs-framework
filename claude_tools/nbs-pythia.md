@@ -33,8 +33,8 @@ You are spawned when a `pythia-checkpoint` event triggers, or when invoked manua
 Find the decision log for the chat you are assessing. The log filename derives from the chat name: `live.chat` → `.nbs/scribe/live-log.md`.
 
 ```bash
-# Full log for trajectory analysis
-cat .nbs/scribe/live-log.md
+# Recent decisions (last 20) — do NOT cat the full log, it can be millions of lines
+tail -500 .nbs/scribe/live-log.md
 
 # Targeted queries via nbs-scribe-query
 nbs-scribe-query --chat=.nbs/chat/live.chat --last=10
