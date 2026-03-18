@@ -209,10 +209,31 @@ static void *watchdog_thread_fn(void *arg) {
         sleep(WATCHDOG_POLL_INTERVAL_S);
         if (!watchdog_is_enabled(ws)) break;
 
-        /* Count alive agent sessions via popen */
-        FILE *fp = popen(
-            "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
-            "grep -c 'nbs-.*-live' 2>/dev/null || echo 0", "r");
+        /* Derive session prefix from chat filename.
+         * live.chat → "live", nn.Module.chat → "nn-Module"
+         * Dots replaced with dashes (tmux rejects dots in session names). */
+        char chat_tag[256];
+        {
+            const char *base = strrchr(ws->chat_path, '/');
+            base = base ? base + 1 : ws->chat_path;
+            size_t blen = strlen(base);
+            /* Strip .chat suffix */
+            if (blen > 5 && strcmp(base + blen - 5, ".chat") == 0)
+                blen -= 5;
+            if (blen >= sizeof(chat_tag)) blen = sizeof(chat_tag) - 1;
+            memcpy(chat_tag, base, blen);
+            chat_tag[blen] = '\0';
+            /* Replace dots with dashes */
+            for (size_t i = 0; i < blen; i++)
+                if (chat_tag[i] == '.') chat_tag[i] = '-';
+        }
+
+        /* Count alive agent sessions for THIS chat only */
+        char grep_cmd[512];
+        snprintf(grep_cmd, sizeof(grep_cmd),
+                 "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
+                 "grep -c 'nbs-.*-%s' 2>/dev/null || echo 0", chat_tag);
+        FILE *fp = popen(grep_cmd, "r");
         int count = 0;
         if (fp) {
             if (fscanf(fp, "%d", &count) != 1) count = 0;

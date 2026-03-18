@@ -38,11 +38,16 @@ NBS_DIGEST="bin/nbs-digest-spawn"
 
 [[ -x "$NBS_CHAT" ]] || { echo "Error: nbs-chat not found at $NBS_CHAT" >&2; exit 1; }
 
-echo "[watchdog] Restarting team..."
+# Derive session tag from chat filename (matches watchdog logic in terminal.c)
+# live.chat → "live", nn.Module.chat → "nn-Module"
+CHAT_BASE=$(basename "$CHAT_FILE" .chat)
+CHAT_TAG="${CHAT_BASE//./-}"
 
-# 1. Kill all agent sessions and sidecars
+echo "[watchdog] Restarting team for ${CHAT_TAG}..."
+
+# 1. Kill all agent sessions and sidecars for this chat
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    tmux kill-session -t "nbs-${h}-live" 2>/dev/null || true
+    tmux kill-session -t "nbs-${h}-${CHAT_TAG}" 2>/dev/null || true
 done
 pkill -f 'nbs-sidecar.*--handle=' 2>/dev/null || true
 rm -f .nbs/pids/*.pid 2>/dev/null || true
@@ -73,19 +78,19 @@ done
 
 # 4. Spawn agents (scribe first, 5s stagger)
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    tmux new-session -d -s "nbs-${h}-live" -c "$PROJECT_ROOT" \
+    tmux new-session -d -s "nbs-${h}-${CHAT_TAG}" -c "$PROJECT_ROOT" \
         "NBS_HANDLE=${h} bin/nbs-claude --dangerously-skip-permissions"
     sleep 5
 done
 
 # 5. Wait for init, inject skills
 sleep 15
-tmux send-keys -t nbs-scribe-live "/nbs-scribe" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t nbs-gatekeeper-live "/nbs-gatekeeper" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t nbs-testkeeper-live "/nbs-testkeeper" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t nbs-theologian-live "/nbs-theologian" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t nbs-generalist-live "/nbs-teams-chat" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t nbs-supervisor-live "/nbs-supervisor" Enter 2>/dev/null || true
+tmux send-keys -t "nbs-scribe-${CHAT_TAG}" "/nbs-scribe" Enter 2>/dev/null || true; sleep 1
+tmux send-keys -t "nbs-gatekeeper-${CHAT_TAG}" "/nbs-gatekeeper" Enter 2>/dev/null || true; sleep 1
+tmux send-keys -t "nbs-testkeeper-${CHAT_TAG}" "/nbs-testkeeper" Enter 2>/dev/null || true; sleep 1
+tmux send-keys -t "nbs-theologian-${CHAT_TAG}" "/nbs-theologian" Enter 2>/dev/null || true; sleep 1
+tmux send-keys -t "nbs-generalist-${CHAT_TAG}" "/nbs-teams-chat" Enter 2>/dev/null || true; sleep 1
+tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/null || true
 
 # 6. Post continuation directive
 "$NBS_CHAT" send "$CHAT_FILE" supervisor \
