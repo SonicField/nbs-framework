@@ -186,6 +186,16 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
 
     /* Walk up looking for .nbs/ */
     for (int i = 0; i < 10; i++) {
+        /* Skip if current dir IS .nbs — that's the state dir, not the project root */
+        const char *basename = strrchr(dir, '/');
+        basename = basename ? basename + 1 : dir;
+        if (strcmp(basename, ".nbs") == 0) {
+            char *up = strrchr(dir, '/');
+            if (up) *up = '\0';
+            else break;
+            continue;
+        }
+
         char probe[4096 + 8];
         snprintf(probe, sizeof(probe), "%s/.nbs", dir);
         struct stat st;
