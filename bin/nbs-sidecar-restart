@@ -1,215 +1,200 @@
 #!/bin/bash
-# nbs-sidecar-restart — Hot-restart sidecar processes without killing agents.
+# nbs-sidecar-restart — Hot-restart or respawn sidecar processes.
 #
 # Usage:
-#   nbs-sidecar-restart              # restart all running sidecars
+#   nbs-sidecar-restart              # restart all running sidecars (pick up new binary)
 #   nbs-sidecar-restart <handle>     # restart just one sidecar
+#   nbs-sidecar-restart --respawn    # scan all teams, spawn missing sidecars
 #
-# Reads each sidecar's command line from /proc, strips --initial-prompt
-# (to prevent re-injection into an already-running agent), kills the old
-# process, and launches a new one with the updated binary.
+# Default mode: reads each running sidecar's command line from /proc,
+# strips --initial-prompt, kills the old process, launches a new one.
+#
+# Respawn mode: scans all nbs-*-* tmux sessions, finds which ones are
+# missing a sidecar process, and spawns fresh sidecars for them. Also
+# restarts any existing sidecars. Works across all teams (live, module, etc).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SIDECAR="${SCRIPT_DIR}/nbs-sidecar"
 
-# Ensure bin/ is in PATH so sidecars can find nbs-prompts, nbs-bus, etc.
+# Ensure bin/ is in PATH so sidecars can find nbs-bus, etc.
 case ":${PATH}:" in
     *":${SCRIPT_DIR}:"*) ;;
     *) export PATH="${SCRIPT_DIR}:${PATH}" ;;
 esac
 
-TARGET_HANDLE="${1:-}"
+MODE="restart"
+TARGET_HANDLE=""
 
-if [[ "${TARGET_HANDLE}" == "--help" || "${TARGET_HANDLE}" == "-h" ]]; then
-    echo "Usage: $(basename "$0") [handle]"
-    echo ""
-    echo "Hot-restart nbs-sidecar processes to pick up new binary code."
-    echo "Agents (Claude sessions) are not affected."
-    echo ""
-    echo "  handle    Restart only the sidecar for this handle (optional)."
-    echo "            If omitted, restarts all running sidecars."
-    exit 0
-fi
-
-# Discover running sidecars
-# V4.3: Use [n] trick to prevent pgrep from self-matching
-# V5.4: Distinguish "no matches" (exit 1) from "pgrep error" (exit 2+)
-PIDS=$(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null) || {
-    pgrep_rc=$?
-    if [[ $pgrep_rc -gt 1 ]]; then
-        echo "ERROR: pgrep failed with exit code $pgrep_rc" >&2
-        exit 1
-    fi
-}
-
-if [[ -z "${PIDS:-}" ]]; then
-    echo "No running sidecars found."
-    exit 0
-fi
-
-RESTARTED=0
-FAILED=0
-
-for pid in $PIDS; do
-    # V5.7: Assert PID is numeric before using in /proc paths or kill
-    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
-        echo "ASSERTION FAILED: pgrep returned non-numeric PID: '$pid'" >&2
-        exit 1
-    fi
-
-    # Read full command line from /proc (NUL-separated)
-    if [[ ! -r "/proc/$pid/cmdline" ]]; then
-        continue
-    fi
-
-    # Parse arguments from NUL-separated cmdline
-    mapfile -d '' ARGS < "/proc/$pid/cmdline"
-
-    # Extract handle from arguments
-    HANDLE=""
-    for arg in "${ARGS[@]}"; do
-        case "$arg" in
-            --handle=*)
-                HANDLE="${arg#--handle=}"
-                ;;
-        esac
-    done
-
-    if [[ -z "$HANDLE" ]]; then
-        echo "SKIP: PID $pid — could not extract handle"
-        continue
-    fi
-
-    # If targeting a specific handle, skip others
-    if [[ -n "$TARGET_HANDLE" && "$HANDLE" != "$TARGET_HANDLE" ]]; then
-        continue
-    fi
-
-    # Skip infrastructure handles — these are ephemeral workers, not
-    # persistent team agents. Restarting them is pointless (they should
-    # exit on their own) or harmful (creates duplicate workers).
-    case "$HANDLE" in
-        pythia*|shepard*|fixup*)
-            echo "SKIP: $HANDLE (PID $pid) — infrastructure, not a team agent"
-            continue
+for arg in "$@"; do
+    case "$arg" in
+        --respawn) MODE="respawn" ;;
+        --help|-h)
+            echo "Usage: $(basename "$0") [--respawn] [handle]"
+            echo ""
+            echo "Hot-restart or respawn nbs-sidecar processes."
+            echo "Agents (Claude sessions) are not affected."
+            echo ""
+            echo "  (no args)     Restart all running sidecars (pick up new binary)"
+            echo "  <handle>      Restart only the sidecar for this handle"
+            echo "  --respawn     Scan all teams, spawn missing sidecars, restart existing ones"
+            exit 0
             ;;
+        *) TARGET_HANDLE="$arg" ;;
     esac
-
-    # Reconstruct args, stripping --initial-prompt and resolving binary path
-    NEW_ARGS=()
-    for arg in "${ARGS[@]}"; do
-        case "$arg" in
-            --initial-prompt=*)
-                # Skip — do not re-inject into running agent
-                ;;
-            */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar)
-                # Use the current binary from bin/
-                NEW_ARGS+=("${SCRIPT_DIR}/nbs-sidecar")
-                ;;
-            *)
-                NEW_ARGS+=("$arg")
-                ;;
-        esac
-    done
-
-    # V4.1: Validate NEW_ARGS is non-empty before exec
-    if [[ ${#NEW_ARGS[@]} -eq 0 ]]; then
-        echo "FAIL: $HANDLE (PID $pid) — no command after argument filtering"
-        FAILED=$((FAILED + 1))
-        continue
-    fi
-
-    # V4.2: SECURITY — validate binary path matches expected nbs-sidecar
-    expected_binary="${SCRIPT_DIR}/nbs-sidecar"
-    if [[ "${NEW_ARGS[0]}" != "$expected_binary" ]]; then
-        echo "SKIP: PID $pid — binary '${NEW_ARGS[0]}' is not $expected_binary"
-        continue
-    fi
-
-    if [[ ! -x "${NEW_ARGS[0]}" ]]; then
-        echo "FAIL: $HANDLE (PID $pid) — sidecar binary not executable: ${NEW_ARGS[0]}"
-        FAILED=$((FAILED + 1))
-        continue
-    fi
-
-    # V5.5: SECURITY — validate argument formats to prevent injection
-    # Arguments from /proc cmdline should only be --flag or --flag=value
-    for arg in "${NEW_ARGS[@]:1}"; do
-        if [[ ! "$arg" =~ ^--[a-zA-Z_-]+= ]] && [[ ! "$arg" =~ ^--[a-zA-Z_-]+$ ]]; then
-            echo "FAIL: $HANDLE (PID $pid) — unexpected argument format: '$arg'" >&2
-            FAILED=$((FAILED + 1))
-            continue 2
-        fi
-    done
-
-    # Kill old sidecar
-    # V5.1: Log kill result instead of silently discarding errors
-    echo -n "Restarting $HANDLE (PID $pid)... "
-    if ! kill "$pid" 2>/dev/null; then
-        # Process may already be dead — the loop below will confirm
-        echo -n "(kill signal may not have been delivered to PID $pid) "
-    fi
-    # Wait for process to die (up to 3s)
-    for i in 1 2 3 4 5 6; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            break
-        fi
-        sleep 0.5
-    done
-
-    # V5.2: Escalate to SIGKILL if SIGTERM did not work
-    if kill -0 "$pid" 2>/dev/null; then
-        echo -n "SIGTERM did not kill PID $pid, sending SIGKILL... "
-        kill -9 "$pid" 2>/dev/null || true
-        sleep 1
-    fi
-
-    if kill -0 "$pid" 2>/dev/null; then
-        echo "FAIL: $HANDLE (PID $pid) — old process did not die even after SIGKILL"
-        FAILED=$((FAILED + 1))
-        continue
-    fi
-
-    # Launch new sidecar
-    "${NEW_ARGS[@]}" &
-    NEW_PID=$!
-    # V5.3: Log disown failure — indicates backgrounding logic error
-    if ! disown "$NEW_PID" 2>/dev/null; then
-        echo "WARNING: disown failed for PID $NEW_PID — process may be killed when script exits"
-    fi
-
-    # V5.8: Improved postcondition — verify new process survives startup
-    # Check twice with a gap to catch processes that crash during init
-    sleep 1
-    if kill -0 "$NEW_PID" 2>/dev/null; then
-        sleep 2
-        if kill -0 "$NEW_PID" 2>/dev/null; then
-            echo "$pid → $NEW_PID"
-            RESTARTED=$((RESTARTED + 1))
-        else
-            echo "FAIL: $HANDLE — new process (PID $NEW_PID) died during startup"
-            FAILED=$((FAILED + 1))
-        fi
-    else
-        echo "FAIL: $HANDLE (PID $pid) — new process (PID $NEW_PID) died immediately"
-        FAILED=$((FAILED + 1))
-    fi
-
-    # Stagger restarts
-    sleep 1
 done
 
-echo ""
-echo "Restarted: $RESTARTED  Failed: $FAILED"
+[[ -x "$SIDECAR" ]] || { echo "Error: nbs-sidecar not found at $SIDECAR" >&2; exit 1; }
 
-if [[ -n "$TARGET_HANDLE" && $RESTARTED -eq 0 && $FAILED -eq 0 ]]; then
-    echo "No sidecar found for handle: $TARGET_HANDLE"
-    exit 1
+# Infrastructure handles — skip these (ephemeral workers, not team agents)
+is_infrastructure() {
+    case "$1" in
+        pythia*|shepard*|fixup*|chatdigest*|librarian*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# --- Restart existing sidecars (default mode) ---
+
+restart_running() {
+    local PIDS
+    PIDS=$(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null) || {
+        local pgrep_rc=$?
+        if [[ $pgrep_rc -gt 1 ]]; then
+            echo "ERROR: pgrep failed with exit code $pgrep_rc" >&2
+            exit 1
+        fi
+    }
+
+    if [[ -z "${PIDS:-}" ]]; then
+        echo "No running sidecars found."
+        return
+    fi
+
+    for pid in $PIDS; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        [[ -r "/proc/$pid/cmdline" ]] || continue
+
+        mapfile -d '' ARGS < "/proc/$pid/cmdline"
+
+        # Extract handle
+        local HANDLE=""
+        for arg in "${ARGS[@]}"; do
+            case "$arg" in --handle=*) HANDLE="${arg#--handle=}" ;; esac
+        done
+        [[ -n "$HANDLE" ]] || continue
+        [[ -z "$TARGET_HANDLE" || "$HANDLE" == "$TARGET_HANDLE" ]] || continue
+        is_infrastructure "$HANDLE" && continue
+
+        # Reconstruct args
+        local NEW_ARGS=()
+        for arg in "${ARGS[@]}"; do
+            case "$arg" in
+                --initial-prompt=*) ;;
+                */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar) NEW_ARGS+=("$SIDECAR") ;;
+                *) NEW_ARGS+=("$arg") ;;
+            esac
+        done
+        [[ ${#NEW_ARGS[@]} -gt 0 ]] || continue
+        [[ "${NEW_ARGS[0]}" == "$SIDECAR" ]] || continue
+
+        # Kill old, spawn new
+        echo -n "Restarting $HANDLE (PID $pid)... "
+        kill "$pid" 2>/dev/null || true
+        for _ in 1 2 3 4 5 6; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.5
+        done
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 1
+
+        "${NEW_ARGS[@]}" &
+        disown $! 2>/dev/null || true
+        echo "$pid → $!"
+        RESTARTED=$((RESTARTED + 1))
+        sleep 1
+    done
+}
+
+# --- Respawn missing sidecars ---
+
+respawn_missing() {
+    # Find all nbs agent tmux sessions
+    local SESSIONS
+    SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^nbs-' || true)
+    [[ -n "$SESSIONS" ]] || { echo "No nbs agent sessions found."; return; }
+
+    while IFS= read -r ses; do
+        # Extract handle and tag from session name: nbs-<handle>-<tag>
+        local rest="${ses#nbs-}"
+        # Handle is everything before the last dash-separated token
+        # nbs-supervisor-live → handle=supervisor, tag=live
+        # nbs-gatekeeper-nn-Module → handle=gatekeeper, tag=nn-Module
+        # Strategy: try known handles first
+        local handle="" tag=""
+        for h in supervisor generalist scribe gatekeeper testkeeper theologian; do
+            if [[ "$rest" == "${h}-"* ]]; then
+                handle="$h"
+                tag="${rest#${h}-}"
+                break
+            fi
+        done
+        [[ -n "$handle" ]] || continue
+        is_infrastructure "$handle" && continue
+
+        local pane
+        pane=$(tmux display-message -t "$ses" -p '#{pane_id}' 2>/dev/null) || continue
+
+        # Check if a sidecar is already watching this pane
+        if pgrep -f "nbs-sidecar.*--pane-id=${pane}" >/dev/null 2>&1; then
+            continue  # Already has a sidecar
+        fi
+
+        # Determine project root from the session's working directory
+        local session_cwd
+        session_cwd=$(tmux display-message -t "$ses" -p '#{pane_current_path}' 2>/dev/null) || continue
+        # Walk up to find .nbs/
+        local root="$session_cwd"
+        while [[ "$root" != "/" ]]; do
+            [[ -d "${root}/.nbs" ]] && break
+            root=$(dirname "$root")
+        done
+        [[ -d "${root}/.nbs" ]] || { echo "SKIP: $ses — no .nbs/ found above $session_cwd"; continue; }
+
+        echo -n "Spawning sidecar for $handle ($ses, pane=$pane)... "
+        "$SIDECAR" \
+            --handle="$handle" \
+            --root="$root" \
+            --transport=tmux \
+            --pane-id="$pane" \
+            --log="${root}/.nbs/sidecar-${handle}.log" &
+        disown $! 2>/dev/null || true
+        echo "PID $!"
+        SPAWNED=$((SPAWNED + 1))
+        sleep 1
+    done <<< "$SESSIONS"
+}
+
+# --- Main ---
+
+RESTARTED=0
+SPAWNED=0
+FAILED=0
+
+if [[ "$MODE" == "respawn" ]]; then
+    # First restart any that are running (pick up new binary)
+    restart_running
+    # Then spawn any that are missing
+    respawn_missing
+else
+    restart_running
 fi
 
-# V4.4: Use 0/1 exit code, not FAILED count (which can overflow valid range)
-if [[ "$FAILED" -gt 0 ]]; then
+echo ""
+echo "Restarted: $RESTARTED  Spawned: $SPAWNED"
+
+if [[ -n "$TARGET_HANDLE" && $RESTARTED -eq 0 && $SPAWNED -eq 0 ]]; then
+    echo "No sidecar found for handle: $TARGET_HANDLE"
     exit 1
 fi
 exit 0
