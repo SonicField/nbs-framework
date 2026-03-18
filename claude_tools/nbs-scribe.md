@@ -130,7 +130,7 @@ Use these common tags (or create new ones as needed):
 
 ## Decision Log Access
 
-The decision log at `.nbs/scribe/<chat-name>-log.md` is readable by any agent. Use `nbs-scribe-query` to query past decisions — it derives the log path from the chat file:
+The decision log at `.nbs/scribe/<chat-name>-log.md` is readable by any agent. Use `nbs-scribe-query` to query past decisions — it derives the log path from the chat file. All commands automatically search archive files (e.g. `live-log-20260318-103500-archive.md`) in addition to the live log, newest first.
 
 ```bash
 # Search for decisions about a topic
@@ -147,6 +147,15 @@ nbs-scribe-query --chat=.nbs/chat/live.chat --last=5
 
 # Count total decisions
 nbs-scribe-query --chat=.nbs/chat/live.chat --count
+
+# Search with regex (ERE, not PCRE)
+nbs-scribe-query --chat=.nbs/chat/live.chat 'deopt.*crash' --regex
+
+# Decisions by risk tag
+nbs-scribe-query --chat=.nbs/chat/live.chat --tag=correctness
+
+# Show all superseded (corrected) decisions
+nbs-scribe-query --chat=.nbs/chat/live.chat --superseded
 ```
 
 ## Session Continuity
