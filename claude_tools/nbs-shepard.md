@@ -32,22 +32,28 @@ You are spawned when a `shepard-checkpoint` event triggers (every 100 chat messa
 **Before reading chat**, check whether agents are actually alive. A dead agent produces no chat messages — Shepard must detect this directly, not infer it from silence.
 
 ```bash
-# List all agent sessions
-nbs-workers list
+# List live team agent sessions (these are the REAL agents, not ephemeral workers)
+tmux list-sessions -F '#{session_name}' 2>/dev/null | grep 'nbs-.*-live'
 
-# For each agent from the list, check status individually
-nbs-workers status <worker-slug>
-# e.g. nbs-workers status supervisor-e0fc
+# For each live session, capture the last few lines to check for activity
+tmux capture-pane -t <session-name> -p -S -5 2>/dev/null
+# e.g. tmux capture-pane -t nbs-supervisor-live -p -S -5
+
+# Expected live sessions: nbs-supervisor-live, nbs-generalist-live,
+# nbs-scribe-live, nbs-gatekeeper-live, nbs-testkeeper-live, nbs-theologian-live
+#
+# Also check ephemeral workers (periodic triggers, digest workers):
+nbs-workers list
 ```
 
-Classify each agent:
+Classify each live agent (from `tmux capture-pane` output):
 
 | Category | Indicators | Action to recommend |
 |----------|-----------|---------------------|
-| **Healthy** | Spinner active or recent output, context >25% | None |
-| **Context stressed** | Context 15–25% | Recommend `/compact` |
-| **Zombie** | Context <15%, no meaningful output | Recommend `/nbs-teams-fixup` |
-| **Dead** | Session exited, bash prompt visible, or session missing | Recommend `/nbs-teams-fixup` immediately |
+| **Healthy** | Spinner active (Tomfoolering/Galloping/etc), or recent tool use output | None |
+| **Idle** | Shows `❯` prompt with no activity | May need a task — check if supervisor has assigned work |
+| **Context stressed** | Shows "Auto-compact" or context warning | Recommend `/compact` |
+| **Dead** | Shows "Terminated", bare `$>` bash prompt, or session missing from tmux list | Recommend restart via `/nbs-teams-fixup` immediately |
 
 If ANY agent is dead or zombie, this MUST appear as the **first item** in the posted assessment, marked `ACTION REQUIRED`. Do not bury it under other findings. The supervisor and the human need to see it immediately.
 
