@@ -33,8 +33,17 @@ CHAT_FILE="$2"
 
 cd "$PROJECT_ROOT"
 
-NBS_CHAT=".nbs/bin/nbs-chat"
-NBS_DIGEST=".nbs/bin/nbs-digest-spawn"
+# Find tools: prefer .nbs/bin/ (installed projects), fall back to bin/ (framework itself)
+if [[ -x ".nbs/bin/nbs-chat" ]]; then
+    NBS_BIN=".nbs/bin"
+elif [[ -x "bin/nbs-chat" ]]; then
+    NBS_BIN="bin"
+else
+    echo "Error: cannot find nbs-chat in .nbs/bin/ or bin/" >&2
+    exit 1
+fi
+NBS_CHAT="${NBS_BIN}/nbs-chat"
+NBS_DIGEST="${NBS_BIN}/nbs-digest-spawn"
 
 [[ -x "$NBS_CHAT" ]] || { echo "Error: nbs-chat not found at $NBS_CHAT" >&2; exit 1; }
 
@@ -104,7 +113,7 @@ done
 # 4. Spawn agents (scribe first, 5s stagger)
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
     tmux new-session -d -s "nbs-${h}-${CHAT_TAG}" -c "$PROJECT_ROOT" \
-        "NBS_HANDLE=${h} .nbs/bin/nbs-claude --dangerously-skip-permissions"
+        "NBS_HANDLE=${h} ${NBS_BIN}/nbs-claude --dangerously-skip-permissions"
     sleep 5
 done
 

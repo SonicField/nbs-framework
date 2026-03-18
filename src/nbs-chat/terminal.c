@@ -162,6 +162,23 @@ static void history_free(void) {
 
 /* history_load defined after line_state_t and line_ensure_cap (see below) */
 
+/* --- Restart script resolution --- */
+
+/* Find the restart script: try .nbs/bin/ first (installed projects),
+ * fall back to bin/ (framework source tree). Returns 0 on success. */
+static int resolve_restart_script(const char *project_root,
+                                   char *out, size_t out_size) {
+    int n = snprintf(out, out_size,
+                     "%s/.nbs/bin/nbs-chat-terminal-restart.sh", project_root);
+    if (n > 0 && (size_t)n < out_size && access(out, X_OK) == 0)
+        return 0;
+    n = snprintf(out, out_size,
+                 "%s/bin/nbs-chat-terminal-restart.sh", project_root);
+    if (n > 0 && (size_t)n < out_size && access(out, X_OK) == 0)
+        return 0;
+    return -1;
+}
+
 /* --- Watchdog daemon --- */
 
 static watchdog_state_t g_watchdog;
@@ -256,10 +273,8 @@ static void *watchdog_thread_fn(void *arg) {
         watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
         if (d == WATCHDOG_RESTART) {
             char script[4096 + 64];
-            int sn = snprintf(script, sizeof(script),
-                     "%s/.nbs/bin/nbs-chat-terminal-restart.sh",
-                     ws->project_root);
-            if (sn > 0 && (size_t)sn < sizeof(script)) {
+            if (resolve_restart_script(ws->project_root,
+                                        script, sizeof(script)) == 0) {
                 pid_t rpid = fork();
                 if (rpid == 0) {
                     /* Child: exec restart script with project_root and chat_path */
@@ -1255,9 +1270,8 @@ int main(int argc, char **argv) {
         /* --restart: run restart script immediately, no cooldown */
         if (restart_immediately) {
             char script[4096 + 64];
-            int rsn = snprintf(script, sizeof(script),
-                     "%s/.nbs/bin/nbs-chat-terminal-restart.sh", wd_project_root);
-            if (rsn > 0 && (size_t)rsn < sizeof(script)) {
+            if (resolve_restart_script(wd_project_root,
+                                        script, sizeof(script)) == 0) {
                 printf("%sRestarting team...%s\n", DIM, RESET);
                 pid_t rpid = fork();
                 if (rpid == 0) {
@@ -1567,10 +1581,8 @@ int main(int argc, char **argv) {
                 } else {
                     printf("  %sTriggering manual restart...%s\n", DIM, RESET);
                     char rscript[4096 + 64];
-                    int rsn = snprintf(rscript, sizeof(rscript),
-                             "%s/.nbs/bin/nbs-chat-terminal-restart.sh",
-                             g_watchdog.project_root);
-                    if (rsn > 0 && (size_t)rsn < sizeof(rscript)) {
+                    if (resolve_restart_script(g_watchdog.project_root,
+                                               rscript, sizeof(rscript)) == 0) {
                         pid_t rpid = fork();
                         if (rpid == 0) {
                             /* Child: exec restart script */
