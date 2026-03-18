@@ -11,6 +11,9 @@
 #   nbs-scribe-query --chat=<chat-file> --count      Count total decisions
 #   nbs-scribe-query --chat=<chat-file> --superseded Show all corrections
 #
+# All commands automatically search archive files (e.g. live-log-20260318-103500-archive.md)
+# in addition to the live log. Archives are searched newest-first.
+#
 # The log file is derived from the chat file name:
 #   .nbs/chat/live.chat → .nbs/scribe/live-log.md
 #   .nbs/chat/work.chat → .nbs/scribe/work-log.md
@@ -80,6 +83,16 @@ SCRIBE_DIR=$(cd "$CHAT_DIR/../scribe" 2>/dev/null && pwd) || {
 }
 LOG="${SCRIBE_DIR}/${CHAT_BASE}-log.md"
 
+# Collect archive files for this session (newest first)
+ARCHIVES=()
+for f in "${SCRIBE_DIR}/${CHAT_BASE}-log-"*"-archive.md"; do
+    [[ -f "$f" ]] && ARCHIVES+=("$f")
+done
+# Sort newest first (filename contains timestamp)
+IFS=$'\n' ARCHIVES=($(printf '%s\n' "${ARCHIVES[@]}" | sort -r)); unset IFS
+# All files: live first, then archives newest-to-oldest
+ALL_FILES=("$LOG" "${ARCHIVES[@]}")
+
 if [[ ! -f "$LOG" ]]; then
     echo "Error: scribe log not found: $LOG (derived from $CHAT_FILE)" >&2
     exit 4
@@ -97,8 +110,13 @@ case "$1" in
         exit 0
         ;;
     --count)
-        c=$(grep -c '^### D-' "$LOG" || true)
-        echo "${c:-0}"
+        total=0
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            c=$(grep -c '^### D-' "$f" || true)
+            total=$(( total + ${c:-0} ))
+        done
+        echo "$total"
         exit 0
         ;;
     --last=*)
@@ -108,9 +126,18 @@ case "$1" in
             echo "Error: --last requires a positive integer, got '$N'" >&2
             exit 4
         }
-        grep -n '^### D-' "$LOG" | tail -"$N" | while IFS=: read -r line_num _rest; do
-            sed -n "${line_num},/^---$/p" "$LOG" | head -10
-            echo ""
+        collected=0
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            remaining=$(( N - collected ))
+            [[ $remaining -le 0 ]] && break
+            entries=$(grep -n '^### D-' "$f" | tail -"$remaining")
+            [[ -z "$entries" ]] && continue
+            while IFS=: read -r line_num _rest; do
+                sed -n "${line_num},/^---$/p" "$f" | head -10
+                echo ""
+                collected=$(( collected + 1 ))
+            done <<< "$entries"
         done
         exit 0
         ;;
@@ -121,13 +148,16 @@ case "$1" in
             echo "Error: --id must match D-<timestamp>, got '$ID'" >&2
             exit 4
         }
-        LINE=$(grep -nF "### ${ID}" "$LOG" | head -1 | cut -d: -f1 || true)
-        if [[ -z "$LINE" ]]; then
-            echo "Decision not found: $ID" >&2
-            exit 1
-        fi
-        sed -n "${LINE},/^---$/p" "$LOG" | head -12
-        exit 0
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            LINE=$(grep -nF "### ${ID}" "$f" | head -1 | cut -d: -f1 || true)
+            if [[ -n "$LINE" ]]; then
+                sed -n "${LINE},/^---$/p" "$f" | head -12
+                exit 0
+            fi
+        done
+        echo "Decision not found: $ID" >&2
+        exit 1
         ;;
     --by=*)
         HANDLE="${1#--by=}"
@@ -137,17 +167,27 @@ case "$1" in
             exit 4
         }
         # [Violation 5] Exit 1 if no matches found
-        RESULTS=$(grep -n "Participants:" "$LOG" | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
-            HEADER_LINE=$(head -"$pline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
-            if [[ -n "$HEADER_LINE" ]]; then
-                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
-                echo ""
+        FOUND_ANY=false
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            FILE_RESULTS=$(grep -n "Participants:" "$f" | grep -F "$HANDLE" | cut -d: -f1 | while read -r pline; do
+                HEADER_LINE=$(head -"$pline" "$f" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
+                if [[ -n "$HEADER_LINE" ]]; then
+                    sed -n "${HEADER_LINE},/^---$/p" "$f" | head -10
+                    echo ""
+                fi
+            done | awk '!seen[$0]++') || true
+            if [[ -n "$FILE_RESULTS" ]]; then
+                FOUND_ANY=true
+                if [[ ${#ARCHIVES[@]} -gt 0 ]]; then
+                    echo "[$(basename "$f")]"
+                fi
+                printf '%s\n' "$FILE_RESULTS"
             fi
-        done | awk '!seen[$0]++') || true
-        if [[ -z "$RESULTS" ]]; then
+        done
+        if [[ "$FOUND_ANY" != true ]]; then
             exit 1
         fi
-        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     --tag=*)
@@ -158,26 +198,46 @@ case "$1" in
             exit 4
         }
         # [Violation 6] Exit 1 if no matches found
-        RESULTS=$(grep -n "Risk tags:" "$LOG" | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
-            HEADER_LINE=$(head -"$tline" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
-            if [[ -n "$HEADER_LINE" ]]; then
-                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
-                echo ""
+        FOUND_ANY=false
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            FILE_RESULTS=$(grep -n "Risk tags:" "$f" | grep -F "$TAG" | cut -d: -f1 | while read -r tline; do
+                HEADER_LINE=$(head -"$tline" "$f" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
+                if [[ -n "$HEADER_LINE" ]]; then
+                    sed -n "${HEADER_LINE},/^---$/p" "$f" | head -10
+                    echo ""
+                fi
+            done | awk '!seen[$0]++') || true
+            if [[ -n "$FILE_RESULTS" ]]; then
+                FOUND_ANY=true
+                if [[ ${#ARCHIVES[@]} -gt 0 ]]; then
+                    echo "[$(basename "$f")]"
+                fi
+                printf '%s\n' "$FILE_RESULTS"
             fi
-        done | awk '!seen[$0]++') || true
-        if [[ -z "$RESULTS" ]]; then
+        done
+        if [[ "$FOUND_ANY" != true ]]; then
             exit 1
         fi
-        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     --superseded)
         # [Violation 7] Exit 1 if no superseded entries found
-        RESULTS=$(grep -A8 '\[SUPERSEDES' "$LOG") || true
-        if [[ -z "$RESULTS" ]]; then
+        FOUND_ANY=false
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            FILE_RESULTS=$(grep -A8 '\[SUPERSEDES' "$f") || true
+            if [[ -n "$FILE_RESULTS" ]]; then
+                FOUND_ANY=true
+                if [[ ${#ARCHIVES[@]} -gt 0 ]]; then
+                    echo "[$(basename "$f")]"
+                fi
+                printf '%s\n' "$FILE_RESULTS"
+            fi
+        done
+        if [[ "$FOUND_ANY" != true ]]; then
             exit 1
         fi
-        printf '%s\n' "$RESULTS"
         exit 0
         ;;
     -*)
@@ -193,17 +253,27 @@ case "$1" in
         }
         # [Violation 3/4] Use array for grep opts; -- prevents pattern-as-flag
         # [Violation 8] Exit 1 if no matches found
-        RESULTS=$(grep "${GREP_OPTS[@]}" -- "$PATTERN" "$LOG" 2>&1 | while IFS=: read -r line_num _rest; do
-            HEADER_LINE=$(head -"$line_num" "$LOG" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
-            if [[ -n "$HEADER_LINE" ]]; then
-                sed -n "${HEADER_LINE},/^---$/p" "$LOG" | head -10
-                echo ""
+        FOUND_ANY=false
+        for f in "${ALL_FILES[@]}"; do
+            [[ -f "$f" ]] || continue
+            FILE_RESULTS=$(grep "${GREP_OPTS[@]}" -- "$PATTERN" "$f" 2>&1 | while IFS=: read -r line_num _rest; do
+                HEADER_LINE=$(head -"$line_num" "$f" | grep -n '^### D-' | tail -1 | cut -d: -f1 || true)
+                if [[ -n "$HEADER_LINE" ]]; then
+                    sed -n "${HEADER_LINE},/^---$/p" "$f" | head -10
+                    echo ""
+                fi
+            done | awk '!seen[$0]++') || true
+            if [[ -n "$FILE_RESULTS" ]]; then
+                FOUND_ANY=true
+                if [[ ${#ARCHIVES[@]} -gt 0 ]]; then
+                    echo "[$(basename "$f")]"
+                fi
+                printf '%s\n' "$FILE_RESULTS"
             fi
-        done | awk '!seen[$0]++') || true
-        if [[ -z "$RESULTS" ]]; then
+        done
+        if [[ "$FOUND_ANY" != true ]]; then
             exit 1
         fi
-        printf '%s\n' "$RESULTS"
         exit 0
         ;;
 esac

@@ -27,6 +27,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <glob.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -578,7 +579,7 @@ static const char *strcasestr_portable(const char *haystack, const char *needle)
 
 static int cmd_search(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "Usage: nbs-chat search <file> <pattern> [--handle=<name>]\n");
+        fprintf(stderr, "Usage: nbs-chat search <file> <pattern> [--handle=<name>] [--after=<time>] [--before=<time>] [--include-archives]\n");
         return 4;
     }
     ASSERT_MSG(argc >= 4, "cmd_search: argc %d after validation", argc);
@@ -588,6 +589,7 @@ static int cmd_search(int argc, char **argv) {
     const char *filter_handle = NULL;
     time_t after_time = 0;
     time_t before_time = 0;
+    int include_archives = 0;
 
     /* Preconditions: args validated from argv */
     ASSERT_MSG(path != NULL, "cmd_search: path argument is NULL");
@@ -618,6 +620,8 @@ static int cmd_search(int argc, char **argv) {
                 fprintf(stderr, "Error: Invalid --before value: %s\n", argv[i] + 9);
                 return 4;
             }
+        } else if (strcmp(argv[i], "--include-archives") == 0) {
+            include_archives = 1;
         } else {
             fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
             return 4;
@@ -680,12 +684,127 @@ static int cmd_search(int argc, char **argv) {
         }
     }
 
+    chat_state_free(&state);
+
+    /* Search archive files if requested */
+    if (include_archives) {
+        /* Derive archive glob pattern from the live file path.
+         * For path "/dir/foo.chat", glob for "/dir/foo-*-archive.chat". */
+        char dir[MAX_PATH_LEN];
+        char base[MAX_PATH_LEN];
+        snprintf(dir, sizeof(dir), "%s", path);
+        snprintf(base, sizeof(base), "%s", path);
+
+        /* Find last '/' to split dir and basename */
+        char *last_slash = strrchr(dir, '/');
+        const char *dirname_part;
+        const char *basename_part;
+        if (last_slash) {
+            *last_slash = '\0';
+            dirname_part = dir;
+            basename_part = last_slash + 1;
+            /* Also update base to just the basename */
+            memmove(base, basename_part, strlen(basename_part) + 1);
+        } else {
+            dirname_part = ".";
+            /* base already holds the full filename */
+        }
+
+        /* Strip .chat extension from basename to form glob stem */
+        char stem[MAX_PATH_LEN];
+        snprintf(stem, sizeof(stem), "%s", base);
+        char *ext = strstr(stem, ".chat");
+        if (ext && ext[5] == '\0') {
+            *ext = '\0';
+        }
+
+        char glob_pattern[MAX_PATH_LEN * 2];
+        int gp_len = snprintf(glob_pattern, sizeof(glob_pattern), "%s/%s-*-archive.chat",
+                              dirname_part, stem);
+        if (gp_len < 0 || (size_t)gp_len >= sizeof(glob_pattern)) {
+            fprintf(stderr, "Error: Archive glob pattern too long\n");
+            return 1;
+        }
+
+        glob_t globbuf;
+        int grc = glob(glob_pattern, 0, NULL, &globbuf);
+        if (grc == 0) {
+            /* Sort reverse-alphabetically (newest timestamps first) */
+            for (size_t a = 0; a < globbuf.gl_pathc; a++) {
+                for (size_t b = a + 1; b < globbuf.gl_pathc; b++) {
+                    if (strcmp(globbuf.gl_pathv[a], globbuf.gl_pathv[b]) < 0) {
+                        char *tmp = globbuf.gl_pathv[a];
+                        globbuf.gl_pathv[a] = globbuf.gl_pathv[b];
+                        globbuf.gl_pathv[b] = tmp;
+                    }
+                }
+            }
+
+            for (size_t gi = 0; gi < globbuf.gl_pathc; gi++) {
+                const char *archive_path = globbuf.gl_pathv[gi];
+
+                /* Extract just the filename for the prefix label */
+                const char *archive_name = strrchr(archive_path, '/');
+                archive_name = archive_name ? archive_name + 1 : archive_path;
+
+                chat_state_t astate;
+                int arc = chat_read(archive_path, &astate);
+                if (arc < 0) {
+                    fprintf(stderr, "Warning: Could not read archive %s, skipping\n",
+                            archive_path);
+                    continue;
+                }
+
+                ASSERT_MSG(astate.message_count == 0 || astate.messages != NULL,
+                           "cmd_search: chat_read succeeded but messages is NULL with count=%d (archive %s)",
+                           astate.message_count, archive_path);
+
+                for (int ai = 0; ai < astate.message_count; ai++) {
+                    if (filter_handle && strcmp(astate.messages[ai].handle, filter_handle) != 0) {
+                        continue;
+                    }
+                    if (after_time > 0 && astate.messages[ai].timestamp < after_time) {
+                        continue;
+                    }
+                    if (before_time > 0 && astate.messages[ai].timestamp > before_time) {
+                        continue;
+                    }
+
+                    if (strcasestr_portable(astate.messages[ai].content, pattern) != NULL) {
+                        if (astate.messages[ai].timestamp > 0) {
+                            struct tm tm_buf;
+                            struct tm *tm = gmtime_r(&astate.messages[ai].timestamp, &tm_buf);
+                            if (tm) {
+                                char ts[32];
+                                strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
+                                printf("[%s] [%d] [%s] %s: %s\n", archive_name, ai, ts,
+                                       astate.messages[ai].handle, astate.messages[ai].content);
+                            } else {
+                                printf("[%s] [%d] %s: %s\n", archive_name, ai,
+                                       astate.messages[ai].handle, astate.messages[ai].content);
+                            }
+                        } else {
+                            printf("[%s] [%d] %s: %s\n", archive_name, ai,
+                                   astate.messages[ai].handle, astate.messages[ai].content);
+                        }
+                        match_count++;
+                    }
+                }
+
+                chat_state_free(&astate);
+            }
+
+            globfree(&globbuf);
+        } else if (grc != GLOB_NOMATCH) {
+            fprintf(stderr, "Warning: glob() failed for pattern %s\n", glob_pattern);
+        }
+    }
+
     if (match_count == 0) {
         /* No matches — exit code 0 (not an error, just no results) */
         printf("No matches found.\n");
     }
 
-    chat_state_free(&state);
     return 0;
 }
 

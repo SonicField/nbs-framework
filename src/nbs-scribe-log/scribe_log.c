@@ -279,6 +279,322 @@ int scribe_log_init(const char *log_path)
 }
 
 /* ------------------------------------------------------------------ */
+/* Auto-archive                                                        */
+/* ------------------------------------------------------------------ */
+
+#define SCRIBE_ARCHIVE_THRESHOLD  500   /* decisions before archive triggers */
+#define SCRIBE_ARCHIVE_CLEAVE     250   /* decisions moved to archive */
+
+/*
+ * scribe_log_auto_archive — Cleave old decisions into an archive file.
+ *
+ * Called from scribe_log_append after the successful write, while the
+ * fcntl lock is still held. Mirrors the chat_auto_archive pattern.
+ *
+ * Preconditions:
+ *   - Lock is held by caller (do NOT acquire a second lock)
+ *   - log_path points to the live log file
+ *
+ * Postconditions:
+ *   - If decision count <= SCRIBE_ARCHIVE_THRESHOLD: no-op
+ *   - On success: archive file created with header + first 250 entries;
+ *     main file rewritten with updated count + remaining entries
+ *   - On failure: warning to stderr, main file unchanged (non-fatal)
+ */
+static void scribe_log_auto_archive(const char *log_path)
+{
+    ASSERT_MSG(log_path != NULL, "scribe_log_auto_archive: log_path is NULL");
+
+    /* Read entire file into memory */
+    FILE *f = fopen(log_path, "r");
+    if (!f) {
+        fprintf(stderr, "Warning: auto-archive: cannot open %s: %s\n",
+                log_path, strerror(errno));
+        return;
+    }
+
+    /* Get file size */
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        fprintf(stderr, "Warning: auto-archive: fseek failed: %s\n",
+                strerror(errno));
+        return;
+    }
+    long file_size = ftell(f);
+    if (file_size <= 0) {
+        fclose(f);
+        return;
+    }
+    rewind(f);
+
+    char *content = malloc((size_t)file_size + 1);
+    if (!content) {
+        fclose(f);
+        fprintf(stderr, "Warning: auto-archive: malloc failed\n");
+        return;
+    }
+
+    size_t nread = fread(content, 1, (size_t)file_size, f);
+    fclose(f);
+    content[nread] = '\0';
+
+    /* Count "### D-" lines and record their offsets */
+    int decision_count = 0;
+    /* First pass: count decisions */
+    {
+        const char *p = content;
+        while ((p = strstr(p, "\n### D-")) != NULL) {
+            decision_count++;
+            p += 7; /* skip past "\n### D-" */
+        }
+        /* Also check if file starts with "### D-" (no leading newline) */
+        if (strncmp(content, "### D-", 6) == 0)
+            decision_count++;
+    }
+
+    if (decision_count <= SCRIBE_ARCHIVE_THRESHOLD) {
+        free(content);
+        return;
+    }
+
+    /* Find the byte offset of the (ARCHIVE_CLEAVE + 1)th "### D-" line.
+     * Everything before that offset (header + first 250 entries) goes to archive.
+     * Everything from that offset onward stays in main. */
+    int seen = 0;
+    size_t cleave_offset = 0;
+    {
+        const char *p = content;
+        /* Check start-of-file case */
+        if (strncmp(content, "### D-", 6) == 0) {
+            seen++;
+            if (seen > SCRIBE_ARCHIVE_CLEAVE) {
+                cleave_offset = 0;
+                goto found_cleave;
+            }
+            p = content + 6;
+        }
+        while ((p = strstr(p, "\n### D-")) != NULL) {
+            seen++;
+            if (seen > SCRIBE_ARCHIVE_CLEAVE) {
+                /* p points to the '\n' before "### D-" — the cleave point
+                 * is at p+1 (start of the "### D-" line itself).
+                 * But we also want the preceding "---" separator to stay
+                 * with the entry. Scan backward for "---\n" preceding this. */
+                cleave_offset = (size_t)(p - content);
+                /* Walk back over whitespace/separator to include \n---\n
+                 * with the remaining file, not the archive */
+                /* Actually, each entry starts with "\n---\n\n### D-".
+                 * We want the "---" separator to stay with its entry,
+                 * so cleave at the "\n---" before this entry. */
+                /* Search backward from p for the preceding "\n---\n" or
+                 * "\n\n---\n" that introduces this entry's block */
+                const char *scan = p;
+                /* Walk backwards over any blank lines */
+                while (scan > content && *(scan - 1) == '\n') scan--;
+                /* Now check for "---" */
+                if (scan >= content + 3 && scan[-3] == '-' && scan[-2] == '-' && scan[-1] == '-') {
+                    /* Include the newline before "---" */
+                    scan -= 3;
+                    if (scan > content && *(scan - 1) == '\n') scan--;
+                    cleave_offset = (size_t)(scan - content);
+                    if (cleave_offset > 0) cleave_offset++; /* keep trailing \n of archive part */
+                }
+                goto found_cleave;
+            }
+            p += 7;
+        }
+        /* Should not reach here since decision_count > threshold > cleave */
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: inconsistent decision count\n");
+        return;
+    }
+
+found_cleave:
+    ;
+
+    /* Identify the header: everything before the first "### D-" entry
+     * (including the initial "---" separator). The header ends just before
+     * the first entry block's separator. */
+    size_t header_end = 0;
+    {
+        /* Find first "### D-" */
+        const char *first_entry;
+        if (strncmp(content, "### D-", 6) == 0) {
+            first_entry = content;
+        } else {
+            first_entry = strstr(content, "\n### D-");
+            if (first_entry) first_entry++; /* skip the \n */
+        }
+        if (!first_entry) {
+            free(content);
+            fprintf(stderr, "Warning: auto-archive: no entries found\n");
+            return;
+        }
+        /* Walk backward from first_entry over separator block "\n---\n\n" */
+        const char *hend = first_entry;
+        while (hend > content && *(hend - 1) == '\n') hend--;
+        if (hend >= content + 3 && hend[-3] == '-' && hend[-2] == '-' && hend[-1] == '-') {
+            hend -= 3;
+            while (hend > content && *(hend - 1) == '\n') hend--;
+            if (hend > content) hend++; /* keep one newline */
+        }
+        header_end = (size_t)(hend - content);
+    }
+
+    /* Build archive filename: <name>-<YYYYMMDD>-<HHMMSS>-archive.md */
+    char archive_path[SCRIBE_MAX_PATH];
+    {
+        time_t now = time(NULL);
+        struct tm tm_buf;
+        struct tm *tm = gmtime_r(&now, &tm_buf);
+        if (!tm) {
+            free(content);
+            fprintf(stderr, "Warning: auto-archive: gmtime_r failed\n");
+            return;
+        }
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", tm);
+
+        const char *dot = strrchr(log_path, '.');
+        if (dot && strcmp(dot, ".md") == 0) {
+            int prefix_len = (int)(dot - log_path);
+            int n = snprintf(archive_path, sizeof(archive_path),
+                             "%.*s-%s-archive.md", prefix_len, log_path, timestamp);
+            if (n < 0 || (size_t)n >= sizeof(archive_path)) {
+                free(content);
+                fprintf(stderr, "Warning: auto-archive: archive path overflow\n");
+                return;
+            }
+        } else {
+            int n = snprintf(archive_path, sizeof(archive_path),
+                             "%s-%s-archive.md", log_path, timestamp);
+            if (n < 0 || (size_t)n >= sizeof(archive_path)) {
+                free(content);
+                fprintf(stderr, "Warning: auto-archive: archive path overflow\n");
+                return;
+            }
+        }
+    }
+
+    /* --- Write archive file (header + first 250 entries) --- */
+    char archive_tmp[SCRIBE_MAX_PATH + 8];
+    {
+        int n = snprintf(archive_tmp, sizeof(archive_tmp), "%s.tmp", archive_path);
+        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(archive_tmp),
+                   "scribe_log_auto_archive: archive_tmp truncated");
+    }
+
+    int afd = open(archive_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (afd < 0) {
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: cannot create archive tmp: %s\n",
+                strerror(errno));
+        return;
+    }
+    FILE *af = fdopen(afd, "w");
+    if (!af) {
+        close(afd);
+        unlink(archive_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: fdopen failed\n");
+        return;
+    }
+
+    /* Write header + archived entries */
+    size_t aw = fwrite(content, 1, cleave_offset, af);
+    if (aw != cleave_offset || fclose(af) != 0) {
+        unlink(archive_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: archive write failed\n");
+        return;
+    }
+
+    if (rename(archive_tmp, archive_path) != 0) {
+        unlink(archive_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: archive rename failed: %s\n",
+                strerror(errno));
+        return;
+    }
+
+    /* --- Rewrite main file: header + remaining entries --- */
+    /* Update "Decision count: N" in header */
+    int remaining_count = decision_count - SCRIBE_ARCHIVE_CLEAVE;
+
+    char main_tmp[SCRIBE_MAX_PATH + 8];
+    {
+        int n = snprintf(main_tmp, sizeof(main_tmp), "%s.tmp", log_path);
+        ASSERT_MSG(n >= 0 && (size_t)n < sizeof(main_tmp),
+                   "scribe_log_auto_archive: main_tmp truncated");
+    }
+
+    int mfd = open(main_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (mfd < 0) {
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: cannot create main tmp: %s\n",
+                strerror(errno));
+        return;
+    }
+    FILE *mf = fdopen(mfd, "w");
+    if (!mf) {
+        close(mfd);
+        unlink(main_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: fdopen failed for main\n");
+        return;
+    }
+
+    /* Write header with updated decision count */
+    int mw_err = 0;
+    {
+        /* Write header line by line, replacing "Decision count: ..." */
+        const char *hdr = content;
+        const char *hdr_end = content + header_end;
+        while (hdr < hdr_end) {
+            const char *line_end = memchr(hdr, '\n', (size_t)(hdr_end - hdr));
+            if (!line_end) line_end = hdr_end;
+            size_t line_len = (size_t)(line_end - hdr);
+
+            if (line_len >= 16 && strncmp(hdr, "Decision count:", 15) == 0) {
+                if (fprintf(mf, "Decision count: %d\n", remaining_count) < 0)
+                    mw_err = 1;
+            } else {
+                if (fwrite(hdr, 1, line_len, mf) != line_len) mw_err = 1;
+                if (fputc('\n', mf) == EOF) mw_err = 1;
+            }
+            hdr = line_end + 1;
+        }
+    }
+
+    /* Write remaining entries (from cleave_offset to end) */
+    size_t remaining_size = nread - cleave_offset;
+    if (!mw_err && remaining_size > 0) {
+        if (fwrite(content + cleave_offset, 1, remaining_size, mf) != remaining_size)
+            mw_err = 1;
+    }
+
+    if (mw_err || fclose(mf) != 0) {
+        unlink(main_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: main rewrite failed\n");
+        return;
+    }
+
+    if (rename(main_tmp, log_path) != 0) {
+        unlink(main_tmp);
+        free(content);
+        fprintf(stderr, "Warning: auto-archive: main rename failed: %s\n",
+                strerror(errno));
+        return;
+    }
+
+    free(content);
+
+    fprintf(stderr, "nbs-scribe-log: archived %d decisions to %s (%d remaining)\n",
+            SCRIBE_ARCHIVE_CLEAVE, archive_path, remaining_count);
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry append                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -421,6 +737,11 @@ int scribe_log_append(const char *log_path, const scribe_entry_t *entry)
         lock_release(lock_fd);
         return SCRIBE_EXIT_ERROR;
     }
+
+    /* Auto-archive if decision count exceeds threshold.
+     * Non-fatal: if archive fails, the append still succeeded.
+     * Runs under the existing fcntl lock (no second lock acquired). */
+    scribe_log_auto_archive(log_path);
 
     lock_release(lock_fd);
 

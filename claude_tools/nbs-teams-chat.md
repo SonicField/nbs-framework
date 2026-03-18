@@ -46,6 +46,7 @@ Use this table to select the right tool for each situation. Do not use raw comma
 | Get remote diff | `nbs-remote-diff <ses> --cwd=<dir>` | `pty-session send <ses> 'git diff' && sleep 5 && pty-session read` |
 | Reserve a pty-session | `pty-session-lock acquire <ses> <handle>` | Posting "I'm using this session" to chat |
 | Search chat history | `nbs-chat search <file> "pattern"` | `grep` on chat files |
+| Search chat + archives | `nbs-chat search <file> "pattern" --include-archives` | `grep` on archive files |
 
 **You will be notified when there are new messages.** After you finish processing, return to your prompt. Do not poll, sleep-wait, or busy-loop.
 
@@ -76,7 +77,7 @@ All arguments are **positional**. There are no `--from=` or `--message=` flags.
 |---------|--------|
 | Send | `nbs-chat send <file> <handle> "<message>"` |
 | Read | `nbs-chat read <file> [--last=N] [--unread=<handle>]` |
-| Search | `nbs-chat search <file> "<pattern>"` |
+| Search | `nbs-chat search <file> "<pattern>" [--include-archives]` |
 | Create | `nbs-chat create <file>` |
 | Delete | `nbs-chat delete <file> --after=<time> [--dry-run]` |
 
@@ -102,6 +103,9 @@ nbs-chat participants .nbs/chat/coordination.chat
 # Search message history
 nbs-chat search .nbs/chat/coordination.chat "pattern"
 nbs-chat search .nbs/chat/coordination.chat "pattern" --handle=parser-worker
+
+# Search including archived chat files
+nbs-chat search .nbs/chat/coordination.chat "pattern" --include-archives
 
 # Read messages from the last 2 hours
 nbs-chat read .nbs/chat/coordination.chat --after=2h
