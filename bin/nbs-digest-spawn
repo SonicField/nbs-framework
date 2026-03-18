@@ -69,7 +69,7 @@ fi
 # Spawn ephemeral digest worker
 # CHAT_FILE has been validated to contain only safe characters (alphanumeric, dots,
 # hyphens, underscores, forward slashes) so it is safe to embed in the prompt string.
-TASK_DESC="Your handle is 'shepard'. Load /nbs-chat-digest. Digest the last 500 messages of ${CHAT_FILE} by launching 5 parallel sub-agents (use --last=100 --offset=0/100/200/300/400). Each sub-agent summarises decisions, blockers, 3Ws, and outcomes. Synthesise into a single digest of at least 200 lines. Post the FULL digest text to ${CHAT_FILE} via nbs-chat send using handle 'shepard'. Also write to .nbs/digests/. Exit after posting."
+TASK_DESC="Load /nbs-chat-digest. Read the last 100 messages of ${CHAT_FILE} via 'nbs-chat read ${CHAT_FILE} --last=100'. Do NOT launch sub-agents — process the messages directly in this session. Produce a concise digest (key decisions, blockers, outcomes, current state). Post the digest to ${CHAT_FILE} via 'nbs-chat send ${CHAT_FILE} chatdigest <digest>'. Also write to .nbs/digests/. Then stop."
 
 # [BUG #1] Do not suppress stderr from spawn -- let errors propagate
 WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC") || {
@@ -118,7 +118,7 @@ if [[ "$WAIT" == true ]]; then
 fi
 
 # [BUG #2] Do not swallow banner post errors -- report failure
-if ! "$NBS_CHAT" send "$CHAT_FILE" shepard \
+if ! "$NBS_CHAT" send "$CHAT_FILE" chatdigest \
     "=== TEAM RESTART — Digest above summarises prior session ==="; then
     echo "Warning: failed to post restart banner to $CHAT_FILE" >&2
 fi
