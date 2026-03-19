@@ -37,6 +37,7 @@ const trigger_periodic_t TRIGGER_PYTHIA = {
     .ts_filename = "pythia-last-run",
     .lock_filename = "pythia.lock",
     .role = TRIGGER_ROLE_PYTHIA,
+    .skill_file = TRIGGER_SKILL_PYTHIA,
     .task_desc = TRIGGER_DESC_PYTHIA,
 };
 
@@ -45,6 +46,7 @@ const trigger_periodic_t TRIGGER_SHEPARD = {
     .ts_filename = "shepard-last-run",
     .lock_filename = "shepard.lock",
     .role = TRIGGER_ROLE_SHEPARD,
+    .skill_file = TRIGGER_SKILL_SHEPARD,
     .task_desc = TRIGGER_DESC_SHEPARD,
 };
 
@@ -53,6 +55,7 @@ const trigger_periodic_t TRIGGER_FIXUP = {
     .ts_filename = "fixup-last-run",
     .lock_filename = "fixup.lock",
     .role = TRIGGER_ROLE_FIXUP,
+    .skill_file = TRIGGER_SKILL_FIXUP,
     .task_desc = TRIGGER_DESC_FIXUP,
 };
 
@@ -61,6 +64,7 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
     .ts_filename = "librarian-last-run",
     .lock_filename = "librarian.lock",
     .role = TRIGGER_ROLE_LIBRARIAN,
+    .skill_file = TRIGGER_SKILL_LIBRARIAN,
     .task_desc = TRIGGER_DESC_LIBRARIAN,
 };
 
@@ -254,12 +258,50 @@ int trigger_periodic_spawn(const char *nbs_root,
         return 1; /* Lock busy */
     }
 
+    /* Build combined task: skill file content + task instructions.
+     * The skill content is embedded verbatim so the worker doesn't
+     * need to load a slash command (which fails in tmux contexts). */
+    char skill_path[4096];
+    int sp = snprintf(skill_path, sizeof(skill_path),
+                      "%s/.nbs/%s", nbs_root, trigger->skill_file);
+    ASSERT_MSG(sp > 0 && (size_t)sp < sizeof(skill_path),
+               "trigger_periodic_spawn(%s): skill path overflow",
+               trigger->name);
+
+    char *combined_desc = NULL;
+    FILE *sf = fopen(skill_path, "r");
+    if (sf) {
+        fseek(sf, 0, SEEK_END);
+        long skill_len = ftell(sf);
+        fseek(sf, 0, SEEK_SET);
+        if (skill_len > 0 && skill_len < 64 * 1024) {
+            size_t desc_len = strlen(trigger->task_desc);
+            size_t total = (size_t)skill_len + desc_len + 64;
+            combined_desc = malloc(total);
+            if (combined_desc) {
+                size_t nread = fread(combined_desc, 1, (size_t)skill_len, sf);
+                snprintf(combined_desc + nread, total - nread,
+                         "\n\n## Task Instructions\n\n%s", trigger->task_desc);
+            }
+        }
+        fclose(sf);
+    }
+    if (!combined_desc) {
+        fprintf(stderr, "trigger_periodic_spawn(%s): skill file '%s' not found "
+                "or unreadable, using task description only\n",
+                trigger->name, skill_path);
+    }
+
+    const char *task = combined_desc ? combined_desc : trigger->task_desc;
+
     /* Fork+exec nbs-workers spawn */
     const char *argv[] = {
         resolve_nbs_workers(), "spawn", trigger->role,
-        nbs_root, trigger->task_desc, NULL
+        nbs_root, task, NULL
     };
     int rc = exec_fire_and_forget(argv);
+
+    free(combined_desc);
 
     /* Release lock */
     struct flock unlock = {

@@ -22,7 +22,8 @@ typedef struct {
     const char *ts_filename;    /* Timestamp file under .nbs/ (e.g. "pythia-last-run") */
     const char *lock_filename;  /* Lock file under .nbs/ (e.g. "pythia.lock") */
     const char *role;           /* Worker role for nbs-workers spawn */
-    const char *task_desc;      /* Task description passed to nbs-workers */
+    const char *skill_file;     /* Skill file relative to .nbs/ (e.g. "commands/nbs-pythia.md") */
+    const char *task_desc;      /* Task instructions appended after skill content */
 } trigger_periodic_t;
 
 /* Static trigger definitions */

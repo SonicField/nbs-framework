@@ -185,9 +185,11 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
  *
  * Returns 0 on spawn success, -1 on failure.
  */
-static int spawn_trigger_worker(const char *role, const char *task_desc,
+static int spawn_trigger_worker(const char *role, const char *skill_file,
+                                 const char *task_desc,
                                  const char *project_root) {
     ASSERT_MSG(role != NULL, "spawn_trigger_worker: role is NULL");
+    ASSERT_MSG(skill_file != NULL, "spawn_trigger_worker: skill_file is NULL");
     ASSERT_MSG(task_desc != NULL, "spawn_trigger_worker: task_desc is NULL");
     ASSERT_MSG(project_root != NULL, "spawn_trigger_worker: project_root is NULL");
 
@@ -207,19 +209,53 @@ static int spawn_trigger_worker(const char *role, const char *task_desc,
         }
     }
 
+    /* Read skill file and combine with task description.
+     * Skill content is embedded verbatim — no modifications. */
+    char skill_path[4096];
+    int sp = snprintf(skill_path, sizeof(skill_path),
+                      "%s/.nbs/%s", project_root, skill_file);
+    char *combined = NULL;
+    if (sp > 0 && (size_t)sp < sizeof(skill_path)) {
+        FILE *sf = fopen(skill_path, "r");
+        if (sf) {
+            fseek(sf, 0, SEEK_END);
+            long slen = ftell(sf);
+            fseek(sf, 0, SEEK_SET);
+            if (slen > 0 && slen < 64 * 1024) {
+                size_t dlen = strlen(task_desc);
+                size_t total = (size_t)slen + dlen + 64;
+                combined = malloc(total);
+                if (combined) {
+                    size_t nread = fread(combined, 1, (size_t)slen, sf);
+                    snprintf(combined + nread, total - nread,
+                             "\n\n## Task Instructions\n\n%s", task_desc);
+                }
+            }
+            fclose(sf);
+        }
+    }
+    if (!combined) {
+        fprintf(stderr, "warning: skill file '%s' not found, using task only\n",
+                skill_path);
+    }
+
+    const char *task = combined ? combined : task_desc;
+
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "warning: fork for /%s failed: %s\n",
                 role, strerror(errno));
+        free(combined);
         return -1;
     }
     if (pid == 0) {
-        /* Child: exec nbs-workers spawn <role> <project_root> <task_desc> */
+        /* Child: exec nbs-workers spawn <role> <project_root> <task> */
         execl(workers_bin, "nbs-workers", "spawn", role,
-              project_root, task_desc, (char *)NULL);
+              project_root, task, (char *)NULL);
         _exit(127);
     }
     /* Parent: don't wait — worker runs in background */
+    free(combined);
     return 0;
 }
 
@@ -1589,17 +1625,27 @@ int main(int argc, char **argv) {
                 strcmp(edit.buf, "/fixup") == 0) {
                 const char *role = edit.buf + 1;  /* skip the '/' */
                 const char *desc = NULL;
-                if (strcmp(role, "pythia") == 0) desc = TRIGGER_DESC_PYTHIA;
-                else if (strcmp(role, "shepard") == 0) desc = TRIGGER_DESC_SHEPARD;
-                else if (strcmp(role, "librarian") == 0) desc = TRIGGER_DESC_LIBRARIAN;
-                else if (strcmp(role, "fixup") == 0) desc = TRIGGER_DESC_FIXUP;
+                const char *skill = NULL;
+                if (strcmp(role, "pythia") == 0) {
+                    desc = TRIGGER_DESC_PYTHIA;
+                    skill = TRIGGER_SKILL_PYTHIA;
+                } else if (strcmp(role, "shepard") == 0) {
+                    desc = TRIGGER_DESC_SHEPARD;
+                    skill = TRIGGER_SKILL_SHEPARD;
+                } else if (strcmp(role, "librarian") == 0) {
+                    desc = TRIGGER_DESC_LIBRARIAN;
+                    skill = TRIGGER_SKILL_LIBRARIAN;
+                } else if (strcmp(role, "fixup") == 0) {
+                    desc = TRIGGER_DESC_FIXUP;
+                    skill = TRIGGER_SKILL_FIXUP;
+                }
 
                 if (!watchdog_is_enabled(&g_watchdog)) {
                     printf("  %sWatchdog not initialised — no project root.%s\n",
                            DIM, RESET);
-                } else if (desc) {
+                } else if (desc && skill) {
                     printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
-                    if (spawn_trigger_worker(role, desc,
+                    if (spawn_trigger_worker(role, skill, desc,
                                               g_watchdog.project_root) == 0) {
                         printf("  %s%s spawned (will post to chat when done).%s\n",
                                DIM, role, RESET);
