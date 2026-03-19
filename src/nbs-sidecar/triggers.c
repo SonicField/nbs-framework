@@ -258,7 +258,11 @@ int trigger_periodic_check(const char *nbs_root, int interval_secs,
      * periodic workers are idempotent, and duplicate runs are harmless
      * (just wasteful).
      */
-    write_last_run(nbs_root, trigger->ts_filename, now);
+    /* Do NOT write_last_run here — it must happen inside
+     * trigger_periodic_spawn, after acquiring the lock. Otherwise
+     * multiple sidecars all pass the elapsed check, all write the
+     * timestamp, and all try to spawn (lock only serialises the
+     * spawn, not the check). */
     trigger_periodic_spawn(nbs_root, trigger);
     return 0;
 }
@@ -296,6 +300,10 @@ int trigger_periodic_spawn(const char *nbs_root,
         close(fd);
         return 1; /* Lock busy */
     }
+
+    /* Write timestamp AFTER acquiring lock — only the winning sidecar
+     * updates the timestamp, preventing duplicate spawns. */
+    write_last_run(nbs_root, trigger->ts_filename, time(NULL));
 
     /* Fork+exec nbs-spawn-worker (bash script).
      * Uses the same tmux new-session pattern as the restart script,
