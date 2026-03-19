@@ -13,6 +13,7 @@
 #endif
 
 #include "triggers.h"
+#include "../nbs-common/trigger_defs.h"
 #include "bus_client.h"
 #include "chat_client.h"
 #include "exec_util.h"
@@ -35,45 +36,32 @@ const trigger_periodic_t TRIGGER_PYTHIA = {
     .name = "pythia",
     .ts_filename = "pythia-last-run",
     .lock_filename = "pythia.lock",
-    .role = "pythia",
-    .task_desc =
-        "Load /nbs-pythia. Read the last 500 lines of .nbs/scribe/live-log.md "
-        "(do NOT read the full file). Run the checkpoint procedure. "
-        "Post assessment to chat. Then stop — do not do anything else.",
+    .role = TRIGGER_ROLE_PYTHIA,
+    .task_desc = TRIGGER_DESC_PYTHIA,
 };
 
 const trigger_periodic_t TRIGGER_SHEPARD = {
     .name = "shepard",
     .ts_filename = "shepard-last-run",
     .lock_filename = "shepard.lock",
-    .role = "shepard",
-    .task_desc =
-        "Load /nbs-shepard. Check agent liveness by listing tmux sessions "
-        "and capturing panes. Read the last 20 chat messages directly "
-        "(do NOT launch sub-agents). Post a brief assessment to chat. "
-        "Then stop — do not do anything else after posting.",
+    .role = TRIGGER_ROLE_SHEPARD,
+    .task_desc = TRIGGER_DESC_SHEPARD,
 };
 
 const trigger_periodic_t TRIGGER_FIXUP = {
     .name = "fixup",
     .ts_filename = "fixup-last-run",
     .lock_filename = "fixup.lock",
-    .role = "fixup",
-    .task_desc =
-        "Load /nbs-fixup-auto. Run /nbs-teams-fixup on all agents. "
-        "Post summary to chat. Then stop — do not do anything else after posting.",
+    .role = TRIGGER_ROLE_FIXUP,
+    .task_desc = TRIGGER_DESC_FIXUP,
 };
 
 const trigger_periodic_t TRIGGER_LIBRARIAN = {
     .name = "librarian",
     .ts_filename = "librarian-last-run",
     .lock_filename = "librarian.lock",
-    .role = "librarian",
-    .task_desc =
-        "Load /nbs-librarian. Read last 100 chat messages via nbs-chat read. "
-        "Search scribe log for answers to questions or blockers the team is "
-        "stuck on. Post findings with @team! tag. If scribe has nothing "
-        "relevant, stay silent. Then stop — do not do anything else.",
+    .role = TRIGGER_ROLE_LIBRARIAN,
+    .task_desc = TRIGGER_DESC_LIBRARIAN,
 };
 
 /* --- nbs-workers path resolution --- */

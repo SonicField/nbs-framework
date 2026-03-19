@@ -28,6 +28,7 @@
 #include "chat_file.h"
 #include "bus_bridge.h"
 #include "render.h"
+#include "../nbs-common/trigger_defs.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -170,6 +171,56 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
         *slash = '\0';
     }
     return -1;
+}
+
+/*
+ * spawn_trigger_worker — Fork+exec nbs-workers to spawn an ephemeral worker.
+ *
+ * Used by /pythia, /shepard, /fixup, /librarian terminal commands.
+ * Same action as the sidecar's periodic triggers, but manual.
+ *
+ * Preconditions:
+ *   - role, task_desc, project_root are non-NULL
+ *   - nbs-workers is findable via resolve_restart_script pattern
+ *
+ * Returns 0 on spawn success, -1 on failure.
+ */
+static int spawn_trigger_worker(const char *role, const char *task_desc,
+                                 const char *project_root) {
+    ASSERT_MSG(role != NULL, "spawn_trigger_worker: role is NULL");
+    ASSERT_MSG(task_desc != NULL, "spawn_trigger_worker: task_desc is NULL");
+    ASSERT_MSG(project_root != NULL, "spawn_trigger_worker: project_root is NULL");
+
+    /* Find nbs-workers binary: try .nbs/bin/ then bin/ */
+    char workers_bin[4096];
+    int n = snprintf(workers_bin, sizeof(workers_bin),
+                     "%s/.nbs/bin/nbs-workers", project_root);
+    if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
+        access(workers_bin, X_OK) != 0) {
+        n = snprintf(workers_bin, sizeof(workers_bin),
+                     "%s/bin/nbs-workers", project_root);
+        if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
+            access(workers_bin, X_OK) != 0) {
+            fprintf(stderr, "warning: nbs-workers not found in %s\n",
+                    project_root);
+            return -1;
+        }
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "warning: fork for /%s failed: %s\n",
+                role, strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        /* Child: exec nbs-workers spawn <role> <project_root> <task_desc> */
+        execl(workers_bin, "nbs-workers", "spawn", role,
+              project_root, task_desc, (char *)NULL);
+        _exit(127);
+    }
+    /* Parent: don't wait — worker runs in background */
+    return 0;
 }
 
 static void *watchdog_thread_fn(void *arg) {
@@ -334,6 +385,10 @@ static void print_help(void) {
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
     printf("  %s/shutdown%s   Send wrap-up message and disable auto-restart\n", DIM, RESET);
     printf("  %s/restart%s    Manually restart the agent team\n", DIM, RESET);
+    printf("  %s/pythia%s     Spawn pythia (trajectory & risk assessment)\n", DIM, RESET);
+    printf("  %s/shepard%s    Spawn shepard (team effectiveness check)\n", DIM, RESET);
+    printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
+    printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
     printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
     printf("\n");
@@ -1520,6 +1575,36 @@ int main(int argc, char **argv) {
                                     strerror(errno));
                         }
                         /* Parent: do not wait — restart runs in background */
+                    }
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* Trigger commands: /pythia, /shepard, /librarian, /fixup */
+            if (strcmp(edit.buf, "/pythia") == 0 ||
+                strcmp(edit.buf, "/shepard") == 0 ||
+                strcmp(edit.buf, "/librarian") == 0 ||
+                strcmp(edit.buf, "/fixup") == 0) {
+                const char *role = edit.buf + 1;  /* skip the '/' */
+                const char *desc = NULL;
+                if (strcmp(role, "pythia") == 0) desc = TRIGGER_DESC_PYTHIA;
+                else if (strcmp(role, "shepard") == 0) desc = TRIGGER_DESC_SHEPARD;
+                else if (strcmp(role, "librarian") == 0) desc = TRIGGER_DESC_LIBRARIAN;
+                else if (strcmp(role, "fixup") == 0) desc = TRIGGER_DESC_FIXUP;
+
+                if (!watchdog_is_enabled(&g_watchdog)) {
+                    printf("  %sWatchdog not initialised — no project root.%s\n",
+                           DIM, RESET);
+                } else if (desc) {
+                    printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
+                    if (spawn_trigger_worker(role, desc,
+                                              g_watchdog.project_root) == 0) {
+                        printf("  %s%s spawned (will post to chat when done).%s\n",
+                               DIM, role, RESET);
+                    } else {
+                        printf("  %sFailed to spawn %s.%s\n", DIM, role, RESET);
                     }
                 }
                 line_state_reset(&edit);
