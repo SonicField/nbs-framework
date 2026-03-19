@@ -211,9 +211,18 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
 
     /* Read skill file and combine with task description.
      * Skill content is embedded verbatim — no modifications. */
+    /* Try project .nbs/ first, then ~/.nbs/ (global install) */
     char skill_path[4096];
     int sp = snprintf(skill_path, sizeof(skill_path),
                       "%s/.nbs/%s", project_root, skill_file);
+    if (sp > 0 && (size_t)sp < sizeof(skill_path) &&
+        access(skill_path, R_OK) != 0) {
+        const char *home = getenv("HOME");
+        if (home) {
+            sp = snprintf(skill_path, sizeof(skill_path),
+                          "%s/.nbs/%s", home, skill_file);
+        }
+    }
     char *combined = NULL;
     if (sp > 0 && (size_t)sp < sizeof(skill_path)) {
         FILE *sf = fopen(skill_path, "r");

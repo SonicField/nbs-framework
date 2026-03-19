@@ -261,12 +261,22 @@ int trigger_periodic_spawn(const char *nbs_root,
     /* Build combined task: skill file content + task instructions.
      * The skill content is embedded verbatim so the worker doesn't
      * need to load a slash command (which fails in tmux contexts). */
+    /* Try project .nbs/ first, then ~/.nbs/ (global install).
+     * The framework source tree has no .nbs/commands/ — the processed
+     * templates live at ~/.nbs/commands/ after install. */
     char skill_path[4096];
     int sp = snprintf(skill_path, sizeof(skill_path),
                       "%s/.nbs/%s", nbs_root, trigger->skill_file);
     ASSERT_MSG(sp > 0 && (size_t)sp < sizeof(skill_path),
                "trigger_periodic_spawn(%s): skill path overflow",
                trigger->name);
+    if (access(skill_path, R_OK) != 0) {
+        const char *home = getenv("HOME");
+        if (home) {
+            sp = snprintf(skill_path, sizeof(skill_path),
+                          "%s/.nbs/%s", home, trigger->skill_file);
+        }
+    }
 
     char *combined_desc = NULL;
     FILE *sf = fopen(skill_path, "r");
