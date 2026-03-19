@@ -258,12 +258,14 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
         return -1;
     }
     if (pid == 0) {
-        /* Child: detach from terminal's process group and session.
-         * Without setsid(), the child inherits the terminal's raw mode,
-         * signal handlers, and controlling terminal — which causes
-         * Claude Code sessions spawned by nbs-workers to die with
-         * "socket connection closed unexpectedly" after ~30 seconds. */
+        /* Child: fully detach from the terminal environment.
+         * setsid() creates a new session (detaches controlling terminal).
+         * unsetenv("TMUX") is critical — the terminal runs inside tmux,
+         * so TMUX is set. nbs-claude checks TMUX to decide its mode.
+         * If TMUX leaks into the worker, nbs-claude takes the wrong
+         * code path and the session dies after ~30 seconds. */
         setsid();
+        unsetenv("TMUX");
         /* Close inherited terminal fds */
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
