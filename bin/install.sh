@@ -200,17 +200,43 @@ for dir in concepts docs templates bin terminal-weathering; do
 done
 
 # 5. Create ~/.claude/commands symlinks
+#
+# CRITICAL: Symlinks ALWAYS point to ~/.nbs/commands/ (the global default
+# prefix), never to a project-specific prefix. This ensures that deleting
+# a project's .nbs/ directory doesn't break Claude Code skills globally.
+#
+# When --prefix is not ~/.nbs, we still process templates into the custom
+# prefix (step 2), but ~/.claude/commands/ symlinks point to ~/.nbs/commands/.
+# If ~/.nbs/commands/ doesn't have the templates yet, we copy them there.
 echo "Installing Claude Code commands..."
 mkdir -p "$CLAUDE_COMMANDS_DIR"
 
+# Ensure ~/.nbs/commands/ has current templates (the stable global location)
+GLOBAL_COMMANDS="$HOME/.nbs/commands"
+if [[ "$PREFIX" != "$HOME/.nbs" ]]; then
+    mkdir -p "$GLOBAL_COMMANDS"
+    # Process templates into ~/.nbs/commands/ with ~/.nbs as NBS_ROOT
+    for template in "$PROJECT_ROOT/claude_tools"/*.md; do
+        if [[ -f "$template" ]]; then
+            name=$(basename "$template")
+            output="$GLOBAL_COMMANDS/$name"
+            process_template "$template" "$output" "$HOME/.nbs"
+        fi
+    done
+    echo "  Global commands updated: $GLOBAL_COMMANDS"
+fi
+# When PREFIX is ~/.nbs, step 2 already processed templates there.
+
 # Remove stale skill names from prior installs
 for stale in nbs-teams-supervisor.md nbs-teams-worker.md; do
-    # Remove from processed templates
-    stale_processed="$PREFIX/commands/$stale"
-    if [[ -e "$stale_processed" ]]; then
-        rm "$stale_processed"
-        echo "  Removed stale template: $stale"
-    fi
+    # Remove from processed templates (both prefix and global)
+    for dir in "$PREFIX/commands" "$GLOBAL_COMMANDS"; do
+        stale_processed="$dir/$stale"
+        if [[ -e "$stale_processed" ]]; then
+            rm "$stale_processed"
+            echo "  Removed stale template: $stale (from $dir)"
+        fi
+    done
     # Remove from installed commands
     stale_path="$CLAUDE_COMMANDS_DIR/$stale"
     if [[ -e "$stale_path" || -L "$stale_path" ]]; then
@@ -220,7 +246,7 @@ for stale in nbs-teams-supervisor.md nbs-teams-worker.md; do
 done
 
 COMMANDS_INSTALLED=0
-for cmd in "$PREFIX/commands"/*.md; do
+for cmd in "$GLOBAL_COMMANDS"/*.md; do
     if [[ -f "$cmd" ]]; then
         name=$(basename "$cmd")
         target="$CLAUDE_COMMANDS_DIR/$name"
@@ -237,9 +263,18 @@ done
 # V8.4: Postcondition — at least one command must have been installed
 [[ $COMMANDS_INSTALLED -gt 0 ]] || {
     echo "ASSERTION FAILED: No commands installed to $CLAUDE_COMMANDS_DIR" >&2
-    echo "  $PREFIX/commands/ appears empty. Check template processing." >&2
+    echo "  $GLOBAL_COMMANDS/ appears empty. Check template processing." >&2
     exit 1
 }
+# V9.1: Postcondition — all symlinks point to ~/.nbs/commands/, not a project prefix
+for link in "$CLAUDE_COMMANDS_DIR"/nbs-*.md; do
+    [[ -L "$link" ]] || continue
+    link_target=$(readlink "$link")
+    [[ "$link_target" == "$GLOBAL_COMMANDS/"* ]] || {
+        echo "ASSERTION FAILED: $(basename "$link") points to $link_target, not $GLOBAL_COMMANDS/" >&2
+        exit 1
+    }
+done
 
 # 6. Offer to add bin/ to PATH
 BIN_DIR="$PREFIX/bin"

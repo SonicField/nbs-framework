@@ -1,0 +1,395 @@
+#!/bin/bash
+# nbs-doctor — Diagnose and repair the NBS environment
+#
+# Safe to run at any time. Without --fix, only reports problems.
+# With --fix, repairs what it can.
+#
+# NEVER deletes data files (chat logs, scribe logs, digests, events).
+#
+# Usage:
+#   nbs-doctor              Report problems in current project
+#   nbs-doctor --fix        Fix problems in current project + global
+#
+# Checks:
+#   1. Global: ~/.nbs/ exists and has required structure
+#   2. Global: ~/.claude/commands/ symlinks all resolve
+#   3. Global: nbs binaries on PATH
+#   4. Project: .nbs/ directory structure complete
+#   5. Project: chat files exist for terminal use
+#   6. Project: control registries valid
+#
+# Exit codes:
+#   0 - All checks pass (or all fixed)
+#   1 - Problems found (without --fix) or fix failed
+
+set -euo pipefail
+
+FIX=0
+PROBLEMS=0
+FIXED=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --fix) FIX=1 ;;
+        --help|-h)
+            echo "Usage: nbs-doctor [--fix]"
+            echo ""
+            echo "Diagnose and repair the NBS environment."
+            echo "Without --fix, only reports problems."
+            echo "With --fix, repairs what it can."
+            echo ""
+            echo "NEVER deletes chat logs, scribe logs, digests, or events."
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            echo "Usage: nbs-doctor [--fix]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+problem() {
+    echo "  PROBLEM: $1"
+    PROBLEMS=$((PROBLEMS + 1))
+}
+
+ok() {
+    echo "  OK: $1"
+}
+
+fixed() {
+    echo "  FIXED: $1"
+    FIXED=$((FIXED + 1))
+}
+
+skip() {
+    echo "  SKIP: $1"
+}
+
+# --- Locate the framework source ---
+
+# Try to find the framework source directory. We need this to rebuild
+# and to know where templates live.
+FRAMEWORK_SRC=""
+
+# Method 1: If this script is in the framework's bin/
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/../claude_tools/nbs-notify.md" ]]; then
+    FRAMEWORK_SRC="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+
+# Method 2: Follow ~/.nbs/bin symlink
+if [[ -z "$FRAMEWORK_SRC" ]] && [[ -L "$HOME/.nbs/bin" ]]; then
+    BIN_TARGET="$(readlink -f "$HOME/.nbs/bin" 2>/dev/null)" || true
+    if [[ -n "$BIN_TARGET" ]] && [[ -f "$(dirname "$BIN_TARGET")/claude_tools/nbs-notify.md" ]]; then
+        FRAMEWORK_SRC="$(dirname "$BIN_TARGET")"
+    fi
+fi
+
+if [[ -z "$FRAMEWORK_SRC" ]]; then
+    echo "WARNING: Cannot locate NBS framework source. Some fixes unavailable." >&2
+fi
+
+echo "=== NBS Doctor ==="
+echo ""
+
+# ============================================================
+# GLOBAL CHECKS
+# ============================================================
+
+echo "Global environment:"
+
+# 1. ~/.nbs/ exists
+if [[ -d "$HOME/.nbs" ]]; then
+    ok "~/.nbs/ exists"
+else
+    problem "~/.nbs/ does not exist"
+    if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+        bash "$FRAMEWORK_SRC/bin/install.sh"
+        fixed "Ran install.sh to create ~/.nbs/"
+    fi
+fi
+
+# 2. ~/.nbs/commands/ has processed templates
+if [[ -d "$HOME/.nbs/commands" ]]; then
+    CMD_COUNT=$(find "$HOME/.nbs/commands" -name '*.md' 2>/dev/null | wc -l)
+    if [[ $CMD_COUNT -gt 0 ]]; then
+        ok "~/.nbs/commands/ has $CMD_COUNT templates"
+    else
+        problem "~/.nbs/commands/ exists but is empty"
+        if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+            for template in "$FRAMEWORK_SRC/claude_tools"/*.md; do
+                if [[ -f "$template" ]]; then
+                    name=$(basename "$template")
+                    while IFS= read -r line || [[ -n "$line" ]]; do
+                        echo "${line//\{\{NBS_ROOT\}\}/$HOME/.nbs}"
+                    done < "$template" > "$HOME/.nbs/commands/$name"
+                fi
+            done
+            fixed "Regenerated templates in ~/.nbs/commands/"
+        fi
+    fi
+else
+    problem "~/.nbs/commands/ does not exist"
+    if [[ $FIX -eq 1 ]]; then
+        mkdir -p "$HOME/.nbs/commands"
+        if [[ -n "$FRAMEWORK_SRC" ]]; then
+            for template in "$FRAMEWORK_SRC/claude_tools"/*.md; do
+                if [[ -f "$template" ]]; then
+                    name=$(basename "$template")
+                    while IFS= read -r line || [[ -n "$line" ]]; do
+                        echo "${line//\{\{NBS_ROOT\}\}/$HOME/.nbs}"
+                    done < "$template" > "$HOME/.nbs/commands/$name"
+                fi
+            done
+            fixed "Created ~/.nbs/commands/ with templates"
+        else
+            fixed "Created ~/.nbs/commands/ (empty — no framework source)"
+        fi
+    fi
+fi
+
+# 3. ~/.claude/commands/ symlinks resolve
+if [[ -d "$HOME/.claude/commands" ]]; then
+    DANGLING=0
+    WRONG_TARGET=0
+    for link in "$HOME/.claude/commands"/nbs-*.md; do
+        [[ -L "$link" ]] || continue
+        target=$(readlink "$link")
+        if [[ ! -e "$link" ]]; then
+            echo "    DANGLING: $(basename "$link") -> $target"
+            DANGLING=$((DANGLING + 1))
+        elif [[ "$target" != "$HOME/.nbs/commands/"* ]]; then
+            # Points somewhere other than ~/.nbs/commands/ — fragile
+            echo "    FRAGILE: $(basename "$link") -> $target (should point to ~/.nbs/commands/)"
+            WRONG_TARGET=$((WRONG_TARGET + 1))
+        fi
+    done
+    if [[ $DANGLING -eq 0 ]] && [[ $WRONG_TARGET -eq 0 ]]; then
+        ok "~/.claude/commands/ symlinks all resolve"
+    else
+        [[ $DANGLING -gt 0 ]] && problem "$DANGLING dangling symlinks in ~/.claude/commands/"
+        [[ $WRONG_TARGET -gt 0 ]] && problem "$WRONG_TARGET symlinks point outside ~/.nbs/commands/ (fragile)"
+        if [[ $FIX -eq 1 ]]; then
+            for link in "$HOME/.claude/commands"/nbs-*.md; do
+                [[ -L "$link" ]] || continue
+                name=$(basename "$link")
+                correct_target="$HOME/.nbs/commands/$name"
+                current_target=$(readlink "$link")
+                if [[ ! -e "$link" ]] || [[ "$current_target" != "$correct_target" ]]; then
+                    if [[ -f "$correct_target" ]]; then
+                        rm "$link"
+                        ln -s "$correct_target" "$link"
+                    fi
+                fi
+            done
+            fixed "Re-pointed ~/.claude/commands/ symlinks to ~/.nbs/commands/"
+        fi
+    fi
+else
+    problem "~/.claude/commands/ does not exist"
+    if [[ $FIX -eq 1 ]]; then
+        mkdir -p "$HOME/.claude/commands"
+        for cmd in "$HOME/.nbs/commands"/*.md; do
+            if [[ -f "$cmd" ]]; then
+                name=$(basename "$cmd")
+                ln -s "$cmd" "$HOME/.claude/commands/$name"
+            fi
+        done
+        fixed "Created ~/.claude/commands/ with symlinks to ~/.nbs/commands/"
+    fi
+fi
+
+# 4. ~/.nbs/bin/ exists and has binaries
+if [[ -d "$HOME/.nbs/bin" ]]; then
+    MISSING_BINS=""
+    for bin in nbs-chat nbs-chat-terminal nbs-sidecar nbs-workers nbs-bus; do
+        if [[ ! -x "$HOME/.nbs/bin/$bin" ]]; then
+            MISSING_BINS="$MISSING_BINS $bin"
+        fi
+    done
+    if [[ -z "$MISSING_BINS" ]]; then
+        ok "~/.nbs/bin/ has all required binaries"
+    else
+        problem "Missing binaries:$MISSING_BINS"
+        if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+            echo "    Rebuilding from source..."
+            make -C "$FRAMEWORK_SRC" clean 2>/dev/null || true
+            if make -C "$FRAMEWORK_SRC" install BIN_DIR="$HOME/.nbs/bin" 2>&1; then
+                fixed "Rebuilt and installed binaries"
+            else
+                problem "Build failed — check compiler output above"
+            fi
+        fi
+    fi
+else
+    problem "~/.nbs/bin/ does not exist"
+    if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+        mkdir -p "$HOME/.nbs/bin"
+        echo "    Building from source..."
+        make -C "$FRAMEWORK_SRC" clean 2>/dev/null || true
+        if make -C "$FRAMEWORK_SRC" install BIN_DIR="$HOME/.nbs/bin" 2>&1; then
+            fixed "Built and installed binaries to ~/.nbs/bin/"
+        else
+            problem "Build failed"
+        fi
+    fi
+fi
+
+# 5. PATH includes ~/.nbs/bin
+if echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.nbs/bin"; then
+    ok "~/.nbs/bin is on PATH"
+else
+    problem "~/.nbs/bin is not on PATH"
+    if [[ $FIX -eq 1 ]]; then
+        # Detect shell rc file
+        SHELL_NAME=$(basename "${SHELL:-/bin/bash}")
+        case "$SHELL_NAME" in
+            bash) RC_FILE="$HOME/.bashrc" ;;
+            zsh)  RC_FILE="$HOME/.zshrc" ;;
+            *)    RC_FILE="" ;;
+        esac
+        if [[ -n "$RC_FILE" ]]; then
+            PATH_LINE="export PATH=\"$HOME/.nbs/bin:\$PATH\"  # NBS Framework PATH"
+            if [[ -f "$RC_FILE" ]] && grep -qF "# NBS Framework PATH" "$RC_FILE"; then
+                skip "PATH entry already in $RC_FILE (not active in this shell)"
+            else
+                echo "" >> "$RC_FILE"
+                echo "$PATH_LINE" >> "$RC_FILE"
+                fixed "Added ~/.nbs/bin to PATH in $RC_FILE"
+                echo "    Run: source $RC_FILE"
+            fi
+        else
+            skip "Unknown shell ($SHELL_NAME) — add ~/.nbs/bin to PATH manually"
+        fi
+    fi
+fi
+
+# 6. Supporting directories symlinked
+if [[ -d "$HOME/.nbs" ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+    for dir in concepts docs templates terminal-weathering; do
+        target="$HOME/.nbs/$dir"
+        if [[ -L "$target" ]] && [[ -e "$target" ]]; then
+            : # OK
+        elif [[ -L "$target" ]] && [[ ! -e "$target" ]]; then
+            problem "~/.nbs/$dir symlink is dangling"
+            if [[ $FIX -eq 1 ]]; then
+                rm "$target"
+                ln -s "$FRAMEWORK_SRC/$dir" "$target"
+                fixed "Re-linked ~/.nbs/$dir -> $FRAMEWORK_SRC/$dir"
+            fi
+        elif [[ ! -e "$target" ]]; then
+            problem "~/.nbs/$dir does not exist"
+            if [[ $FIX -eq 1 ]] && [[ -d "$FRAMEWORK_SRC/$dir" ]]; then
+                ln -s "$FRAMEWORK_SRC/$dir" "$target"
+                fixed "Linked ~/.nbs/$dir -> $FRAMEWORK_SRC/$dir"
+            fi
+        fi
+    done
+fi
+
+echo ""
+
+# ============================================================
+# PROJECT CHECKS (current directory)
+# ============================================================
+
+echo "Project: $(pwd)"
+
+# Check if this looks like an NBS project
+if [[ -d ".nbs" ]]; then
+    ok ".nbs/ directory exists"
+
+    # Required subdirectories (safe to create — these are infrastructure, not data)
+    for subdir in chat events events/processed scribe workers pids sessions; do
+        if [[ -d ".nbs/$subdir" ]]; then
+            : # fine
+        else
+            problem ".nbs/$subdir/ missing"
+            if [[ $FIX -eq 1 ]]; then
+                mkdir -p ".nbs/$subdir"
+                fixed "Created .nbs/$subdir/"
+            fi
+        fi
+    done
+
+    # Check for at least one chat file
+    CHAT_COUNT=$(find .nbs/chat -name '*.chat' 2>/dev/null | wc -l)
+    if [[ $CHAT_COUNT -gt 0 ]]; then
+        ok "$CHAT_COUNT chat file(s) found"
+    else
+        problem "No chat files in .nbs/chat/"
+        if [[ $FIX -eq 1 ]]; then
+            NBS_CHAT=""
+            if command -v nbs-chat >/dev/null 2>&1; then
+                NBS_CHAT="nbs-chat"
+            elif [[ -x "$HOME/.nbs/bin/nbs-chat" ]]; then
+                NBS_CHAT="$HOME/.nbs/bin/nbs-chat"
+            fi
+            if [[ -n "$NBS_CHAT" ]]; then
+                "$NBS_CHAT" create .nbs/chat/live.chat
+                fixed "Created .nbs/chat/live.chat"
+            else
+                skip "Cannot create chat file — nbs-chat not available"
+            fi
+        fi
+    fi
+
+    # Check control registries reference valid paths
+    for reg in .nbs/control-registry-*; do
+        [[ -f "$reg" ]] || continue
+        handle=$(basename "$reg" | sed 's/control-registry-//')
+        while IFS= read -r line; do
+            case "$line" in
+                chat:*)
+                    CHAT_PATH="${line#chat:}"
+                    if [[ ! -f "$CHAT_PATH" ]]; then
+                        problem "Registry $handle: chat path missing: $CHAT_PATH"
+                    fi
+                    ;;
+                bus:*)
+                    BUS_PATH="${line#bus:}"
+                    if [[ ! -d "$BUS_PATH" ]]; then
+                        problem "Registry $handle: bus path missing: $BUS_PATH"
+                        if [[ $FIX -eq 1 ]]; then
+                            mkdir -p "$BUS_PATH/processed"
+                            fixed "Created bus directory: $BUS_PATH"
+                        fi
+                    fi
+                    ;;
+            esac
+        done < "$reg"
+    done
+
+    # Report data directories (never modified)
+    echo "  DATA (never modified by doctor):"
+    for datadir in chat scribe digests; do
+        if [[ -d ".nbs/$datadir" ]]; then
+            COUNT=$(find ".nbs/$datadir" -type f 2>/dev/null | wc -l)
+            echo "    .nbs/$datadir/: $COUNT file(s)"
+        fi
+    done
+else
+    skip "No .nbs/ directory — not an NBS project (run install.sh --prefix=.nbs to initialise)"
+fi
+
+echo ""
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+if [[ $FIX -eq 1 ]]; then
+    echo "=== Summary: $PROBLEMS problem(s) found, $FIXED fixed ==="
+else
+    echo "=== Summary: $PROBLEMS problem(s) found ==="
+    if [[ $PROBLEMS -gt 0 ]]; then
+        echo "Run 'nbs-doctor --fix' to repair."
+    fi
+fi
+
+if [[ $PROBLEMS -gt 0 ]] && [[ $FIX -eq 0 ]]; then
+    exit 1
+fi
+exit 0
