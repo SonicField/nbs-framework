@@ -1228,11 +1228,17 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * nbs-claude is invoked via PATH (not relative bin/nbs-claude) so
      * this works in both the framework source tree and installed projects.
      * The bash -l login shell sources .bashrc which adds ~/.nbs/bin to
-     * PATH. nbs-claude itself also adds its SCRIPT_DIR to PATH. */
+     * PATH. nbs-claude itself also adds its SCRIPT_DIR to PATH.
+     *
+     * NBS_POLL_DISABLE=1 prevents the sidecar from starting. Ephemeral
+     * workers run one task and stop — they don't need the sidecar's
+     * notification/polling system. The sidecar also races the task
+     * prompt by injecting "Load /nbs-teams-chat" which can clobber
+     * the worker's actual task instructions. */
     {
         char launch_cmd[PATH_BUF_SIZE];
         int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "NBS_HANDLE=%s nbs-claude "
+                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 nbs-claude "
                          "--dangerously-skip-permissions",
                          slug);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
