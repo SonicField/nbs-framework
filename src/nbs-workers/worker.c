@@ -1188,8 +1188,8 @@ int cmd_spawn(const char *slug, const char *project_dir,
     char session_cmd[PATH_BUF_SIZE * 2];
     {
         int n = snprintf(session_cmd, sizeof(session_cmd),
-                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 nbs-claude "
-                         "--dangerously-skip-permissions "
+                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 NBS_FORCE_SPAWN=1 "
+                         "nbs-claude --dangerously-skip-permissions "
                          "'Read %s and execute the task. "
                          "Update the Status and Log sections when complete.'",
                          slug, task_file);
