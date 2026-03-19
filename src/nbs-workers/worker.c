@@ -486,9 +486,8 @@ static int tmux_send_keys(const char *session_name, const char *keys,
     return exec_fire_and_forget(argv);
 }
 
-/* Used by nbs-workers continue for prompt detection. Not used by spawn
- * (which uses claude -p instead of interactive mode). */
-__attribute__((unused))
+/* Used by cmd_spawn to detect when Claude's prompt is ready before
+ * sending the task, and by cmd_session for prompt detection. */
 static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
 {
     ASSERT_MSG(session_name != NULL, "tmux_capture_pane: session_name is NULL");
@@ -1246,11 +1245,33 @@ int cmd_spawn(const char *slug, const char *project_dir,
         tmux_send_keys(session, launch_cmd, 1);
     }
 
-    /* Allow Claude to start.
-     * Rationale: nbs-claude takes ~2-3s to initialise and display
-     * its prompt. The subsequent send-keys delivers the task text,
-     * which would be lost if Claude has not started reading stdin. */
-    sleep(3);
+    /* Wait for Claude's prompt before sending the task.
+     * Claude Code loads all registered skills at startup. With many
+     * skills, this can take 10-20s. Sending the task before the prompt
+     * appears causes the Enter key to be lost, leaving the task text
+     * queued but never submitted.
+     *
+     * Poll for the prompt character (UTF-8 ❯ = 0xE2 0x9D 0xAF) in
+     * the tmux pane. Fall back to fixed delay if detection fails. */
+    {
+        int prompt_found = 0;
+        for (int wait = 0; wait < 30; wait++) {
+            sleep(2);
+            char pane_buf[4096];
+            if (tmux_capture_pane(session, pane_buf, sizeof(pane_buf)) == 0) {
+                /* Look for Claude Code prompt indicator */
+                if (strstr(pane_buf, "\xe2\x9d\xaf") != NULL ||
+                    strstr(pane_buf, "bypass permissions") != NULL) {
+                    prompt_found = 1;
+                    break;
+                }
+            }
+        }
+        if (!prompt_found) {
+            fprintf(stderr, "cmd_spawn: prompt not detected after 60s, "
+                    "sending task anyway\n");
+        }
+    }
 
     /* Send the task prompt. */
     {
