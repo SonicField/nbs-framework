@@ -130,8 +130,8 @@ tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/nu
 # The digest's CONTINUATION section determines what the team should do.
 # Do not hardcode a plan — let the digest's analysis of the prior session
 # drive the direction. If the digest identified GOALS, pursue them.
-# If REVIEW, ask Alex for direction.
+# If REVIEW, ask the human leader for direction.
 "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-    "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to Alex — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
+    "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
 
 echo "[watchdog] Team restarted successfully"

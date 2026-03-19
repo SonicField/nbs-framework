@@ -112,8 +112,8 @@ After analysing what happened, reason about **what should happen next**. This se
 Examine the final messages for:
 - Explicit next steps, options, or "paths forward" proposed by any participant
 - Open tasks, blocked work, or identified follow-ups
-- Whether the session ended cleanly (deliberate close by supervisor or Alex) vs crash/timeout
-- Unresolved questions or decisions deferred to Alex
+- Whether the session ended cleanly (deliberate close by supervisor or the human leader) vs crash/timeout
+- Unresolved questions or decisions deferred to the human leader
 
 Produce one of two continuation types:
 
@@ -130,12 +130,12 @@ Source: <quote or paraphrase from the message that proposed this>
 CONTINUATION: REVIEW
 The previous session ended with <brief description>. No explicit next steps were identified.
 The team should: review the scribe log and prior session outcomes, then propose 3 candidate goals
-to Alex with expected outcomes for each. Do not begin work until Alex confirms a direction.
+to the human leader with expected outcomes for each. Do not begin work until the human leader confirms a direction.
 ```
 
 **Rules for continuation:**
 - Never invent goals that weren't discussed. Only extract what was actually proposed.
-- If Alex gave a direction (e.g., "accept standings", "focus on X"), that IS the continuation.
+- If the human leader gave a direction (e.g., "accept standings", "focus on X"), that IS the continuation.
 - If the session closed cleanly with "session complete" and no forward direction, use REVIEW.
 - If the session crashed or timed out mid-work, use GOALS with the interrupted work as the goal.
 
