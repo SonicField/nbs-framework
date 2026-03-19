@@ -87,6 +87,7 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
 static char nbs_workers_path[WORKERS_PATH_LEN] = "";
 static int nbs_workers_path_resolved = 0;
 
+__attribute__((unused))
 static const char *resolve_nbs_workers(void)
 {
     ASSERT_MSG((pid_t)syscall(SYS_gettid) == getpid(),
@@ -121,6 +122,44 @@ static const char *resolve_nbs_workers(void)
     }
 
     return nbs_workers_path;
+}
+
+/*
+ * resolve_spawn_worker — Find the nbs-spawn-worker script.
+ * Looks next to the sidecar binary (same directory).
+ */
+#define SPAWN_PATH_LEN 4096
+static char spawn_worker_path[SPAWN_PATH_LEN];
+
+static const char *resolve_spawn_worker(void)
+{
+    if (spawn_worker_path[0] != '\0')
+        return spawn_worker_path;
+
+    char self[SPAWN_PATH_LEN];
+    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (len <= 0)
+        return "nbs-spawn-worker";
+    self[len] = '\0';
+
+    char *slash = strrchr(self, '/');
+    if (!slash)
+        return "nbs-spawn-worker";
+
+    size_t dir_len = (size_t)(slash - self);
+    if (dir_len + sizeof("/nbs-spawn-worker") > sizeof(spawn_worker_path))
+        return "nbs-spawn-worker";
+
+    memcpy(spawn_worker_path, self, dir_len);
+    memcpy(spawn_worker_path + dir_len, "/nbs-spawn-worker",
+           sizeof("/nbs-spawn-worker"));
+
+    if (access(spawn_worker_path, X_OK) != 0) {
+        spawn_worker_path[0] = '\0';
+        return "nbs-spawn-worker";
+    }
+
+    return spawn_worker_path;
 }
 
 /* --- Shared timestamp file I/O --- */
@@ -258,60 +297,15 @@ int trigger_periodic_spawn(const char *nbs_root,
         return 1; /* Lock busy */
     }
 
-    /* Build combined task: skill file content + task instructions.
-     * The skill content is embedded verbatim so the worker doesn't
-     * need to load a slash command (which fails in tmux contexts). */
-    /* Try project .nbs/ first, then ~/.nbs/ (global install).
-     * The framework source tree has no .nbs/commands/ — the processed
-     * templates live at ~/.nbs/commands/ after install. */
-    char skill_path[4096];
-    int sp = snprintf(skill_path, sizeof(skill_path),
-                      "%s/.nbs/%s", nbs_root, trigger->skill_file);
-    ASSERT_MSG(sp > 0 && (size_t)sp < sizeof(skill_path),
-               "trigger_periodic_spawn(%s): skill path overflow",
-               trigger->name);
-    if (access(skill_path, R_OK) != 0) {
-        const char *home = getenv("HOME");
-        if (home) {
-            sp = snprintf(skill_path, sizeof(skill_path),
-                          "%s/.nbs/%s", home, trigger->skill_file);
-        }
-    }
-
-    char *combined_desc = NULL;
-    FILE *sf = fopen(skill_path, "r");
-    if (sf) {
-        fseek(sf, 0, SEEK_END);
-        long skill_len = ftell(sf);
-        fseek(sf, 0, SEEK_SET);
-        if (skill_len > 0 && skill_len < 64 * 1024) {
-            size_t desc_len = strlen(trigger->task_desc);
-            size_t total = (size_t)skill_len + desc_len + 64;
-            combined_desc = malloc(total);
-            if (combined_desc) {
-                size_t nread = fread(combined_desc, 1, (size_t)skill_len, sf);
-                snprintf(combined_desc + nread, total - nread,
-                         "\n\n## Task Instructions\n\n%s", trigger->task_desc);
-            }
-        }
-        fclose(sf);
-    }
-    if (!combined_desc) {
-        fprintf(stderr, "trigger_periodic_spawn(%s): skill file '%s' not found "
-                "or unreadable, using task description only\n",
-                trigger->name, skill_path);
-    }
-
-    const char *task = combined_desc ? combined_desc : trigger->task_desc;
-
-    /* Fork+exec nbs-workers spawn */
+    /* Fork+exec nbs-spawn-worker (bash script).
+     * Uses the same tmux new-session pattern as the restart script,
+     * which is proven to work. The script handles skill embedding,
+     * task file creation, and session launch. */
     const char *argv[] = {
-        resolve_nbs_workers(), "spawn", trigger->role,
-        nbs_root, task, NULL
+        "bash", resolve_spawn_worker(), trigger->role,
+        nbs_root, trigger->skill_file, trigger->task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
-
-    free(combined_desc);
 
     /* Release lock */
     struct flock unlock = {
