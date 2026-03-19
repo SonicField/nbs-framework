@@ -62,67 +62,48 @@ static void build_inbox_path(const sidecar_config_t *cfg,
                "build_inbox_path: path truncated (need %d, have %zu)", n, out_size);
 }
 
-/* --- Recovery prompt builder --- */
+/* --- Notification prompt builder --- */
 
 /*
- * build_recovery_prompt — Construct a raw text prompt to re-bootstrap
- * the agent when /nbs-notify skill is lost after compaction.
+ * build_notify_prompt — Construct a plain text notification prompt.
+ *
+ * Replaces the /nbs-notify slash command injection. Slash commands
+ * fail in tmux contexts because the Enter key doesn't reliably
+ * register. Plain text prompts work every time.
+ *
+ * The content matches the nbs-notify.md skill file but is embedded
+ * directly so no file read or slash command is needed.
  */
-static void build_recovery_prompt(const sidecar_config_t *cfg,
-                                   const char *registry_path,
-                                   char *out, size_t out_size) {
-    ASSERT_MSG(cfg != NULL, "build_recovery_prompt: cfg is NULL");
-    ASSERT_MSG(registry_path != NULL, "build_recovery_prompt: registry_path is NULL");
-    ASSERT_MSG(out != NULL, "build_recovery_prompt: out is NULL");
-    ASSERT_MSG(out_size > 0, "build_recovery_prompt: out_size is 0");
+static void build_notify_prompt(const sidecar_config_t *cfg,
+                                 const char *notify_message,
+                                 char *out, size_t out_size) {
+    ASSERT_MSG(cfg != NULL, "build_notify_prompt: cfg is NULL");
+    ASSERT_MSG(notify_message != NULL, "build_notify_prompt: notify_message is NULL");
+    ASSERT_MSG(out != NULL, "build_notify_prompt: out is NULL");
+    ASSERT_MSG(out_size > 0, "build_notify_prompt: out_size is 0");
 
-    char chat_path[SIDECAR_MAX_PATH];
-    int has_chat = (registry_find_first(registry_path, "chat",
-                                         chat_path, sizeof(chat_path)) == 0);
+    int sn = snprintf(out, out_size,
+        "The sidecar detected pending work: %s. "
+        "Your handle is '%s'. "
+        "Instructions: "
+        "1. Run nbs-bus ack-all .nbs/events/ to acknowledge pending events. "
+        "2. Run nbs-chat read <file> --unread=%s for each chat with unread messages. "
+        "Respond via nbs-chat send if the message requires a response. "
+        "3. Process events and messages. If useful work emerges, start it and "
+        "announce in chat so others can coordinate. "
+        "4. Do not post zero-information messages (no 'acknowledged', 'noted'). "
+        "5. Be proactive: read the last 10 messages for context. If there is "
+        "active discussion, contribute. "
+        "6. After processing, return to your prompt. The sidecar will notify "
+        "you when there is new work. Do NOT poll or sleep-wait.",
+        notify_message, cfg->handle, cfg->handle);
 
-    /* Build in pieces to avoid format-truncation warnings.
-     * Guard against snprintf returning negative (encoding error). */
-    size_t off = 0;
-    int sn;
-    sn = snprintf(out + off, out_size - off,
-        "Your skills were lost after compaction. Please read these files "
-        "to restore them: ");
-    if (sn > 0) off += (size_t)sn;
-    if (off < out_size) {
-        sn = snprintf(out + off, out_size - off,
-            "%s/claude_tools/nbs-notify.md, ", cfg->nbs_root);
-        if (sn > 0) off += (size_t)sn;
-    }
-    if (off < out_size) {
-        sn = snprintf(out + off, out_size - off,
-            "%s/claude_tools/nbs-teams-chat.md, ", cfg->nbs_root);
-        if (sn > 0) off += (size_t)sn;
-    }
-    if (off < out_size) {
-        sn = snprintf(out + off, out_size - off,
-            "%s/claude_tools/nbs-poll.md. ", cfg->nbs_root);
-        if (sn > 0) off += (size_t)sn;
-    }
-    if (off < out_size) {
-        sn = snprintf(out + off, out_size - off,
-            "Your handle is '%s'.", cfg->handle);
-        if (sn > 0) off += (size_t)sn;
-    }
-    if (has_chat && off < out_size) {
-        /* Truncation is intentional — chat_path may be long */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-        sn = snprintf(out + off, out_size - off,
-            " Then send a message to %s confirming skills restored.",
-            chat_path);
-        if (sn > 0) off += (size_t)sn;
-#pragma GCC diagnostic pop
-    }
-    (void)off;
+    /* Truncation is acceptable — the message may be long but the
+     * instructions are the important part. */
+    (void)sn;
 
-    /* Postcondition: output must be non-empty */
     ASSERT_MSG(out[0] != '\0',
-               "build_recovery_prompt: output is empty");
+               "build_notify_prompt: output is empty");
 }
 
 /* --- Interrupt handler --- */
@@ -159,8 +140,11 @@ static int handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
             if (!content) continue;
 
             if (detect_prompt_visible(content)) {
-                /* Inject /nbs-notify interrupt */
-                if (tp->send_text(tp, "/nbs-notify interrupt from chat") != 0) {
+                /* Inject interrupt as plain text (not /nbs-notify slash command) */
+                char interrupt_prompt[SIDECAR_MAX_PROMPT];
+                build_notify_prompt(cfg, "INTERRUPT — you were @mentioned with ! priority",
+                                     interrupt_prompt, sizeof(interrupt_prompt));
+                if (tp->send_text(tp, interrupt_prompt) != 0) {
                     fprintf(stderr, "handle_interrupt: send_text failed\n");
                 }
                 usleep(300000);
@@ -867,35 +851,6 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 }
 
                 if (should_inject_notify(cfg, &state, registry_path) == 0) {
-                    /* Self-heal check */
-                    if (state.notify_fail_count >= cfg->notify_fail_threshold) {
-                        char recovery[SIDECAR_MAX_PROMPT];
-                        build_recovery_prompt(cfg, registry_path,
-                                               recovery, sizeof(recovery));
-                        if (tp->send_text(tp, recovery) != 0) {
-                            fprintf(stderr, "sidecar_run: recovery send_text failed\n");
-                        }
-                        usleep(300000);
-                        if (tp->send_key(tp, "Enter") != 0) {
-                            fprintf(stderr, "sidecar_run: recovery send_key Enter failed\n");
-                        }
-
-                        sleep(5);
-                        char *rc_content = tp->capture(tp, 5);
-                        if (rc_content) {
-                            if (!detect_skill_failure(rc_content)) {
-                                state.notify_fail_count = 0;
-                            }
-                            free(rc_content);
-                        }
-
-                        state.idle_seconds = 0;
-                        state.last_content_hash = 0;
-                        free(content);
-                        sleep(15);
-                        continue;
-                    }
-
                     /* TOCTOU re-capture before injection */
                     char *fresh = tp->capture(tp, 5);
                     if (fresh) {
@@ -911,13 +866,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         free(fresh);
                     }
 
-                    /* Inject /nbs-notify */
-                    char inject_cmd[SIDECAR_MAX_MESSAGE + 16];
-                    snprintf(inject_cmd, sizeof(inject_cmd),
-                             "/nbs-notify %s", state.notify_message);
-                    tp->send_text(tp, inject_cmd);
+                    /* Inject notification as plain text prompt.
+                     * Previous approach used /nbs-notify slash command,
+                     * which failed because Enter doesn't reliably register
+                     * in tmux contexts. Plain text works every time. */
+                    char notify_prompt[SIDECAR_MAX_PROMPT];
+                    build_notify_prompt(cfg, state.notify_message,
+                                        notify_prompt, sizeof(notify_prompt));
+                    if (tp->send_text(tp, notify_prompt) != 0) {
+                        fprintf(stderr, "sidecar_run: notify send_text failed\n");
+                    }
                     usleep(300000);
-                    tp->send_key(tp, "Enter");
+                    if (tp->send_key(tp, "Enter") != 0) {
+                        fprintf(stderr, "sidecar_run: notify send_key Enter failed\n");
+                    }
 
                     /* Verify injection consumed (up to 3 retries) */
                     int injection_consumed = 0;
@@ -926,7 +888,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         char *verify = tp->capture(tp, 5);
                         if (!verify) continue;
 
-                        if (strstr(verify, "/nbs-notify") != NULL) {
+                        if (strstr(verify, "sidecar detected") != NULL) {
                             /* Still in buffer — retry Enter */
                             tp->send_key(tp, "Enter");
                             free(verify);
@@ -941,15 +903,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     if (injection_consumed) {
                         state.notify_fail_count = 0;
                     } else {
-                        /* Check for skill failure */
-                        char *final = tp->capture(tp, 5);
-                        if (final) {
-                            if (detect_prompt_visible(final) &&
-                                detect_skill_failure(final)) {
-                                state.notify_fail_count++;
-                            }
-                            free(final);
-                        }
+                        state.notify_fail_count++;
                     }
 
                     state.idle_seconds = 0;
