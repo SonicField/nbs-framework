@@ -109,3 +109,33 @@ tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT" \
 tmux pipe-pane -t "$SESSION" -o "cat >> '${LOG_FILE}'" 2>/dev/null || true
 
 echo "$SESSION"
+
+# Monitor for completion, then kill the session.
+# Ephemeral workers post to chat and/or update their task file state,
+# then sit at the prompt forever. Poll every 10s for up to 10 minutes.
+(
+    sleep 15  # let worker initialise
+    for i in $(seq 1 60); do
+        sleep 10
+
+        # Session died on its own?
+        if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+            break
+        fi
+
+        # Check task file for completion
+        if [[ -f "$TASK_FILE" ]]; then
+            STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}')
+            case "$STATE" in
+                completed|done|failed|escalated)
+                    sleep 5
+                    tmux kill-session -t "$SESSION" 2>/dev/null || true
+                    break
+                    ;;
+            esac
+        fi
+    done
+
+    # Timeout — kill anyway
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+) &
