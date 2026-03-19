@@ -105,21 +105,55 @@ Messages: <count>
 - <observation>
 ```
 
-### 6. Post to Chat
+### 6. Continuation Analysis
 
-Post the full digest to chat. This is the primary output — restarted agents read it on startup.
+After analysing what happened, reason about **what should happen next**. This section is critical — restarted agents use it to determine their direction.
+
+Examine the final messages for:
+- Explicit next steps, options, or "paths forward" proposed by any participant
+- Open tasks, blocked work, or identified follow-ups
+- Whether the session ended cleanly (deliberate close by supervisor or Alex) vs crash/timeout
+- Unresolved questions or decisions deferred to Alex
+
+Produce one of two continuation types:
+
+**CONTINUATION: GOALS** — when you can identify specific, actionable goals from the conversation:
+```
+CONTINUATION: GOALS
+1. <specific goal extracted from conversation>
+2. <specific goal extracted from conversation>
+Source: <quote or paraphrase from the message that proposed this>
+```
+
+**CONTINUATION: REVIEW** — when no clear goals exist, or the session ended without forward direction:
+```
+CONTINUATION: REVIEW
+The previous session ended with <brief description>. No explicit next steps were identified.
+The team should: review the scribe log and prior session outcomes, then propose 3 candidate goals
+to Alex with expected outcomes for each. Do not begin work until Alex confirms a direction.
+```
+
+**Rules for continuation:**
+- Never invent goals that weren't discussed. Only extract what was actually proposed.
+- If Alex gave a direction (e.g., "accept standings", "focus on X"), that IS the continuation.
+- If the session closed cleanly with "session complete" and no forward direction, use REVIEW.
+- If the session crashed or timed out mid-work, use GOALS with the interrupted work as the goal.
+
+### 7. Post to Chat
+
+Post the full digest (including the Continuation section) to chat. This is the primary output — restarted agents read it on startup.
 
 ```bash
 nbs-chat send <chat-file> <handle> "CHAT DIGEST:
 
-<full digest content>"
+<full digest content including Continuation section>"
 ```
 
 Also write to `.nbs/digests/<date>-<topic>.md` as a permanent record.
 
-### 7. Verify
+### 8. Verify
 
-Spot-check at least 3 claims against the source chat. No sensitive data, no misattributed decisions.
+Spot-check at least 3 claims against the source chat. No sensitive data, no misattributed decisions. Verify the Continuation section accurately reflects proposals from the conversation — no invented goals.
 
 ## Arguments
 

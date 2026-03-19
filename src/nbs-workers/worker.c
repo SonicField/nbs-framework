@@ -1223,11 +1223,16 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * Use the slug (e.g. "shepard") as the handle, not the unique name
      * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
      * handles in chat. The hex suffix remains on the task file and tmux
-     * session name to prevent file collisions. */
+     * session name to prevent file collisions.
+     *
+     * nbs-claude is invoked via PATH (not relative bin/nbs-claude) so
+     * this works in both the framework source tree and installed projects.
+     * The bash -l login shell sources .bashrc which adds ~/.nbs/bin to
+     * PATH. nbs-claude itself also adds its SCRIPT_DIR to PATH. */
     {
         char launch_cmd[PATH_BUF_SIZE];
         int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "NBS_HANDLE=%s bin/nbs-claude "
+                         "NBS_HANDLE=%s nbs-claude "
                          "--dangerously-skip-permissions",
                          slug);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
@@ -1995,16 +2000,19 @@ int cmd_continue(const char *handle, const char *model_override,
         }
     }
 
-    /* Build nbs-claude command */
+    /* Build nbs-claude command.
+     * Use PATH lookup (not relative bin/nbs-claude) so this works in
+     * both the framework source tree and installed projects. The tmux
+     * session runs bash which inherits PATH from the user environment. */
     char nbs_claude_cmd[PATH_BUF_SIZE * 2];
     if (model[0] != '\0') {
         snprintf(nbs_claude_cmd, sizeof(nbs_claude_cmd),
-                 "NBS_HANDLE=%s NBS_MODEL=%s bin/nbs-claude "
+                 "NBS_HANDLE=%s NBS_MODEL=%s nbs-claude "
                  "--continue=%s --dangerously-skip-permissions",
                  handle, model, session_id);
     } else {
         snprintf(nbs_claude_cmd, sizeof(nbs_claude_cmd),
-                 "NBS_HANDLE=%s bin/nbs-claude "
+                 "NBS_HANDLE=%s nbs-claude "
                  "--continue=%s --dangerously-skip-permissions",
                  handle, session_id);
     }

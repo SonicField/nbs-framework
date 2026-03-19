@@ -127,7 +127,11 @@ tmux send-keys -t "nbs-generalist-${CHAT_TAG}" "/nbs-teams-chat" Enter 2>/dev/nu
 tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/null || true
 
 # 6. Post continuation directive
+# The digest's CONTINUATION section determines what the team should do.
+# Do not hardcode a plan — let the digest's analysis of the prior session
+# drive the direction. If the digest identified GOALS, pursue them.
+# If REVIEW, ask Alex for direction.
 "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-    "@team Auto-restart by terminal watchdog. Read the scribe log and chat digest above. @supervisor create a 6-phase plan to continue and expand the work from the previous session. Phase 1-3: Implement the open items from the previous session fix plan, benchmarking after each. Phase 4: Assess against the target. If met, commit and push. Phase 5: If not met, propose 3 new ideas with falsifiable predictions. Phase 6: Implement and benchmark each new idea sequentially. The session is NOT complete until either the target is met or all 6 phases are exhausted. Diagnosis without implementation is not progress." 2>/dev/null || true
+    "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to Alex — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
 
 echo "[watchdog] Team restarted successfully"

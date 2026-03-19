@@ -116,6 +116,39 @@ if [[ -d "$HOME/.nbs/commands" ]]; then
     CMD_COUNT=$(find "$HOME/.nbs/commands" -name '*.md' 2>/dev/null | wc -l)
     if [[ $CMD_COUNT -gt 0 ]]; then
         ok "~/.nbs/commands/ has $CMD_COUNT templates"
+        # Check template content — {{NBS_ROOT}} should expand to ~/.nbs
+        # Look for paths referencing concepts/ or claude_tools/ under a
+        # different .nbs root. These are functional references that must
+        # resolve, not example paths in documentation.
+        STALE=0
+        for cmd in "$HOME/.nbs/commands"/nbs-*.md; do
+            [[ -f "$cmd" ]] || continue
+            # Extract paths like /home/user/.../concepts/ or /home/user/.../claude_tools/
+            WRONG=$(grep -oE '/home/[^ ]+/(concepts|claude_tools|terminal-weathering)/' "$cmd" 2>/dev/null | head -1 || true)
+            if [[ -n "$WRONG" ]] && [[ "$WRONG" != "$HOME/.nbs/"* ]]; then
+                if [[ $STALE -eq 0 ]]; then
+                    echo "    Stale NBS_ROOT in templates (expanded to wrong prefix):"
+                fi
+                echo "      $(basename "$cmd"): $WRONG"
+                STALE=$((STALE + 1))
+            fi
+        done
+        if [[ $STALE -gt 0 ]]; then
+            problem "$STALE templates have stale NBS_ROOT (wrong prefix)"
+            if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then
+                for template in "$FRAMEWORK_SRC/claude_tools"/*.md; do
+                    if [[ -f "$template" ]]; then
+                        name=$(basename "$template")
+                        while IFS= read -r line || [[ -n "$line" ]]; do
+                            echo "${line//\{\{NBS_ROOT\}\}/$HOME/.nbs}"
+                        done < "$template" > "$HOME/.nbs/commands/$name"
+                    fi
+                done
+                fixed "Regenerated templates with correct NBS_ROOT (~/.nbs)"
+            fi
+        else
+            ok "Template content references correct NBS_ROOT"
+        fi
     else
         problem "~/.nbs/commands/ exists but is empty"
         if [[ $FIX -eq 1 ]] && [[ -n "$FRAMEWORK_SRC" ]]; then

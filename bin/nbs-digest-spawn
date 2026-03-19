@@ -74,7 +74,7 @@ fi
 # Spawn ephemeral digest worker
 # CHAT_FILE has been validated to contain only safe characters (alphanumeric, dots,
 # hyphens, underscores, forward slashes) so it is safe to embed in the prompt string.
-TASK_DESC="Load /nbs-chat-digest. Read the last 100 messages of ${CHAT_FILE} via 'nbs-chat read ${CHAT_FILE} --last=100'. Do NOT launch sub-agents — process the messages directly in this session. Produce a concise digest (key decisions, blockers, outcomes, current state). Post the digest to ${CHAT_FILE} via 'nbs-chat send ${CHAT_FILE} chatdigest <digest>'. Also write to .nbs/digests/. Then stop."
+TASK_DESC="Load /nbs-chat-digest. Read the last 100 messages of ${CHAT_FILE} via 'nbs-chat read ${CHAT_FILE} --last=100'. Do NOT launch sub-agents — process the messages directly in this session. Produce a concise digest (key decisions, blockers, outcomes, current state). CRITICAL: include a Continuation section — analyse the final messages to determine whether clear next goals exist (CONTINUATION: GOALS) or the team needs to review and propose direction (CONTINUATION: REVIEW). Post the digest to ${CHAT_FILE} via 'nbs-chat send ${CHAT_FILE} chatdigest <digest>'. Also write to .nbs/digests/. Then stop — do not do anything else after posting."
 
 # [BUG #1] Do not suppress stderr from spawn -- let errors propagate
 WORKER_NAME=$("$NBS_WORKERS" spawn chatdigest "$PROJECT_ROOT" "$TASK_DESC") || {
