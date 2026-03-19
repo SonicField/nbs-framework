@@ -1459,12 +1459,13 @@ int cmd_spawn(const char *slug, const char *project_dir,
         }
     }
 
-    /* Publish bus event */
+    /* Publish bus event.
+     * Truncate the task description for the bus payload — the full content
+     * (which may include embedded skill files) can be 10KB+ but the bus
+     * event is just a notification, not the task itself. */
     {
         char payload[PATH_BUF_SIZE];
-        int n = snprintf(payload, sizeof(payload), "Task: %s", task_description);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(payload),
-                   "cmd_spawn: payload too long");
+        snprintf(payload, sizeof(payload), "Task: %.4000s", task_description);
         bus_publish(abs_project_dir, name, "worker-spawned", "normal", payload);
     }
 
