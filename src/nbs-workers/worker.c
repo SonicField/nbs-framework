@@ -1226,12 +1226,34 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * differently from claude running as the session command. */
     char session_cmd[PATH_BUF_SIZE * 2];
     {
+        /* Resolve nbs-claude path: try .nbs/bin/ then bin/ under project root.
+         * Must be absolute — tmux runs session commands via /bin/sh -c which
+         * does not have PATH set up. PATH lookup causes connection errors
+         * because a different nbs-claude (or environment) is found. */
+        char nbs_claude_path[PATH_BUF_SIZE];
+        {
+            int cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
+                              "%s/.nbs/bin/nbs-claude", abs_project_dir);
+            if (cp <= 0 || (size_t)cp >= sizeof(nbs_claude_path) ||
+                access(nbs_claude_path, X_OK) != 0) {
+                cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
+                              "%s/bin/nbs-claude", abs_project_dir);
+                if (cp <= 0 || (size_t)cp >= sizeof(nbs_claude_path) ||
+                    access(nbs_claude_path, X_OK) != 0) {
+                    fprintf(stderr, "Error: nbs-claude not found under %s\n",
+                            abs_project_dir);
+                    unlink(task_file);
+                    return EXIT_ERROR;
+                }
+            }
+        }
+
         int n = snprintf(session_cmd, sizeof(session_cmd),
-                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 "
-                         "nbs-claude --dangerously-skip-permissions "
-                         "'Read %s and execute the task. "
-                         "Update the Status and Log sections when complete.'",
-                         slug, task_file);
+                         "NBS_HANDLE=%s "
+                         "NBS_INITIAL_PROMPT='Read %s and execute the task. "
+                         "Update the Status and Log sections when complete.' "
+                         "%s --dangerously-skip-permissions",
+                         slug, task_file, nbs_claude_path);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(session_cmd),
                    "cmd_spawn: session_cmd too long");
     }
