@@ -236,8 +236,10 @@ cp "$FAKE_BIN/nbs-workers" "$ALT_BIN/"
 cp "$FAKE_BIN/nbs-chat" "$ALT_BIN/"
 chmod +x "$ALT_BIN"/*
 # alt_project has NO .nbs/workers directory at all
+# CRITICAL: cd into alt_project so PROJECT_ROOT=$(pwd) resolves correctly.
+# Without this, PROJECT_ROOT picks up the test runner's cwd which has .nbs/workers/.
 
-OUTPUT=$(timeout 10 "$ALT_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1) && {
+OUTPUT=$(cd "$ALT_PROJECT" && timeout 10 "$ALT_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1) && {
     fail "should have failed with missing workers directory"
 } || {
     EXIT_CODE=$?
@@ -268,7 +270,7 @@ fi
 
 # --- Test 12: Valid invocation succeeds ---
 echo "12. Valid invocation with good path succeeds..."
-OUTPUT=$("$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" 2>&1)
+OUTPUT=$(cd "$FAKE_PROJECT" && "$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" 2>&1)
 EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 0 ]]; then
     if echo "$OUTPUT" | grep -q "Digest worker spawned"; then
@@ -283,7 +285,7 @@ fi
 # --- Test 13: --wait with completed task file succeeds ---
 echo "13. --wait mode detects completed task file..."
 echo "State: completed" > "$FAKE_PROJECT/.nbs/workers/test-worker-abc1.md"
-OUTPUT=$(timeout 15 "$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1)
+OUTPUT=$(cd "$FAKE_PROJECT" && timeout 15 "$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1)
 EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 0 ]]; then
     if echo "$OUTPUT" | grep -q "finished"; then
@@ -299,7 +301,7 @@ rm -f "$FAKE_PROJECT/.nbs/workers/test-worker-abc1.md"
 # --- Test 14: --wait with capitalised state (case normalisation) ---
 echo "14. --wait mode handles capitalised state via tolower..."
 echo "State: Completed" > "$FAKE_PROJECT/.nbs/workers/test-worker-abc1.md"
-OUTPUT=$(timeout 15 "$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1)
+OUTPUT=$(cd "$FAKE_PROJECT" && timeout 15 "$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" --wait 2>&1)
 EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 0 ]]; then
     if echo "$OUTPUT" | grep -q "finished"; then
