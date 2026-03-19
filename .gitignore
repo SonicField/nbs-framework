@@ -86,3 +86,7 @@ edit_*.py
 src/nbs-scribe-log/nbs-scribe-log
 src/nbs-scribe-log/assert_check
 src/nbs-scribe-log/*.o
+# Build artefacts for nbs-hub
+src/nbs-hub/nbs-hub
+src/nbs-hub/*.o
+bin/nbs-hub
