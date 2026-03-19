@@ -174,14 +174,12 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
 }
 
 /*
- * spawn_trigger_worker — Fork+exec nbs-workers to spawn an ephemeral worker.
+ * spawn_trigger_worker — Fork+exec nbs-spawn-worker shell script.
  *
- * Used by /pythia, /shepard, /fixup, /librarian terminal commands.
- * Same action as the sidecar's periodic triggers, but manual.
- *
- * Preconditions:
- *   - role, task_desc, project_root are non-NULL
- *   - nbs-workers is findable via resolve_restart_script pattern
+ * Uses the exact same fork+execlp("bash",...) pattern as /restart,
+ * which is proven to work from the terminal. The shell script
+ * handles tmux session creation, task file writing, and log setup
+ * using the same agent launch pattern as the restart script.
  *
  * Returns 0 on spawn success, -1 on failure.
  */
@@ -193,80 +191,36 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     ASSERT_MSG(task_desc != NULL, "spawn_trigger_worker: task_desc is NULL");
     ASSERT_MSG(project_root != NULL, "spawn_trigger_worker: project_root is NULL");
 
-    /* Find nbs-workers binary: try .nbs/bin/ then bin/ */
-    char workers_bin[4096];
-    int n = snprintf(workers_bin, sizeof(workers_bin),
-                     "%s/.nbs/bin/nbs-workers", project_root);
-    if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
-        access(workers_bin, X_OK) != 0) {
-        n = snprintf(workers_bin, sizeof(workers_bin),
-                     "%s/bin/nbs-workers", project_root);
-        if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
-            access(workers_bin, X_OK) != 0) {
-            fprintf(stderr, "warning: nbs-workers not found in %s\n",
+    /* Find nbs-spawn-worker script: try .nbs/bin/ then bin/ */
+    char script[4096];
+    int n = snprintf(script, sizeof(script),
+                     "%s/.nbs/bin/nbs-spawn-worker", project_root);
+    if (n <= 0 || (size_t)n >= sizeof(script) ||
+        access(script, X_OK) != 0) {
+        n = snprintf(script, sizeof(script),
+                     "%s/bin/nbs-spawn-worker", project_root);
+        if (n <= 0 || (size_t)n >= sizeof(script) ||
+            access(script, X_OK) != 0) {
+            fprintf(stderr, "warning: nbs-spawn-worker not found in %s\n",
                     project_root);
             return -1;
         }
     }
 
-    /* Read skill file and combine with task description.
-     * Skill content is embedded verbatim — no modifications. */
-    /* Try project .nbs/ first, then ~/.nbs/ (global install) */
-    char skill_path[4096];
-    int sp = snprintf(skill_path, sizeof(skill_path),
-                      "%s/.nbs/%s", project_root, skill_file);
-    if (sp > 0 && (size_t)sp < sizeof(skill_path) &&
-        access(skill_path, R_OK) != 0) {
-        const char *home = getenv("HOME");
-        if (home) {
-            sp = snprintf(skill_path, sizeof(skill_path),
-                          "%s/.nbs/%s", home, skill_file);
-        }
-    }
-    char *combined = NULL;
-    if (sp > 0 && (size_t)sp < sizeof(skill_path)) {
-        FILE *sf = fopen(skill_path, "r");
-        if (sf) {
-            fseek(sf, 0, SEEK_END);
-            long slen = ftell(sf);
-            fseek(sf, 0, SEEK_SET);
-            if (slen > 0 && slen < 64 * 1024) {
-                size_t dlen = strlen(task_desc);
-                size_t total = (size_t)slen + dlen + 64;
-                combined = malloc(total);
-                if (combined) {
-                    size_t nread = fread(combined, 1, (size_t)slen, sf);
-                    snprintf(combined + nread, total - nread,
-                             "\n\n## Task Instructions\n\n%s", task_desc);
-                }
-            }
-            fclose(sf);
-        }
-    }
-    if (!combined) {
-        fprintf(stderr, "warning: skill file '%s' not found, using task only\n",
-                skill_path);
-    }
-
-    const char *task = combined ? combined : task_desc;
-
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "warning: fork for /%s failed: %s\n",
                 role, strerror(errno));
-        free(combined);
         return -1;
     }
     if (pid == 0) {
-        /* Child: minimal cleanup before exec.
-         * Do NOT setsid() or close fds — that breaks tmux session
-         * communication. The CLI spawn works without any of that. */
-        execl(workers_bin, "nbs-workers", "spawn", role,
-              project_root, task, (char *)NULL);
+        /* Child: exec the spawn script via bash.
+         * Same pattern as /restart — proven to work from the terminal. */
+        execlp("bash", "bash", script, role, project_root,
+               skill_file, task_desc, (char *)NULL);
         _exit(127);
     }
-    /* Parent: don't wait — worker runs in background */
-    free(combined);
+    /* Parent: don't wait — script runs in background */
     return 0;
 }
 

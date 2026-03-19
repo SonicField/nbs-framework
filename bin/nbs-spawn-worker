@@ -1,0 +1,111 @@
+#!/bin/bash
+# nbs-spawn-worker — Spawn an ephemeral worker agent
+#
+# Launches a worker using the exact same pattern as team agents:
+#   tmux new-session -d -s <name> -c <dir> "<nbs-claude command>"
+#
+# The worker reads its task from a task file, executes it, and
+# posts results to chat.
+#
+# Usage:
+#   nbs-spawn-worker <role> <project-root> <skill-file> <task-instructions>
+#
+# Arguments:
+#   role              Worker handle (e.g., pythia, shepard)
+#   project-root      Absolute path to the project
+#   skill-file        Path to skill .md file (content embedded in task file)
+#   task-instructions  Task instructions appended after skill content
+
+set -euo pipefail
+
+if [[ $# -lt 4 ]]; then
+    echo "Usage: nbs-spawn-worker <role> <project-root> <skill-file> <task-instructions>" >&2
+    exit 4
+fi
+
+ROLE="$1"
+PROJECT_ROOT="$2"
+SKILL_FILE="$3"
+TASK_INSTRUCTIONS="$4"
+
+# Validate
+[[ -d "$PROJECT_ROOT" ]] || { echo "Error: project root not found: $PROJECT_ROOT" >&2; exit 1; }
+
+# Find nbs-claude: try .nbs/bin/ then bin/ under project root
+NBS_CLAUDE=""
+for d in "$PROJECT_ROOT/.nbs/bin" "$PROJECT_ROOT/bin"; do
+    if [[ -x "$d/nbs-claude" ]]; then
+        NBS_CLAUDE="$d/nbs-claude"
+        break
+    fi
+done
+[[ -n "$NBS_CLAUDE" ]] || { echo "Error: nbs-claude not found under $PROJECT_ROOT" >&2; exit 1; }
+
+# Generate unique session name
+SUFFIX=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' ')
+SESSION="nbs-${ROLE}-worker-${SUFFIX}"
+WORKERS_DIR="$PROJECT_ROOT/.nbs/workers"
+mkdir -p "$WORKERS_DIR"
+TASK_FILE="$WORKERS_DIR/${ROLE}-${SUFFIX}.md"
+LOG_FILE="$WORKERS_DIR/${ROLE}-${SUFFIX}.log"
+
+# Read skill file content (verbatim, no modifications)
+SKILL_CONTENT=""
+if [[ -f "$SKILL_FILE" ]]; then
+    SKILL_CONTENT=$(cat "$SKILL_FILE")
+elif [[ -f "$HOME/.nbs/$SKILL_FILE" ]]; then
+    SKILL_CONTENT=$(cat "$HOME/.nbs/$SKILL_FILE")
+fi
+
+# Write task file
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+cat > "$TASK_FILE" << TASKEOF
+# Worker: ${ROLE}-${SUFFIX}
+
+## Task
+
+${SKILL_CONTENT}
+
+## Task Instructions
+
+${TASK_INSTRUCTIONS}
+
+## Tooling
+
+Your supervisor monitors you via \`nbs-workers\`. These tips avoid common mistakes:
+
+- **Do not read raw .log files** — they contain ANSI escape codes. Use \`nbs-workers search <name> <regex>\` for clean, searchable output.
+- **Update Status and Log sections** in this file when done — your supervisor reads them via \`nbs-workers results\`.
+- **Escalate blockers** by setting State to \`escalated\` — do not work around problems silently.
+
+## Status
+
+State: running
+Started: ${TIMESTAMP}
+Completed:
+
+## Log
+
+[Worker appends findings here]
+TASKEOF
+
+# Clean up stale pidfile (previous run may still hold flock)
+PIDFILE="$PROJECT_ROOT/.nbs/pids/${ROLE}.pid"
+if [[ -f "$PIDFILE" ]]; then
+    # Try to acquire lock briefly — if held, wait up to 3s
+    exec 9>"$PIDFILE"
+    if ! flock -w 3 9 2>/dev/null; then
+        echo "Warning: previous ${ROLE} still shutting down" >&2
+    fi
+    exec 9>&-
+    rm -f "$PIDFILE"
+fi
+
+# Launch worker session — exact same pattern as team agents
+tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT" \
+    "NBS_HANDLE=${ROLE} NBS_INITIAL_PROMPT='Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete.' ${NBS_CLAUDE} --dangerously-skip-permissions"
+
+# Start log capture
+tmux pipe-pane -t "$SESSION" -o "cat >> '${LOG_FILE}'" 2>/dev/null || true
+
+echo "$SESSION"
