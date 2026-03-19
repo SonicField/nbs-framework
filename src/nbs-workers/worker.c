@@ -1173,6 +1173,45 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Postcondition: task file exists */
     ASSERT_MSG(file_exists(task_file), "task file not created: %s", task_file);
 
+    /* Clean up stale pidfile from previous run of this role.
+     * Ephemeral workers reuse the slug (e.g., "pythia") as the handle.
+     * If the previous worker's nbs-claude is still shutting down, its
+     * flock on the pidfile will block the new spawn. Wait briefly for
+     * the lock to release, then remove the stale pidfile. */
+    {
+        char pidfile[PATH_BUF_SIZE];
+        int pn = snprintf(pidfile, sizeof(pidfile),
+                          "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
+        if (pn > 0 && (size_t)pn < sizeof(pidfile)) {
+            int pfd = open(pidfile, O_RDWR, 0600);
+            if (pfd >= 0) {
+                /* Try to acquire the lock — if we get it, no one else
+                 * is using this handle and the pidfile is stale. */
+                struct flock fl = {
+                    .l_type = F_WRLCK,
+                    .l_whence = SEEK_SET,
+                    .l_start = 0,
+                    .l_len = 0,
+                };
+                /* Try non-blocking first */
+                if (fcntl(pfd, F_SETLK, &fl) < 0) {
+                    /* Lock held — previous worker still shutting down.
+                     * Wait up to 5s for it to release. */
+                    fprintf(stderr, "cmd_spawn: waiting for previous %s to release lock...\n", slug);
+                    struct flock bfl = fl;
+                    alarm(5);
+                    int got = fcntl(pfd, F_SETLKW, &bfl);
+                    alarm(0);
+                    if (got < 0) {
+                        fprintf(stderr, "cmd_spawn: previous %s lock timed out, proceeding anyway\n", slug);
+                    }
+                }
+                close(pfd);
+                unlink(pidfile);
+            }
+        }
+    }
+
     /* Create tmux session with nbs-claude as the session command.
      *
      * This matches how agents are launched in the restart script:
@@ -1188,7 +1227,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
     char session_cmd[PATH_BUF_SIZE * 2];
     {
         int n = snprintf(session_cmd, sizeof(session_cmd),
-                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 NBS_FORCE_SPAWN=1 "
+                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 "
                          "nbs-claude --dangerously-skip-permissions "
                          "'Read %s and execute the task. "
                          "Update the Status and Log sections when complete.'",
