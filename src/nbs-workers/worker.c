@@ -471,6 +471,7 @@ static int tmux_kill_session(const char *session_name)
     return exec_fire_and_forget(argv);
 }
 
+__attribute__((unused))
 static int tmux_send_keys(const char *session_name, const char *keys,
                           int send_enter)
 {
@@ -486,8 +487,8 @@ static int tmux_send_keys(const char *session_name, const char *keys,
     return exec_fire_and_forget(argv);
 }
 
-/* Used by cmd_spawn to detect when Claude's prompt is ready before
- * sending the task, and by cmd_session for prompt detection. */
+/* Available for cmd_session prompt detection if needed. */
+__attribute__((unused))
 static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
 {
     ASSERT_MSG(session_name != NULL, "tmux_capture_pane: session_name is NULL");
@@ -1172,18 +1173,34 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Postcondition: task file exists */
     ASSERT_MSG(file_exists(task_file), "task file not created: %s", task_file);
 
-    /* Create tmux session */
-    char shell_cmd[PATH_BUF_SIZE];
+    /* Create tmux session with nbs-claude as the session command.
+     *
+     * This matches how agents are launched in the restart script:
+     *   tmux new-session -d -s <name> -c <dir> "NBS_HANDLE=... nbs-claude ..."
+     *
+     * nbs-claude IS the session — no intermediate bash, no send-keys.
+     * The -p flag passes the task prompt directly to claude, which
+     * processes it immediately on startup without needing send-keys.
+     *
+     * Previous approach (bash -l + send-keys) caused connection errors
+     * because claude running as a child of interactive bash behaves
+     * differently from claude running as the session command. */
+    char session_cmd[PATH_BUF_SIZE * 2];
     {
-        int n = snprintf(shell_cmd, sizeof(shell_cmd), "cd '%s' && exec bash -l",
-                         abs_project_dir);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(shell_cmd),
-                   "cmd_spawn: shell_cmd too long");
+        int n = snprintf(session_cmd, sizeof(session_cmd),
+                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 nbs-claude "
+                         "--dangerously-skip-permissions "
+                         "-p 'Read %s and execute the task. "
+                         "Update the Status and Log sections when complete.'",
+                         slug, task_file);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(session_cmd),
+                   "cmd_spawn: session_cmd too long");
     }
 
     {
         const char *argv[] = {"tmux", "new-session", "-d", "-s", session,
-                              shell_cmd, NULL};
+                              "-c", abs_project_dir,
+                              session_cmd, NULL};
         if (exec_spawn_detached(argv) != 0) {
             fprintf(stderr, "Error: Failed to create tmux session\n");
             unlink(task_file);
@@ -1211,87 +1228,10 @@ int cmd_spawn(const char *slug, const char *project_dir,
         return EXIT_ERROR;
     }
 
-    /* Allow shell to initialise.
-     * Rationale: tmux new-session spawns bash -l which sources
-     * profile/rc files. 2s is empirically sufficient for typical
-     * shell startup. Verified by the subsequent tmux send-keys
-     * which fails visibly if the shell is not ready. */
-    sleep(2);
-
-    /* Launch interactive Claude with NBS_HANDLE for sidecar identity.
-     * Use the slug (e.g. "shepard") as the handle, not the unique name
-     * (e.g. "shepard-d8a5"). Ephemeral workers should appear with clean
-     * handles in chat. The hex suffix remains on the task file and tmux
-     * session name to prevent file collisions.
-     *
-     * nbs-claude is invoked via PATH (not relative bin/nbs-claude) so
-     * this works in both the framework source tree and installed projects.
-     * The bash -l login shell sources .bashrc which adds ~/.nbs/bin to
-     * PATH. nbs-claude itself also adds its SCRIPT_DIR to PATH.
-     *
-     * NBS_POLL_DISABLE=1 prevents the sidecar from starting. Ephemeral
-     * workers run one task and stop — they don't need the sidecar's
-     * notification/polling system. The sidecar also races the task
-     * prompt by injecting "Load /nbs-teams-chat" which can clobber
-     * the worker's actual task instructions. */
-    {
-        char launch_cmd[PATH_BUF_SIZE];
-        int n = snprintf(launch_cmd, sizeof(launch_cmd),
-                         "NBS_HANDLE=%s NBS_POLL_DISABLE=1 nbs-claude "
-                         "--dangerously-skip-permissions",
-                         slug);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(launch_cmd),
-                   "cmd_spawn: launch_cmd too long");
-        tmux_send_keys(session, launch_cmd, 1);
-    }
-
-    /* Wait for Claude's prompt before sending the task.
-     * Claude Code loads all registered skills at startup. With many
-     * skills, this can take 10-20s. Sending the task before the prompt
-     * appears causes the Enter key to be lost, leaving the task text
-     * queued but never submitted.
-     *
-     * Poll for the prompt character (UTF-8 ❯ = 0xE2 0x9D 0xAF) in
-     * the tmux pane. Fall back to fixed delay if detection fails. */
-    {
-        int prompt_found = 0;
-        for (int wait = 0; wait < 30; wait++) {
-            sleep(2);
-            char pane_buf[4096];
-            if (tmux_capture_pane(session, pane_buf, sizeof(pane_buf)) == 0) {
-                /* Look for Claude Code prompt indicator */
-                if (strstr(pane_buf, "\xe2\x9d\xaf") != NULL ||
-                    strstr(pane_buf, "bypass permissions") != NULL) {
-                    prompt_found = 1;
-                    break;
-                }
-            }
-        }
-        if (!prompt_found) {
-            fprintf(stderr, "cmd_spawn: prompt not detected after 60s, "
-                    "sending task anyway\n");
-        }
-    }
-
-    /* Send the task prompt. */
-    {
-        char prompt[PATH_BUF_SIZE * 2];
-        int n = snprintf(prompt, sizeof(prompt),
-                         "Read %s and execute the task. "
-                         "Update the Status and Log sections when complete.",
-                         task_file);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(prompt),
-                   "cmd_spawn: prompt too long");
-        tmux_send_keys(session, prompt, 1);
-    }
-
-    /* Wait for Claude to start processing (poll for prompt consumption).
-     * Rationale: after send-keys delivers the task text plus Enter,
-     * Claude needs time to read the task file and begin execution.
-     * 5s is empirically sufficient. The subsequent poll loop is the
-     * real completion check — this delay only prevents premature
-     * polling. */
-    sleep(5);
+    /* Allow claude to initialise before polling for completion.
+     * The -p flag delivers the prompt at startup, so no send-keys
+     * timing issues. This delay just prevents premature polling. */
+    sleep(10);
 
     /* Monitor for completion, then kill the session.
      *
