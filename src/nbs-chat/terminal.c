@@ -258,7 +258,23 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
         return -1;
     }
     if (pid == 0) {
-        /* Child: exec nbs-workers spawn <role> <project_root> <task> */
+        /* Child: detach from terminal's process group and session.
+         * Without setsid(), the child inherits the terminal's raw mode,
+         * signal handlers, and controlling terminal — which causes
+         * Claude Code sessions spawned by nbs-workers to die with
+         * "socket connection closed unexpectedly" after ~30 seconds. */
+        setsid();
+        /* Close inherited terminal fds */
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
         execl(workers_bin, "nbs-workers", "spawn", role,
               project_root, task, (char *)NULL);
         _exit(127);
