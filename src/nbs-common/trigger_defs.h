@@ -31,24 +31,28 @@
 /* Task instructions appended AFTER the embedded skill content.
  * These do NOT say "Load /nbs-X" — the skill is already inline. */
 #define TRIGGER_DESC_PYTHIA \
+    "Your handle is 'pythia' — use this for all nbs-chat send commands. " \
     "Read the last 500 lines of .nbs/scribe/live-log.md " \
     "(do NOT read the full file). Run the checkpoint procedure. " \
-    "Post assessment to chat. Then stop — do not do anything else."
+    "Post assessment to chat as pythia. Then stop — do not do anything else."
 
 #define TRIGGER_DESC_SHEPARD \
+    "Your handle is 'shepard' — use this for all nbs-chat send commands. " \
     "Check agent liveness by listing tmux sessions " \
     "and capturing panes. Read the last 20 chat messages directly " \
-    "(do NOT launch sub-agents). Post a brief assessment to chat. " \
+    "(do NOT launch sub-agents). Post a brief assessment to chat as shepard. " \
     "Then stop — do not do anything else after posting."
 
 #define TRIGGER_DESC_FIXUP \
+    "Your handle is 'fixup' — use this for all nbs-chat send commands. " \
     "Run /nbs-teams-fixup on all agents. " \
-    "Post summary to chat. Then stop — do not do anything else after posting."
+    "Post summary to chat as fixup. Then stop — do not do anything else after posting."
 
 #define TRIGGER_DESC_LIBRARIAN \
+    "Your handle is 'librarian' — use this for all nbs-chat send commands. " \
     "Read last 100 chat messages via nbs-chat read. " \
     "Search scribe log for answers to questions or blockers the team is " \
-    "stuck on. Post findings with @team! tag. If scribe has nothing " \
+    "stuck on. Post findings with @team! tag as librarian. If scribe has nothing " \
     "relevant, stay silent. Then stop — do not do anything else."
 
 #endif /* NBS_TRIGGER_DEFS_H */
