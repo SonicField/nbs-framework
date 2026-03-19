@@ -1190,7 +1190,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
         int n = snprintf(session_cmd, sizeof(session_cmd),
                          "NBS_HANDLE=%s NBS_POLL_DISABLE=1 nbs-claude "
                          "--dangerously-skip-permissions "
-                         "-p 'Read %s and execute the task. "
+                         "'Read %s and execute the task. "
                          "Update the Status and Log sections when complete.'",
                          slug, task_file);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(session_cmd),
