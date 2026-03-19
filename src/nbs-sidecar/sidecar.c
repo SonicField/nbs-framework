@@ -83,20 +83,10 @@ static void build_notify_prompt(const sidecar_config_t *cfg,
     ASSERT_MSG(out_size > 0, "build_notify_prompt: out_size is 0");
 
     int sn = snprintf(out, out_size,
-        "The sidecar detected pending work: %s. "
-        "Your handle is '%s'. "
-        "Instructions: "
-        "1. Run nbs-bus ack-all .nbs/events/ to acknowledge pending events. "
-        "2. Run nbs-chat read <file> --unread=%s for each chat with unread messages. "
-        "Respond via nbs-chat send if the message requires a response. "
-        "3. Process events and messages. If useful work emerges, start it and "
-        "announce in chat so others can coordinate. "
-        "4. Do not post zero-information messages (no 'acknowledged', 'noted'). "
-        "5. Be proactive: read the last 10 messages for context. If there is "
-        "active discussion, contribute. "
-        "6. After processing, return to your prompt. The sidecar will notify "
-        "you when there is new work. Do NOT poll or sleep-wait.",
-        notify_message, cfg->handle, cfg->handle);
+        "%s — ack events with nbs-bus ack-all .nbs/events/ then "
+        "read unread chats with nbs-chat read <file> --unread=%s and respond if needed. "
+        "Return to prompt when done.",
+        notify_message, cfg->handle);
 
     /* Truncation is acceptable — the message may be long but the
      * instructions are the important part. */
