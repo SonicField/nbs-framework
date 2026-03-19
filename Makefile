@@ -17,6 +17,7 @@ all:
 	$(MAKE) -C src/nbs-pty-session
 	$(MAKE) -C src/nbs-workers
 	$(MAKE) -C src/nbs-scribe-log
+	$(MAKE) -C src/nbs-hub
 
 install: all
 	$(MAKE) -C src/nbs-bus install
@@ -25,6 +26,7 @@ install: all
 	$(MAKE) -C src/nbs-pty-session install
 	$(MAKE) -C src/nbs-workers install
 	$(MAKE) -C src/nbs-scribe-log install
+	$(MAKE) -C src/nbs-hub install
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
@@ -33,6 +35,7 @@ clean:
 	-$(MAKE) -C src/nbs-pty-session clean
 	-$(MAKE) -C src/nbs-workers clean
 	-$(MAKE) -C src/nbs-scribe-log clean
+	-$(MAKE) -C src/nbs-hub clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
