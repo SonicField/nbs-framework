@@ -27,6 +27,7 @@
 
 #include "chat_file.h"
 #include "bus_bridge.h"
+#include "render.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -53,69 +54,11 @@
 
 #define POLL_INTERVAL_MS 1500  /* Background message poll interval */
 
-/* --- ANSI colour palette --- */
+/* --- ANSI colour aliases (from render.h) --- */
 
-static const char *COLOURS[] = {
-    "38;5;39",   /* Blue */
-    "38;5;208",  /* Orange */
-    "38;5;41",   /* Green */
-    "38;5;213",  /* Pink */
-    "38;5;226",  /* Yellow */
-    "38;5;87",   /* Cyan */
-    "38;5;196",  /* Red */
-    "38;5;147",  /* Lavender */
-};
-#define NUM_COLOURS 8
-_Static_assert(sizeof(COLOURS) / sizeof(COLOURS[0]) == NUM_COLOURS,
-               "NUM_COLOURS must match COLOURS array length");
-
-#define BOLD  "\033[1m"
-#define DIM   "\033[2m"
-#define RESET "\033[0m"
-
-/* Handle-to-colour mapping */
-typedef struct {
-    char handle[MAX_HANDLE_LEN];
-    int colour_index;
-} handle_colour_t;
-
-static handle_colour_t handle_colours[MAX_PARTICIPANTS];
-static int handle_colour_count = 0;
-static int next_colour = 0;
-
-static const char *get_colour(const char *handle) {
-    /* Precondition */
-    ASSERT_MSG(handle != NULL, "get_colour: handle is NULL");
-
-    for (int i = 0; i < handle_colour_count; i++) {
-        if (strcmp(handle_colours[i].handle, handle) == 0) {
-            return COLOURS[handle_colours[i].colour_index];
-        }
-    }
-    if (handle_colour_count < MAX_PARTICIPANTS) {
-        int sn_ret = snprintf(handle_colours[handle_colour_count].handle,
-                              MAX_HANDLE_LEN, "%s", handle);
-        /* Detect truncation: snprintf returns the number of characters
-         * that would have been written.  If >= MAX_HANDLE_LEN, the
-         * handle was truncated and colour lookups may fail to match. */
-        if (sn_ret < 0 || sn_ret >= MAX_HANDLE_LEN) {
-            fprintf(stderr, "warning: handle truncated in colour table: "
-                    "length %d exceeds %d\n", sn_ret, MAX_HANDLE_LEN - 1);
-        }
-        handle_colours[handle_colour_count].colour_index = next_colour;
-        handle_colour_count++;
-
-        /* Invariant: colour count within bounds */
-        ASSERT_MSG(handle_colour_count <= MAX_PARTICIPANTS,
-                   "get_colour: handle_colour_count %d exceeds MAX_PARTICIPANTS %d",
-                   handle_colour_count, MAX_PARTICIPANTS);
-
-        int idx = next_colour;
-        next_colour = (next_colour + 1) % NUM_COLOURS;
-        return COLOURS[idx];
-    }
-    return COLOURS[0];
-}
+#define BOLD  RENDER_BOLD
+#define DIM   RENDER_DIM
+#define RESET RENDER_RESET
 
 /* --- Global state --- */
 
@@ -365,32 +308,14 @@ typedef struct {
 
 static void format_message(const char *handle, const char *content,
                            const char *my_handle, time_t timestamp) {
-    /* Preconditions */
     ASSERT_MSG(handle != NULL, "format_message: handle is NULL");
     ASSERT_MSG(content != NULL, "format_message: content is NULL");
     ASSERT_MSG(my_handle != NULL, "format_message: my_handle is NULL");
 
-    /* Format timestamp prefix */
-    char ts_prefix[32] = "";
-    if (timestamp > 0) {
-        struct tm tm_buf;
-        struct tm *tm = gmtime_r(&timestamp, &tm_buf);
-        if (tm) {
-            char ts[24];
-            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
-            snprintf(ts_prefix, sizeof(ts_prefix), "[%s] ", ts);
-        }
-    }
-
-    const char *colour = get_colour(handle);
     if (strcmp(handle, my_handle) == 0) {
-        /* Own messages slightly dimmer — timestamp dim, handle coloured+dim */
-        printf("  %s%s\033[%sm%s%s%s: %s%s\n",
-               DIM, ts_prefix, colour, handle, RESET, DIM, content, RESET);
+        render_message_own(handle, content, timestamp, stdout);
     } else {
-        /* Others — timestamp dim, handle bold+coloured */
-        printf("  %s%s%s\033[%sm%s%s%s: %s\n",
-               DIM, ts_prefix, RESET, colour, BOLD, handle, RESET, content);
+        render_message(handle, content, timestamp, stdout);
     }
 }
 

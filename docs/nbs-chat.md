@@ -52,6 +52,7 @@ The header tracks the last writer, timestamp, file size (integrity check), and p
 | `nbs-chat read <file> --before=<time>` | Read messages before a time |
 | `nbs-chat search <file> <pattern> [--handle=<name>]` | Search message history by substring |
 | `nbs-chat search <file> <pattern> --after=<time>` | Search within a time range |
+| `nbs-chat export <file> [options]` | Export messages with ANSI colour rendering |
 | `nbs-chat delete <file> --after=<time>` | Delete messages at or after time (atomic, locked) |
 | `nbs-chat delete <file> --after=<time> --dry-run` | Show what would be deleted |
 | `nbs-chat poll <file> <handle> --timeout=N` | Block until new message from someone else |
@@ -105,6 +106,41 @@ nbs-chat poll .nbs/chat/debug.chat parser-worker --timeout=60
 ```
 
 Internally, `poll` checks once per second under lock. No inotify, no daemons — just a sleep loop. Simple and portable.
+
+## Export
+
+`export` renders chat messages with the same ANSI colour scheme used by `nbs-chat-terminal`, for post-hoc review of conversations. Output goes to stdout — pipe to a file and view with `less -R` or vim with AnsiEsc.
+
+```bash
+# Export last 50 messages
+nbs-chat export .nbs/chat/live.chat --last=50 > session.txt
+less -R session.txt
+
+# Export only supervisor and theologian messages
+nbs-chat export .nbs/chat/live.chat --handle=supervisor,theologian > highlights.txt
+
+# Export messages mentioning "ceiling" from the last 6 hours
+nbs-chat export .nbs/chat/live.chat --after=6h --grep=ceiling
+
+# Export a specific message range (0-based indices)
+nbs-chat export .nbs/chat/live.chat --from=100 --to=150
+```
+
+### Export Options
+
+| Option | Purpose |
+|--------|---------|
+| `--last=N` | Show only the last N messages |
+| `--from=N` | Start from message N (0-based index) |
+| `--to=N` | End at message N (exclusive) |
+| `--handle=h1,h2,...` | Only messages from these handles (comma-separated) |
+| `--after=<time>` | Messages after time |
+| `--before=<time>` | Messages before time |
+| `--grep=<pattern>` | Only messages matching pattern (case-insensitive) |
+
+Options compose: `--last=100 --handle=supervisor --grep=phase` shows the last 100 messages, filtered to supervisor only, further filtered to those containing "phase".
+
+The rendering is shared with `nbs-chat-terminal` — both use the same colour palette and formatting code (`render.c`). Each handle gets a consistent colour (blue, orange, green, pink, yellow, cyan, red, lavender — cycling for more than 8 handles).
 
 ## Delete
 

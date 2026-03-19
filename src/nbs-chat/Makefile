@@ -12,7 +12,7 @@ TEST_DIR = ../../tests/automated
 UNIT_TEST_DIR = ../../tests
 
 # Shared library objects (used by both binaries)
-LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c
+LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c render.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
 
 # nbs-chat CLI
@@ -157,13 +157,14 @@ test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(
 test-all: test-unit test test-asan
 
 # Dependencies
-main.o: main.c chat_file.h bus_bridge.h time_parse.h
-terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h
+main.o: main.c chat_file.h bus_bridge.h time_parse.h render.h
+terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h render.h
 watchdog.o: watchdog.c watchdog.h ../nbs-common/nbs_assert.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h
 lock.o: lock.c lock.h chat_file.h
 bus_bridge.o: bus_bridge.c bus_bridge.h chat_file.h
+render.o: render.c render.h chat_file.h
 remote.o: remote.c
 
 clean:

@@ -161,7 +161,7 @@ That's it. Three commands: clone, build, install.
 | Component | Binary | Purpose |
 |-----------|--------|---------|
 | nbs-bus | `bin/nbs-bus` | File-based event queue for agent coordination |
-| nbs-chat | `bin/nbs-chat`, `bin/nbs-chat-terminal`, `bin/nbs-chat-remote`, `bin/nbs-chat-web` | Chat file protocol (create, send, read, poll, search) |
+| nbs-chat | `bin/nbs-chat`, `bin/nbs-chat-terminal`, `bin/nbs-chat-remote` | Chat file protocol (create, send, read, poll, search, export) |
 | nbs-sidecar | `bin/nbs-sidecar` | Background monitor for Claude Code sessions (20 behaviours) |
 | nbs-pty-session | `bin/pty-session` | Terminal session manager (create, send, read, wait, kill) |
 | nbs-worker | `bin/nbs-worker` | Worker lifecycle management (spawn, status, search, dismiss) |

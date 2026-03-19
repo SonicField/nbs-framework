@@ -9,6 +9,7 @@
  *   read <file> [options]            Read messages
  *   poll <file> <handle> [options]   Wait for new message
  *   search <file> <pattern> [opts]   Search message history
+ *   export <file> [options]          Export with ANSI colours
  *   delete <file> --after=<time>     Delete messages after time
  *   participants <file>              List participants
  *   help                             Show usage
@@ -23,6 +24,7 @@
 
 #include "bus_bridge.h"
 #include "chat_file.h"
+#include "render.h"
 #include "time_parse.h"
 #include <assert.h>
 #include <ctype.h>
@@ -43,6 +45,7 @@ static void print_usage(void) {
     printf("  read <file> [options]            Read messages\n");
     printf("  poll <file> <handle> [options]   Wait for new message\n");
     printf("  search <file> <pattern> [opts]   Search message history\n");
+    printf("  export <file> [options]          Export with ANSI colours\n");
     printf("  delete <file> --after=<time>     Delete messages after time\n");
     printf("  participants <file>              List participants and counts\n");
     printf("  help                             Show this help\n\n");
@@ -57,6 +60,14 @@ static void print_usage(void) {
     printf("  --handle=<name>  Only search messages from this handle\n");
     printf("  --after=<time>   Only search messages after time\n");
     printf("  --before=<time>  Only search messages before time\n\n");
+    printf("Export options:\n");
+    printf("  --last=N              Show only the last N messages\n");
+    printf("  --from=N              Start from message N (0-based)\n");
+    printf("  --to=N                End at message N (exclusive)\n");
+    printf("  --handle=h1,h2,...    Only messages from these handles\n");
+    printf("  --after=<time>        Messages after time\n");
+    printf("  --before=<time>       Messages before time\n");
+    printf("  --grep=<pattern>      Only messages matching pattern\n\n");
     printf("Delete options:\n");
     printf("  --after=<time>   Delete messages at or after time (required)\n");
     printf("  --dry-run        Show what would be deleted without modifying\n\n");
@@ -808,6 +819,185 @@ static int cmd_search(int argc, char **argv) {
     return 0;
 }
 
+/*
+ * handle_match — Check if handle is in a comma-separated list.
+ *
+ * Preconditions:
+ *   - handle != NULL
+ *   - list != NULL (comma-separated handle names, no spaces)
+ *
+ * Returns 1 if handle matches any entry in the list, 0 otherwise.
+ */
+static int handle_match(const char *handle, const char *list) {
+    ASSERT_MSG(handle != NULL, "handle_match: handle is NULL");
+    ASSERT_MSG(list != NULL, "handle_match: list is NULL");
+
+    size_t hlen = strlen(handle);
+    const char *p = list;
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t entry_len = comma ? (size_t)(comma - p) : strlen(p);
+        if (entry_len == hlen && strncmp(p, handle, hlen) == 0) {
+            return 1;
+        }
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
+static int cmd_export(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: nbs-chat export <file> [--last=N] [--from=N] [--to=N] "
+                "[--handle=h1,h2] [--after=<time>] [--before=<time>] [--grep=<pattern>]\n");
+        return 4;
+    }
+
+    const char *path = argv[2];
+    ASSERT_MSG(path != NULL, "cmd_export: path is NULL");
+
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_export") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
+    int last_n = -1;
+    int from_n = -1;
+    int to_n = -1;
+    const char *handle_filter = NULL;
+    const char *grep_pattern = NULL;
+    time_t after_time = 0;
+    time_t before_time = 0;
+
+    for (int i = 3; i < argc; i++) {
+        if (strncmp(argv[i], "--last=", 7) == 0) {
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 7, &endptr, 10);
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > INT_MAX) {
+                fprintf(stderr, "Error: Invalid --last value: %s\n", argv[i] + 7);
+                return 4;
+            }
+            last_n = (int)val;
+        } else if (strncmp(argv[i], "--from=", 7) == 0) {
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 7, &endptr, 10);
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > INT_MAX) {
+                fprintf(stderr, "Error: Invalid --from value: %s\n", argv[i] + 7);
+                return 4;
+            }
+            from_n = (int)val;
+        } else if (strncmp(argv[i], "--to=", 5) == 0) {
+            char *endptr;
+            errno = 0;
+            long val = strtol(argv[i] + 5, &endptr, 10);
+            if (errno != 0 || *endptr != '\0' || val < 0 || val > INT_MAX) {
+                fprintf(stderr, "Error: Invalid --to value: %s\n", argv[i] + 5);
+                return 4;
+            }
+            to_n = (int)val;
+        } else if (strncmp(argv[i], "--handle=", 9) == 0) {
+            handle_filter = argv[i] + 9;
+            if (handle_filter[0] == '\0') {
+                fprintf(stderr, "Error: --handle= requires a value\n");
+                return 4;
+            }
+        } else if (strncmp(argv[i], "--after=", 8) == 0) {
+            if (parse_timespec(argv[i] + 8, &after_time) < 0) {
+                fprintf(stderr, "Error: Invalid --after value: %s\n", argv[i] + 8);
+                return 4;
+            }
+        } else if (strncmp(argv[i], "--before=", 9) == 0) {
+            if (parse_timespec(argv[i] + 9, &before_time) < 0) {
+                fprintf(stderr, "Error: Invalid --before value: %s\n", argv[i] + 9);
+                return 4;
+            }
+        } else if (strncmp(argv[i], "--grep=", 7) == 0) {
+            grep_pattern = argv[i] + 7;
+            if (grep_pattern[0] == '\0') {
+                fprintf(stderr, "Error: --grep= requires a pattern\n");
+                return 4;
+            }
+        } else {
+            fprintf(stderr, "Error: Unknown option: %s\n", argv[i]);
+            return 4;
+        }
+    }
+
+    chat_state_t state;
+    int read_rc = chat_read(path, &state);
+    if (read_rc < 0) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Failed to read chat file '%s' (chat_read returned %d, errno=%d: %s)\n",
+                path, read_rc, errno, strerror(errno));
+        return 1;
+    }
+    ASSERT_MSG(state.message_count == 0 || state.messages != NULL,
+               "cmd_export: chat_read returned 0 but messages is NULL with message_count=%d",
+               state.message_count);
+
+    if (state.skipped_count > 0) {
+        fprintf(stderr, "warning: %d message(s) skipped (decode failure)\n",
+                state.skipped_count);
+    }
+
+    /* Compute index range */
+    int start = 0;
+    int end = state.message_count;
+
+    if (from_n >= 0) {
+        start = from_n;
+        if (start > end) start = end;
+    }
+    if (to_n >= 0) {
+        if (to_n < end) end = to_n;
+    }
+
+    /* Apply time filters */
+    if (after_time > 0) {
+        while (start < end && state.messages[start].timestamp < after_time) {
+            start++;
+        }
+    }
+    if (before_time > 0) {
+        while (end > start && state.messages[end - 1].timestamp > before_time) {
+            end--;
+        }
+    }
+
+    /* Apply --last (after other range filters) */
+    if (last_n >= 0 && end - start > last_n) {
+        start = end - last_n;
+    }
+
+    ASSERT_MSG(start >= 0 && start <= end && end <= state.message_count,
+               "cmd_export: bounds violated: start=%d end=%d message_count=%d",
+               start, end, state.message_count);
+
+    /* Render with per-message filters (handle, grep) */
+    render_init();
+
+    for (int i = start; i < end; i++) {
+        if (handle_filter && !handle_match(state.messages[i].handle, handle_filter)) {
+            continue;
+        }
+        if (grep_pattern &&
+            !strcasestr_portable(state.messages[i].content, grep_pattern)) {
+            continue;
+        }
+        render_message(state.messages[i].handle, state.messages[i].content,
+                       state.messages[i].timestamp, stdout);
+    }
+
+    chat_state_free(&state);
+    return 0;
+}
+
 static int cmd_delete(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "Usage: nbs-chat delete <file> --after=<time> [--dry-run]\n");
@@ -938,6 +1128,7 @@ int main(int argc, char **argv) {
     else if (strcmp(cmd, "read") == 0) rc = cmd_read(argc, argv);
     else if (strcmp(cmd, "poll") == 0) rc = cmd_poll(argc, argv);
     else if (strcmp(cmd, "search") == 0) rc = cmd_search(argc, argv);
+    else if (strcmp(cmd, "export") == 0) rc = cmd_export(argc, argv);
     else if (strcmp(cmd, "delete") == 0) rc = cmd_delete(argc, argv);
     else if (strcmp(cmd, "participants") == 0) rc = cmd_participants(argc, argv);
     else if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
