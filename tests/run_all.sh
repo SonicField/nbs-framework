@@ -279,6 +279,7 @@ if $QUICK_MODE; then
     skip_test "test_poll_registry_ai"
     skip_test "test_nbs_chat_ai_integration"
     skip_test "test_nbs_chat_search_ai"
+    skip_test "test_worker_spawn_survival"
 else
     if [[ -f "$SCRIPT_DIR/automated/test_install_worker.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_install_worker.sh"
@@ -301,6 +302,11 @@ else
     fi
     if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_nbs_chat_search_ai.sh"
+    fi
+    # Worker spawn survival: verifies workers live long enough to complete tasks.
+    # Catches the 30s death bug where C binary spawn path killed workers.
+    if [[ -f "$SCRIPT_DIR/automated/test_worker_spawn_survival.sh" ]]; then
+        run_ai_test "$SCRIPT_DIR/automated/test_worker_spawn_survival.sh"
     fi
 fi
 
