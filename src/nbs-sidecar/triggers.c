@@ -301,6 +301,20 @@ int trigger_periodic_spawn(const char *nbs_root,
         return 1; /* Lock busy */
     }
 
+    /* Re-check timestamp after acquiring lock. Multiple sidecars can pass
+     * the elapsed check in trigger_periodic_check before any acquires the
+     * lock. The first winner writes the timestamp; subsequent winners must
+     * re-read and bail if it's been updated. Without this, N sidecars
+     * produce N duplicate spawns (observed: 3 librarian posts in 30s). */
+    time_t recheck = read_last_run(nbs_root, trigger->ts_filename);
+    if (recheck > 0 && (time(NULL) - recheck) < 30) {
+        /* Another sidecar already spawned recently — bail */
+        struct flock unlock = { .l_type = F_UNLCK, .l_whence = SEEK_SET };
+        fcntl(fd, F_SETLK, &unlock);
+        close(fd);
+        return 1;
+    }
+
     /* Write timestamp AFTER acquiring lock — only the winning sidecar
      * updates the timestamp, preventing duplicate spawns. */
     write_last_run(nbs_root, trigger->ts_filename, time(NULL));
