@@ -49,7 +49,7 @@ fi
 
 # Operation 3: Send command
 echo "3. Send command..."
-MARKER="UNIQUE_MARKER_$SESSION_NAME"
+MARKER="PTY_OK_$$"
 if "$PTY_SESSION" send "$SESSION_NAME" "echo $MARKER" >/dev/null 2>&1; then
     echo "   PASS: Command sent"
 else
@@ -63,7 +63,7 @@ sleep 1
 # Operation 4: Read shows marker
 echo "4. Read shows marker..."
 READ_OUTPUT=$("$PTY_SESSION" read "$SESSION_NAME" 2>&1)
-if echo "$READ_OUTPUT" | grep -q "$MARKER"; then
+if echo "$READ_OUTPUT" | tr -d '\n' | grep -q "$MARKER"; then
     echo "   PASS: Marker found in output"
 else
     echo "   FAIL: Marker not found"

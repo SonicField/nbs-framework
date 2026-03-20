@@ -12,9 +12,11 @@ BIN_DIR = ../../bin
 TEST_DIR = ../../tests/automated
 UNIT_TEST_DIR = ../../tests
 
-# nbs-chat objects needed for base64, chat_file, lock
+# nbs-chat sources needed for base64, lock
+# Compiled locally to avoid cross-directory .o contamination (ASan/non-ASan mismatch)
 CHAT_SRC_DIR = ../nbs-chat
-CHAT_LIB_OBJS = $(CHAT_SRC_DIR)/base64.o $(CHAT_SRC_DIR)/lock.o
+CHAT_LIB_SRCS = $(CHAT_SRC_DIR)/base64.c $(CHAT_SRC_DIR)/lock.c $(CHAT_SRC_DIR)/bus_bridge.c
+CHAT_LIB_OBJS = chat_base64.o chat_lock.o chat_bus_bridge.o
 
 # Sidecar sources
 SRCS = main.c sidecar.c transport_tmux.c transport_pty.c detect.c exec_util.c \
@@ -43,9 +45,15 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
 
 all: $(TARGET) $(ASSERT_CHECK)
 
-# Build nbs-chat objects if needed
-$(CHAT_SRC_DIR)/%.o:
-	$(MAKE) -C $(CHAT_SRC_DIR) $*.o
+# Build nbs-chat sources locally (avoids cross-directory .o contamination)
+chat_base64.o: $(CHAT_SRC_DIR)/base64.c $(CHAT_SRC_DIR)/base64.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(CHAT_SRC_DIR)/base64.c
+
+chat_lock.o: $(CHAT_SRC_DIR)/lock.c $(CHAT_SRC_DIR)/lock.h $(CHAT_SRC_DIR)/chat_file.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(CHAT_SRC_DIR)/lock.c
+
+chat_bus_bridge.o: $(CHAT_SRC_DIR)/bus_bridge.c $(CHAT_SRC_DIR)/bus_bridge.h $(CHAT_SRC_DIR)/chat_file.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(CHAT_SRC_DIR)/bus_bridge.c
 
 $(TARGET): $(OBJS) $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -62,7 +70,7 @@ install: all
 	install $(TARGET) $(BIN_DIR)/
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(ASSERT_CHECK)
+	rm -f $(OBJS) $(CHAT_LIB_OBJS) $(TARGET) $(ASSERT_CHECK)
 	rm -f $(UNIT_TESTS)
 
 debug: CFLAGS = $(COMMON_CFLAGS) -O0 -g
@@ -86,7 +94,7 @@ $(UNIT_TEST_DIR)/test_sidecar_exec_unit: $(UNIT_TEST_DIR)/test_sidecar_exec_unit
 $(UNIT_TEST_DIR)/test_sidecar_registry_unit: $(UNIT_TEST_DIR)/test_sidecar_registry_unit.c registry.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
-$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit: $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit.c mention_escape.o $(CHAT_SRC_DIR)/bus_bridge.o
+$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit: $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit.c mention_escape.o chat_bus_bridge.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit.c strip_ansi.o
