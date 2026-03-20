@@ -1,0 +1,89 @@
+#!/bin/bash
+# nbs-remote-session: Create a persistent shell on a remote machine
+#
+# Wraps pty-session + SSH into a single command. Returns a session name
+# that can be used with pty-session send/read/wait/kill.
+#
+# Usage:
+#   nbs-remote-session <host>                  # Auto-named session
+#   nbs-remote-session <host> --name=mywork    # Named session
+#   nbs-remote-session <host> --cwd=/path      # cd after connecting
+#
+# Examples:
+#   nbs-remote-session build-server.example.com
+#   nbs-remote-session build-server.example.com --name=build --cwd=/home/user/project
+#
+#   # Then use normally:
+#   pty-session send build 'make -j8'
+#   pty-session read build --last=20
+#   pty-session kill build
+#
+# Exit codes:
+#   0 - Session created, name printed to stdout
+#   1 - SSH connection failed
+#   2 - Invalid arguments
+
+set -euo pipefail
+
+PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+export NBS_PTY_QUIET=1
+
+die() { echo "Error: $*" >&2; exit "${1:-1}"; }
+
+[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
+
+# Parse arguments
+HOST=""
+NAME=""
+CWD=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --name=*)  NAME="${arg#*=}" ;;
+        --cwd=*)   CWD="${arg#*=}" ;;
+        --help|-h)
+            sed -n '2,/^$/{ /^#/p }' "$0" | cut -c3-
+            exit 0
+            ;;
+        -*)        die 2 "Unknown option: $arg" ;;
+        *)
+            if [[ -z "$HOST" ]]; then
+                HOST="$arg"
+            else
+                die 2 "Unexpected argument: $arg"
+            fi
+            ;;
+    esac
+done
+
+[[ -n "$HOST" ]] || die 2 "Usage: nbs-remote-session <host> [--name=NAME] [--cwd=PATH]"
+
+# Generate session name from hostname if not provided
+if [[ -z "$NAME" ]]; then
+    # build-server.example.com → build-server
+    NAME="$(echo "$HOST" | cut -d. -f1)-$$"
+fi
+
+# Create pty-session with SSH as the session command.
+# pty-session runs under the user's login environment (SSH keys, proxy creds).
+if ! "$PTY_SESSION" create "$NAME" "ssh -o StrictHostKeyChecking=no $HOST" >/dev/null 2>&1; then
+    die 1 "Failed to create pty-session '$NAME'"
+fi
+
+# Wait for SSH connection by sending a marker and waiting for it.
+# Cannot wait for prompt — MOTD contains $ characters that confuse pattern matching.
+MARKER="__NBS_SESSION_READY_${RANDOM}__"
+sleep 5  # Let MOTD and login scripts finish
+"$PTY_SESSION" send "$NAME" "echo $MARKER" >/dev/null 2>&1
+if ! "$PTY_SESSION" wait "$NAME" "$MARKER" --timeout=15 >/dev/null 2>&1; then
+    "$PTY_SESSION" kill "$NAME" >/dev/null 2>&1 || true
+    die 1 "SSH to $HOST timed out (15s)"
+fi
+
+# cd if requested
+if [[ -n "$CWD" ]]; then
+    "$PTY_SESSION" send "$NAME" "cd $CWD" >/dev/null 2>&1
+    sleep 1
+fi
+
+echo "$NAME"

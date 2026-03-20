@@ -141,7 +141,11 @@ int main(int argc, char **argv) {
     cfg.startup_grace = env_int("NBS_STARTUP_GRACE", 30);
     cfg.notify_fail_threshold = env_int("NBS_NOTIFY_FAIL_THRESHOLD", 5);
     cfg.flush_interval = env_int("NBS_FLUSH_INTERVAL", 60);
-    cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 300);
+    /* Disabled by default — /nbs-notify handles event delivery directly.
+     * /nbs-poll was a legacy safety net that burned context tokens every 5
+     * minutes and blindly ack'd bus events. Re-enable with NBS_POLL_INTERVAL=300
+     * if notification path proves unreliable. */
+    cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 0);
     cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
     cfg.librarian_interval = env_int("NBS_LIBRARIAN_INTERVAL", 15) * 60;
     cfg.pythia_interval = env_int("NBS_PYTHIA_INTERVAL", 30) * 60;

@@ -617,6 +617,8 @@ static void show_tool_header(void)
 
     fprintf(stderr,
         "**pty-session: consider higher-level tools**\n"
+        "- SSH session: `nbs-remote-session <host> [--name=N] [--cwd=PATH]`\n"
+        "- Run command: `nbs-remote-run <host> [--cwd=PATH] '<cmd>'`\n"
         "- Read files:  `nbs-remote-read <host> <path> [--head=N|--tail=N]`\n"
         "- Edit files:  `nbs-remote-edit pull/push/diff <host> <path>`\n"
         "- Build:       `nbs-remote-build <ses> '<cmd>' --chat=... --handle`\n"
