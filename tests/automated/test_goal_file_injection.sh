@@ -187,6 +187,34 @@ CONTENT=$("$CHAT" read "${TMPDIR}/boundary.chat" --last=1 2>/dev/null)
 [[ -n "$CONTENT" ]]; check "64KB file accepted (at boundary)" $?
 
 # ═══════════════════════════════════════════════════════════════
+# Watchdog suppression tests
+# ═══════════════════════════════════════════════════════════════
+
+echo ""
+echo "=== Watchdog suppression ==="
+
+# Test 12: --goal-file disables watchdog
+echo ""
+echo "Test 12: --goal-file disables watchdog"
+# Need a chat file inside a project with .nbs/ for watchdog to attempt init
+PROJECT_DIR="${TMPDIR}/project"
+mkdir -p "${PROJECT_DIR}/.nbs/chat"
+"$CHAT" create "${PROJECT_DIR}/.nbs/chat/test.chat" >/dev/null 2>&1
+echo "watchdog test goal" > "${TMPDIR}/wd_goal.md"
+OUTPUT=$(timeout 5 "$TERMINAL" "${PROJECT_DIR}/.nbs/chat/test.chat" alex \
+    --goal-file="${TMPDIR}/wd_goal.md" 2>&1 </dev/null || true)
+echo "$OUTPUT" | grep -q 'Watchdog disabled'; check "--goal-file disables watchdog" $?
+
+# Test 13: without --goal-file, watchdog is NOT disabled
+echo ""
+echo "Test 13: without --goal-file, watchdog is not disabled"
+"$CHAT" create "${PROJECT_DIR}/.nbs/chat/test2.chat" >/dev/null 2>&1
+OUTPUT=$(timeout 5 "$TERMINAL" "${PROJECT_DIR}/.nbs/chat/test2.chat" alex \
+    2>&1 </dev/null || true)
+DISABLED_COUNT=$(echo "$OUTPUT" | grep -c 'Watchdog disabled' || true)
+[[ "$DISABLED_COUNT" -eq 0 ]]; check "no --goal-file: watchdog not disabled" $?
+
+# ═══════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════
 

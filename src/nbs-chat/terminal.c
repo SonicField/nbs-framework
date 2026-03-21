@@ -1372,13 +1372,22 @@ int main(int argc, char **argv) {
             }
         }
 
-        watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
-        pthread_t watchdog_tid;
-        if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
-                           &g_watchdog) == 0) {
-            pthread_detach(watchdog_tid);
+        /* --goal-file disables the watchdog. The team has a defined mission
+         * with explicit verification gates. When agents finish (or crash),
+         * fixup handles recovery. The watchdog's auto-restart loop would
+         * re-launch agents that have completed their goal — pure waste. */
+        if (goal_file_path != NULL) {
+            printf("%sWatchdog disabled (--goal-file mode: fixup handles crashes)%s\n",
+                   DIM, RESET);
         } else {
-            fprintf(stderr, "warning: failed to start watchdog thread\n");
+            watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
+            pthread_t watchdog_tid;
+            if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
+                               &g_watchdog) == 0) {
+                pthread_detach(watchdog_tid);
+            } else {
+                fprintf(stderr, "warning: failed to start watchdog thread\n");
+            }
         }
     } else {
         fprintf(stderr, "warning: could not resolve project root from %s "
