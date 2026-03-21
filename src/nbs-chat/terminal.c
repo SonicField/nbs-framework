@@ -1120,10 +1120,12 @@ static void handle_signal(int sig) {
 static void print_usage(void) {
     printf("nbs-chat-terminal: Interactive terminal client for nbs-chat\n\n");
     printf("Usage:\n");
-    printf("  nbs-chat-terminal <file> <handle> [--restart]\n\n");
+    printf("  nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]\n\n");
     printf("  <file>      Path to chat file (must exist)\n");
     printf("  <handle>    Your display name in the chat\n");
-    printf("  --restart   Start/restart the agent team immediately\n\n");
+    printf("  --restart           Start/restart the agent team immediately\n");
+    printf("  --goal-file=PATH    Inject file contents into chat as session goal\n");
+    printf("                      (posted as your handle, before restart/digest)\n\n");
     printf("Controls:\n");
     printf("  Type a message and press Enter to send.\n");
     printf("  Use arrow keys, Home, End, Delete for line editing.\n");
@@ -1142,11 +1144,14 @@ int main(int argc, char **argv) {
     g_chat_file = argv[1];
     g_handle = argv[2];
 
-    /* Check for --restart flag */
+    /* Check for --restart and --goal-file flags */
     int restart_immediately = 0;
+    const char *goal_file_path = NULL;
     for (int i = 3; i < argc; i++) {
         if (strcmp(argv[i], "--restart") == 0) {
             restart_immediately = 1;
+        } else if (strncmp(argv[i], "--goal-file=", 12) == 0) {
+            goal_file_path = argv[i] + 12;
         }
     }
 
@@ -1175,6 +1180,106 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: Chat file not found: %s\n", g_chat_file);
         fprintf(stderr, "Create it first: nbs-chat create %s\n", g_chat_file);
         return 2;
+    }
+
+    /* --goal-file: validate, read, and inject BEFORE any restart or digest.
+     *
+     * This is deliberately early and deliberately paranoid. If the goal file
+     * cannot be read, we abort before touching the chat file or launching
+     * any agents. A half-injected goal with a running team is worse than
+     * no injection at all.
+     *
+     * Checks:
+     *   1. File exists and is a regular file (not a directory, pipe, etc.)
+     *   2. File is non-empty (empty goal is a mistake, not a feature)
+     *   3. File is not too large (>64KB is probably wrong file)
+     *   4. File is readable (permissions)
+     *   5. Read succeeds completely (no partial reads)
+     *   6. chat_send succeeds (chat file not corrupted)
+     */
+    if (goal_file_path != NULL) {
+        /* 1. Exists and is regular file */
+        struct stat goal_st;
+        if (stat(goal_file_path, &goal_st) != 0) {
+            fprintf(stderr, "Error: Goal file not found: %s\n",
+                    goal_file_path);
+            return 1;
+        }
+        if (!S_ISREG(goal_st.st_mode)) {
+            fprintf(stderr, "Error: Goal file is not a regular file: %s\n",
+                    goal_file_path);
+            return 1;
+        }
+
+        /* 2. Non-empty */
+        if (goal_st.st_size == 0) {
+            fprintf(stderr, "Error: Goal file is empty: %s\n",
+                    goal_file_path);
+            return 1;
+        }
+
+        /* 3. Not too large (64KB limit — goal files are short documents) */
+        if (goal_st.st_size > 65536) {
+            fprintf(stderr, "Error: Goal file too large (%lld bytes, max 64KB): %s\n",
+                    (long long)goal_st.st_size, goal_file_path);
+            return 1;
+        }
+
+        /* 4. Readable */
+        FILE *gf = fopen(goal_file_path, "r");
+        if (gf == NULL) {
+            fprintf(stderr, "Error: Cannot open goal file: %s (%s)\n",
+                    goal_file_path, strerror(errno));
+            return 1;
+        }
+
+        /* 5. Read completely */
+        size_t goal_size = (size_t)goal_st.st_size;
+        char *goal_content = malloc(goal_size + 1);
+        if (goal_content == NULL) {
+            fprintf(stderr, "Error: Failed to allocate %zu bytes for goal file\n",
+                    goal_size + 1);
+            fclose(gf);
+            return 1;
+        }
+
+        size_t nread = fread(goal_content, 1, goal_size, gf);
+        fclose(gf);
+
+        if (nread != goal_size) {
+            fprintf(stderr, "Error: Short read on goal file: got %zu of %zu bytes\n",
+                    nread, goal_size);
+            free(goal_content);
+            return 1;
+        }
+        goal_content[nread] = '\0';
+
+        /* Verify content is not binary garbage (check for null bytes) */
+        if (strlen(goal_content) != nread) {
+            /* strlen hit a null byte before end — likely binary file */
+            fprintf(stderr, "Error: Goal file appears to be binary "
+                    "(contains null bytes): %s\n", goal_file_path);
+            free(goal_content);
+            return 1;
+        }
+
+        /* 6. Inject into chat */
+        printf("Injecting goal file: %s (%zu bytes)\n", goal_file_path, nread);
+
+        int send_rc = chat_send(g_chat_file, g_handle, goal_content);
+        free(goal_content);
+
+        if (send_rc != 0) {
+            fprintf(stderr, "Error: Failed to inject goal file into chat "
+                    "(chat_send returned %d, errno=%d: %s)\n",
+                    send_rc, errno, strerror(errno));
+            fprintf(stderr, "Chat file may be corrupted or locked. "
+                    "Aborting — no agents launched.\n");
+            return 1;
+        }
+
+        printf("Goal injected as '%s'. Agents will see this on startup.\n",
+               g_handle);
     }
 
     /* Set up signal handlers */
