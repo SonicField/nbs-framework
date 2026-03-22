@@ -208,20 +208,36 @@ for arg in "$@"; do
         --spawn-only)
             SPAWN_ONLY=true
             ;;
+        --root=*)
+            PROJECT_ROOT="$(cd "${arg#--root=}" && pwd -P)"
+            ;;
         --compact-log)
             COMPACT_LOG=true
             ;;
         --help|-h)
             cat <<'USAGE'
-nbs-chat-init: Bootstrap NBS framework infrastructure
+nbs-chat-init: Bootstrap NBS framework infrastructure for any project
 
 Usage: nbs-chat-init --name=NAME [OPTIONS]
+
+  Sets up a project directory with everything needed for an NBS AI team.
+  Run this once in any project (even non-NBS projects) and you're ready
+  to start a team with nbs-chat-terminal.
+
+Example:
+  cd ~/local/FooBar
+  nbs-chat-init --name=foobar-dev
+  nbs-chat-terminal .nbs/chat/foobar-dev.chat alex --goal-file=goal.md --restart
+
+  Or from anywhere:
+  nbs-chat-init --name=phoenix-ts --root=~/local/phoenix
 
 Required:
   --name=NAME             Chat name — all resource names derive from this
 
 Options:
-  --project-name=NAME     Override project name (default: dirname of pwd)
+  --root=PATH             Project root directory (default: current directory)
+  --project-name=NAME     Override project name (default: dirname of root)
   --force                 Skip confirmation prompts
   --dry-run               Print actions without executing
   --spawn-scribe          Launch Scribe in tmux session
@@ -235,6 +251,10 @@ Infrastructure created:
   .nbs/events/            Event bus queue
   .nbs/chat/<name>.chat   Primary chat channel
   .nbs/scribe/<name>-log.md Decision log
+  .nbs/workers/           Ephemeral worker task files
+  .nbs/pids/              Agent PID tracking
+  .nbs/commands/          Skill files (symlinked from ~/.nbs/commands/)
+  .nbs/docs/              Tool reference (symlinked from ~/.nbs/docs/)
 
 Spawn only (restart after reboot):
   nbs-chat-init --name=NAME --spawn-only --spawn-scribe
@@ -393,7 +413,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
     # Use a unique event type per invocation to avoid dedup window collisions
     # Audit Violation 5 (HARDENING): Check date +%s return value.
-    local self_test_ts
     self_test_ts=$(date +%s) || {
         error "date command failed during self-test event type generation"
         exit 1
@@ -612,6 +631,49 @@ else
     # V5.5: Use absolute path for project-id
     echo "$PROJECT_ID" > "${PROJECT_ROOT}/.nbs/project-id"
     ok "  project-id: $PROJECT_ID"
+fi
+
+# ============================================================
+# PHASE 4b: Operational Directories and Skills
+# ============================================================
+
+info "Phase 4b: Operational directories..."
+
+# Create directories needed by agents, workers, and sidecar
+for dir in workers pids pty-locks sessions; do
+    run mkdir -p "${PROJECT_ROOT}/.nbs/${dir}"
+done
+ok "  workers/, pids/, pty-locks/, sessions/"
+
+# Link or copy skills from global ~/.nbs/commands/ if available.
+# These give agents access to librarian, pythia, shepard, fixup, etc.
+NBS_GLOBAL_COMMANDS="$HOME/.nbs/commands"
+PROJECT_COMMANDS="${PROJECT_ROOT}/.nbs/commands"
+if [[ -d "$NBS_GLOBAL_COMMANDS" ]] && [[ ! -d "$PROJECT_COMMANDS" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Link $NBS_GLOBAL_COMMANDS → $PROJECT_COMMANDS"
+    else
+        ln -s "$NBS_GLOBAL_COMMANDS" "$PROJECT_COMMANDS"
+        ok "  commands/ → $NBS_GLOBAL_COMMANDS (symlinked)"
+    fi
+elif [[ -d "$PROJECT_COMMANDS" ]]; then
+    info "  commands/ already exists — keeping"
+else
+    warn "  No global commands found at $NBS_GLOBAL_COMMANDS — agents will lack skills"
+fi
+
+# Link docs from global ~/.nbs/docs/ if available (tools.md, etc.)
+NBS_GLOBAL_DOCS="$HOME/.nbs/docs"
+PROJECT_DOCS="${PROJECT_ROOT}/.nbs/docs"
+if [[ -d "$NBS_GLOBAL_DOCS" ]] && [[ ! -d "$PROJECT_DOCS" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Link $NBS_GLOBAL_DOCS → $PROJECT_DOCS"
+    else
+        ln -s "$NBS_GLOBAL_DOCS" "$PROJECT_DOCS"
+        ok "  docs/ → $NBS_GLOBAL_DOCS (symlinked)"
+    fi
+elif [[ -d "$PROJECT_DOCS" ]]; then
+    info "  docs/ already exists — keeping"
 fi
 
 fi  # end of SPAWN_ONLY != true
