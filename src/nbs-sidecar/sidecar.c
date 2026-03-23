@@ -267,7 +267,7 @@ static void respond_dialogue(transport_t *tp,
                 resp->option);
         return;
     }
-    usleep(500000);
+    /* No delay needed — Enter is CR (0x0d) which submits immediately */
     if (tp->send_key(tp, "Enter") != 0) {
         fprintf(stderr, "respond_dialogue: send_key Enter failed\n");
         return;
@@ -508,10 +508,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (!content) continue;
 
         if (detect_prompt_visible(content)) {
-            if (tp->send_text(tp, cfg->initial_prompt) != 0) {
-                fprintf(stderr, "sidecar_run: initial prompt send_text failed\n");
+            /* Send initial prompt as raw text (no paste brackets).
+             * Using send_key bypasses the paste-bracket wrapping in
+             * send_text. Enter is sent as CR (0x0d) which the raw PTY
+             * treats as submit — no timing delays needed. */
+            if (tp->send_key(tp, cfg->initial_prompt) != 0) {
+                fprintf(stderr, "sidecar_run: initial prompt send_key failed\n");
             }
-            usleep(300000);
             if (tp->send_key(tp, "Enter") != 0) {
                 fprintf(stderr, "sidecar_run: initial prompt send_key Enter failed\n");
             }

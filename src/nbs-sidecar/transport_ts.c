@@ -175,6 +175,15 @@ static int ts_send_text(const transport_t *self, const char *text)
     int flags = fcntl(fd, F_GETFL);
     if (flags >= 0) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 
+    /* Wrap content in bracketed paste markers so TUI apps (like Claude
+     * Code) that enable bracketed paste mode ([?2004h]) treat the input
+     * as a complete paste unit rather than individual keystrokes. Without
+     * these markers, Enter is treated as newline-in-editor, not submit. */
+    static const char paste_start[] = "\x1b[200~";
+    static const char paste_end[] = "\x1b[201~";
+
+    write(fd, paste_start, sizeof(paste_start) - 1);
+
     size_t len = strlen(text);
     size_t written = 0;
     while (written < len) {
@@ -188,6 +197,8 @@ static int ts_send_text(const transport_t *self, const char *text)
         }
         written += (size_t)w;
     }
+
+    write(fd, paste_end, sizeof(paste_end) - 1);
 
     close(fd);
     return 0;
@@ -209,7 +220,7 @@ static int ts_send_key(const transport_t *self, const char *key)
     size_t len;
 
     if (strcmp(key, "Enter") == 0) {
-        data = "\n";
+        data = "\r";  /* CR, not LF — raw terminal mode expects 0x0d */
         len = 1;
     } else if (strcmp(key, "Escape") == 0) {
         data = "\x1b";

@@ -508,6 +508,10 @@ static int cmd_send(const char *handle, const char *text, size_t len)
         return NBS_TS_EXIT_ERROR;
     }
 
+    /* No paste bracket wrapping in the CLI — bash and other non-TUI
+     * consumers don't need it. Paste brackets are applied only in the
+     * sidecar transport (transport_ts.c ts_send_text) which exclusively
+     * sends to Claude Code's TUI. */
     size_t written = 0;
     while (written < len) {
         ssize_t w = write(fd, text + written, len - written);
@@ -1073,10 +1077,10 @@ int main(int argc, char *argv[])
         char *text = join_args(argc, argv, 3);
         if (!text) return NBS_TS_EXIT_ERROR;
         size_t len = strlen(text);
-        /* Append newline */
+        /* Append carriage return (Enter in raw terminal mode) */
         char *with_nl = realloc(text, len + 2);
         if (!with_nl) { free(text); return NBS_TS_EXIT_ERROR; }
-        with_nl[len] = '\n';
+        with_nl[len] = '\r';
         with_nl[len + 1] = '\0';
         int rc = cmd_send(argv[2], with_nl, len + 1);
         free(with_nl);
