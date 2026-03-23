@@ -328,7 +328,7 @@ int trigger_periodic_spawn(const char *nbs_root,
     write_last_run(nbs_root, trigger->ts_filename, time(NULL));
 
     /* Fork+exec nbs-spawn-worker (bash script).
-     * Uses the same tmux new-session pattern as the restart script,
+     * Uses the same nbs-ts create pattern as the restart script,
      * which is proven to work. The script handles skill embedding,
      * task file creation, and session launch. */
     const char *argv[] = {

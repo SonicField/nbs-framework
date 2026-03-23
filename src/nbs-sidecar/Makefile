@@ -19,7 +19,7 @@ CHAT_LIB_SRCS = $(CHAT_SRC_DIR)/base64.c $(CHAT_SRC_DIR)/lock.c $(CHAT_SRC_DIR)/
 CHAT_LIB_OBJS = chat_base64.o chat_lock.o chat_bus_bridge.o
 
 # Sidecar sources
-SRCS = main.c sidecar.c transport_tmux.c transport_pty.c detect.c exec_util.c \
+SRCS = main.c sidecar.c transport_ts.c detect.c exec_util.c \
        bus_client.c chat_client.c registry.c triggers.c hash.c strip_ansi.c \
        mention_escape.c
 OBJS = $(SRCS:.c=.o)
@@ -103,10 +103,10 @@ $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_str
 $(UNIT_TEST_DIR)/test_sidecar_triggers_unit: $(UNIT_TEST_DIR)/test_sidecar_triggers_unit.c triggers.o bus_client.o chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
-$(UNIT_TEST_DIR)/test_sidecar_transport_unit: $(UNIT_TEST_DIR)/test_sidecar_transport_unit.c transport_pty.o transport_tmux.o exec_util.o
+$(UNIT_TEST_DIR)/test_sidecar_transport_unit: $(UNIT_TEST_DIR)/test_sidecar_transport_unit.c transport_ts.o exec_util.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
-$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_tmux.o transport_pty.o $(CHAT_LIB_OBJS)
+$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_ts.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit: $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit.c bus_client.o exec_util.o

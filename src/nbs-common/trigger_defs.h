@@ -10,7 +10,7 @@
  * The skill file content is embedded directly in the task description
  * at spawn time (by nbs-workers or by the caller). This avoids the
  * worker needing to load a slash command, which fails in non-interactive
- * tmux contexts where the Enter key for Skill tool calls doesn't register.
+ * contexts where the Enter key for Skill tool calls doesn't register.
  */
 
 #ifndef NBS_TRIGGER_DEFS_H
@@ -38,7 +38,7 @@
 
 #define TRIGGER_DESC_SHEPARD \
     "Your handle is 'shepard' — use this for all nbs-chat send commands. " \
-    "Check agent liveness by listing tmux sessions " \
+    "Check agent liveness by listing nbs-ts sessions " \
     "and capturing panes. Read the last 20 chat messages directly " \
     "(do NOT launch sub-agents). Post a brief assessment to chat as shepard. " \
     "Then stop — do not do anything else after posting."

@@ -85,7 +85,7 @@ int validate_uuid(const char *s);
  *   - Returns 0 otherwise
  *
  * Security boundary: handles are interpolated into shell commands
- * passed to tmux. This function rejects all shell metacharacters.
+ * passed to nbs-ts. This function rejects all shell metacharacters.
  */
 int validate_safe_handle(const char *handle);
 
@@ -106,7 +106,7 @@ int validate_safe_model(const char *model);
 /* --- Commands --- */
 
 /*
- * cmd_spawn — Create a new worker with a tmux session.
+ * cmd_spawn — Create a new worker with an nbs-ts session.
  *
  * Preconditions:
  *   - slug != NULL, slug[0] != '\0', matches ^[a-z0-9]+$
@@ -116,7 +116,7 @@ int validate_safe_model(const char *model);
  *
  * Postconditions:
  *   - On success (0): worker task file created at <project_dir>/.nbs/workers/<slug>-<4hex>.md,
- *                     tmux session running with name pty_<slug>-<4hex>
+ *                     nbs-ts session running with handle pty_<slug>-<4hex>
  *   - On error (1): project directory invalid or I/O failure, no worker created
  *   - On bad args (4): slug invalid or required parameters empty/NULL
  */
@@ -171,14 +171,14 @@ int cmd_search(const char *name, const char *pattern,
 int cmd_results(const char *name, const char *cwd);
 
 /*
- * cmd_dismiss — Kill worker's tmux session and mark as dismissed.
+ * cmd_dismiss — Kill worker's nbs-ts session and mark as dismissed.
  *
  * Preconditions:
  *   - name != NULL, name[0] != '\0'
  *   - cwd != NULL
  *
  * Postconditions:
- *   - On success (0): tmux session killed (if running), task file State updated to "dismissed",
+ *   - On success (0): nbs-ts session killed (if running), task file State updated to "dismissed",
  *                     Completed timestamp set if empty
  *   - On not found (2): worker task file does not exist
  *   - On bad args (4): name is NULL or empty
@@ -194,7 +194,7 @@ int cmd_dismiss(const char *name, const char *cwd);
  *   - cwd != NULL
  *
  * Postconditions:
- *   - On success (0): nbs-claude launched with existing session ID, tmux session attached
+ *   - On success (0): nbs-claude launched with existing session ID, nbs-ts session created
  *   - On not found (2): session metadata file does not exist for handle
  *   - On bad args (4): handle is NULL or empty
  *   - On error (1): failed to read session metadata or execute nbs-claude

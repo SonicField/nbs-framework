@@ -1,8 +1,8 @@
 #!/bin/bash
-# nbs-remote-status: Quick state check of a remote pty-session
+# nbs-remote-status: Quick state check of a remote nbs-ts session
 #
 # Runs git status, git diff --stat, and optionally checks for running
-# builds on a remote pty-session. One command instead of three.
+# builds on a remote nbs-ts session. One command instead of three.
 #
 # Usage:
 #   nbs-remote-status <session> [options]
@@ -33,14 +33,14 @@
 
 set -euo pipefail
 
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
-# Precondition: pty-session binary must exist
-[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+[[ -x "$NBS_TS" ]] || { echo "Error: nbs-ts not found" >&2; exit 1; }
 
-# Suppress pty-session tool header (we ARE the higher-level tool)
-export NBS_PTY_QUIET=1
+
 
 SESSION=""
 CWD=""
@@ -103,9 +103,12 @@ if [[ -n "$CWD" ]]; then
     [[ "$CWD" =~ $CWD_RE ]] || { echo "Error: --cwd contains suspicious characters: '$CWD'" >&2; exit 4; }
 fi
 
+# Session dispatch helpers
+
+
 # Verify session exists
-if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
-    echo "Error: pty-session '$SESSION' not found" >&2
+if ! "$NBS_TS" read "$SESSION" --last=1 2>/dev/null >/dev/null 2>&1; then
+    echo "Error: session '$SESSION' not found" >&2
     exit 2
 fi
 
@@ -124,7 +127,7 @@ if [[ -n "$CWD" ]]; then
 fi
 
 # Single-quote markers in remote command to prevent shell expansion
-if ! "$PTY_SESSION" send "$SESSION" "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
+if ! "$NBS_TS" send "$SESSION" "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
     echo "Error: Failed to send status command to session '$SESSION'" >&2
     exit 1
 fi
@@ -140,12 +143,12 @@ while (( elapsed < TIMEOUT )); do
     elapsed=$((elapsed + POLL))
 
     # Track consecutive read failures to detect dead sessions (BUG: was silently swallowed with || true)
-    if output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null); then
+    if output=$("$NBS_TS" read "$SESSION" --last="$LAST" 2>/dev/null); then
         consecutive_failures=0
     else
         consecutive_failures=$((consecutive_failures + 1))
         if (( consecutive_failures >= 3 )); then
-            echo "Error: pty-session read failed 3 consecutive times for '$SESSION'" >&2
+            echo "Error: session read failed 3 consecutive times for '$SESSION'" >&2
             exit 2
         fi
         continue

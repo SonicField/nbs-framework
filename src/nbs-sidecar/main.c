@@ -5,8 +5,7 @@
  * sidecar_config_t, initialises the transport, and calls sidecar_run().
  *
  * Usage:
- *   nbs-sidecar --handle=NAME --root=PATH --transport=tmux --pane-id=ID
- *   nbs-sidecar --handle=NAME --root=PATH --transport=pty --pty-path=PATH --session=NAME
+ *   nbs-sidecar --handle=NAME --root=PATH --session=HANDLE
  *
  * All parameters can also be set via NBS_* environment variables.
  * Command-line arguments take precedence over environment variables.
@@ -53,16 +52,12 @@ static void print_usage(void) {
     fprintf(stderr,
         "nbs-sidecar: Claude Code session monitor\n\n"
         "Usage:\n"
-        "  nbs-sidecar --handle=NAME --root=PATH --transport=tmux --pane-id=ID\n"
-        "  nbs-sidecar --handle=NAME --root=PATH --transport=pty "
-        "--pty-path=PATH --session=NAME\n\n"
+        "  nbs-sidecar --handle=NAME --root=PATH --session=HANDLE\n\n"
         "Options:\n"
         "  --handle=NAME          Agent handle (required)\n"
         "  --root=PATH            Project root containing .nbs/ (required)\n"
-        "  --transport=tmux|pty   Transport mode (required)\n"
-        "  --pane-id=ID           tmux pane ID (tmux mode)\n"
-        "  --pty-path=PATH        Path to pty-session binary (pty mode)\n"
-        "  --session=NAME         pty-session session name (pty mode)\n"
+        "  --transport=ts         Transport mode (default: ts)\n"
+        "  --session=HANDLE       nbs-ts session handle (required)\n"
         "  --initial-prompt=TEXT  Custom initial prompt\n"
         "  --log=PATH             Log file for sidecar stderr\n\n"
         "Environment (defaults, overridden by args):\n"
@@ -155,7 +150,7 @@ int main(int argc, char **argv) {
      * command-line parsing so that argv overrides are applied first. */
 
     cfg.is_remote = (cfg.remote_host[0] != '\0') ? 1 : 0;
-    cfg.transport_mode = TRANSPORT_TMUX; /* default */
+    cfg.transport_mode = TRANSPORT_TS; /* default */
 
     /* Parse command-line arguments (override env) */
     for (int i = 1; i < argc; i++) {
@@ -175,28 +170,11 @@ int main(int argc, char **argv) {
             }
         } else if (strncmp(argv[i], "--transport=", 12) == 0) {
             const char *t = argv[i] + 12;
-            if (strcmp(t, "tmux") == 0) {
-                cfg.transport_mode = TRANSPORT_TMUX;
-            } else if (strcmp(t, "pty") == 0) {
-                cfg.transport_mode = TRANSPORT_PTY;
+            if (strcmp(t, "ts") == 0) {
+                cfg.transport_mode = TRANSPORT_TS;
             } else {
                 fprintf(stderr, "Error: unknown transport '%s' "
-                        "(expected 'tmux' or 'pty')\n", t);
-                return SIDECAR_EXIT_BAD_ARGS;
-            }
-        } else if (strncmp(argv[i], "--pane-id=", 10) == 0) {
-            int n = snprintf(cfg.pane_id, sizeof(cfg.pane_id), "%s", argv[i] + 10);
-            if (n < 0 || (size_t)n >= sizeof(cfg.pane_id)) {
-                fprintf(stderr, "Error: --pane-id value too long (max %zu)\n",
-                        sizeof(cfg.pane_id) - 1);
-                return SIDECAR_EXIT_BAD_ARGS;
-            }
-        } else if (strncmp(argv[i], "--pty-path=", 11) == 0) {
-            int n = snprintf(cfg.pty_session_path, sizeof(cfg.pty_session_path),
-                     "%s", argv[i] + 11);
-            if (n < 0 || (size_t)n >= sizeof(cfg.pty_session_path)) {
-                fprintf(stderr, "Error: --pty-path value too long (max %zu)\n",
-                        sizeof(cfg.pty_session_path) - 1);
+                        "(expected 'ts')\n", t);
                 return SIDECAR_EXIT_BAD_ARGS;
             }
         } else if (strncmp(argv[i], "--session=", 10) == 0) {
@@ -278,20 +256,9 @@ int main(int argc, char **argv) {
     }
 
     /* Transport-specific validation */
-    if (cfg.transport_mode == TRANSPORT_TMUX) {
-        if (cfg.pane_id[0] == '\0') {
-            fprintf(stderr, "Error: --pane-id is required for tmux transport\n");
-            return SIDECAR_EXIT_BAD_ARGS;
-        }
-    } else {
-        if (cfg.pty_session_path[0] == '\0') {
-            fprintf(stderr, "Error: --pty-path is required for pty transport\n");
-            return SIDECAR_EXIT_BAD_ARGS;
-        }
-        if (cfg.session_name[0] == '\0') {
-            fprintf(stderr, "Error: --session is required for pty transport\n");
-            return SIDECAR_EXIT_BAD_ARGS;
-        }
+    if (cfg.session_name[0] == '\0') {
+        fprintf(stderr, "Error: --session is required (nbs-ts session handle)\n");
+        return SIDECAR_EXIT_BAD_ARGS;
     }
 
     /* Build initial prompt: always include handle announcement.
@@ -322,7 +289,7 @@ int main(int argc, char **argv) {
     }
 
     /* Ignore SIGHUP — the sidecar is backgrounded by nbs-claude and must
-     * survive parent shell exit and tmux session restarts. Without this,
+     * survive parent shell exit and session restarts. Without this,
      * any session kill or shell exit sends SIGHUP and silently kills the
      * sidecar with no log output (the signal arrives before any stderr
      * write can complete). */
@@ -362,12 +329,7 @@ int main(int argc, char **argv) {
     memset(&tp, 0, sizeof(tp));
     int tp_rc;
 
-    if (cfg.transport_mode == TRANSPORT_TMUX) {
-        tp_rc = transport_tmux_init(&tp, cfg.pane_id);
-    } else {
-        tp_rc = transport_pty_init(&tp, cfg.pty_session_path,
-                                    cfg.session_name);
-    }
+    tp_rc = transport_ts_init(&tp, cfg.session_name);
 
     if (tp_rc != 0) {
         fprintf(stderr, "Error: failed to initialise transport\n");

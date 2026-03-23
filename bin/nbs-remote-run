@@ -1,7 +1,7 @@
 #!/bin/bash
 # nbs-remote-run: Run a command on a remote machine, return output
 #
-# Ephemeral: creates a pty-session, SSHs, runs the command, captures
+# Ephemeral: creates an nbs-ts session, SSHs, runs the command, captures
 # output, cleans up. No session management needed.
 #
 # Usage:
@@ -26,12 +26,13 @@
 
 set -euo pipefail
 
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
-export NBS_PTY_QUIET=1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 
 die() { local rc="$1"; shift; echo "Error: $*" >&2; exit "$rc"; }
 
-[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
+[[ -x "$NBS_TS" ]] || die 1 "nbs-ts not found"
 
 # Parse arguments
 HOST=""
@@ -65,52 +66,39 @@ done
 [[ -n "$CMD" ]]  || die 2 "No command specified"
 
 # Unique session name and markers
-SESSION="nbs-run-$$-${RANDOM}"
+SESSION=""
 START_MARKER="NBS_START_${RANDOM}_${RANDOM}"
 END_MARKER="NBS_END_${RANDOM}_${RANDOM}"
 
 cleanup() {
-    "$PTY_SESSION" kill "$SESSION" >/dev/null 2>&1 || true
+    [[ -n "$SESSION" ]] && "$NBS_TS" kill "$SESSION" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# Create pty-session with SSH as the session command
-if ! "$PTY_SESSION" create "$SESSION" "ssh -o StrictHostKeyChecking=no $HOST" >/dev/null 2>&1; then
-    die 1 "Failed to create pty-session"
-fi
+SESSION=$("$NBS_TS" create "ssh -o StrictHostKeyChecking=no $HOST") || die 1 "Failed to create nbs-ts session"
 
-# Wait for SSH by sending a marker after MOTD settles
 READY="NBS_READY_${RANDOM}"
 sleep 5
-"$PTY_SESSION" send "$SESSION" "echo $READY" >/dev/null 2>&1
-if ! "$PTY_SESSION" wait "$SESSION" "$READY" --timeout=15 >/dev/null 2>&1; then
+"$NBS_TS" send "$SESSION" "echo $READY"
+if ! "$NBS_TS" wait-pattern "$SESSION" "$READY" --timeout=15 >/dev/null 2>&1; then
     die 1 "SSH to $HOST timed out (15s)"
 fi
 
-# cd if requested
 if [[ -n "$CWD" ]]; then
-    "$PTY_SESSION" send "$SESSION" "cd $CWD" >/dev/null 2>&1
+    "$NBS_TS" send "$SESSION" "cd $CWD"
     sleep 1
 fi
 
-# Run command with start/end markers for output extraction.
-# Markers are printed by echo (not pty-session fencing) so they appear
-# inline with command output, not mixed with pty metadata.
-"$PTY_SESSION" send "$SESSION" "echo $START_MARKER; $CMD; echo $END_MARKER" >/dev/null 2>&1
+"$NBS_TS" send "$SESSION" "echo $START_MARKER; $CMD; echo $END_MARKER"
 
-# Wait for end marker
-if ! "$PTY_SESSION" wait "$SESSION" "$END_MARKER" --timeout="$TIMEOUT" >/dev/null 2>&1; then
+if ! "$NBS_TS" wait-pattern "$SESSION" "$END_MARKER" --timeout="$TIMEOUT" >/dev/null 2>&1; then
     die 3 "Command timed out after ${TIMEOUT}s"
 fi
 sleep 1
 
-# Read full scrollback and extract between markers.
-# The first line after START_MARKER is often a partial echo of the command
-# itself (pty terminal echo), so we skip it with tail -n +2.
-"$PTY_SESSION" read "$SESSION" 2>/dev/null \
+"$NBS_TS" read-new "$SESSION" --strip 2>/dev/null \
     | sed -n "/${START_MARKER}/,/${END_MARKER}/p" \
     | grep -v "$START_MARKER" \
     | grep -v "$END_MARKER" \
-    | grep -v '__PTY_FENCE_' \
     | tail -n +2 \
     || true

@@ -1,8 +1,8 @@
 #!/bin/bash
-# nbs-remote-build: Run a build command on a remote pty-session while staying
+# nbs-remote-build: Run a build command on a remote nbs-ts session while staying
 # chat-aware. Polls for build completion and checks chat between polls.
 #
-# Solves the "build-time chat blindness" problem: agents using pty-session
+# Solves the "build-time chat blindness" problem: agents using nbs-ts
 # to build on remote machines block on 'sleep 120' and can't read chat
 # messages until the build finishes.
 #
@@ -42,17 +42,19 @@
 
 set -euo pipefail
 
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
-# Precondition: pty-session binary must exist and be executable
-[[ -x "$PTY_SESSION" ]] || {
-    echo "ASSERTION FAILED: pty-session binary not found or not executable at $PTY_SESSION. Required for remote build execution. Install from https://github.com/SonicField/nbs-framework" >&2
+[[ -x "$NBS_TS" ]] || {
+    echo "ASSERTION FAILED: nbs-ts not found" >&2
     exit 1
 }
 
-# Suppress pty-session tool header (we ARE the higher-level tool)
-export NBS_PTY_QUIET=1
+# Suppress tool header (we ARE the higher-level tool)
+
+# Detect session type: nbs-ts handles are 8 hex chars
 
 # Defaults
 SESSION=""
@@ -148,14 +150,17 @@ if (( _regex_rc == 2 )); then
     exit 4
 fi
 
-# Verify session exists (try reading from it)
-if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
-    echo "Error: pty-session '$SESSION' not found" >&2
+# Session dispatch helpers
+
+
+# Verify session exists
+if ! "$NBS_TS" read "$SESSION" --last=1 2>/dev/null >/dev/null 2>&1; then
+    echo "Error: session '$SESSION' not found" >&2
     exit 2
 fi
 
 # Send the build command
-if ! "$PTY_SESSION" send "$SESSION" "$BUILD_CMD"; then
+if ! "$NBS_TS" send "$SESSION" "$BUILD_CMD"; then
     echo "Error: Failed to send build command to session '$SESSION'" >&2
     exit 1
 fi
@@ -179,27 +184,22 @@ while (( elapsed < TIMEOUT )); do
 
     # Check if build is done (prompt visible in last few lines)
     read_rc=0
-    last_lines=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || read_rc=$?
+    last_lines=$("$NBS_TS" read "$SESSION" --last=5 2>/dev/null) || read_rc=$?
     if (( read_rc != 0 )); then
         consecutive_read_failures=$((consecutive_read_failures + 1))
         if (( consecutive_read_failures >= 3 )); then
-            echo "Error: pty-session read failed $consecutive_read_failures consecutive times, session may be dead" >&2
+            echo "Error: session read failed $consecutive_read_failures consecutive times, session may be dead" >&2
             exit 1
         fi
     else
         consecutive_read_failures=0
     fi
     if echo "$last_lines" | grep -qE "$PROMPT_PATTERN"; then
-        # SECURITY: Verify the shell is truly idle by sending a sentinel command.
-        # Build output can contain text matching the prompt pattern (e.g. "$ " in
-        # a log message), causing false-positive completion detection. We confirm
-        # by sending a unique echo command and verifying it appears in output.
         sentinel="NBS_SENTINEL_${RANDOM}_${RANDOM}"
-        "$PTY_SESSION" send "$SESSION" "echo $sentinel" 2>/dev/null || true
+        "$NBS_TS" send "$SESSION" "echo $sentinel" 2>/dev/null || true
         sleep 1
-        sentinel_output=$("$PTY_SESSION" read "$SESSION" --last=5 2>/dev/null) || true
+        sentinel_output=$("$NBS_TS" read "$SESSION" --last=5 2>/dev/null) || true
         if ! echo "$sentinel_output" | grep -qF "$sentinel"; then
-            # Sentinel not found — prompt match was a false positive from build output
             continue
         fi
 
@@ -208,8 +208,7 @@ while (( elapsed < TIMEOUT )); do
             echo "Build completed in ${elapsed}s" >&2
         fi
 
-        # Postcondition: retrieve and verify build output
-        build_output=$("$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null) || {
+        build_output=$("$NBS_TS" read "$SESSION" --last=50 2>/dev/null) || {
             echo "Warning: build completed but could not read output from session '$SESSION'" >&2
         }
         if [[ -n "${build_output:-}" ]]; then
@@ -246,7 +245,7 @@ if [[ "$QUIET" != true ]]; then
 fi
 
 # Print whatever output we have
-if ! "$PTY_SESSION" read "$SESSION" --last=50 2>/dev/null; then
+if ! "$NBS_TS" read "$SESSION" --last=50 2>/dev/null; then
     echo "Warning: could not read final output from session '$SESSION'" >&2
 fi
 exit 3

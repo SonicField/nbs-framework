@@ -1,7 +1,7 @@
 #!/bin/bash
 # nbs-claude-remote: Launch Claude Code on a remote machine via SSH
 #
-# SSHs to a remote machine, starts nbs-claude in a tmux session there,
+# SSHs to a remote machine, starts nbs-claude in an nbs-ts session there,
 # and attaches your local terminal. All file access (bus, chat, scribe)
 # happens on the remote machine where .nbs/ lives.
 #
@@ -14,13 +14,13 @@
 #
 # Options:
 #   --handle=NAME         Agent handle (default: remote)
-#   --name=NAME           Chat name for tmux session naming (default: live)
+#   --name=NAME           Chat name for session naming (default: live)
 #   --ssh-key=PATH        SSH key file (default: use ssh-agent)
 #   --ssh-opts=OPTS       Additional SSH options, space-separated single tokens
 #                         (e.g. '-o ControlPath=none'). Compound options with
 #                         embedded spaces are NOT supported in a single invocation.
-#   --resume              Attach to existing remote tmux session instead of creating
-#   --list                List existing NBS tmux sessions on the remote
+#   --resume              Attach to existing remote nbs-ts session instead of creating
+#   --list                List existing NBS nbs-ts sessions on the remote
 #   --help                Show usage
 #
 # Examples:
@@ -44,10 +44,6 @@ cleanup() {
         return
     fi
     CLEANUP_DONE=true
-    # STRUCTURAL SCAFFOLDING: No resources currently require cleanup.
-    # This trap exists so that future additions (temp files, background
-    # processes, port forwards) have a single idempotent teardown point.
-    # If you add a resource, add its teardown here and add a test.
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -61,10 +57,9 @@ SSH_KEY=""
 SSH_OPTS=""
 RESUME=false
 LIST=false
-# V2.3: Initialise SSH_OPTS_ARRAY to prevent unbound variable errors with set -u
 SSH_OPTS_ARRAY=()
 
-# --- Output helpers (HARDENING #9: printf instead of echo -e) ---
+# --- Output helpers ---
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -80,9 +75,6 @@ error() { printf '%b %s\n' "${RED}[nbs-claude-remote]${NC}" "$*" >&2; }
 
 # --- Validation helpers ---
 
-# Validate a string matches a safe pattern (alphanumeric, underscore, hyphen).
-# Used for HANDLE, CHAT_NAME which become part of tmux session names and
-# shell commands.
 validate_safe_name() {
     local label="$1"
     local value="$2"
@@ -92,9 +84,6 @@ validate_safe_name() {
     fi
 }
 
-# Validate a path-like string against shell injection.
-# Permits alphanumeric, dots, underscores, at-signs, colons, tildes,
-# hyphens, and forward slashes.
 validate_safe_path() {
     local label="$1"
     local value="$2"
@@ -104,15 +93,6 @@ validate_safe_path() {
     fi
 }
 
-# Parse SSH_OPTS string into an array safely (SECURITY #1).
-# Word-splits on spaces only (not globs, not IFS tricks).
-# LIMITATION: Compound SSH options with embedded spaces (e.g.
-#   '-o ProxyCommand=ssh -W %h:%p jumphost') will be split into
-#   separate tokens, producing invalid SSH arguments. For compound
-#   options, use --ssh-opts multiple times with one token each, e.g.:
-#     --ssh-opts='-o' --ssh-opts='ProxyCommand=ssh -W %h:%p jumphost'
-#   This function is safe against shell injection but does not preserve
-#   quoting within the options string.
 parse_ssh_opts_array() {
     local opts_string="$1"
     SSH_OPTS_ARRAY=()
@@ -141,8 +121,6 @@ for arg in "$@"; do
             SSH_KEY="${arg#--ssh-key=}"
             ;;
         --ssh-opts=*)
-            # Accumulate: each --ssh-opts value is space-split and appended.
-            # For compound options, use multiple --ssh-opts invocations.
             SSH_OPTS="${arg#--ssh-opts=}"
             ;;
         --resume)
@@ -163,16 +141,16 @@ Required:
 
 Options:
   --handle=NAME         Agent handle (default: remote)
-  --name=NAME           Chat name for tmux session naming (default: live)
+  --name=NAME           Chat name for session naming (default: live)
   --ssh-key=PATH        SSH key file
   --ssh-opts=OPTS       Additional SSH options, space-separated single tokens
                         (e.g. '-o ControlPath=none'). Compound options with
                         embedded spaces are NOT supported in a single invocation.
-  --resume              Attach to existing remote tmux session
-  --list                List existing NBS tmux sessions on remote
+  --resume              Attach to existing remote nbs-ts session
+  --list                List existing NBS nbs-ts sessions on remote
   --help                Show this help
 
-The script SSHs to the remote, starts nbs-claude in a tmux session
+The script SSHs to the remote, starts nbs-claude in an nbs-ts session
 there, and attaches your terminal. All file access happens on the
 remote machine where .nbs/ lives.
 
@@ -199,27 +177,22 @@ if [[ -z "$HOST" ]]; then
     exit 4
 fi
 
-# HARDENING #10 / SECURITY #2: Validate HOST format
 validate_safe_path "HOST" "$HOST"
 
-# V2.4: Validate SSH_KEY file exists before attempting SSH
 if [[ -n "$SSH_KEY" && ! -f "$SSH_KEY" ]]; then
     error "SSH key file not found: $SSH_KEY"
     exit 4
 fi
 
-# Parse SSH_OPTS into array before first use (SECURITY #1)
 parse_ssh_opts_array "$SSH_OPTS"
 
 if [[ "$LIST" == "true" ]]; then
-    # List remote NBS tmux sessions and exit
-    info "Listing NBS tmux sessions on $HOST..."
+    # List remote NBS nbs-ts sessions and exit
+    info "Listing NBS sessions on $HOST..."
     SSH_CMD=(ssh)
     [[ -n "$SSH_KEY" ]] && SSH_CMD+=(-i "$SSH_KEY")
     [[ ${#SSH_OPTS_ARRAY[@]} -gt 0 ]] && SSH_CMD+=("${SSH_OPTS_ARRAY[@]}")
-    # BUG #1 fix: Do not suppress tmux ls stderr or mask exit code.
-    # Let tmux errors (binary missing, permission denied) propagate.
-    SSH_CMD+=("$HOST" "tmux ls 2>&1 | grep nbs- || { echo 'No NBS sessions found (or tmux unavailable)' >&2; exit 1; }")
+    SSH_CMD+=("$HOST" "nbs-ts list 2>&1 || { echo 'No NBS sessions found (or nbs-ts unavailable)' >&2; exit 1; }")
     "${SSH_CMD[@]}"
     exit $?
 fi
@@ -230,14 +203,11 @@ if [[ -z "$ROOT" ]]; then
     exit 4
 fi
 
-# HARDENING #10 / SECURITY #2: Validate ROOT format
 validate_safe_path "ROOT" "$ROOT"
-
-# SECURITY #3: Validate HANDLE and CHAT_NAME against injection
 validate_safe_name "HANDLE" "$HANDLE"
 validate_safe_name "CHAT_NAME" "$CHAT_NAME"
 
-# --- Build SSH command (SECURITY #1: use array for SSH_OPTS) ---
+# --- Build SSH command ---
 
 SSH_BASE=(ssh -t)
 [[ -n "$SSH_KEY" ]] && SSH_BASE+=(-i "$SSH_KEY")
@@ -249,12 +219,9 @@ SESSION_NAME="nbs-${HANDLE}-${CHAT_NAME}"
 # --- Resume mode ---
 
 if [[ "$RESUME" == "true" ]]; then
-    info "Attaching to remote session: $SESSION_NAME on $HOST"
-    # BUG #5: Let tmux failure propagate — do not mask with || echo.
-    # BUG #6: Do not suppress stderr locally — distinguish SSH failure from tmux failure.
-    # NOTE: ${SESSION_NAME} is expanded locally. Remote-side single quotes
-    # are defence-in-depth; SESSION_NAME is validated by validate_safe_name.
-    "${SSH_BASE[@]}" "tmux attach-session -t '${SESSION_NAME}'"
+    info "Listing sessions on $HOST to find $SESSION_NAME..."
+    # Find the nbs-ts handle for this session by searching nbs-ts list
+    "${SSH_BASE[@]}" "nbs-ts list 2>/dev/null | grep '${HANDLE}' || { echo 'Session not found' >&2; exit 1; }"
     exit $?
 fi
 
@@ -266,33 +233,19 @@ printf '  Host:     %s\n' "$HOST"
 printf '  Root:     %s\n' "$ROOT"
 printf '  Handle:   %s\n' "$HANDLE"
 printf '  Chat:     %s\n' "$CHAT_NAME"
-printf '  Session:  %s\n' "$SESSION_NAME"
 printf '\n'
 
-# Check if session already exists on remote
-# BUG #6: Only suppress remote tmux stderr (expected when session absent),
-# do NOT suppress local SSH stderr — SSH connection failures must be visible.
-# HARDENING #8 fix: Check tmux availability before has-session to distinguish
-# "session absent" from "tmux not installed".
-info "Checking for existing session..."
-# NOTE on quoting: ${SESSION_NAME} is expanded locally (not on the remote).
-# The single quotes in the remote command string are defence-in-depth on the
-# remote shell side. SESSION_NAME is validated by validate_safe_name above.
-if ! "${SSH_BASE[@]}" "command -v tmux >/dev/null 2>&1 || { echo 'tmux not found on remote host' >&2; exit 1; }"; then
-    error "tmux is not available on $HOST"
+# Check nbs-ts availability on remote
+info "Checking for nbs-ts on remote..."
+if ! "${SSH_BASE[@]}" "command -v nbs-ts >/dev/null 2>&1 || { echo 'nbs-ts not found on remote host. Install nbs-ts on $HOST before using nbs-claude-remote.' >&2; exit 1; }"; then
+    error "nbs-ts is not available on $HOST"
+    error "Install nbs-ts on the remote machine first."
     exit 1
 fi
-if "${SSH_BASE[@]}" "tmux has-session -t '${SESSION_NAME}' 2>/dev/null"; then
-    warn "Session '${SESSION_NAME}' already exists on $HOST"
-    info "Attaching to existing session..."
-    "${SSH_BASE[@]}" "tmux attach-session -t '${SESSION_NAME}'"
-    exit $?
-fi
 
-# Create remote tmux session, start nbs-claude, then attach
+# Create remote nbs-ts session, start nbs-claude, then attach
 info "Creating remote session and launching nbs-claude..."
 
-# BUG #7: Validate LOCAL_HOST — assert non-empty and contains @
 LOCAL_HOST="$(whoami)@$(hostname -f 2>/dev/null || hostname)"
 if [[ -z "$LOCAL_HOST" ]]; then
     error "LOCAL_HOST is empty — whoami or hostname failed"
@@ -302,56 +255,26 @@ if [[ "$LOCAL_HOST" != *"@"* ]]; then
     error "LOCAL_HOST='$LOCAL_HOST' does not contain '@' — expected USER@HOST format"
     exit 1
 fi
-
-# SECURITY #4 fix: Validate LOCAL_HOST against shell injection, matching
-# the validation applied to HOST, ROOT, HANDLE, and CHAT_NAME.
 validate_safe_path "LOCAL_HOST" "$LOCAL_HOST"
 
-# SECURITY #4: --dangerously-skip-permissions is required for non-interactive
-# tmux sessions where Claude cannot prompt for confirmation. This is an
-# intentional security trade-off: the remote machine is trusted, and the
-# user explicitly chose to launch on it. The flag is necessary because
-# tmux send-keys cannot interact with permission prompts.
-# HARDENING #12: $ROOT quoted in send-keys via validated variable
-# SECURITY #2 / #3: $ROOT, $SESSION_NAME, $HANDLE all validated above
-# V2.1: Use double quotes so tilde expansion works on the remote side.
-# ROOT is validated by validate_safe_path (no single quotes, no special chars).
-#
-# MAINTENANCE INVARIANT (HARDENING #5): All variables interpolated into
-# REMOTE_CMD below and their validation sites:
-#   ROOT          — validate_safe_path "ROOT" (line ~220)
-#   SESSION_NAME  — composed from HANDLE + CHAT_NAME, both validate_safe_name (line ~223-224)
-#   HANDLE        — validate_safe_name "HANDLE" (line ~223)
-#   LOCAL_HOST    — validate_safe_path "LOCAL_HOST" (after line ~277)
-# If you add a new variable here, you MUST validate it above first.
-# NOTE: ${SESSION_NAME} is expanded locally. Remote-side single quotes
-# around it are defence-in-depth (HARDENING #9 clarification).
+# Create nbs-ts session running nbs-claude directly.
+# nbs-ts create runs the command in a managed PTY — direct command execution.
 REMOTE_CMD="cd \"${ROOT}\" && \
-    tmux new-session -d -s '${SESSION_NAME}' -c \"${ROOT}\" && \
-    tmux send-keys -t '${SESSION_NAME}' 'NBS_HANDLE=\"${HANDLE}\" NBS_REMOTE_HOST=\"${LOCAL_HOST}\" nbs-claude --dangerously-skip-permissions --root=\"${ROOT}\" --remote-host=\"${LOCAL_HOST}\"' Enter"
+    HANDLE=\$(nbs-ts create 'NBS_HANDLE=\"${HANDLE}\" NBS_TRANSPORT=ts NBS_REMOTE_HOST=\"${LOCAL_HOST}\" nbs-claude --dangerously-skip-permissions --root=\"${ROOT}\" --remote-host=\"${LOCAL_HOST}\"') && \
+    echo \"Session created: \$HANDLE\""
 
-# BUG #8: Replace 'sleep 2' with readiness poll loop.
-# BUG #2 fix: Poll for the actual nbs-claude process, not just pane liveness.
-# The pane shell may be alive while nbs-claude has not yet started or has
-# already failed. We check both session existence and that nbs-claude
-# appears in the process tree of the tmux pane.
-# V2.2: Add timeout check after poll loop
+# Readiness poll: check nbs-ts status for session liveness
 POLL_CMD="for i in \$(seq 1 20); do \
-    if tmux has-session -t '${SESSION_NAME}' 2>/dev/null && \
-       tmux list-panes -t '${SESSION_NAME}' -F '#{pane_pid}' 2>/dev/null | head -1 | xargs -I{} sh -c 'pgrep -P {} -f nbs-claude >/dev/null 2>&1 || kill -0 {} 2>/dev/null' 2>/dev/null; then \
+    if nbs-ts status \"\$HANDLE\" 2>/dev/null | grep -q alive; then \
         break; \
     fi; \
     sleep 0.2; \
 done; \
-if ! tmux has-session -t '${SESSION_NAME}' 2>/dev/null; then \
+if ! nbs-ts status \"\$HANDLE\" 2>/dev/null | grep -q alive; then \
     echo 'Error: session failed to start within timeout' >&2; \
     exit 1; \
-fi; \
-PANE_PID=\$(tmux list-panes -t '${SESSION_NAME}' -F '#{pane_pid}' 2>/dev/null | head -1); \
-if [ -n \"\$PANE_PID\" ] && ! pgrep -P \"\$PANE_PID\" -f nbs-claude >/dev/null 2>&1; then \
-    echo 'Warning: nbs-claude process not yet detected in session (may still be starting)' >&2; \
 fi"
 
-ATTACH_CMD="tmux attach-session -t '${SESSION_NAME}'"
+ATTACH_CMD="nbs-ts attach \"\$HANDLE\""
 
 "${SSH_BASE[@]}" "${REMOTE_CMD} && ${POLL_CMD} && ${ATTACH_CMD}"

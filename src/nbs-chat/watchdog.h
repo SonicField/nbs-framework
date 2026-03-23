@@ -1,7 +1,7 @@
 /*
  * watchdog.h — Terminal watchdog daemon state machine
  *
- * Detects when the NBS agent team has died (<3 tmux sessions alive)
+ * Detects when the NBS agent team has died (<3 nbs-ts sessions alive)
  * and decides whether to trigger an auto-restart. Pure state machine
  * with no I/O or threading — all I/O is done by the caller.
  *

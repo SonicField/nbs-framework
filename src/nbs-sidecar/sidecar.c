@@ -10,7 +10,7 @@
  *   - Periodic triggers (pythia, shepard, fixup, librarian)
  *   - Periodic Enter flush (every FLUSH_INTERVAL ticks)
  *
- * The transport vtable abstracts tmux vs pty-session interactions.
+ * The transport vtable abstracts session transport interactions.
  */
 
 #include "sidecar.h"
@@ -70,7 +70,7 @@ static void build_inbox_path(const sidecar_config_t *cfg,
  * build_notify_prompt — Construct a plain text notification prompt.
  *
  * Replaces the /nbs-notify slash command injection. Slash commands
- * fail in tmux contexts because the Enter key doesn't reliably
+ * fail in terminal contexts because the Enter key doesn't reliably
  * register. Plain text prompts work every time.
  *
  * The content matches the nbs-notify.md skill file but is embedded
@@ -242,7 +242,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     char msg[SIDECAR_MAX_CONTENT];
     snprintf(msg, sizeof(msg),
-             "tmux pane for %s:\n%s", cfg->handle, escaped);
+             "session output for %s:\n%s", cfg->handle, escaped);
     int rc = chat_client_send(chat_path, "sidecar", msg);
     if (rc != 0) {
         fprintf(stderr, "handle_query: chat_client_send failed for '%s'\n",
@@ -269,7 +269,7 @@ static void respond_dialogue(transport_t *tp,
                 resp->option);
         return;
     }
-    usleep(500000);
+    /* No delay needed — Enter is CR (0x0d) which submits immediately */
     if (tp->send_key(tp, "Enter") != 0) {
         fprintf(stderr, "respond_dialogue: send_key Enter failed\n");
         return;
@@ -510,10 +510,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (!content) continue;
 
         if (detect_prompt_visible(content)) {
-            if (tp->send_text(tp, cfg->initial_prompt) != 0) {
-                fprintf(stderr, "sidecar_run: initial prompt send_text failed\n");
+            /* Send initial prompt as raw text (no paste brackets).
+             * Using send_key bypasses the paste-bracket wrapping in
+             * send_text. Enter is sent as CR (0x0d) which the raw PTY
+             * treats as submit — no timing delays needed. */
+            if (tp->send_key(tp, cfg->initial_prompt) != 0) {
+                fprintf(stderr, "sidecar_run: initial prompt send_key failed\n");
             }
-            usleep(300000);
             if (tp->send_key(tp, "Enter") != 0) {
                 fprintf(stderr, "sidecar_run: initial prompt send_key Enter failed\n");
             }
@@ -875,7 +878,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     /* Inject notification as plain text prompt.
                      * Previous approach used /nbs-notify slash command,
                      * which failed because Enter doesn't reliably register
-                     * in tmux contexts. Plain text works every time. */
+                     * in terminal contexts. Plain text works every time. */
                     char notify_prompt[SIDECAR_MAX_PROMPT];
                     build_notify_prompt(cfg, state.notify_message,
                                         notify_prompt, sizeof(notify_prompt));

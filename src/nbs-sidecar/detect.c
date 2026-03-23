@@ -188,7 +188,7 @@ int detect_prompt_visible(const char *content)
     int newlines_found = 0;
     size_t i = len;
 
-    /* Skip trailing newlines (tmux pads pane to full height with empty lines) */
+    /* Skip trailing newlines (terminal output may pad with empty lines) */
     while (i > 0 && content[i - 1] == '\n')
         i--;
 

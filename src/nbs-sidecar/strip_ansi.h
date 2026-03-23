@@ -1,7 +1,7 @@
 /*
  * strip_ansi.h — Strip ANSI/terminal escape sequences from text.
  *
- * Used by the @mention? query feature to clean tmux pane captures
+ * Used by the @mention? query feature to clean session output
  * before posting to chat.
  */
 

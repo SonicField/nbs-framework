@@ -178,7 +178,7 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
  *
  * Uses the exact same fork+execlp("bash",...) pattern as /restart,
  * which is proven to work from the terminal. The shell script
- * handles tmux session creation, task file writing, and log setup
+ * handles session creation, task file writing, and log setup
  * using the same agent launch pattern as the restart script.
  *
  * Returns 0 on spawn success, -1 on failure.
@@ -242,7 +242,7 @@ static void *watchdog_thread_fn(void *arg) {
 
         /* Derive session prefix from chat filename.
          * live.chat → "live", nn.Module.chat → "nn-Module"
-         * Dots replaced with dashes (tmux rejects dots in session names). */
+         * Dots replaced with dashes (session names use dashes). */
         char chat_tag[256];
         {
             const char *base = strrchr(ws->chat_path, '/');
@@ -259,20 +259,17 @@ static void *watchdog_thread_fn(void *arg) {
                 if (chat_tag[i] == '.') chat_tag[i] = '-';
         }
 
-        /* Count alive agent sessions for THIS chat only */
-        char grep_cmd[512];
-        snprintf(grep_cmd, sizeof(grep_cmd),
-                 "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
-                 "grep -c 'nbs-.*-%s' 2>/dev/null || echo 0", chat_tag);
-        FILE *fp = popen(grep_cmd, "r");
+        /* Count alive agent sessions for THIS chat only.
+         * Count alive nbs-ts sessions. */
         int count = 0;
-        if (fp) {
-            if (fscanf(fp, "%d", &count) != 1) count = 0;
-            pclose(fp);
-        } else {
-            fprintf(stderr, "warning: watchdog popen failed: %s\n",
-                    strerror(errno));
+        {
+            FILE *fp = popen("nbs-ts list 2>/dev/null | grep -c alive || echo 0", "r");
+            if (fp) {
+                if (fscanf(fp, "%d", &count) != 1) count = 0;
+                pclose(fp);
+            }
         }
+        /* nbs-ts is the only session transport — no fallback needed */
 
         watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
         if (d == WATCHDOG_RESTART) {
