@@ -428,26 +428,52 @@ static int cmd_create(const char *command)
         close(cfd);
     }
 
-    /* Create PTY — try helper first, fall back to direct openpty.
-     *
-     * The helper provides centralised process management. If it's running,
-     * it allocates the PTY and forks the child. If not, we do it directly.
-     */
+    /* Write the rcfile for PROMPT_COMMAND — needed by both helper and direct paths */
+    char rcfile_path[MAX_FILE_PATH];
+    snprintf(rcfile_path, sizeof(rcfile_path), "%s/bashrc", session_dir);
+
+    char rcfile_content[MAX_FILE_PATH * 2];
+    snprintf(rcfile_content, sizeof(rcfile_content),
+             "NBS_TS_SEQ=-1\n"
+             "PROMPT_COMMAND='NBS_TS_LAST_EXIT=$?; "
+             "NBS_TS_SEQ=$((NBS_TS_SEQ + 1)); "
+             "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"'\n",
+             completion_log);
+
+    int rcfd = open(rcfile_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (rcfd < 0) {
+        fprintf(stderr, "nbs-ts: create rcfile '%s' failed: %s\n",
+                rcfile_path, strerror(errno));
+        rmdir(session_dir);
+        return NBS_TS_EXIT_ERROR;
+    }
+    {
+        size_t rc_len = strlen(rcfile_content);
+        ssize_t rc_w = write(rcfd, rcfile_content, rc_len);
+        close(rcfd);
+        if (rc_w != (ssize_t)rc_len) {
+            fprintf(stderr, "nbs-ts: write rcfile '%s' failed: %s\n",
+                    rcfile_path, strerror(errno));
+            rmdir(session_dir);
+            return NBS_TS_EXIT_ERROR;
+        }
+    }
+
+    /* Create PTY — try helper first, fall back to direct openpty. */
     int master_fd, slave_fd = -1;
     char slave_name[256] = "";
     int used_helper = 0;
     pid_t helper_child_pid = 0;
 
     {
-        /* Build the full command with PROMPT_COMMAND wrapper for helper */
         char helper_cmd[MAX_FILE_PATH * 4];
-        snprintf(helper_cmd, sizeof(helper_cmd),
-                 "NBS_TS_SEQ=-1; "
-                 "PROMPT_COMMAND='NBS_TS_LAST_EXIT=$?; "
-                 "NBS_TS_SEQ=$((NBS_TS_SEQ + 1)); "
-                 "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"'; "
-                 "exec %s",
-                 completion_log, command);
+        if (strcmp(command, "bash") == 0 || strcmp(command, "bash -i") == 0) {
+            snprintf(helper_cmd, sizeof(helper_cmd),
+                     "bash --rcfile \"%s\" -i", rcfile_path);
+        } else {
+            snprintf(helper_cmd, sizeof(helper_cmd),
+                     "source \"%s\"; %s", rcfile_path, command);
+        }
 
         int hfd = helper_request_pty(helper_cmd, &helper_child_pid);
         if (hfd >= 0) {
@@ -476,41 +502,8 @@ static int cmd_create(const char *command)
     if (write_file_str(slave_path_file, slave_name) < 0) {
         fprintf(stderr, "nbs-ts: write slave path failed\n");
         close(master_fd);
-        close(slave_fd);
+        if (slave_fd >= 0) close(slave_fd);
         return NBS_TS_EXIT_ERROR;
-    }
-
-    /* Write the rcfile for PROMPT_COMMAND before forking */
-    char rcfile_path[MAX_FILE_PATH];
-    snprintf(rcfile_path, sizeof(rcfile_path), "%s/bashrc", session_dir);
-
-    char rcfile_content[MAX_FILE_PATH * 2];
-    snprintf(rcfile_content, sizeof(rcfile_content),
-             "NBS_TS_SEQ=-1\n"
-             "PROMPT_COMMAND='NBS_TS_LAST_EXIT=$?; "
-             "NBS_TS_SEQ=$((NBS_TS_SEQ + 1)); "
-             "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"'\n",
-             completion_log);
-
-    int rcfd = open(rcfile_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (rcfd < 0) {
-        fprintf(stderr, "nbs-ts: create rcfile '%s' failed: %s\n",
-                rcfile_path, strerror(errno));
-        close(master_fd);
-        close(slave_fd);
-        return NBS_TS_EXIT_ERROR;
-    }
-    {
-        size_t rc_len = strlen(rcfile_content);
-        ssize_t rc_w = write(rcfd, rcfile_content, rc_len);
-        close(rcfd);
-        if (rc_w != (ssize_t)rc_len) {
-            fprintf(stderr, "nbs-ts: write rcfile '%s' failed: %s\n",
-                    rcfile_path, strerror(errno));
-            close(master_fd);
-            close(slave_fd);
-            return NBS_TS_EXIT_ERROR;
-        }
     }
 
     /* Write metadata */
