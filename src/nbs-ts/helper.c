@@ -189,13 +189,17 @@ static void handle_client(int client_fd) {
         _exit(127);
     }
 
-    /* Parent — send master fd to caller */
+    /* Parent — send master fd and child PID to caller */
     close(slave_fd);
 
     if (send_fd(client_fd, master_fd) < 0) {
         log_msg("error: send_fd failed: %s (cmd=%s, child=%d, peer_pid=%d)",
                 strerror(errno), cmd, child, cred.pid);
     } else {
+        /* Send child PID as a plain integer after the fd */
+        char pid_buf[32];
+        int pn = snprintf(pid_buf, sizeof(pid_buf), "%d", (int)child);
+        if (pn > 0) write(client_fd, pid_buf, (size_t)pn);
         log_msg("spawn: \"%s\" -> pid %d (peer_pid=%d)",
                 cmd, child, cred.pid);
     }

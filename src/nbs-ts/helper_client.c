@@ -17,7 +17,7 @@
 
 #define MAX_CMD_LEN 4096
 
-int helper_request_pty(const char *command) {
+int helper_request_pty(const char *command, pid_t *out_child_pid) {
     ASSERT_MSG(command != NULL, "helper_request_pty: command is NULL");
     ASSERT_MSG(command[0] != '\0', "helper_request_pty: command is empty");
 
@@ -81,20 +81,39 @@ int helper_request_pty(const char *command) {
         .msg_controllen = sizeof(cmsg_buf.buf),
     };
 
-    ssize_t n = recvmsg(s, &msg, 0);
-    close(s);
+    /* Signal EOF to helper so its read loop terminates */
+    shutdown(s, SHUT_WR);
 
-    if (n <= 0) return -1;
+    ssize_t n = recvmsg(s, &msg, 0);
+
+    if (n <= 0) { close(s); return -1; }
 
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     if (!cmsg ||
         cmsg->cmsg_level != SOL_SOCKET ||
         cmsg->cmsg_type != SCM_RIGHTS ||
         cmsg->cmsg_len < CMSG_LEN(sizeof(int))) {
+        close(s);
         return -1;
     }
 
     int fd;
     memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+
+    /* Read child PID sent after the fd */
+    if (out_child_pid) {
+        char pid_buf[32];
+        ssize_t pr = read(s, pid_buf, sizeof(pid_buf) - 1);
+        if (pr > 0) {
+            pid_buf[pr] = '\0';
+            char *endptr;
+            long val = strtol(pid_buf, &endptr, 10);
+            *out_child_pid = (val > 0 && *endptr == '\0') ? (pid_t)val : 0;
+        } else {
+            *out_child_pid = 0;
+        }
+    }
+
+    close(s);
     return fd;
 }

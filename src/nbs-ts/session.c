@@ -281,12 +281,11 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     }
 
     /* Try helper first */
-    int helper_fd = helper_request_pty(setup);
+    pid_t helper_child_pid = 0;
+    int helper_fd = helper_request_pty(setup, &helper_child_pid);
     if (helper_fd >= 0) {
         s->master_fd = helper_fd;
-        /* Helper forked the child — we don't know the PID directly.
-         * Read it from the PTY (the shell's PID is the session leader). */
-        s->child_pid = 0;  /* Will be populated from pid file if needed */
+        s->child_pid = helper_child_pid;
     } else {
         /* Fallback: direct openpty + fork + exec */
         static int warned_once = 0;

@@ -424,6 +424,7 @@ static int cmd_create(const char *command)
     int master_fd, slave_fd = -1;
     char slave_name[256] = "";
     int used_helper = 0;
+    pid_t helper_child_pid = 0;
 
     {
         /* Build the full command with PROMPT_COMMAND wrapper for helper */
@@ -436,7 +437,7 @@ static int cmd_create(const char *command)
                  "exec %s",
                  completion_log, command);
 
-        int hfd = helper_request_pty(helper_cmd);
+        int hfd = helper_request_pty(helper_cmd, &helper_child_pid);
         if (hfd >= 0) {
             master_fd = hfd;
             used_helper = 1;
@@ -531,9 +532,8 @@ static int cmd_create(const char *command)
         pid_t child_pid = 0;
 
         if (used_helper) {
-            /* Helper already forked the child — we have the master fd.
-             * Write PID 0 (unknown — helper's child is not our descendant). */
-            child_pid = 0;
+            /* Helper forked the child and sent us its PID. */
+            child_pid = helper_child_pid;
         } else {
             /* Direct mode: fork the child from within the daemon */
             child_pid = fork();
