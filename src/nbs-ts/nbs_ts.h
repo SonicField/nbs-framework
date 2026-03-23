@@ -2,7 +2,7 @@
  * nbs_ts.h — NBS Terminal Service public API.
  *
  * Manages command sessions in pseudo-terminals with reliable output
- * capture and explicit completion signalling. Replaces tmux for local
+ * capture and explicit completion signalling. Replaces previous session managers for local
  * AI agent process management.
  *
  * Each session is:

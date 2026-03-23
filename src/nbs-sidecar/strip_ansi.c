@@ -87,7 +87,7 @@ size_t strip_ansi(char *text) {
         } else if ((unsigned char)*rd >= 0x80 && (unsigned char)*rd <= 0x9F) {
             /* Strip standalone C1 control codes (0x80-0x9F).
              * These are the 8-bit equivalents of ESC-initiated sequences.
-             * Applications inside tmux may emit these.
+             * Applications inside terminal sessions may emit these.
              * This branch is only reached for bytes 0x80-0x9F that are NOT
              * preceded by a valid UTF-8 leading byte (those are handled
              * above). Standalone bytes in this range are C1 controls per

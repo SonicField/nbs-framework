@@ -10,7 +10,7 @@
  *   - Periodic triggers (pythia, shepard, fixup, librarian)
  *   - Periodic Enter flush (every FLUSH_INTERVAL ticks)
  *
- * The transport vtable abstracts tmux vs pty-session interactions.
+ * The transport vtable abstracts session transport interactions.
  */
 
 #include "sidecar.h"
@@ -68,7 +68,7 @@ static void build_inbox_path(const sidecar_config_t *cfg,
  * build_notify_prompt — Construct a plain text notification prompt.
  *
  * Replaces the /nbs-notify slash command injection. Slash commands
- * fail in tmux contexts because the Enter key doesn't reliably
+ * fail in terminal contexts because the Enter key doesn't reliably
  * register. Plain text prompts work every time.
  *
  * The content matches the nbs-notify.md skill file but is embedded
@@ -240,7 +240,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     char msg[SIDECAR_MAX_CONTENT];
     snprintf(msg, sizeof(msg),
-             "tmux pane for %s:\n%s", cfg->handle, escaped);
+             "session output for %s:\n%s", cfg->handle, escaped);
     int rc = chat_client_send(chat_path, "sidecar", msg);
     if (rc != 0) {
         fprintf(stderr, "handle_query: chat_client_send failed for '%s'\n",
@@ -859,7 +859,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     /* Inject notification as plain text prompt.
                      * Previous approach used /nbs-notify slash command,
                      * which failed because Enter doesn't reliably register
-                     * in tmux contexts. Plain text works every time. */
+                     * in terminal contexts. Plain text works every time. */
                     char notify_prompt[SIDECAR_MAX_PROMPT];
                     build_notify_prompt(cfg, state.notify_message,
                                         notify_prompt, sizeof(notify_prompt));

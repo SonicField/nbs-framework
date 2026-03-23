@@ -4,7 +4,7 @@
  * Implements all 8 nbs-workers commands: spawn, status, search, results,
  * dismiss, continue, session, list, plus help.
  *
- * All external commands (tmux, nbs-bus, nbs-claude) are invoked via
+ * All external commands (nbs-ts, nbs-bus, nbs-claude) are invoked via
  * fork+exec — never system().
  *
  * Invariants:
@@ -166,10 +166,11 @@ static int exec_fire_and_forget(const char *const argv[])
 
 /*
  * exec_spawn_detached — Fork+exec a command, wait for the client process
- * to exit (used for tmux new-session -d which detaches and exits).
+ * to exit. Used for commands that detach (e.g. session creation).
  *
  * Returns 0 on success, -1 on failure.
  */
+__attribute__((unused))
 static int exec_spawn_detached(const char *const argv[])
 {
     ASSERT_MSG(argv != NULL && argv[0] != NULL,
@@ -452,58 +453,41 @@ static int dir_exists(const char *path)
 }
 
 /* ------------------------------------------------------------------ */
-/* tmux helpers                                                        */
+/* nbs-ts session helpers                                              */
 /* ------------------------------------------------------------------ */
 
-static int tmux_has_session(const char *session_name)
+static int nbs_ts_has_session(const char *handle)
 {
-    ASSERT_MSG(session_name != NULL, "tmux_has_session: session_name is NULL");
-    const char *argv[] = {"tmux", "has-session", "-t", session_name, NULL};
+    ASSERT_MSG(handle != NULL, "nbs_ts_has_session: handle is NULL");
+    const char *argv[] = {"nbs-ts", "status", handle, NULL};
     char buf[64];
     int rc = exec_capture(argv, buf, sizeof(buf));
-    return (rc == 0);
+    if (rc != 0) return 0;
+    return (strstr(buf, "alive") != NULL);
 }
 
-static int tmux_kill_session(const char *session_name)
+static int nbs_ts_kill_session(const char *handle)
 {
-    ASSERT_MSG(session_name != NULL, "tmux_kill_session: session_name is NULL");
-    const char *argv[] = {"tmux", "kill-session", "-t", session_name, NULL};
+    ASSERT_MSG(handle != NULL, "nbs_ts_kill_session: handle is NULL");
+    const char *argv[] = {"nbs-ts", "kill", handle, NULL};
     return exec_fire_and_forget(argv);
 }
 
 __attribute__((unused))
-static int tmux_send_keys(const char *session_name, const char *keys,
-                          int send_enter)
+static int nbs_ts_send(const char *handle, const char *text)
 {
-    ASSERT_MSG(session_name != NULL, "tmux_send_keys: session_name is NULL");
-    ASSERT_MSG(keys != NULL, "tmux_send_keys: keys is NULL");
-    if (send_enter) {
-        const char *argv[] = {"tmux", "send-keys", "-t", session_name,
-                              keys, "Enter", NULL};
-        return exec_fire_and_forget(argv);
-    }
-    const char *argv[] = {"tmux", "send-keys", "-t", session_name,
-                          keys, NULL};
+    ASSERT_MSG(handle != NULL, "nbs_ts_send: handle is NULL");
+    ASSERT_MSG(text != NULL, "nbs_ts_send: text is NULL");
+    const char *argv[] = {"nbs-ts", "send", handle, text, NULL};
     return exec_fire_and_forget(argv);
 }
 
-/* Available for cmd_session prompt detection if needed. */
 __attribute__((unused))
-static int tmux_capture_pane(const char *session_name, char *buf, size_t bufsz)
+static int nbs_ts_read_new(const char *handle, char *buf, size_t bufsz)
 {
-    ASSERT_MSG(session_name != NULL, "tmux_capture_pane: session_name is NULL");
-    const char *argv[] = {"tmux", "capture-pane", "-t", session_name,
-                          "-p", NULL};
+    ASSERT_MSG(handle != NULL, "nbs_ts_read_new: handle is NULL");
+    const char *argv[] = {"nbs-ts", "read-new", handle, "--strip", NULL};
     return exec_capture(argv, buf, bufsz);
-}
-
-static int tmux_pipe_pane(const char *session_name, const char *cmd)
-{
-    ASSERT_MSG(session_name != NULL, "tmux_pipe_pane: session_name is NULL");
-    ASSERT_MSG(cmd != NULL, "tmux_pipe_pane: cmd is NULL");
-    const char *argv[] = {"tmux", "pipe-pane", "-t", session_name,
-                          "-o", cmd, NULL};
-    return exec_fire_and_forget(argv);
 }
 
 /* ------------------------------------------------------------------ */
@@ -992,7 +976,7 @@ void cmd_help(void)
         "      Returns the generated worker name (e.g., parser-a3f1).\n"
         "\n"
         "  nbs-workers status <name>\n"
-        "      Report worker status from tmux session and task file State field.\n"
+        "      Report worker status from nbs-ts session and task file State field.\n"
         "\n"
         "  nbs-workers search <name> <regex> [--context=N]\n"
         "      Search persistent log for regex matches with context (default 50).\n"
@@ -1001,10 +985,10 @@ void cmd_help(void)
         "      Extract Log section from completed task file.\n"
         "\n"
         "  nbs-workers dismiss <name>\n"
-        "      Kill tmux session, mark task file as dismissed.\n"
+        "      Kill nbs-ts session, mark task file as dismissed.\n"
         "\n"
         "  nbs-workers continue <handle> [--model=MODEL]\n"
-        "      Resume an agent from its session metadata. Kills old tmux\n"
+        "      Resume an agent from its session metadata. Kills old nbs-ts\n"
         "      session, respawns with the saved session ID via claude --resume.\n"
         "      Optionally override the model.\n"
         "\n"
@@ -1061,7 +1045,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
     }
 
     /* Reject paths with single quotes — they break the shell command
-     * used in tmux new-session (cd '...' && exec bash -l) */
+     * used in nbs-ts create (cd '...' && exec bash -l) */
     if (strchr(abs_project_dir, '\'') != NULL) {
         fprintf(stderr,
                 "Error: project directory path contains single quote: %s\n",
@@ -1212,22 +1196,22 @@ int cmd_spawn(const char *slug, const char *project_dir,
         }
     }
 
-    /* Create tmux session with nbs-claude as the session command.
+    /* Create nbs-ts session with nbs-claude as the session command.
      *
      * This matches how agents are launched in the restart script:
-     *   tmux new-session -d -s <name> -c <dir> "NBS_HANDLE=... nbs-claude ..."
+     *   nbs-ts create <name> -c <dir> "NBS_HANDLE=... nbs-claude ..."
      *
-     * nbs-claude IS the session — no intermediate bash, no send-keys.
+     * nbs-claude IS the session — no intermediate bash, direct session.
      * The -p flag passes the task prompt directly to claude, which
-     * processes it immediately on startup without needing send-keys.
+     * processes it immediately on startup without extra injection.
      *
-     * Previous approach (bash -l + send-keys) caused connection errors
+     * Previous approach (previous approach) caused connection errors
      * because claude running as a child of interactive bash behaves
      * differently from claude running as the session command. */
     char session_cmd[PATH_BUF_SIZE * 2];
     {
         /* Resolve nbs-claude path: try .nbs/bin/ then bin/ under project root.
-         * Must be absolute — tmux runs session commands via /bin/sh -c which
+         * Must be absolute — nbs-ts runs session commands via /bin/sh -c which
          * does not have PATH set up. PATH lookup causes connection errors
          * because a different nbs-claude (or environment) is found. */
         char nbs_claude_path[PATH_BUF_SIZE];
@@ -1258,39 +1242,40 @@ int cmd_spawn(const char *slug, const char *project_dir,
                    "cmd_spawn: session_cmd too long");
     }
 
+    /* Create nbs-ts session. Prepend cd to project dir since nbs-ts
+     * create does not have a --cwd flag. */
     {
-        const char *argv[] = {"tmux", "new-session", "-d", "-s", session,
-                              "-c", abs_project_dir,
-                              session_cmd, NULL};
-        if (exec_spawn_detached(argv) != 0) {
-            fprintf(stderr, "Error: Failed to create tmux session\n");
+        char full_cmd[PATH_BUF_SIZE * 3];
+        int n = snprintf(full_cmd, sizeof(full_cmd),
+                         "cd %s && %s", abs_project_dir, session_cmd);
+        ASSERT_MSG(n > 0 && (size_t)n < sizeof(full_cmd),
+                   "cmd_spawn: full_cmd too long");
+        const char *argv[] = {"nbs-ts", "create", full_cmd, NULL};
+        char handle_buf[64];
+        int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));
+        if (rc != 0) {
+            fprintf(stderr, "Error: Failed to create nbs-ts session\n");
             unlink(task_file);
             return EXIT_ERROR;
         }
+        /* nbs-ts create prints the handle — store it as the session name */
+        char *nl = strchr(handle_buf, '\n');
+        if (nl) *nl = '\0';
+        snprintf(session, sizeof(session), "%s", handle_buf);
     }
 
-    /* Start persistent logging via pipe-pane */
-    {
-        char pipe_cmd[PATH_BUF_SIZE + 16];
-        int n = snprintf(pipe_cmd, sizeof(pipe_cmd), "cat >> '%s'", log_file);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(pipe_cmd),
-                   "cmd_spawn: pipe_cmd too long");
-        if (tmux_pipe_pane(session, pipe_cmd) != 0) {
-            fprintf(stderr,
-                    "Warning: pipe-pane failed — log capture may not work\n");
-        }
-    }
+    /* Output capture is automatic with nbs-ts — output capture is automatic */
 
-    /* Postcondition: tmux session is alive */
-    if (!tmux_has_session(session)) {
+    /* Postcondition: nbs-ts session is alive */
+    if (!nbs_ts_has_session(session)) {
         fprintf(stderr,
-                "Error: tmux session died immediately after creation\n");
+                "Error: nbs-ts session died immediately after creation\n");
         unlink(task_file);
         return EXIT_ERROR;
     }
 
     /* Allow claude to initialise before polling for completion.
-     * The -p flag delivers the prompt at startup, so no send-keys
+     * The -p flag delivers the prompt at startup, so direct session
      * timing issues. This delay just prevents premature polling. */
     sleep(10);
 
@@ -1299,7 +1284,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * Interactive Claude never exits on its own. The worker will post
      * to chat and/or publish a bus event when done, then sit at its
      * prompt forever. We poll for the completion signal (bus event
-     * with the worker name as source), then kill the tmux session
+     * with the worker name as source), then kill the nbs-ts session
      * and clean the pidfile.
      *
      * Poll every 10s for up to 10 minutes. If no completion signal,
@@ -1315,18 +1300,18 @@ int cmd_spawn(const char *slug, const char *project_dir,
         for (int poll = 0; poll < 60; poll++) {
             /* Poll interval: 10s between checks.
              * Rationale: balances responsiveness (detect completion
-             * within 10s) against overhead (tmux has-session + nbs-chat
+             * within 10s) against overhead (nbs-ts status + nbs-chat
              * search fork/exec per iteration). 60 iterations × 10s =
              * 10 minute timeout. */
             sleep(10);
 
-            /* Check if tmux session still exists — if not, worker
+            /* Check if nbs-ts session still exists — if not, worker
              * exited on its own (crashed or clean exit). Either way,
              * nothing to kill.
-             * Uses tmux_has_session (fork+exec) — never system(). */
-            if (!tmux_has_session(session)) {
+             * Uses nbs_ts_has_session (fork+exec) — never system(). */
+            if (!nbs_ts_has_session(session)) {
                 /* Session died — write death summary to log.
-                 * The pipe-pane log has ANSI noise; append a clean
+                 * The session log has ANSI noise; append a clean
                  * human-readable summary for easy diagnosis. */
                 FILE *death_log = fopen(log_file, "a");
                 if (death_log) {
@@ -1425,8 +1410,8 @@ int cmd_spawn(const char *slug, const char *project_dir,
         }
 
         /* Kill the session and clean up.
-         * Uses tmux_kill_session (fork+exec) — never system(). */
-        (void)tmux_kill_session(session);
+         * Uses nbs_ts_kill_session (fork+exec) — never system(). */
+        (void)nbs_ts_kill_session(session);
 
         /* Clean pidfile */
         {
@@ -1435,7 +1420,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
                                "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
             ASSERT_MSG(pfn > 0 && (size_t)pfn < sizeof(pidfile),
                        "cmd_spawn: pidfile path too long");
-            /* Brief delay after tmux kill-session to let the shell
+            /* Brief delay after nbs-ts kill to let the shell
              * process terminate and release the pidfile. 2s is
              * conservative; the pidfile is unlinked regardless. */
             sleep(2);
@@ -1475,7 +1460,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
     fprintf(stderr, "  project:   %s\n", abs_project_dir);
     fprintf(stderr, "  task file:  %s\n", task_file);
     fprintf(stderr, "  log file:   %s\n", log_file);
-    fprintf(stderr, "  tmux:       %s\n", session);
+    fprintf(stderr, "  session:       %s\n", session);
     fprintf(stderr, "  note: run nbs-workers commands from %s\n",
             abs_project_dir);
 
@@ -1510,7 +1495,7 @@ int cmd_status(const char *name, const char *cwd)
     char session[NAME_MAX_LEN];
     build_session_name(session, sizeof(session), name);
 
-    int alive = tmux_has_session(session);
+    int alive = nbs_ts_has_session(session);
 
     char state[64];
     get_state_field(task_file, state, sizeof(state));
@@ -1534,14 +1519,14 @@ int cmd_status(const char *name, const char *cwd)
     }
 
     printf("Worker: %s\n", name);
-    printf("  tmux session: %s\n", alive ? "yes" : "no");
+    printf("  nbs-ts session: %s\n", alive ? "yes" : "no");
     printf("  task state:   %s\n", state);
     printf("  status:       %s\n", reported_status);
 
     if (strcmp(reported_status, "died (session exited unexpectedly)") == 0) {
         char payload[PATH_BUF_SIZE];
         snprintf(payload, sizeof(payload),
-                 "Worker %s: tmux dead but state still running", name);
+                 "Worker %s: session dead but state still running", name);
         bus_publish(cwd, name, "worker-died", "high", payload);
 
         /* Show death summary from log tail if available */
@@ -1839,16 +1824,16 @@ int cmd_dismiss(const char *name, const char *cwd)
     char session[NAME_MAX_LEN];
     build_session_name(session, sizeof(session), name);
 
-    /* Kill tmux session if alive */
-    if (tmux_has_session(session)) {
-        if (tmux_kill_session(session) == 0) {
-            printf("Killed tmux session: %s\n", session);
+    /* Kill nbs-ts session if alive */
+    if (nbs_ts_has_session(session)) {
+        if (nbs_ts_kill_session(session) == 0) {
+            printf("Killed nbs-ts session: %s\n", session);
         } else {
             fprintf(stderr,
-                    "Warning: tmux kill-session failed for %s\n", session);
+                    "Warning: nbs-ts kill failed for %s\n", session);
         }
     } else {
-        printf("tmux session already dead\n");
+        printf("nbs-ts session already dead\n");
     }
 
     /* Update State field to dismissed */
@@ -1916,7 +1901,7 @@ int cmd_continue(const char *handle, const char *model_override,
         return EXIT_BAD_ARGS;
     }
 
-    /* Security: handle is interpolated into a shell command (tmux new-session).
+    /* Security: handle is interpolated into a shell command (nbs-ts create).
      * Validate against a safe character set to prevent injection. */
     if (!validate_safe_handle(handle)) {
         fprintf(stderr,
@@ -1963,7 +1948,7 @@ int cmd_continue(const char *handle, const char *model_override,
     char session_id[128] = {0};
     char model[128] = {0};
     char project_root[PATH_BUF_SIZE] = {0};
-    char tmux_session_name[NAME_MAX_LEN] = {0};
+    char ts_session_handle[NAME_MAX_LEN] = {0};
 
     json_extract_string(json, "session_id", session_id, sizeof(session_id));
     json_extract_string(json, "model", model, sizeof(model));
@@ -1973,10 +1958,10 @@ int cmd_continue(const char *handle, const char *model_override,
         fprintf(stderr, "Error: missing 'project_root' in session metadata\n");
         return EXIT_ERROR;
     }
-    if (json_extract_string(json, "tmux_session", tmux_session_name,
-                            sizeof(tmux_session_name)) != 0) {
+    if (json_extract_string(json, "nbs_ts_handle", ts_session_handle,
+                            sizeof(ts_session_handle)) != 0) {
         free(json);
-        fprintf(stderr, "Error: missing 'tmux_session' in session metadata\n");
+        fprintf(stderr, "Error: missing 'nbs_ts_handle' in session metadata\n");
         return EXIT_ERROR;
     }
     long old_pid = json_extract_number(json, "pid");
@@ -2001,15 +1986,15 @@ int cmd_continue(const char *handle, const char *model_override,
     printf("  Session ID: %s\n", session_id);
     printf("  Model: %s\n", model[0] ? model : "<default>");
     printf("  Project: %s\n", project_root);
-    printf("  Tmux session: %s\n", tmux_session_name);
+    printf("  Session: %s\n", ts_session_handle);
 
-    /* Kill old tmux session if still running */
-    if (tmux_has_session(tmux_session_name)) {
-        printf("  Killing old tmux session...\n");
-        tmux_kill_session(tmux_session_name);
-        /* Brief delay to let tmux fully clean up the old session
+    /* Kill old nbs-ts session if still running */
+    if (nbs_ts_has_session(ts_session_handle)) {
+        printf("  Killing old nbs-ts session...\n");
+        nbs_ts_kill_session(ts_session_handle);
+        /* Brief delay to let nbs-ts fully clean up the old session
          * before spawning a new one with the same name. Without
-         * this, the new-session may fail with "duplicate session". */
+         * this, the create may fail with "duplicate session". */
         sleep(1);
     }
 
@@ -2031,7 +2016,7 @@ int cmd_continue(const char *handle, const char *model_override,
 
     /* Build nbs-claude command.
      * Use PATH lookup (not relative bin/nbs-claude) so this works in
-     * both the framework source tree and installed projects. The tmux
+     * both the framework source tree and installed projects. The nbs-ts
      * session runs bash which inherits PATH from the user environment. */
     char nbs_claude_cmd[PATH_BUF_SIZE * 2];
     if (model[0] != '\0') {
@@ -2048,28 +2033,29 @@ int cmd_continue(const char *handle, const char *model_override,
 
     printf("  Spawning: %s\n", nbs_claude_cmd);
 
-    /* Respawn in tmux */
+    /* Respawn via nbs-ts */
     {
-        const char *argv[] = {"tmux", "new-session", "-d",
-                              "-s", tmux_session_name,
-                              "-c", project_root,
-                              nbs_claude_cmd, NULL};
-        if (exec_spawn_detached(argv) != 0) {
-            fprintf(stderr, "  Warning: tmux session did not start\n");
+        char full_cmd[PATH_BUF_SIZE * 3];
+        snprintf(full_cmd, sizeof(full_cmd),
+                 "cd %s && %s", project_root, nbs_claude_cmd);
+        const char *argv[] = {"nbs-ts", "create", full_cmd, NULL};
+        char handle_buf[64];
+        int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));
+        if (rc != 0) {
+            fprintf(stderr, "  Warning: nbs-ts session did not start\n");
             return EXIT_ERROR;
         }
+        char *nl = strchr(handle_buf, '\n');
+        if (nl) *nl = '\0';
+        snprintf(ts_session_handle, sizeof(ts_session_handle), "%s", handle_buf);
     }
 
-    /* Wait and verify.
-     * Rationale: tmux new-session with nbs-claude takes ~2-3s to
-     * fully initialise. tmux_has_session below is the verification
-     * step — the sleep is the precondition for meaningful verification. */
     sleep(3);
-    if (tmux_has_session(tmux_session_name)) {
-        printf("  Continued successfully in tmux session: %s\n",
-               tmux_session_name);
+    if (nbs_ts_has_session(ts_session_handle)) {
+        printf("  Continued successfully in nbs-ts session: %s\n",
+               ts_session_handle);
     } else {
-        fprintf(stderr, "  Warning: tmux session did not start\n");
+        fprintf(stderr, "  Warning: nbs-ts session did not start\n");
         return EXIT_ERROR;
     }
 
@@ -2136,15 +2122,15 @@ int cmd_session(const char *handle, const char *cwd)
     char model_buf[128] = {0};
     char started[64] = {0};
     char project_root[PATH_BUF_SIZE] = {0};
-    char tmux_session_name[NAME_MAX_LEN] = {0};
+    char ts_session_handle[NAME_MAX_LEN] = {0};
 
     int has_session_id = json_extract_string(json, "session_id", session_id, sizeof(session_id)) == 0;
     json_extract_string(json, "model", model_buf, sizeof(model_buf));
     int has_started = json_extract_string(json, "started", started, sizeof(started)) == 0;
     int has_project_root = json_extract_string(json, "project_root", project_root,
                         sizeof(project_root)) == 0;
-    int has_tmux = json_extract_string(json, "tmux_session", tmux_session_name,
-                        sizeof(tmux_session_name)) == 0;
+    int has_session = json_extract_string(json, "nbs_ts_handle", ts_session_handle,
+                        sizeof(ts_session_handle)) == 0;
     long pid_val = json_extract_number(json, "pid");
 
     free(json);
@@ -2152,7 +2138,7 @@ int cmd_session(const char *handle, const char *cwd)
     printf("  Session ID: %s\n", has_session_id ? session_id : "<missing>");
     printf("  Model: %s\n", model_buf[0] ? model_buf : "<default>");
     printf("  Started: %s\n", has_started ? started : "<missing>");
-    printf("  Tmux: %s\n", has_tmux ? tmux_session_name : "<missing>");
+    printf("  Session: %s\n", has_session ? ts_session_handle : "<missing>");
     printf("  Project: %s\n", has_project_root ? project_root : "<missing>");
     if (pid_val > 0)
         printf("  PID: %ld\n", pid_val);
@@ -2170,11 +2156,11 @@ int cmd_session(const char *handle, const char *cwd)
         printf("  Status: UNKNOWN (no PID recorded)\n");
     }
 
-    /* Check tmux session */
-    if (tmux_has_session(tmux_session_name)) {
-        printf("  Tmux session: ALIVE\n");
+    /* Check nbs-ts session */
+    if (nbs_ts_has_session(ts_session_handle)) {
+        printf("  Session: ALIVE\n");
     } else {
-        printf("  Tmux session: NOT FOUND\n");
+        printf("  Session: NOT FOUND\n");
     }
 
     return EXIT_SUCCESS_CODE;
@@ -2229,10 +2215,10 @@ int cmd_list(const char *cwd)
         char state[64];
         get_state_field(task_path, state, sizeof(state));
 
-        /* Check tmux session */
+        /* Check nbs-ts session */
         char session[NAME_MAX_LEN];
         build_session_name(session, sizeof(session), filename);
-        const char *alive = tmux_has_session(session) ? "alive" : "dead";
+        const char *alive = nbs_ts_has_session(session) ? "alive" : "dead";
 
         /* Check log file */
         char log_info[64];
@@ -2248,7 +2234,7 @@ int cmd_list(const char *cwd)
             snprintf(log_info, sizeof(log_info), "no-log");
         }
 
-        printf("  %-25s %-12s tmux:%-5s %s\n",
+        printf("  %-25s %-12s session:%-5s %s\n",
                filename, state, alive, log_info);
         has_workers = 1;
     }

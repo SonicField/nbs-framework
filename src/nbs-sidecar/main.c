@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
     }
 
     /* Ignore SIGHUP — the sidecar is backgrounded by nbs-claude and must
-     * survive parent shell exit and tmux session restarts. Without this,
+     * survive parent shell exit and session restarts. Without this,
      * any session kill or shell exit sends SIGHUP and silently kills the
      * sidecar with no log output (the signal arrives before any stderr
      * write can complete). */
