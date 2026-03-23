@@ -32,7 +32,8 @@ typedef struct transport transport_t;
 /* Transport mode */
 typedef enum {
     TRANSPORT_TMUX,
-    TRANSPORT_PTY
+    TRANSPORT_PTY,
+    TRANSPORT_TS
 } transport_mode_t;
 
 /*

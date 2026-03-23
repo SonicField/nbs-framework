@@ -55,14 +55,16 @@ static void print_usage(void) {
         "Usage:\n"
         "  nbs-sidecar --handle=NAME --root=PATH --transport=tmux --pane-id=ID\n"
         "  nbs-sidecar --handle=NAME --root=PATH --transport=pty "
-        "--pty-path=PATH --session=NAME\n\n"
+        "--pty-path=PATH --session=NAME\n"
+        "  nbs-sidecar --handle=NAME --root=PATH --transport=ts "
+        "--session=HANDLE\n\n"
         "Options:\n"
-        "  --handle=NAME          Agent handle (required)\n"
-        "  --root=PATH            Project root containing .nbs/ (required)\n"
-        "  --transport=tmux|pty   Transport mode (required)\n"
-        "  --pane-id=ID           tmux pane ID (tmux mode)\n"
-        "  --pty-path=PATH        Path to pty-session binary (pty mode)\n"
-        "  --session=NAME         pty-session session name (pty mode)\n"
+        "  --handle=NAME              Agent handle (required)\n"
+        "  --root=PATH                Project root containing .nbs/ (required)\n"
+        "  --transport=tmux|pty|ts    Transport mode (required)\n"
+        "  --pane-id=ID               tmux pane ID (tmux mode)\n"
+        "  --pty-path=PATH            Path to pty-session binary (pty mode)\n"
+        "  --session=NAME             Session name (pty) or nbs-ts handle (ts)\n"
         "  --initial-prompt=TEXT  Custom initial prompt\n"
         "  --log=PATH             Log file for sidecar stderr\n\n"
         "Environment (defaults, overridden by args):\n"
@@ -179,6 +181,8 @@ int main(int argc, char **argv) {
                 cfg.transport_mode = TRANSPORT_TMUX;
             } else if (strcmp(t, "pty") == 0) {
                 cfg.transport_mode = TRANSPORT_PTY;
+            } else if (strcmp(argv[i] + 12, "ts") == 0) {
+                cfg.transport_mode = TRANSPORT_TS;
             } else {
                 fprintf(stderr, "Error: unknown transport '%s' "
                         "(expected 'tmux' or 'pty')\n", t);
@@ -283,6 +287,12 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Error: --pane-id is required for tmux transport\n");
             return SIDECAR_EXIT_BAD_ARGS;
         }
+    } else if (cfg.transport_mode == TRANSPORT_TS) {
+        if (cfg.session_name[0] == '\0') {
+            fprintf(stderr, "Error: --session is required for ts transport "
+                    "(nbs-ts session handle)\n");
+            return SIDECAR_EXIT_BAD_ARGS;
+        }
     } else {
         if (cfg.pty_session_path[0] == '\0') {
             fprintf(stderr, "Error: --pty-path is required for pty transport\n");
@@ -364,6 +374,8 @@ int main(int argc, char **argv) {
 
     if (cfg.transport_mode == TRANSPORT_TMUX) {
         tp_rc = transport_tmux_init(&tp, cfg.pane_id);
+    } else if (cfg.transport_mode == TRANSPORT_TS) {
+        tp_rc = transport_ts_init(&tp, cfg.session_name);
     } else {
         tp_rc = transport_pty_init(&tp, cfg.pty_session_path,
                                     cfg.session_name);

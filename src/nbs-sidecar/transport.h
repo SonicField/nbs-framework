@@ -89,6 +89,19 @@ int transport_pty_init(transport_t *tp, const char *pty_path,
                        const char *session_name);
 
 /*
+ * transport_ts_init — Initialise an nbs-ts transport.
+ *
+ * Preconditions:
+ *   - tp != NULL
+ *   - handle != NULL, non-empty (8-char hex session handle)
+ *
+ * Postconditions:
+ *   - On success (returns 0): all function pointers set, ctx allocated
+ *   - On error (returns -1): tp is zeroed
+ */
+int transport_ts_init(transport_t *tp, const char *handle);
+
+/*
  * transport_free — Release transport resources.
  *
  * Frees ctx and zeroes function pointers. Safe to call on zeroed transport.
