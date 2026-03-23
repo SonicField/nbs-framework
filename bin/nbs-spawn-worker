@@ -101,41 +101,88 @@ if [[ -f "$PIDFILE" ]]; then
     rm -f "$PIDFILE"
 fi
 
-# Launch worker session — exact same pattern as team agents
-tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT" \
-    "NBS_HANDLE=${ROLE} NBS_INITIAL_PROMPT='Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete.' ${NBS_CLAUDE} --dangerously-skip-permissions"
+# Resolve nbs-ts
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+if [[ ! -x "$NBS_TS" ]]; then
+    NBS_TS="${HOME}/.nbs/bin/nbs-ts"
+fi
 
-# Start log capture
-tmux pipe-pane -t "$SESSION" -o "cat >> '${LOG_FILE}'" 2>/dev/null || true
+# Choose transport: nbs-ts if available, otherwise tmux
+if [[ -x "$NBS_TS" ]]; then
+    # --- nbs-ts mode ---
+    WORKER_CMD="cd $(printf '%q' "$PROJECT_ROOT") && NBS_HANDLE=${ROLE} NBS_TRANSPORT=ts NBS_INITIAL_PROMPT='Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete.' ${NBS_CLAUDE} --dangerously-skip-permissions"
 
-echo "$SESSION"
+    TS_HANDLE=$("$NBS_TS" create "$WORKER_CMD") || {
+        echo "Error: Failed to create nbs-ts worker session" >&2
+        exit 1
+    }
+    # Output is automatic — no pipe-pane needed
 
-# Monitor for completion, then kill the session.
-# Ephemeral workers post to chat and/or update their task file state,
-# then sit at the prompt forever. Poll every 10s for up to 10 minutes.
-(
-    sleep 15  # let worker initialise
-    for i in $(seq 1 60); do
-        sleep 10
+    echo "$TS_HANDLE"
 
-        # Session died on its own?
-        if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-            break
-        fi
+    # Monitor for completion, then kill the session.
+    (
+        sleep 15  # let worker initialise
+        for i in $(seq 1 60); do
+            sleep 10
 
-        # Check task file for completion
-        if [[ -f "$TASK_FILE" ]]; then
-            STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}')
-            case "$STATE" in
-                completed|done|failed|escalated)
-                    sleep 5
-                    tmux kill-session -t "$SESSION" 2>/dev/null || true
-                    break
-                    ;;
-            esac
-        fi
-    done
+            # Session died on its own?
+            if ! "$NBS_TS" status "$TS_HANDLE" 2>/dev/null | grep -q "alive"; then
+                break
+            fi
 
-    # Timeout — kill anyway
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
-) &
+            # Check task file for completion
+            if [[ -f "$TASK_FILE" ]]; then
+                STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}')
+                case "$STATE" in
+                    completed|done|failed|escalated)
+                        sleep 5
+                        "$NBS_TS" kill "$TS_HANDLE" 2>/dev/null || true
+                        break
+                        ;;
+                esac
+            fi
+        done
+
+        # Timeout — kill anyway
+        "$NBS_TS" kill "$TS_HANDLE" 2>/dev/null || true
+    ) &
+else
+    # --- tmux fallback ---
+    tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT" \
+        "NBS_HANDLE=${ROLE} NBS_INITIAL_PROMPT='Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete.' ${NBS_CLAUDE} --dangerously-skip-permissions"
+
+    # Start log capture
+    tmux pipe-pane -t "$SESSION" -o "cat >> '${LOG_FILE}'" 2>/dev/null || true
+
+    echo "$SESSION"
+
+    # Monitor for completion, then kill the session.
+    (
+        sleep 15  # let worker initialise
+        for i in $(seq 1 60); do
+            sleep 10
+
+            # Session died on its own?
+            if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+                break
+            fi
+
+            # Check task file for completion
+            if [[ -f "$TASK_FILE" ]]; then
+                STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}')
+                case "$STATE" in
+                    completed|done|failed|escalated)
+                        sleep 5
+                        tmux kill-session -t "$SESSION" 2>/dev/null || true
+                        break
+                        ;;
+                esac
+            fi
+        done
+
+        # Timeout — kill anyway
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+    ) &
+fi

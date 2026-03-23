@@ -47,6 +47,7 @@ INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
 NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
 NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
+NBS_TRANSPORT="${NBS_TRANSPORT:-}"
 
 # V1.4: Do not suppress cd stderr — let actual error (permission denied, not found) be visible
 NBS_ROOT="$(cd "$NBS_ROOT" && pwd)" || {
@@ -80,10 +81,16 @@ case ":${PATH}:" in
     *) export PATH="${SCRIPT_DIR}:${PATH}" ;;
 esac
 
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+if [[ ! -x "$NBS_TS" ]]; then
+    NBS_TS="${HOME}/.nbs/bin/nbs-ts"
+fi
+
 if [[ ! -x "$PTY_SESSION" ]]; then
     PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 fi
-if [[ ! -x "$PTY_SESSION" ]]; then
+# pty-session is only required if not using nbs-ts transport
+if [[ "$NBS_TRANSPORT" != "ts" && ! -x "$PTY_SESSION" ]]; then
     echo "Error: pty-session not found" >&2
     exit 1
 fi
@@ -122,9 +129,11 @@ cleanup() {
         wait "$SIDECAR_PID" 2>/dev/null || true
     fi
 
-    # Kill pty-session if we created one
+    # Kill session if we created one
     if [[ "$MODE" == "pty" && -n "$SESSION_NAME" ]]; then
         "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
+    elif [[ "$MODE" == "ts" && -n "$SESSION_NAME" ]]; then
+        "$NBS_TS" kill "$SESSION_NAME" 2>/dev/null || true
     fi
 
     exit "$EXIT_CODE"
@@ -269,12 +278,15 @@ if [[ ! "$TMUX_SESSION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     exit 4
 fi
 
+NBS_TS_HANDLE=""  # populated in ts mode
 cat > "$SESSION_META" << EOF
 {
   "session_id": "$SESSION_UUID",
   "handle": "$SIDECAR_HANDLE",
   "model": "$NBS_MODEL",
   "tmux_session": "$TMUX_SESSION_NAME",
+  "nbs_ts_handle": "${NBS_TS_HANDLE}",
+  "transport": "${NBS_TRANSPORT:-auto}",
   "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "project_root": "$NBS_ROOT",
   "pid": $$,
@@ -308,7 +320,80 @@ if [[ -n "$INITIAL_PROMPT" ]]; then
     SIDECAR_ARGS+=("--initial-prompt=$INITIAL_PROMPT")
 fi
 
-if [[ -n "${TMUX:-}" ]]; then
+if [[ "$NBS_TRANSPORT" == "ts" ]]; then
+    # --- nbs-ts mode ---
+    MODE="ts"
+
+    if [[ ! -x "$NBS_TS" ]]; then
+        echo "Error: nbs-ts not found (NBS_TRANSPORT=ts)" >&2
+        exit 1
+    fi
+
+    # Build command string for nbs-ts
+    CLAUDE_CMD=""
+    for arg in "${CLAUDE_ARGS[@]}"; do
+        if [[ -z "$CLAUDE_CMD" ]]; then
+            CLAUDE_CMD="$(printf '%q' "$arg")"
+        else
+            CLAUDE_CMD="$CLAUDE_CMD $(printf '%q' "$arg")"
+        fi
+    done
+
+    # Create nbs-ts session running claude
+    SESSION_NAME=$("$NBS_TS" create "$CLAUDE_CMD") || {
+        echo "Error: Failed to create nbs-ts session" >&2
+        exit 1
+    }
+    NBS_TS_HANDLE="$SESSION_NAME"
+
+    echo "  Mode: nbs-ts ($SESSION_NAME)"
+    echo ""
+
+    # Update session metadata with nbs-ts handle
+    cat > "$SESSION_META" << EOF
+{
+  "session_id": "$SESSION_UUID",
+  "handle": "$SIDECAR_HANDLE",
+  "model": "$NBS_MODEL",
+  "tmux_session": "",
+  "nbs_ts_handle": "${NBS_TS_HANDLE}",
+  "transport": "ts",
+  "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "project_root": "$NBS_ROOT",
+  "pid": $$,
+  "initial_prompt_set": $(if [[ -n "$INITIAL_PROMPT" ]]; then echo "true"; else echo "false"; fi)
+}
+EOF
+
+    SIDECAR_ARGS+=("--transport=ts" "--session=$SESSION_NAME")
+
+    # Start C sidecar with auto-restart (ts mode)
+    if [[ "$POLL_DISABLE" != "1" ]]; then
+        (
+            while true; do
+                "${SIDECAR_ARGS[@]}"
+                rc=$?
+                # Check if nbs-ts session still alive
+                if ! "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; then
+                    break  # Session gone — clean exit
+                fi
+                echo "warning: sidecar exited (rc=$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
+                sleep 5
+            done
+        ) &
+        SIDECAR_PID=$!
+        disown "$SIDECAR_PID"
+        sleep 0.2
+        if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+            echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
+            exit 1
+        fi
+    fi
+
+    # Attach — read-only view of the session output
+    "$NBS_TS" attach "$SESSION_NAME"
+
+elif [[ -n "${TMUX:-}" ]]; then
     # --- Already inside tmux ---
     MODE="tmux"
 

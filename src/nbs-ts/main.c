@@ -889,12 +889,14 @@ static int cmd_kill(const char *handle)
     if (nbs_ts_session_dir(handle, dir, sizeof(dir)) < 0)
         return NBS_TS_EXIT_ERROR;
 
-    /* Kill child process */
+    /* Kill child process group. The child calls setsid() so it is a
+     * process group leader. Negative PID sends signal to the entire
+     * group, preventing orphan subprocesses. */
     pid_t pid = session_pid(handle);
     if (pid > 0) {
-        kill(pid, SIGTERM);
+        kill(-pid, SIGTERM);
         usleep(100000);
-        if (kill(pid, 0) == 0) kill(pid, SIGKILL);
+        if (kill(pid, 0) == 0) kill(-pid, SIGKILL);
         waitpid(pid, NULL, WNOHANG);
     }
 
