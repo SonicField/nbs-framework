@@ -1386,6 +1386,23 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Check nbs-ts-helper — warn if not running */
+    {
+        const char *home = getenv("HOME");
+        if (home) {
+            char helper_sock[256];
+            snprintf(helper_sock, sizeof(helper_sock),
+                     "%s/.nbs-ts/helper.sock", home);
+            struct stat hst;
+            if (stat(helper_sock, &hst) != 0) {
+                printf("%s" "Warning: nbs-ts-helper is not running.\n"
+                       "  SSH, proxy access, and git push will not work.\n"
+                       "  Start it in another terminal: nbs-ts-helper"
+                       "%s\n\n", BOLD, RESET);
+            }
+        }
+    }
+
     /* Put terminal in raw-ish mode (disable echo and canonical mode,
      * but keep signal generation for Ctrl-C) */
     struct termios orig_termios, raw;
