@@ -2,7 +2,7 @@
 # nbs-spawn-worker — Spawn an ephemeral worker agent
 #
 # Launches a worker using the exact same pattern as team agents:
-#   tmux new-session -d -s <name> -c <dir> "<nbs-claude command>"
+#   nbs-ts create "<nbs-claude command>"
 #
 # The worker reads its task from a task file, executes it, and
 # posts results to chat.

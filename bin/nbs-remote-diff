@@ -1,7 +1,7 @@
 #!/bin/bash
-# nbs-remote-diff: Pull git diff from a remote pty-session
+# nbs-remote-diff: Pull git diff from a remote nbs-ts session
 #
-# Fetches 'git diff' output from a remote machine via pty-session and
+# Fetches 'git diff' output from a remote machine via nbs-ts and
 # prints it locally. Optionally posts the diff to a chat channel.
 #
 # Usage:
@@ -15,7 +15,7 @@
 #   --chat=FILE        Post the diff to this chat file
 #   --handle=NAME      Chat handle (required with --chat)
 #   --cwd=DIR          Working directory on the remote machine
-#   --last=N           Lines of pty-session scrollback to capture (default: 200)
+#   --last=N           Lines of nbs-ts scrollback to capture (default: 200)
 #
 # Examples:
 #   # Show unstaged changes

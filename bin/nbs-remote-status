@@ -1,8 +1,8 @@
 #!/bin/bash
-# nbs-remote-status: Quick state check of a remote pty-session
+# nbs-remote-status: Quick state check of a remote nbs-ts session
 #
 # Runs git status, git diff --stat, and optionally checks for running
-# builds on a remote pty-session. One command instead of three.
+# builds on a remote nbs-ts session. One command instead of three.
 #
 # Usage:
 #   nbs-remote-status <session> [options]

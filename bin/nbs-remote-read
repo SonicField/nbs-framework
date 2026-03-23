@@ -11,8 +11,8 @@
 #   nbs-remote-read <server> <remote-path> --lines=M-N  Lines M through N
 #   nbs-remote-read <server> <remote-path> --grep=PAT   Lines matching pattern
 #
-# <server> is an SSH hostname or user@hostname — NOT a pty-session name.
-# A pty-session is created internally for scp. You never manage it.
+# <server> is an SSH hostname or user@hostname — NOT an nbs-ts handle.
+# An nbs-ts session is created internally for scp. You never manage it.
 #
 # Exit codes:
 #   0 - Success
@@ -91,7 +91,7 @@ case "${1:-}" in
 esac
 
 if [[ $# -lt 2 ]]; then
-    die 4 "requires <server> <remote-path>. <server> is an SSH hostname, not a pty-session name."
+    die 4 "requires <server> <remote-path>. <server> is an SSH hostname, not an nbs-ts handle."
 fi
 
 HOST="$1"

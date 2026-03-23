@@ -13,8 +13,8 @@
 # nbs-sidecar. This script only handles orchestration.
 #
 # Works in two modes:
-#   - Inside tmux: runs claude in the current pane, sidecar monitors it
-#   - Outside tmux: creates a pty-session, attaches to it
+#   - Uses nbs-ts for session management
+#   - 
 #
 # Usage:
 #   nbs-claude [--root=PATH] [--model=MODEL] [--continue=SESSION_ID] [claude-args...]
@@ -74,7 +74,7 @@ NBS_SIDECAR="${SCRIPT_DIR}/nbs-sidecar"
 
 # Ensure SCRIPT_DIR is on PATH so child processes (sidecar, claude, nbs-chat)
 # can find sibling binaries (nbs-bus, nbs-chat, nbs-workers) via exec*p().
-# tmux sessions don't source .bashrc, so PATH from install.sh is often missing.
+# nbs-ts sessions may not source .bashrc, so PATH from install.sh is often missing.
 case ":${PATH}:" in
     *":${SCRIPT_DIR}:"*) ;;  # already present
     *) export PATH="${SCRIPT_DIR}:${PATH}" ;;
@@ -237,7 +237,7 @@ echo "$$" > "$PIDFILE"
 
 # --- Session ID ---
 # The builder already added --resume or --session-id to CLAUDE_ARGS.
-# We still need SESSION_UUID for metadata and tmux session naming.
+# We still need SESSION_UUID for metadata.
 SESSION_UUID=""
 if [[ -n "$NBS_CONTINUE_SESSION" ]]; then
     SESSION_UUID="$NBS_CONTINUE_SESSION"
@@ -276,7 +276,7 @@ cat > "$SESSION_META" << EOF
   "session_id": "$SESSION_UUID",
   "handle": "$SIDECAR_HANDLE",
   "model": "$NBS_MODEL",
-  "tmux_session": "$TMUX_SESSION_NAME",
+  
   "nbs_ts_handle": "${NBS_TS_HANDLE}",
   "transport": "${NBS_TRANSPORT:-auto}",
   "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -347,7 +347,6 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
   "session_id": "$SESSION_UUID",
   "handle": "$SIDECAR_HANDLE",
   "model": "$NBS_MODEL",
-  "tmux_session": "",
   "nbs_ts_handle": "${NBS_TS_HANDLE}",
   "transport": "ts",
   "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

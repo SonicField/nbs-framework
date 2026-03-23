@@ -1,7 +1,7 @@
 #!/bin/bash
 # nbs-remote-run: Run a command on a remote machine, return output
 #
-# Ephemeral: creates a pty-session, SSHs, runs the command, captures
+# Ephemeral: creates an nbs-ts session, SSHs, runs the command, captures
 # output, cleans up. No session management needed.
 #
 # Usage:

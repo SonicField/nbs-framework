@@ -9,7 +9,7 @@
 # Default mode: reads each running sidecar's command line from /proc,
 # strips --initial-prompt, kills the old process, launches a new one.
 #
-# Respawn mode: scans all nbs-*-* tmux sessions, finds which ones are
+# Respawn mode: scans all nbs-ts sessions, finds which ones are
 # missing a sidecar process, and spawns fresh sidecars for them. Also
 # restarts any existing sidecars. Works across all teams (live, module, etc).
 
@@ -121,7 +121,7 @@ restart_running() {
 NBS_TS="${SCRIPT_DIR}/nbs-ts"
 
 respawn_missing() {
-    # Try nbs-ts sessions first, fall back to tmux
+    # Try nbs-ts sessions first, nbs-ts only
     if [[ -x "$NBS_TS" ]]; then
         local TS_SESSIONS
         TS_SESSIONS=$("$NBS_TS" list 2>/dev/null | grep "alive" || true)
@@ -164,52 +164,7 @@ respawn_missing() {
         fi
     fi
 
-    # Fallback: tmux sessions
-    local SESSIONS
-    SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^nbs-' || true)
-    [[ -n "$SESSIONS" ]] || { echo "No nbs agent sessions found."; return; }
-
-    while IFS= read -r ses; do
-        local rest="${ses#nbs-}"
-        local handle="" tag=""
-        for h in supervisor generalist scribe gatekeeper testkeeper theologian; do
-            if [[ "$rest" == "${h}-"* ]]; then
-                handle="$h"
-                tag="${rest#${h}-}"
-                break
-            fi
-        done
-        [[ -n "$handle" ]] || continue
-        is_infrastructure "$handle" && continue
-
-        local pane
-        pane=$(tmux display-message -t "$ses" -p '#{pane_id}' 2>/dev/null) || continue
-
-        if pgrep -f "nbs-sidecar.*--pane-id=${pane}" >/dev/null 2>&1; then
-            continue
-        fi
-
-        local session_cwd
-        session_cwd=$(tmux display-message -t "$ses" -p '#{pane_current_path}' 2>/dev/null) || continue
-        local root="$session_cwd"
-        while [[ "$root" != "/" ]]; do
-            [[ -d "${root}/.nbs" ]] && break
-            root=$(dirname "$root")
-        done
-        [[ -d "${root}/.nbs" ]] || { echo "SKIP: $ses — no .nbs/ found above $session_cwd"; continue; }
-
-        echo -n "Spawning sidecar for $handle ($ses, pane=$pane)... "
-        "$SIDECAR" \
-            --handle="$handle" \
-            --root="$root" \
-            --transport=tmux \
-            --pane-id="$pane" \
-            --log="${root}/.nbs/sidecar-${handle}.log" &
-        disown $! 2>/dev/null || true
-        echo "PID $!"
-        SPAWNED=$((SPAWNED + 1))
-        sleep 1
-    done <<< "$SESSIONS"
+    echo "No nbs-ts agent sessions found."
 }
 
 # --- Main ---

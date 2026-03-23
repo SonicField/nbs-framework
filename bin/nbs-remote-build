@@ -1,8 +1,8 @@
 #!/bin/bash
-# nbs-remote-build: Run a build command on a remote pty-session while staying
+# nbs-remote-build: Run a build command on a remote nbs-ts session while staying
 # chat-aware. Polls for build completion and checks chat between polls.
 #
-# Solves the "build-time chat blindness" problem: agents using pty-session
+# Solves the "build-time chat blindness" problem: agents using nbs-ts
 # to build on remote machines block on 'sleep 120' and can't read chat
 # messages until the build finishes.
 #
@@ -52,7 +52,7 @@ NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
     exit 1
 }
 
-# Suppress pty-session tool header (we ARE the higher-level tool)
+# Suppress tool header (we ARE the higher-level tool)
 
 # Detect session type: nbs-ts handles are 8 hex chars
 
