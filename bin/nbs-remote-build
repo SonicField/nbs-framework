@@ -45,21 +45,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NBS_TS="${SCRIPT_DIR}/nbs-ts"
 [[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
-[[ -x "$NBS_TS" ]] || [[ -x "$PTY_SESSION" ]] || {
-    echo "ASSERTION FAILED: Neither nbs-ts nor pty-session found" >&2
+[[ -x "$NBS_TS" ]] || {
+    echo "ASSERTION FAILED: nbs-ts not found" >&2
     exit 1
 }
 
 # Suppress pty-session tool header (we ARE the higher-level tool)
-export NBS_PTY_QUIET=1
 
 # Detect session type: nbs-ts handles are 8 hex chars
-is_nbs_ts_session() {
-    [[ -x "$NBS_TS" ]] && [[ "$1" =~ ^[0-9a-f]{8}$ ]]
-}
 
 # Defaults
 SESSION=""
@@ -156,31 +151,16 @@ if (( _regex_rc == 2 )); then
 fi
 
 # Session dispatch helpers
-_session_read_last() {
-    local n="${1:-5}"
-    if is_nbs_ts_session "$SESSION"; then
-        "$NBS_TS" read "$SESSION" --last="$n" 2>/dev/null
-    else
-        "$PTY_SESSION" read "$SESSION" --last="$n" 2>/dev/null
-    fi
-}
 
-_session_send() {
-    if is_nbs_ts_session "$SESSION"; then
-        "$NBS_TS" send "$SESSION" "$1"
-    else
-        "$PTY_SESSION" send "$SESSION" "$1"
-    fi
-}
 
 # Verify session exists
-if ! _session_read_last 1 >/dev/null 2>&1; then
+if ! "$NBS_TS" read "$SESSION" --last=1 2>/dev/null >/dev/null 2>&1; then
     echo "Error: session '$SESSION' not found" >&2
     exit 2
 fi
 
 # Send the build command
-if ! _session_send "$BUILD_CMD"; then
+if ! "$NBS_TS" send "$SESSION" "$BUILD_CMD"; then
     echo "Error: Failed to send build command to session '$SESSION'" >&2
     exit 1
 fi
@@ -204,7 +184,7 @@ while (( elapsed < TIMEOUT )); do
 
     # Check if build is done (prompt visible in last few lines)
     read_rc=0
-    last_lines=$(_session_read_last 5) || read_rc=$?
+    last_lines=$("$NBS_TS" read "$SESSION" --last=5 2>/dev/null) || read_rc=$?
     if (( read_rc != 0 )); then
         consecutive_read_failures=$((consecutive_read_failures + 1))
         if (( consecutive_read_failures >= 3 )); then
@@ -216,9 +196,9 @@ while (( elapsed < TIMEOUT )); do
     fi
     if echo "$last_lines" | grep -qE "$PROMPT_PATTERN"; then
         sentinel="NBS_SENTINEL_${RANDOM}_${RANDOM}"
-        _session_send "echo $sentinel" 2>/dev/null || true
+        "$NBS_TS" send "$SESSION" "echo $sentinel" 2>/dev/null || true
         sleep 1
-        sentinel_output=$(_session_read_last 5) || true
+        sentinel_output=$("$NBS_TS" read "$SESSION" --last=5 2>/dev/null) || true
         if ! echo "$sentinel_output" | grep -qF "$sentinel"; then
             continue
         fi
@@ -228,7 +208,7 @@ while (( elapsed < TIMEOUT )); do
             echo "Build completed in ${elapsed}s" >&2
         fi
 
-        build_output=$(_session_read_last 50) || {
+        build_output=$("$NBS_TS" read "$SESSION" --last=50 2>/dev/null) || {
             echo "Warning: build completed but could not read output from session '$SESSION'" >&2
         }
         if [[ -n "${build_output:-}" ]]; then
@@ -265,7 +245,7 @@ if [[ "$QUIET" != true ]]; then
 fi
 
 # Print whatever output we have
-if ! _session_read_last 50; then
+if ! "$NBS_TS" read "$SESSION" --last=50 2>/dev/null; then
     echo "Warning: could not read final output from session '$SESSION'" >&2
 fi
 exit 3

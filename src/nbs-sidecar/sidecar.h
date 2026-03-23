@@ -1,7 +1,7 @@
 /*
  * sidecar.h — nbs-sidecar configuration and state definitions
  *
- * The sidecar monitors a Claude Code session (via tmux or pty-session)
+ * The sidecar monitors a Claude Code session (via nbs-ts)
  * and injects notifications, handles dialogues, and triggers periodic
  * coordination actions.
  */
@@ -31,8 +31,6 @@ typedef struct transport transport_t;
 
 /* Transport mode */
 typedef enum {
-    TRANSPORT_TMUX,
-    TRANSPORT_PTY,
     TRANSPORT_TS
 } transport_mode_t;
 

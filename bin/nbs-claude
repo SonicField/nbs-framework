@@ -70,7 +70,6 @@ fi
 
 # Resolve tools
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PTY_SESSION="${SCRIPT_DIR}/pty-session"
 NBS_SIDECAR="${SCRIPT_DIR}/nbs-sidecar"
 
 # Ensure SCRIPT_DIR is on PATH so child processes (sidecar, claude, nbs-chat)
@@ -85,13 +84,8 @@ NBS_TS="${SCRIPT_DIR}/nbs-ts"
 if [[ ! -x "$NBS_TS" ]]; then
     NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 fi
-
-if [[ ! -x "$PTY_SESSION" ]]; then
-    PTY_SESSION="${HOME}/.nbs/bin/pty-session"
-fi
-# pty-session is only required if not using nbs-ts transport
-if [[ "$NBS_TRANSPORT" != "ts" && ! -x "$PTY_SESSION" ]]; then
-    echo "Error: pty-session not found" >&2
+if [[ ! -x "$NBS_TS" ]]; then
+    echo "Error: nbs-ts not found" >&2
     exit 1
 fi
 if [[ ! -x "$NBS_SIDECAR" ]]; then
@@ -129,10 +123,8 @@ cleanup() {
         wait "$SIDECAR_PID" 2>/dev/null || true
     fi
 
-    # Kill session if we created one
-    if [[ "$MODE" == "pty" && -n "$SESSION_NAME" ]]; then
-        "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
-    elif [[ "$MODE" == "ts" && -n "$SESSION_NAME" ]]; then
+    # Kill nbs-ts session if we created one
+    if [[ "$MODE" == "ts" && -n "$SESSION_NAME" ]]; then
         "$NBS_TS" kill "$SESSION_NAME" 2>/dev/null || true
     fi
 
@@ -392,119 +384,6 @@ EOF
 
     # Attach — read-only view of the session output
     "$NBS_TS" attach "$SESSION_NAME"
-
-elif [[ -n "${TMUX:-}" ]]; then
-    # --- Already inside tmux ---
-    MODE="tmux"
-
-    # V1.5: Check tmux display-message exit code
-    PANE_ID=$(tmux display-message -p '#{pane_id}') || {
-        echo "Error: Failed to get tmux pane ID" >&2
-        exit 1
-    }
-    if [[ -z "$PANE_ID" ]]; then
-        echo "Error: tmux pane ID is empty" >&2
-        exit 1
-    fi
-    echo "  Mode: tmux (pane $PANE_ID)"
-    echo ""
-
-    SIDECAR_ARGS+=("--transport=tmux" "--pane-id=$PANE_ID")
-
-    # Start C sidecar monitoring this pane, with auto-restart.
-    # If the sidecar exits but the pane still exists, restart it.
-    # This prevents silent sidecar death from cutting agents off
-    # from notifications, which causes teams to self-terminate.
-    if [[ "$POLL_DISABLE" != "1" ]]; then
-        (
-            while true; do
-                "${SIDECAR_ARGS[@]}"
-                rc=$?
-                # Check if the pane still exists
-                if ! tmux list-panes -t "$PANE_ID" >/dev/null 2>&1; then
-                    break  # Pane gone — clean exit
-                fi
-                # Pane alive but sidecar died — log and restart
-                echo "warning: sidecar exited (rc=$rc) but pane $PANE_ID alive, restarting in 5s" >&2
-                sleep 5
-            done
-        ) &
-        SIDECAR_PID=$!
-        disown "$SIDECAR_PID"
-        # V1.7: Postcondition — verify sidecar did not exit immediately
-        sleep 0.2
-        if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
-            echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
-            exit 1
-        fi
-    fi
-
-    # Run claude in foreground
-    "${CLAUDE_ARGS[@]}"
-
-    # Claude exited — cleanup runs via trap
-else
-    # --- Not inside tmux ---
-    MODE="pty"
-    SESSION_NAME="nbs-claude-$$"
-
-    echo "  Mode: pty-session ($SESSION_NAME)"
-    echo ""
-
-    # V1.2: Build command string for pty-session from CLAUDE_ARGS
-    # (which already has the correct args with --model=, --continue=, --force
-    # extracted and --root=, --remote-host=, --remote-ssh-opts= removed)
-    CLAUDE_CMD=""
-    for arg in "${CLAUDE_ARGS[@]}"; do
-        if [[ -z "$CLAUDE_CMD" ]]; then
-            CLAUDE_CMD="$(printf '%q' "$arg")"
-        else
-            CLAUDE_CMD="$CLAUDE_CMD $(printf '%q' "$arg")"
-        fi
-    done
-
-    # Create pty-session running claude
-    if ! "$PTY_SESSION" create "$SESSION_NAME" "$CLAUDE_CMD"; then
-        echo "Error: Failed to create pty-session" >&2
-        exit 1
-    fi
-
-    SIDECAR_ARGS+=("--transport=pty" "--pty-path=$PTY_SESSION" "--session=$SESSION_NAME")
-
-    # Start C sidecar with auto-restart (pty mode)
-    if [[ "$POLL_DISABLE" != "1" ]]; then
-        (
-            while true; do
-                "${SIDECAR_ARGS[@]}"
-                rc=$?
-                # Check if pty-session still exists
-                if ! "$PTY_SESSION" read "$SESSION_NAME" >/dev/null 2>&1; then
-                    break  # Session gone — clean exit
-                fi
-                echo "warning: sidecar exited (rc=$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
-                sleep 5
-            done
-        ) &
-        SIDECAR_PID=$!
-        disown "$SIDECAR_PID"
-        # V1.7: Postcondition — verify sidecar did not exit immediately
-        sleep 0.2
-        if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
-            echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
-            exit 1
-        fi
-    fi
-
-    # Attach to the session
-    # V1.7: HARDENING — document coupling with pty-session naming convention.
-    # COUPLING: pty-session names its tmux session "pty_${SESSION_NAME}".
-    # If pty-session changes this convention, this will break.
-    TMUX_SESSION="pty_${SESSION_NAME}"
-    if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-        echo "Error: tmux session '$TMUX_SESSION' does not exist after pty-session create" >&2
-        exit 1
-    fi
-    tmux attach-session -t "$TMUX_SESSION"
 fi
 
 # When user exits, cleanup runs via trap

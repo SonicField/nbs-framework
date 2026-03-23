@@ -1,8 +1,8 @@
 #!/bin/bash
 # nbs-remote-session: Create a persistent shell on a remote machine
 #
-# Wraps pty-session + SSH into a single command. Returns a session name
-# that can be used with pty-session send/read/wait/kill.
+# Wraps nbs-ts + SSH into a single command. Returns a session handle
+# that can be used with nbs-ts send/read-new/wait-pattern/kill.
 #
 # Usage:
 #   nbs-remote-session <host>                  # Auto-named session
@@ -14,12 +14,12 @@
 #   nbs-remote-session build-server.example.com --name=build --cwd=/home/user/project
 #
 #   # Then use normally:
-#   pty-session send build 'make -j8'
-#   pty-session read build --last=20
-#   pty-session kill build
+#   nbs-ts send <handle> 'make -j8'
+#   nbs-ts read-new <handle> --strip
+#   nbs-ts kill <handle>
 #
 # Exit codes:
-#   0 - Session created, name printed to stdout
+#   0 - Session created, handle printed to stdout
 #   1 - SSH connection failed
 #   2 - Invalid arguments
 
@@ -28,12 +28,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NBS_TS="${SCRIPT_DIR}/nbs-ts"
 [[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
-export NBS_PTY_QUIET=1
 
 die() { echo "Error: $*" >&2; exit "${1:-1}"; }
 
-[[ -x "$NBS_TS" ]] || [[ -x "$PTY_SESSION" ]] || die 1 "Neither nbs-ts nor pty-session found"
+[[ -x "$NBS_TS" ]] || die 1 "nbs-ts not found"
 
 # Parse arguments
 HOST=""
@@ -61,50 +59,21 @@ done
 
 [[ -n "$HOST" ]] || die 2 "Usage: nbs-remote-session <host> [--name=NAME] [--cwd=PATH]"
 
-# Generate session name from hostname if not provided
-if [[ -z "$NAME" ]]; then
-    # build-server.example.com → build-server
-    NAME="$(echo "$HOST" | cut -d. -f1)-$$"
+HANDLE=$("$NBS_TS" create "ssh -o StrictHostKeyChecking=no $HOST") || {
+    die 1 "Failed to create nbs-ts session"
+}
+
+MARKER="__NBS_SESSION_READY_${RANDOM}__"
+sleep 5
+"$NBS_TS" send "$HANDLE" "echo $MARKER"
+if ! "$NBS_TS" wait-pattern "$HANDLE" "$MARKER" --timeout=15 >/dev/null 2>&1; then
+    "$NBS_TS" kill "$HANDLE" >/dev/null 2>&1 || true
+    die 1 "SSH to $HOST timed out (15s)"
 fi
 
-if [[ -x "$NBS_TS" ]]; then
-    # --- nbs-ts mode ---
-    HANDLE=$("$NBS_TS" create "ssh -o StrictHostKeyChecking=no $HOST") || {
-        die 1 "Failed to create nbs-ts session"
-    }
-
-    MARKER="__NBS_SESSION_READY_${RANDOM}__"
-    sleep 5
-    "$NBS_TS" send "$HANDLE" "echo $MARKER"
-    if ! "$NBS_TS" wait-pattern "$HANDLE" "$MARKER" --timeout=15 >/dev/null 2>&1; then
-        "$NBS_TS" kill "$HANDLE" >/dev/null 2>&1 || true
-        die 1 "SSH to $HOST timed out (15s)"
-    fi
-
-    if [[ -n "$CWD" ]]; then
-        "$NBS_TS" send "$HANDLE" "cd $CWD"
-        sleep 1
-    fi
-
-    echo "$HANDLE"
-else
-    # --- pty-session fallback ---
-    if ! "$PTY_SESSION" create "$NAME" "ssh -o StrictHostKeyChecking=no $HOST" >/dev/null 2>&1; then
-        die 1 "Failed to create pty-session '$NAME'"
-    fi
-
-    MARKER="__NBS_SESSION_READY_${RANDOM}__"
-    sleep 5
-    "$PTY_SESSION" send "$NAME" "echo $MARKER" >/dev/null 2>&1
-    if ! "$PTY_SESSION" wait "$NAME" "$MARKER" --timeout=15 >/dev/null 2>&1; then
-        "$PTY_SESSION" kill "$NAME" >/dev/null 2>&1 || true
-        die 1 "SSH to $HOST timed out (15s)"
-    fi
-
-    if [[ -n "$CWD" ]]; then
-        "$PTY_SESSION" send "$NAME" "cd $CWD" >/dev/null 2>&1
-        sleep 1
-    fi
-
-    echo "$NAME"
+if [[ -n "$CWD" ]]; then
+    "$NBS_TS" send "$HANDLE" "cd $CWD"
+    sleep 1
 fi
+
+echo "$HANDLE"

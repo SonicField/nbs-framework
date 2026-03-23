@@ -319,3 +319,18 @@ int transport_ts_init(transport_t *tp, const char *handle)
                "transport_ts_init: postcondition violated - NULL vtable entry");
     return 0;
 }
+
+void transport_free(transport_t *tp)
+{
+    if (!tp) return;
+
+    int all_null = (tp->capture == NULL && tp->send_text == NULL &&
+                    tp->send_key == NULL && tp->is_alive == NULL);
+    int all_set = (tp->capture != NULL && tp->send_text != NULL &&
+                   tp->send_key != NULL && tp->is_alive != NULL);
+    ASSERT_MSG(all_null || all_set,
+               "transport_free: partially initialised transport — corrupt state");
+
+    free(tp->ctx);
+    memset(tp, 0, sizeof(*tp));
+}
