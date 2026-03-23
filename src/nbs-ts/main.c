@@ -323,16 +323,28 @@ static void daemon_relay(int master_fd, const char *output_log_path,
 
     /* Capture the child's exit code */
     if (child_pid > 0 && exit_code_path) {
+        int code = 0;
+        int got_code = 0;
         int status;
         pid_t r = waitpid(child_pid, &status, 0);
         if (r == child_pid) {
-            int code;
+            /* Direct child — we can reap it */
             if (WIFEXITED(status))
                 code = WEXITSTATUS(status);
             else if (WIFSIGNALED(status))
                 code = 128 + WTERMSIG(status);
             else
                 code = 1;
+            got_code = 1;
+        } else {
+            /* Not our child (helper-spawned). The child already exited
+             * (PTY EOF triggered relay exit). We can't get the exit code
+             * via waitpid. Write 0 — the completion log from
+             * PROMPT_COMMAND has the per-command exit codes. */
+            code = 0;
+            got_code = 1;
+        }
+        if (got_code) {
             char code_str[32];
             snprintf(code_str, sizeof(code_str), "%d", code);
             int efd = open(exit_code_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
