@@ -178,6 +178,50 @@ tmux_session_name() {
     echo "nbs-${role}-${CHAT_NAME}"
 }
 
+# nbs-ts detection
+SCRIPT_DIR_INIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS_BIN="${SCRIPT_DIR_INIT}/nbs-ts"
+[[ -x "$NBS_TS_BIN" ]] || NBS_TS_BIN="${HOME}/.nbs/bin/nbs-ts"
+USE_NBS_TS_INIT=0
+[[ -x "$NBS_TS_BIN" ]] && USE_NBS_TS_INIT=1
+
+# Spawn an agent via nbs-ts. Returns the handle in SPAWN_HANDLE.
+# Usage: spawn_agent_ts <role> <nbs-claude-path> <project-root> [prompt]
+SPAWN_HANDLE=""
+spawn_agent_ts() {
+    local role="$1"
+    local nbs_claude="$2"
+    local project_root="$3"
+    local prompt="${4:-}"
+
+    SPAWN_HANDLE=$("$NBS_TS_BIN" create "cd $(printf '%q' "$project_root") && NBS_HANDLE=${role} NBS_TRANSPORT=ts ${nbs_claude} --dangerously-skip-permissions") || {
+        error "Failed to create nbs-ts session for $role"
+        return 1
+    }
+
+    # Wait for CLI readiness (handle injection)
+    local wait_count=0
+    local max_wait=60
+    while [ "$wait_count" -lt "$max_wait" ]; do
+        if "$NBS_TS_BIN" read "$SPAWN_HANDLE" 2>/dev/null | grep -q 'handle is'; then
+            break
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    if [ "$wait_count" -ge "$max_wait" ]; then
+        warn "  $role CLI did not become ready within ${max_wait}s"
+    fi
+
+    # Send role prompt if provided
+    if [[ -n "$prompt" ]]; then
+        "$NBS_TS_BIN" send "$SPAWN_HANDLE" "$prompt" 2>/dev/null || true
+        sleep 1
+        "$NBS_TS_BIN" send "$SPAWN_HANDLE" "" 2>/dev/null || true
+    fi
+}
+
 # --- Argument parsing ---
 
 for arg in "$@"; do
@@ -744,44 +788,28 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
     fi
 
     if [[ "$SPAWN_SCRIBE" == "true" ]]; then
+        SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor $CHAT_FILE and log decisions to $SCRIBE_LOG. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
+
         info "  Spawning Scribe..."
         if [[ "$DRY_RUN" == "true" ]]; then
-            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $SCRIBE_SESSION"
-            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=scribe nbs-claude"
-            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ Send Scribe role prompt"
+            printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Spawn scribe via $(if [[ "$USE_NBS_TS_INIT" == "1" ]]; then echo nbs-ts; else echo tmux; fi)"
+        elif [[ "$USE_NBS_TS_INIT" == "1" ]]; then
+            spawn_agent_ts "scribe" "nbs-claude" "$PROJECT_ROOT" "$SCRIBE_PROMPT"
+            ok "  Scribe spawned: nbs-ts $SPAWN_HANDLE"
+            info "  Attach: nbs-ts attach $SPAWN_HANDLE"
         else
-            # Create tmux session in the project directory
-            # Audit Violation 7 (BUG): Check tmux new-session return value.
             if ! tmux new-session -d -s "$SCRIBE_SESSION" -c "$PROJECT_ROOT"; then
                 error "Failed to create tmux session '$SCRIBE_SESSION'"
                 exit 1
             fi
-
-            # Wait for shell to initialise
             sleep 2
-
-            # Launch nbs-claude inside the session with unique handle
-            # SECURITY RISK (Violation 2): --dangerously-skip-permissions bypasses Claude's
-            # permission system, allowing the AI to execute any tool without user confirmation.
-            # This is required for autonomous operation but means the AI can modify files,
-            # execute commands, and access network resources without human approval.
-            # TODO: Architectural decision needed — consider scoped permissions or audit logging.
-            # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
             if ! tmux send-keys -t "$SCRIBE_SESSION" "NBS_HANDLE=scribe nbs-claude --dangerously-skip-permissions" Enter; then
                 error "Failed to send launch command to tmux session '$SCRIBE_SESSION'"
                 exit 1
             fi
-
-            # Wait for Claude to start
             sleep 3
-
-            # Send the Scribe role prompt
-            SCRIBE_PROMPT="You are the Scribe. Load /nbs-scribe. Your handle is 'scribe'. Monitor $CHAT_FILE and log decisions to $SCRIBE_LOG. Publish decision-logged bus events. Check pythia-interval threshold and publish pythia-checkpoint events when reached. Do not participate in conversation — only observe and record."
-
-            # Wait for sidecar handle injection (proves CLI is fully ready)
             wait_count=0
             max_wait=60
-            # Violation 12 (HARDENING): Use ${var:-0} in arithmetic to guard against unset.
             while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
                 if tmux capture-pane -t "$SCRIBE_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                     break
@@ -789,21 +817,15 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                 sleep 1
                 wait_count=$((${wait_count:-0} + 1))
             done
-
             if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
                 warn "  Scribe CLI did not become ready within ${max_wait}s"
             fi
-
-            # Audit Violation 8 (HARDENING): Check tmux send-keys return value for prompt delivery.
             if ! tmux send-keys -t "$SCRIBE_SESSION" "$SCRIBE_PROMPT" Enter; then
                 error "Failed to send prompt to tmux session '$SCRIBE_SESSION'"
                 exit 1
             fi
-
-            # Extra Enter for reliability
             sleep 1
             tmux send-keys -t "$SCRIBE_SESSION" "" Enter
-
             ok "  Scribe spawned: $SCRIBE_SESSION"
             info "  Attach: tmux attach -t $SCRIBE_SESSION"
         fi
@@ -824,32 +846,28 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
         fi
 
         if [[ "$SPAWN_PYTHIA" == "true" ]]; then
+            PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. Read the decision log at $SCRIBE_LOG. Post your structured assessment to $CHAT_FILE. When your assessment is posted and the bus event published, exit."
+
             info "  Spawning Pythia..."
             if [[ "$DRY_RUN" == "true" ]]; then
-                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $PYTHIA_SESSION"
-                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=pythia nbs-claude"
-                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ Send Pythia role prompt"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Spawn pythia via $(if [[ "$USE_NBS_TS_INIT" == "1" ]]; then echo nbs-ts; else echo tmux; fi)"
+            elif [[ "$USE_NBS_TS_INIT" == "1" ]]; then
+                spawn_agent_ts "pythia" "nbs-claude" "$PROJECT_ROOT" "$PYTHIA_PROMPT"
+                ok "  Pythia spawned: nbs-ts $SPAWN_HANDLE"
+                info "  Attach: nbs-ts attach $SPAWN_HANDLE"
             else
-                # Audit Violation 7 (BUG): Check tmux new-session return value.
                 if ! tmux new-session -d -s "$PYTHIA_SESSION" -c "$PROJECT_ROOT"; then
                     error "Failed to create tmux session '$PYTHIA_SESSION'"
                     exit 1
                 fi
                 sleep 2
-                # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
-                # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
                 if ! tmux send-keys -t "$PYTHIA_SESSION" "NBS_HANDLE=pythia nbs-claude --dangerously-skip-permissions" Enter; then
                     error "Failed to send launch command to tmux session '$PYTHIA_SESSION'"
                     exit 1
                 fi
                 sleep 3
-
-                PYTHIA_PROMPT="You are Pythia — the oracle. Load /nbs-pythia. Your handle is 'pythia'. Read the decision log at $SCRIBE_LOG. Post your structured assessment to $CHAT_FILE. When your assessment is posted and the bus event published, exit."
-
-                # Wait for sidecar handle injection (proves CLI is fully ready)
                 wait_count=0
                 max_wait=60
-                # Violation 12 (HARDENING): Use ${var:-0} in arithmetic.
                 while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
                     if tmux capture-pane -t "$PYTHIA_SESSION" -p 2>/dev/null | grep -q 'handle is'; then
                         break
@@ -857,19 +875,15 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                     sleep 1
                     wait_count=$((${wait_count:-0} + 1))
                 done
-
                 if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
                     warn "  Pythia CLI did not become ready within ${max_wait}s"
                 fi
-
-                # Audit Violation 8 (HARDENING): Check tmux send-keys return value for prompt delivery.
                 if ! tmux send-keys -t "$PYTHIA_SESSION" "$PYTHIA_PROMPT" Enter; then
                     error "Failed to send prompt to tmux session '$PYTHIA_SESSION'"
                     exit 1
                 fi
                 sleep 1
                 tmux send-keys -t "$PYTHIA_SESSION" "" Enter
-
                 ok "  Pythia spawned: $PYTHIA_SESSION"
                 info "  Attach: tmux attach -t $PYTHIA_SESSION"
             fi
@@ -893,25 +907,21 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
         if [[ "$SPAWN_ALL" == "true" ]]; then
             info "  Spawning Claude..."
             if [[ "$DRY_RUN" == "true" ]]; then
-                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "tmux new-session -d -s $CLAUDE_SESSION"
-                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "→ NBS_HANDLE=claude nbs-claude"
+                printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Spawn claude via $(if [[ "$USE_NBS_TS_INIT" == "1" ]]; then echo nbs-ts; else echo tmux; fi)"
+            elif [[ "$USE_NBS_TS_INIT" == "1" ]]; then
+                spawn_agent_ts "claude" "nbs-claude" "$PROJECT_ROOT"
+                ok "  Claude spawned: nbs-ts $SPAWN_HANDLE"
+                info "  Attach: nbs-ts attach $SPAWN_HANDLE"
             else
-                # Audit Violation 7 (BUG): Check tmux new-session return value.
                 if ! tmux new-session -d -s "$CLAUDE_SESSION" -c "$PROJECT_ROOT"; then
                     error "Failed to create tmux session '$CLAUDE_SESSION'"
                     exit 1
                 fi
                 sleep 2
-                # SECURITY RISK (Violation 2): See comment in Scribe spawn above.
-                # Audit Violation 10 (BUG): Add NBS_HANDLE=claude to main Claude spawn.
-                # Audit Violation 8 (HARDENING): Check tmux send-keys return value.
                 if ! tmux send-keys -t "$CLAUDE_SESSION" "NBS_HANDLE=claude nbs-claude --dangerously-skip-permissions" Enter; then
                     error "Failed to send launch command to tmux session '$CLAUDE_SESSION'"
                     exit 1
                 fi
-
-                # Audit Violation 11 (HARDENING): Add readiness wait loop for main Claude,
-                # consistent with Scribe and Pythia spawn patterns.
                 wait_count=0
                 max_wait=60
                 while [ "${wait_count:-0}" -lt "${max_wait:-60}" ]; do
@@ -921,11 +931,9 @@ if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SP
                     sleep 1
                     wait_count=$((${wait_count:-0} + 1))
                 done
-
                 if [ "${wait_count:-0}" -ge "${max_wait:-60}" ]; then
                     warn "  Claude CLI did not become ready within ${max_wait}s"
                 fi
-
                 ok "  Claude spawned: $CLAUDE_SESSION"
                 info "  Attach: tmux attach -t $CLAUDE_SESSION"
             fi
@@ -962,18 +970,23 @@ echo "    Config:     ${PROJECT_ROOT}/.nbs/events/config.yaml"
 
 if [[ "$SPAWN_SCRIBE" == "true" ]] || [[ "$SPAWN_PYTHIA" == "true" ]] || [[ "$SPAWN_ALL" == "true" ]]; then
     echo ""
-    echo "  Tmux sessions:"
-    if [[ "$SPAWN_SCRIBE" == "true" ]]; then
-        echo "    Scribe: $(tmux_session_name scribe)"
+    if [[ "$USE_NBS_TS_INIT" == "1" ]]; then
+        echo "  Sessions (nbs-ts):"
+        echo "    List: nbs-ts list"
+    else
+        echo "  Tmux sessions:"
+        if [[ "$SPAWN_SCRIBE" == "true" ]]; then
+            echo "    Scribe: $(tmux_session_name scribe)"
+        fi
+        if [[ "$SPAWN_PYTHIA" == "true" ]]; then
+            echo "    Pythia: $(tmux_session_name pythia)"
+        fi
+        if [[ "$SPAWN_ALL" == "true" ]]; then
+            echo "    Claude: $(tmux_session_name claude)"
+        fi
+        echo ""
+        echo "  List all NBS sessions: tmux ls | grep nbs-"
     fi
-    if [[ "$SPAWN_PYTHIA" == "true" ]]; then
-        echo "    Pythia: $(tmux_session_name pythia)"
-    fi
-    if [[ "$SPAWN_ALL" == "true" ]]; then
-        echo "    Claude: $(tmux_session_name claude)"
-    fi
-    echo ""
-    echo "  List all NBS sessions: tmux ls | grep nbs-"
 fi
 
 echo ""

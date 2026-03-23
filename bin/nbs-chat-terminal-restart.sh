@@ -44,6 +44,9 @@ else
 fi
 NBS_CHAT="${NBS_BIN}/nbs-chat"
 NBS_DIGEST="${NBS_BIN}/nbs-digest-spawn"
+NBS_TS="${NBS_BIN}/nbs-ts"
+USE_NBS_TS=0
+[[ -x "$NBS_TS" ]] && USE_NBS_TS=1
 
 [[ -x "$NBS_CHAT" ]] || { echo "Error: nbs-chat not found at $NBS_CHAT" >&2; exit 1; }
 
@@ -55,14 +58,25 @@ CHAT_TAG="${CHAT_BASE//./-}"
 echo "[watchdog] Restarting team for ${CHAT_TAG}..."
 
 # 1. Kill all agent sessions and sidecars for this chat
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    tmux kill-session -t "nbs-${h}-${CHAT_TAG}" 2>/dev/null || true
-done
-# Only kill sidecars attached to THIS team's sessions (by pane ID)
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    pane=$(tmux display-message -t "nbs-${h}-${CHAT_TAG}" -p '#{pane_id}' 2>/dev/null) || continue
-    pkill -f "nbs-sidecar.*--pane-id=${pane}" 2>/dev/null || true
-done
+if [[ "$USE_NBS_TS" == "1" ]]; then
+    # Kill nbs-ts sessions by listing and matching handles stored in metadata
+    while IFS=$'\t' read -r handle status cmd; do
+        [[ -n "$handle" ]] || continue
+        "$NBS_TS" kill "$handle" 2>/dev/null || true
+    done < <("$NBS_TS" list 2>/dev/null || true)
+    # Kill sidecars by handle pattern
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        pkill -f "nbs-sidecar.*--handle=${h}" 2>/dev/null || true
+    done
+else
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        tmux kill-session -t "nbs-${h}-${CHAT_TAG}" 2>/dev/null || true
+    done
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        pane=$(tmux display-message -t "nbs-${h}-${CHAT_TAG}" -p '#{pane_id}' 2>/dev/null) || continue
+        pkill -f "nbs-sidecar.*--pane-id=${pane}" 2>/dev/null || true
+    done
+fi
 rm -f .nbs/pids/*.pid 2>/dev/null || true
 
 sleep 2
@@ -111,20 +125,47 @@ for handle in scribe gatekeeper testkeeper supervisor generalist theologian; do
 done
 
 # 4. Spawn agents (scribe first, 5s stagger)
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    tmux new-session -d -s "nbs-${h}-${CHAT_TAG}" -c "$PROJECT_ROOT" \
-        "NBS_HANDLE=${h} ${NBS_BIN}/nbs-claude --dangerously-skip-permissions"
-    sleep 5
-done
+declare -A AGENT_HANDLES
+if [[ "$USE_NBS_TS" == "1" ]]; then
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        AGENT_HANDLES[$h]=$("$NBS_TS" create "cd $(printf '%q' "$PROJECT_ROOT") && NBS_HANDLE=${h} NBS_TRANSPORT=ts ${NBS_BIN}/nbs-claude --dangerously-skip-permissions") || {
+            echo "[watchdog] Error: failed to create nbs-ts session for $h" >&2
+            continue
+        }
+        sleep 5
+    done
+else
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        tmux new-session -d -s "nbs-${h}-${CHAT_TAG}" -c "$PROJECT_ROOT" \
+            "NBS_HANDLE=${h} ${NBS_BIN}/nbs-claude --dangerously-skip-permissions"
+        sleep 5
+    done
+fi
 
 # 5. Wait for init, inject skills
 sleep 15
-tmux send-keys -t "nbs-scribe-${CHAT_TAG}" "/nbs-scribe" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t "nbs-gatekeeper-${CHAT_TAG}" "/nbs-gatekeeper" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t "nbs-testkeeper-${CHAT_TAG}" "/nbs-testkeeper" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t "nbs-theologian-${CHAT_TAG}" "/nbs-theologian" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t "nbs-generalist-${CHAT_TAG}" "/nbs-teams-chat" Enter 2>/dev/null || true; sleep 1
-tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/null || true
+if [[ "$USE_NBS_TS" == "1" ]]; then
+    for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+        [[ -n "${AGENT_HANDLES[$h]:-}" ]] || continue
+        local_handle="${AGENT_HANDLES[$h]}"
+        case "$h" in
+            scribe)     "$NBS_TS" send "$local_handle" "/nbs-scribe" 2>/dev/null || true ;;
+            gatekeeper) "$NBS_TS" send "$local_handle" "/nbs-gatekeeper" 2>/dev/null || true ;;
+            testkeeper) "$NBS_TS" send "$local_handle" "/nbs-testkeeper" 2>/dev/null || true ;;
+            theologian) "$NBS_TS" send "$local_handle" "/nbs-theologian" 2>/dev/null || true ;;
+            generalist) "$NBS_TS" send "$local_handle" "/nbs-teams-chat" 2>/dev/null || true ;;
+            supervisor) "$NBS_TS" send "$local_handle" "/nbs-supervisor" 2>/dev/null || true ;;
+        esac
+        sleep 1
+    done
+else
+    tmux send-keys -t "nbs-scribe-${CHAT_TAG}" "/nbs-scribe" Enter 2>/dev/null || true; sleep 1
+    tmux send-keys -t "nbs-gatekeeper-${CHAT_TAG}" "/nbs-gatekeeper" Enter 2>/dev/null || true; sleep 1
+    tmux send-keys -t "nbs-testkeeper-${CHAT_TAG}" "/nbs-testkeeper" Enter 2>/dev/null || true; sleep 1
+    tmux send-keys -t "nbs-theologian-${CHAT_TAG}" "/nbs-theologian" Enter 2>/dev/null || true; sleep 1
+    tmux send-keys -t "nbs-generalist-${CHAT_TAG}" "/nbs-teams-chat" Enter 2>/dev/null || true; sleep 1
+    tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/null || true
+fi
 
 # 6. Post continuation directive
 # The digest's CONTINUATION section determines what the team should do.

@@ -118,19 +118,59 @@ restart_running() {
 
 # --- Respawn missing sidecars ---
 
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+
 respawn_missing() {
-    # Find all nbs agent tmux sessions
+    # Try nbs-ts sessions first, fall back to tmux
+    if [[ -x "$NBS_TS" ]]; then
+        local TS_SESSIONS
+        TS_SESSIONS=$("$NBS_TS" list 2>/dev/null | grep "alive" || true)
+        if [[ -n "$TS_SESSIONS" ]]; then
+            while IFS=$'\t' read -r ts_handle ts_status ts_cmd; do
+                [[ -n "$ts_handle" ]] || continue
+                # Check if a sidecar is already watching this session
+                if pgrep -f "nbs-sidecar.*--session=${ts_handle}" >/dev/null 2>&1; then
+                    continue
+                fi
+                # Try to find project root from session metadata
+                local meta_path="${HOME}/.nbs-ts/sessions/${ts_handle}/meta"
+                [[ -f "$meta_path" ]] || continue
+                # Look for NBS_ROOT in the command or use cwd
+                local root=""
+                for d in $(pgrep -a -f "nbs-claude" 2>/dev/null | grep -oP '(?<=--root=)\S+' || true); do
+                    [[ -d "${d}/.nbs" ]] && root="$d" && break
+                done
+                [[ -n "$root" ]] || continue
+
+                # Extract handle from the command
+                local agent_handle=""
+                agent_handle=$(echo "$ts_cmd" | grep -oP '(?<=NBS_HANDLE=)\S+' || true)
+                [[ -n "$agent_handle" ]] || continue
+                is_infrastructure "$agent_handle" && continue
+
+                echo -n "Spawning sidecar for $agent_handle (nbs-ts=$ts_handle)... "
+                "$SIDECAR" \
+                    --handle="$agent_handle" \
+                    --root="$root" \
+                    --transport=ts \
+                    --session="$ts_handle" \
+                    --log="${root}/.nbs/sidecar-${agent_handle}.log" &
+                disown $! 2>/dev/null || true
+                echo "PID $!"
+                SPAWNED=$((SPAWNED + 1))
+                sleep 1
+            done <<< "$TS_SESSIONS"
+            return
+        fi
+    fi
+
+    # Fallback: tmux sessions
     local SESSIONS
     SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^nbs-' || true)
     [[ -n "$SESSIONS" ]] || { echo "No nbs agent sessions found."; return; }
 
     while IFS= read -r ses; do
-        # Extract handle and tag from session name: nbs-<handle>-<tag>
         local rest="${ses#nbs-}"
-        # Handle is everything before the last dash-separated token
-        # nbs-supervisor-live → handle=supervisor, tag=live
-        # nbs-gatekeeper-nn-Module → handle=gatekeeper, tag=nn-Module
-        # Strategy: try known handles first
         local handle="" tag=""
         for h in supervisor generalist scribe gatekeeper testkeeper theologian; do
             if [[ "$rest" == "${h}-"* ]]; then
@@ -145,15 +185,12 @@ respawn_missing() {
         local pane
         pane=$(tmux display-message -t "$ses" -p '#{pane_id}' 2>/dev/null) || continue
 
-        # Check if a sidecar is already watching this pane
         if pgrep -f "nbs-sidecar.*--pane-id=${pane}" >/dev/null 2>&1; then
-            continue  # Already has a sidecar
+            continue
         fi
 
-        # Determine project root from the session's working directory
         local session_cwd
         session_cwd=$(tmux display-message -t "$ses" -p '#{pane_current_path}' 2>/dev/null) || continue
-        # Walk up to find .nbs/
         local root="$session_cwd"
         while [[ "$root" != "/" ]]; do
             [[ -d "${root}/.nbs" ]] && break

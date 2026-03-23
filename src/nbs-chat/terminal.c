@@ -250,19 +250,30 @@ static void *watchdog_thread_fn(void *arg) {
                 if (chat_tag[i] == '.') chat_tag[i] = '-';
         }
 
-        /* Count alive agent sessions for THIS chat only */
-        char grep_cmd[512];
-        snprintf(grep_cmd, sizeof(grep_cmd),
-                 "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
-                 "grep -c 'nbs-.*-%s' 2>/dev/null || echo 0", chat_tag);
-        FILE *fp = popen(grep_cmd, "r");
+        /* Count alive agent sessions for THIS chat only.
+         * Try nbs-ts first (counts alive sessions), fall back to tmux. */
         int count = 0;
-        if (fp) {
-            if (fscanf(fp, "%d", &count) != 1) count = 0;
-            pclose(fp);
-        } else {
-            fprintf(stderr, "warning: watchdog popen failed: %s\n",
-                    strerror(errno));
+        {
+            FILE *fp = popen("nbs-ts list 2>/dev/null | grep -c alive || echo 0", "r");
+            if (fp) {
+                if (fscanf(fp, "%d", &count) != 1) count = 0;
+                pclose(fp);
+            }
+        }
+        if (count == 0) {
+            /* Fallback: count tmux sessions */
+            char grep_cmd[512];
+            snprintf(grep_cmd, sizeof(grep_cmd),
+                     "tmux list-sessions -F '#{session_name}' 2>/dev/null | "
+                     "grep -c 'nbs-.*-%s' 2>/dev/null || echo 0", chat_tag);
+            FILE *fp = popen(grep_cmd, "r");
+            if (fp) {
+                if (fscanf(fp, "%d", &count) != 1) count = 0;
+                pclose(fp);
+            } else {
+                fprintf(stderr, "warning: watchdog popen failed: %s\n",
+                        strerror(errno));
+            }
         }
 
         watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
