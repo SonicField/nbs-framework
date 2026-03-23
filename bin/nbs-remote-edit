@@ -27,6 +27,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 
 # V7: Validate NBS_REMOTE_EDIT_DIR if explicitly set, rather than silently falling back
@@ -62,7 +65,7 @@ die() {
     exit "$rc"
 }
 
-[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
+[[ -x "$NBS_TS" ]] || [[ -x "$PTY_SESSION" ]] || die 1 "Neither nbs-ts nor pty-session found"
 
 # V1 (SECURITY): Validate hostname and remote path against injection
 # V2 (BUG): Validate remote_path is absolute
@@ -78,47 +81,76 @@ local_path() {
     echo "${STAGING_DIR}/${host}${remote_path}"
 }
 
-# Run scp via a short-lived pty-session (gets user's credentials)
+# Run scp via a short-lived session (gets user's credentials)
 run_scp() {
-    # V9: Add RANDOM suffix for uniqueness under concurrent use
-    local session_name="nbs-edit-$$-${RANDOM}"
+    if [[ -x "$NBS_TS" ]]; then
+        # --- nbs-ts mode ---
+        local handle
+        handle=$("$NBS_TS" create 'bash --login') || {
+            echo "Error: Failed to create nbs-ts session" >&2
+            return 3
+        }
+        sleep 1
 
-    # V4: Check pty-session create success and report errors
-    if ! "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1; then
-        echo "Error: Failed to create pty-session '$session_name'" >&2
-        return 3
-    fi
-    sleep 1
-
-    # V4: Check pty-session send success
-    if ! "$PTY_SESSION" send "$session_name" "$1; echo EDIT_RC=\$?" >/dev/null 2>&1; then
-        "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
-        echo "Error: Failed to send command to pty-session '$session_name'" >&2
-        return 3
-    fi
-
-    # Wait for completion
-    local elapsed=0
-    local timeout=30
-    while (( elapsed < timeout )); do
-        sleep 2
-        elapsed=$((elapsed + 2))
-        local output
-        output=$("$PTY_SESSION" read "$session_name" 2>/dev/null) || true
-        # V6: Use bash regex for stricter, atomic matching of exit code
-        if [[ "$output" =~ EDIT_RC=([0-9]+) ]]; then
-            local rc="${BASH_REMATCH[1]}"
-            "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
-            return "$rc"
+        if ! "$NBS_TS" send "$handle" "$1; echo EDIT_RC=\$?"; then
+            "$NBS_TS" kill "$handle" >/dev/null 2>&1 || true
+            echo "Error: Failed to send command" >&2
+            return 3
         fi
-    done
 
-    # V4: Warn if session kill fails (possible orphan)
-    if ! "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1; then
-        echo "Warning: failed to kill pty-session '$session_name' — may need manual cleanup" >&2
+        local elapsed=0
+        local timeout=30
+        while (( elapsed < timeout )); do
+            sleep 2
+            elapsed=$((elapsed + 2))
+            local output
+            output=$("$NBS_TS" read-new "$handle" --strip 2>/dev/null) || true
+            if [[ "$output" =~ EDIT_RC=([0-9]+) ]]; then
+                local rc="${BASH_REMATCH[1]}"
+                "$NBS_TS" kill "$handle" >/dev/null 2>&1 || true
+                return "$rc"
+            fi
+        done
+
+        "$NBS_TS" kill "$handle" >/dev/null 2>&1 || true
+        echo "Error: scp timed out after ${timeout}s" >&2
+        return 3
+    else
+        # --- pty-session fallback ---
+        local session_name="nbs-edit-$$-${RANDOM}"
+
+        if ! "$PTY_SESSION" create "$session_name" 'bash --login' >/dev/null 2>&1; then
+            echo "Error: Failed to create pty-session '$session_name'" >&2
+            return 3
+        fi
+        sleep 1
+
+        if ! "$PTY_SESSION" send "$session_name" "$1; echo EDIT_RC=\$?" >/dev/null 2>&1; then
+            "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+            echo "Error: Failed to send command to pty-session '$session_name'" >&2
+            return 3
+        fi
+
+        local elapsed=0
+        local timeout=30
+        while (( elapsed < timeout )); do
+            sleep 2
+            elapsed=$((elapsed + 2))
+            local output
+            output=$("$PTY_SESSION" read "$session_name" 2>/dev/null) || true
+            if [[ "$output" =~ EDIT_RC=([0-9]+) ]]; then
+                local rc="${BASH_REMATCH[1]}"
+                "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1 || true
+                return "$rc"
+            fi
+        done
+
+        if ! "$PTY_SESSION" kill "$session_name" >/dev/null 2>&1; then
+            echo "Warning: failed to kill pty-session '$session_name' — may need manual cleanup" >&2
+        fi
+        echo "Error: scp timed out after ${timeout}s" >&2
+        return 3
     fi
-    echo "Error: scp timed out after ${timeout}s" >&2
-    return 3
 }
 
 cmd_pull() {

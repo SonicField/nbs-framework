@@ -25,12 +25,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 export NBS_PTY_QUIET=1
 
 die() { echo "Error: $*" >&2; exit "${1:-1}"; }
 
-[[ -x "$PTY_SESSION" ]] || die 1 "pty-session not found at $PTY_SESSION"
+[[ -x "$NBS_TS" ]] || [[ -x "$PTY_SESSION" ]] || die 1 "Neither nbs-ts nor pty-session found"
 
 # Parse arguments
 HOST=""
@@ -64,26 +67,44 @@ if [[ -z "$NAME" ]]; then
     NAME="$(echo "$HOST" | cut -d. -f1)-$$"
 fi
 
-# Create pty-session with SSH as the session command.
-# pty-session runs under the user's login environment (SSH keys, proxy creds).
-if ! "$PTY_SESSION" create "$NAME" "ssh -o StrictHostKeyChecking=no $HOST" >/dev/null 2>&1; then
-    die 1 "Failed to create pty-session '$NAME'"
-fi
+if [[ -x "$NBS_TS" ]]; then
+    # --- nbs-ts mode ---
+    HANDLE=$("$NBS_TS" create "ssh -o StrictHostKeyChecking=no $HOST") || {
+        die 1 "Failed to create nbs-ts session"
+    }
 
-# Wait for SSH connection by sending a marker and waiting for it.
-# Cannot wait for prompt — MOTD contains $ characters that confuse pattern matching.
-MARKER="__NBS_SESSION_READY_${RANDOM}__"
-sleep 5  # Let MOTD and login scripts finish
-"$PTY_SESSION" send "$NAME" "echo $MARKER" >/dev/null 2>&1
-if ! "$PTY_SESSION" wait "$NAME" "$MARKER" --timeout=15 >/dev/null 2>&1; then
-    "$PTY_SESSION" kill "$NAME" >/dev/null 2>&1 || true
-    die 1 "SSH to $HOST timed out (15s)"
-fi
+    MARKER="__NBS_SESSION_READY_${RANDOM}__"
+    sleep 5
+    "$NBS_TS" send "$HANDLE" "echo $MARKER"
+    if ! "$NBS_TS" wait-pattern "$HANDLE" "$MARKER" --timeout=15 >/dev/null 2>&1; then
+        "$NBS_TS" kill "$HANDLE" >/dev/null 2>&1 || true
+        die 1 "SSH to $HOST timed out (15s)"
+    fi
 
-# cd if requested
-if [[ -n "$CWD" ]]; then
-    "$PTY_SESSION" send "$NAME" "cd $CWD" >/dev/null 2>&1
-    sleep 1
-fi
+    if [[ -n "$CWD" ]]; then
+        "$NBS_TS" send "$HANDLE" "cd $CWD"
+        sleep 1
+    fi
 
-echo "$NAME"
+    echo "$HANDLE"
+else
+    # --- pty-session fallback ---
+    if ! "$PTY_SESSION" create "$NAME" "ssh -o StrictHostKeyChecking=no $HOST" >/dev/null 2>&1; then
+        die 1 "Failed to create pty-session '$NAME'"
+    fi
+
+    MARKER="__NBS_SESSION_READY_${RANDOM}__"
+    sleep 5
+    "$PTY_SESSION" send "$NAME" "echo $MARKER" >/dev/null 2>&1
+    if ! "$PTY_SESSION" wait "$NAME" "$MARKER" --timeout=15 >/dev/null 2>&1; then
+        "$PTY_SESSION" kill "$NAME" >/dev/null 2>&1 || true
+        die 1 "SSH to $HOST timed out (15s)"
+    fi
+
+    if [[ -n "$CWD" ]]; then
+        "$PTY_SESSION" send "$NAME" "cd $CWD" >/dev/null 2>&1
+        sleep 1
+    fi
+
+    echo "$NAME"
+fi

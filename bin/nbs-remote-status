@@ -33,14 +33,19 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
 PTY_SESSION="${HOME}/.nbs/bin/pty-session"
 NBS_CHAT="${HOME}/.nbs/bin/nbs-chat"
 
-# Precondition: pty-session binary must exist
-[[ -x "$PTY_SESSION" ]] || { echo "Error: pty-session not found at $PTY_SESSION" >&2; exit 1; }
+[[ -x "$NBS_TS" ]] || [[ -x "$PTY_SESSION" ]] || { echo "Error: Neither nbs-ts nor pty-session found" >&2; exit 1; }
 
-# Suppress pty-session tool header (we ARE the higher-level tool)
 export NBS_PTY_QUIET=1
+
+is_nbs_ts_session() {
+    [[ -x "$NBS_TS" ]] && [[ "$1" =~ ^[0-9a-f]{8}$ ]]
+}
 
 SESSION=""
 CWD=""
@@ -103,9 +108,27 @@ if [[ -n "$CWD" ]]; then
     [[ "$CWD" =~ $CWD_RE ]] || { echo "Error: --cwd contains suspicious characters: '$CWD'" >&2; exit 4; }
 fi
 
+# Session dispatch helpers
+_session_read_last() {
+    local n="${1:-5}"
+    if is_nbs_ts_session "$SESSION"; then
+        "$NBS_TS" read "$SESSION" --last="$n" 2>/dev/null
+    else
+        "$PTY_SESSION" read "$SESSION" --last="$n" 2>/dev/null
+    fi
+}
+
+_session_send() {
+    if is_nbs_ts_session "$SESSION"; then
+        "$NBS_TS" send "$SESSION" "$1"
+    else
+        "$PTY_SESSION" send "$SESSION" "$1"
+    fi
+}
+
 # Verify session exists
-if ! "$PTY_SESSION" read "$SESSION" --last=1 >/dev/null 2>&1; then
-    echo "Error: pty-session '$SESSION' not found" >&2
+if ! _session_read_last 1 >/dev/null 2>&1; then
+    echo "Error: session '$SESSION' not found" >&2
     exit 2
 fi
 
@@ -124,7 +147,7 @@ if [[ -n "$CWD" ]]; then
 fi
 
 # Single-quote markers in remote command to prevent shell expansion
-if ! "$PTY_SESSION" send "$SESSION" "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
+if ! _session_send "echo '${MARKER_START}'; ${FULL_CMD}; echo '${MARKER_END}'"; then
     echo "Error: Failed to send status command to session '$SESSION'" >&2
     exit 1
 fi
@@ -140,12 +163,12 @@ while (( elapsed < TIMEOUT )); do
     elapsed=$((elapsed + POLL))
 
     # Track consecutive read failures to detect dead sessions (BUG: was silently swallowed with || true)
-    if output=$("$PTY_SESSION" read "$SESSION" --last="$LAST" 2>/dev/null); then
+    if output=$(_session_read_last "$LAST"); then
         consecutive_failures=0
     else
         consecutive_failures=$((consecutive_failures + 1))
         if (( consecutive_failures >= 3 )); then
-            echo "Error: pty-session read failed 3 consecutive times for '$SESSION'" >&2
+            echo "Error: session read failed 3 consecutive times for '$SESSION'" >&2
             exit 2
         fi
         continue
