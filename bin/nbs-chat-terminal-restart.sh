@@ -71,12 +71,15 @@ sleep 2
 # Skip for empty/new chats — nothing to digest, and the digest worker
 # would hang waiting for a completion signal that never comes.
 CHAT_LINES=$(wc -l < "$CHAT_FILE" 2>/dev/null || echo 0)
+DIGEST_OK=false
 if [[ "$CHAT_LINES" -le 10 ]]; then
     echo "[watchdog] New chat ($CHAT_LINES lines) — skipping digest" >&2
 elif [[ -x "$NBS_DIGEST" ]]; then
-    bash "$NBS_DIGEST" "$CHAT_FILE" >/dev/null 2>&1 || {
+    if bash "$NBS_DIGEST" "$CHAT_FILE" >/dev/null 2>&1; then
+        DIGEST_OK=true
+    else
         echo "[watchdog] Warning: digest failed, continuing without it" >&2
-    }
+    fi
 else
     echo "[watchdog] Warning: nbs-digest-spawn not found, skipping digest" >&2
 fi
@@ -127,11 +130,13 @@ tmux send-keys -t "nbs-generalist-${CHAT_TAG}" "/nbs-teams-chat" Enter 2>/dev/nu
 tmux send-keys -t "nbs-supervisor-${CHAT_TAG}" "/nbs-supervisor" Enter 2>/dev/null || true
 
 # 6. Post continuation directive
-# The digest's CONTINUATION section determines what the team should do.
-# Do not hardcode a plan — let the digest's analysis of the prior session
-# drive the direction. If the digest identified GOALS, pursue them.
-# If REVIEW, ask the human leader for direction.
-"$NBS_CHAT" send "$CHAT_FILE" supervisor \
-    "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
+# Only reference the digest if it was actually produced.
+if [[ "$DIGEST_OK" == "true" ]]; then
+    "$NBS_CHAT" send "$CHAT_FILE" supervisor \
+        "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
+else
+    "$NBS_CHAT" send "$CHAT_FILE" supervisor \
+        "@team Auto-restart by terminal watchdog. No digest available. Read the chat history above for context. If the human leader has posted a goal or plan, follow it. Otherwise, propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction." 2>/dev/null || true
+fi
 
 echo "[watchdog] Team restarted successfully"

@@ -645,6 +645,24 @@ for dir in workers pids pty-locks sessions; do
 done
 ok "  workers/, pids/, pty-locks/, sessions/"
 
+# Link binaries from global ~/.nbs/bin/ if available.
+# Agents and the restart script look for nbs-chat, nbs-bus, etc. here.
+NBS_GLOBAL_BIN="$HOME/.nbs/bin"
+PROJECT_BIN="${PROJECT_ROOT}/.nbs/bin"
+if [[ -d "$NBS_GLOBAL_BIN" ]] && [[ ! -e "$PROJECT_BIN" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '  %b %s\n' "${YELLOW}[DRY-RUN]${NC}" "Link $NBS_GLOBAL_BIN → $PROJECT_BIN"
+    else
+        ln -s "$NBS_GLOBAL_BIN" "$PROJECT_BIN"
+        ok "  bin/ → $NBS_GLOBAL_BIN (symlinked)"
+    fi
+elif [[ -e "$PROJECT_BIN" ]]; then
+    info "  bin/ already exists — keeping"
+else
+    warn "  No global binaries found at $NBS_GLOBAL_BIN — tools will not work"
+    warn "  Install NBS first: cd nbs-framework && make install"
+fi
+
 # Link or copy skills from global ~/.nbs/commands/ if available.
 # These give agents access to librarian, pythia, shepard, fixup, etc.
 NBS_GLOBAL_COMMANDS="$HOME/.nbs/commands"
@@ -978,7 +996,6 @@ fi
 
 echo ""
 echo "  Next steps:"
-echo "    1. Join the chat:  nbs-chat-terminal $CHAT_FILE <your-handle>"
-echo "    2. Start Claude:   cd $PROJECT_ROOT && nbs-claude"
-echo "    3. Join (new agent): NBS_HANDLE=<name> nbs-claude"
+echo "    cd $PROJECT_ROOT"
+echo "    nbs-chat-terminal .nbs/chat/${CHAT_NAME}.chat <your-handle> --restart --goal-file=<your-goal>.md"
 echo ""
