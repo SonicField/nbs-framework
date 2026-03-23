@@ -54,8 +54,13 @@ const char *render_get_colour(const char *handle) {
         int sn_ret = snprintf(handle_colours[handle_colour_count].handle,
                               MAX_HANDLE_LEN, "%s", handle);
         if (sn_ret < 0 || sn_ret >= MAX_HANDLE_LEN) {
+            /* Truncated handle could collide with another truncated handle,
+             * producing a duplicate colour slot. Return default colour
+             * without adding to the table. */
             fprintf(stderr, "warning: handle truncated in colour table: "
-                    "length %d exceeds %d\n", sn_ret, MAX_HANDLE_LEN - 1);
+                    "length %d exceeds %d — using default colour\n",
+                    sn_ret, MAX_HANDLE_LEN - 1);
+            return COLOURS[0];
         }
         handle_colours[handle_colour_count].colour_index = next_colour;
         handle_colour_count++;
@@ -74,6 +79,8 @@ const char *render_get_colour(const char *handle) {
 /* --- Timestamp formatting --- */
 
 static void format_timestamp(time_t timestamp, char *buf, size_t buf_size) {
+    ASSERT_MSG(buf != NULL, "format_timestamp: buf is NULL");
+    ASSERT_MSG(buf_size > 0, "format_timestamp: buf_size must be positive, got %zu", buf_size);
     buf[0] = '\0';
     if (timestamp > 0) {
         struct tm tm_buf;

@@ -63,7 +63,13 @@ int nbs_ts_wait_complete(nbs_ts_session_t *s, int timeout_ms,
         return -1;
     }
 
-    long long deadline = get_monotonic_ms() + timeout_ms;
+    long long now_ms = get_monotonic_ms();
+    if (now_ms < 0) {
+        inotify_rm_watch(ifd, wd);
+        close(ifd);
+        return -1;
+    }
+    long long deadline = now_ms + timeout_ms;
     int found = 0;
 
     for (;;) {
@@ -88,6 +94,7 @@ int nbs_ts_wait_complete(nbs_ts_session_t *s, int timeout_ms,
         if (found) break;
 
         long long now = get_monotonic_ms();
+        if (now < 0) break;
         int remaining = (int)(deadline - now);
         if (remaining <= 0) break;
 
@@ -136,7 +143,13 @@ int nbs_ts_wait_pattern(nbs_ts_session_t *s, const char *pattern,
         return -1;
     }
 
-    long long deadline = get_monotonic_ms() + timeout_ms;
+    long long pat_now_ms = get_monotonic_ms();
+    if (pat_now_ms < 0) {
+        inotify_rm_watch(ifd, wd);
+        close(ifd);
+        return -1;
+    }
+    long long deadline = pat_now_ms + timeout_ms;
     int found = 0;
     size_t search_offset = 0;
 
@@ -165,6 +178,7 @@ int nbs_ts_wait_pattern(nbs_ts_session_t *s, const char *pattern,
         if (found) break;
 
         long long now = get_monotonic_ms();
+        if (now < 0) break;
         int remaining = (int)(deadline - now);
         if (remaining <= 0) break;
 

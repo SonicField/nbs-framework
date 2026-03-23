@@ -38,6 +38,17 @@
 /* ------------------------------------------------------------------ */
 
 /*
+ * sigalrm_noop — No-op SIGALRM handler to interrupt blocking syscalls.
+ *
+ * Must be a real handler (not SIG_IGN) so that blocking calls like
+ * fcntl(F_SETLKW) return EINTR when the alarm fires.
+ */
+static void sigalrm_noop(int sig)
+{
+    (void)sig;
+}
+
+/*
  * redirect_stderr_to_devnull — Redirect stderr to /dev/null in child.
  */
 static void redirect_stderr_to_devnull(void)
@@ -277,9 +288,10 @@ static void build_session_name(char *buf, size_t bufsz, const char *name)
 static void get_timestamp(char *buf, size_t bufsz)
 {
     time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    ASSERT_MSG(tm != NULL, "localtime returned NULL");
-    size_t n = strftime(buf, bufsz, "%Y-%m-%d %H:%M:%S", tm);
+    struct tm tm;
+    struct tm *result = localtime_r(&now, &tm);
+    ASSERT_MSG(result != NULL, "localtime_r returned NULL");
+    size_t n = strftime(buf, bufsz, "%Y-%m-%d %H:%M:%S", &tm);
     ASSERT_MSG(n > 0, "strftime failed");
 }
 
@@ -1183,6 +1195,16 @@ int cmd_spawn(const char *slug, const char *project_dir,
                      * Wait up to 5s for it to release. */
                     fprintf(stderr, "cmd_spawn: waiting for previous %s to release lock...\n", slug);
                     struct flock bfl = fl;
+                    /* Install no-op SIGALRM handler so alarm() interrupts
+                     * the blocking fcntl with EINTR rather than killing
+                     * the process. SIG_IGN would not interrupt. */
+                    {
+                        struct sigaction sa;
+                        memset(&sa, 0, sizeof(sa));
+                        sa.sa_handler = sigalrm_noop;
+                        sa.sa_flags = 0; /* no SA_RESTART — must interrupt */
+                        sigaction(SIGALRM, &sa, NULL);
+                    }
                     alarm(5);
                     int got = fcntl(pfd, F_SETLKW, &bfl);
                     alarm(0);
@@ -1247,7 +1269,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
     {
         char full_cmd[PATH_BUF_SIZE * 3];
         int n = snprintf(full_cmd, sizeof(full_cmd),
-                         "cd %s && %s", abs_project_dir, session_cmd);
+                         "cd \"%s\" && %s", abs_project_dir, session_cmd);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(full_cmd),
                    "cmd_spawn: full_cmd too long");
         const char *argv[] = {"nbs-ts", "create", full_cmd, NULL};
@@ -1536,8 +1558,10 @@ int cmd_status(const char *name, const char *cwd)
         if (lpn > 0 && (size_t)lpn < sizeof(log_path)) {
             FILE *lf = fopen(log_path, "r");
             if (lf) {
-                /* Seek to last 500 bytes for the death summary */
-                fseek(lf, -500, SEEK_END);
+                /* Seek to last 500 bytes for the death summary.
+                 * If fseek fails (file < 500 bytes), read from start. */
+                if (fseek(lf, -500, SEEK_END) != 0)
+                    rewind(lf);
                 char tail[512];
                 size_t n = fread(tail, 1, sizeof(tail) - 1, lf);
                 tail[n] = '\0';
@@ -2037,7 +2061,7 @@ int cmd_continue(const char *handle, const char *model_override,
     {
         char full_cmd[PATH_BUF_SIZE * 3];
         snprintf(full_cmd, sizeof(full_cmd),
-                 "cd %s && %s", project_root, nbs_claude_cmd);
+                 "cd \"%s\" && %s", project_root, nbs_claude_cmd);
         const char *argv[] = {"nbs-ts", "create", full_cmd, NULL};
         char handle_buf[64];
         int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));

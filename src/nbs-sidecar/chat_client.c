@@ -288,6 +288,10 @@ int chat_client_check_unread(const char *registry_path, const char *handle,
                "chat_client_check_unread: registry_path is empty");
     ASSERT_MSG(handle != NULL,
                "chat_client_check_unread: handle is NULL");
+    /* H7 fix: empty handle would match no cursor entries, silently
+     * reporting zero unreads regardless of actual state. */
+    ASSERT_MSG(handle[0] != '\0',
+               "chat_client_check_unread: handle is empty");
     ASSERT_MSG(unread_count != NULL,
                "chat_client_check_unread: unread_count is NULL");
     ASSERT_MSG(summary != NULL,

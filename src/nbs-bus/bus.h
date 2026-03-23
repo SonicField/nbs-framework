@@ -79,8 +79,8 @@ typedef struct {
  *   dedup-window: <integer seconds>
  *   ack-timeout: <integer seconds>  (0 = disabled)
  *
- * Unrecognised keys are silently ignored. Missing file or missing keys
- * use defaults. Invalid values are ignored (default used).
+ * Unrecognised keys produce a warning on stderr. Missing file or missing
+ * keys use defaults. Invalid values are ignored (default used).
  *
  * Preconditions:
  *   - events_dir != NULL

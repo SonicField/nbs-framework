@@ -325,9 +325,10 @@ static int process_control_command(const char *line, const char *registry_path)
         ASSERT_MSG(en >= 0 && (size_t)en < sizeof(entry),
                    "process_control_command: entry truncated for bus:'%s'", path);
         return registry_remove(registry_path, entry);
+    } else {
+        /* HARDENING: unknown verb — log to stderr rather than silently ignoring */
+        fprintf(stderr, "registry: unknown verb '%s' in control inbox\n", verb);
     }
-    /* HARDENING: unknown verb — log to stderr rather than silently ignoring */
-    fprintf(stderr, "registry: unknown verb '%s' in control inbox\n", verb);
 
     return 0;
 }

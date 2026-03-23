@@ -3,7 +3,8 @@
  *
  * Deterministic process enforcement for AI supervisors.
  * All state is file-based, human-readable, crash-recoverable.
- * All writes are atomic (write temp, rename).
+ * State writes are atomic (write temp, rename). hub_log appends
+ * without rename — not atomic against concurrent writers.
  */
 
 #include "hub.h"
@@ -14,8 +15,181 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
+
+/* ================================================================
+ * Fork+exec helpers — never use system() or popen().
+ *
+ * system() and popen() invoke /bin/sh, which means any argument
+ * containing shell metacharacters (;, |, $, `, etc.) is interpreted.
+ * fork+exec passes arguments directly to the kernel — no shell, no
+ * injection vector.
+ * ================================================================ */
+
+/*
+ * redirect_stderr_to_devnull — Redirect stderr to /dev/null in child.
+ */
+static void redirect_stderr_to_devnull(void)
+{
+    int fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0) {
+        if (dup2(fd, STDERR_FILENO) < 0)
+            _exit(126);
+        if (fd != STDERR_FILENO)
+            close(fd);
+    } else {
+        close(STDERR_FILENO);
+    }
+}
+
+/*
+ * exec_simple — Fork+exec a command, pass stdout/stderr through.
+ *
+ * Returns child exit code on success, -1 on fork/exec failure.
+ */
+static int exec_simple(const char *const argv[])
+{
+    ASSERT_MSG(argv != NULL && argv[0] != NULL,
+               "exec_simple: argv or argv[0] is NULL");
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+
+    if (pid == 0) {
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    int status;
+    pid_t wpid;
+    do {
+        wpid = waitpid(pid, &status, 0);
+    } while (wpid < 0 && errno == EINTR);
+
+    if (wpid < 0)
+        return -1;
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -1;
+}
+
+/*
+ * exec_silent — Fork+exec with stderr redirected to /dev/null.
+ *
+ * Returns child exit code on success, -1 on fork/exec failure.
+ */
+static int exec_silent(const char *const argv[])
+{
+    ASSERT_MSG(argv != NULL && argv[0] != NULL,
+               "exec_silent: argv or argv[0] is NULL");
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+
+    if (pid == 0) {
+        redirect_stderr_to_devnull();
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    int status;
+    pid_t wpid;
+    do {
+        wpid = waitpid(pid, &status, 0);
+    } while (wpid < 0 && errno == EINTR);
+
+    if (wpid < 0)
+        return -1;
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -1;
+}
+
+/*
+ * exec_capture — Fork+exec a command, capture stdout to buffer.
+ *
+ * Returns child exit code on success, -1 on fork/exec failure.
+ * out_buf is always NUL-terminated on success.
+ */
+static int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
+{
+    ASSERT_MSG(argv != NULL && argv[0] != NULL,
+               "exec_capture: argv or argv[0] is NULL");
+    ASSERT_MSG(out_buf != NULL, "exec_capture: out_buf is NULL");
+    ASSERT_MSG(out_size > 0, "exec_capture: out_size is 0");
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0)
+        return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child */
+        close(pipefd[0]);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+            _exit(126);
+        close(pipefd[1]);
+        redirect_stderr_to_devnull();
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    /* Parent */
+    close(pipefd[1]);
+
+    size_t total = 0;
+    while (total < out_size - 1) {
+        ssize_t n = read(pipefd[0], out_buf + total, out_size - 1 - total);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (n == 0)
+            break;
+        total += (size_t)n;
+    }
+    out_buf[total] = '\0';
+    close(pipefd[0]);
+
+    int status;
+    pid_t wpid;
+    do {
+        wpid = waitpid(pid, &status, 0);
+    } while (wpid < 0 && errno == EINTR);
+
+    if (wpid < 0)
+        return -1;
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -1;
+}
+
+/*
+ * copy_file — Copy src to dst using fork+exec of /bin/cp.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+static int copy_file(const char *src, const char *dst)
+{
+    ASSERT_MSG(src != NULL, "copy_file: src is NULL");
+    ASSERT_MSG(dst != NULL, "copy_file: dst is NULL");
+
+    const char *argv[] = {"cp", src, dst, NULL};
+    return exec_simple(argv) == 0 ? 0 : -1;
+}
 
 /* ================================================================
  * Utility functions
@@ -71,7 +245,13 @@ int ensure_dir(const char *path)
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
         return 0;
-    return mkdir(path, 0755);
+    int rc = mkdir(path, 0755);
+    if (rc != 0)
+        return rc;
+    /* Postcondition: directory must exist after successful mkdir */
+    ASSERT_MSG(stat(path, &st) == 0 && S_ISDIR(st.st_mode),
+               "ensure_dir: mkdir returned 0 but %s is not a directory", path);
+    return 0;
 }
 
 int find_project_dir(const char *cwd, char *out_dir)
@@ -165,7 +345,11 @@ int state_write(const char *path, const char *key, const char *value)
     if (!found)
         fprintf(out, "%s=%s\n", key, value);
 
-    fclose(out);
+    if (fclose(out) != 0) {
+        /* fclose flush failed — temp file may be incomplete */
+        unlink(tmp);
+        return -1;
+    }
     return rename(tmp, path);
 }
 
@@ -181,10 +365,13 @@ void hub_log(const char *project_dir, const char *message)
     iso_timestamp(ts, sizeof(ts));
 
     FILE *f = fopen(path, "a");
-    if (f) {
-        fprintf(f, "[%s] %s\n", ts, message);
-        fclose(f);
+    if (!f) {
+        fprintf(stderr, "[HUB-WARNING] hub_log: cannot open %s: %s\n",
+                path, strerror(errno));
+        return;
     }
+    fprintf(f, "[%s] %s\n", ts, message);
+    fclose(f);
 }
 
 void hub_chat(const char *project_dir, const char *message)
@@ -197,12 +384,14 @@ void hub_chat(const char *project_dir, const char *message)
 
     /* Use nbs-chat if chat file exists, otherwise skip silently */
     if (file_exists(chat_path)) {
-        char cmd[PATH_BUF_SIZE * 2];
-        /* Sanitise message for shell — replace single quotes */
-        snprintf(cmd, sizeof(cmd),
-                 "nbs-chat send '%s' hub '%s' 2>/dev/null",
-                 chat_path, message);
-        (void)system(cmd);
+        const char *argv[] = {
+            "nbs-chat", "send", chat_path, "hub", message, NULL
+        };
+        int rc = exec_silent(argv);
+        if (rc != 0 && rc != 127) {
+            fprintf(stderr, "[HUB-WARNING] hub_chat: nbs-chat send failed "
+                    "(exit %d)\n", rc);
+        }
     }
 }
 
@@ -225,8 +414,9 @@ static void check_stall(const char *project_dir)
     if (!state_read(state_path, "last_spawn_time", val, sizeof(val)))
         return;
 
-    long last = strtol(val, NULL, 10);
-    if (last <= 0) return;
+    char *endptr;
+    long last = strtol(val, &endptr, 10);
+    if (endptr == val || last <= 0) return;
 
     time_t now = time(NULL);
     long elapsed_min = (now - last) / 60;
@@ -257,21 +447,37 @@ int cmd_init(const char *project_dir, const char *goal)
         return EXIT_ERROR;
     }
 
-    /* Create directories */
-    ensure_dir(hub_dir);
+    /* Create directories — abort on failure since init cannot proceed */
+    if (ensure_dir(hub_dir) != 0) {
+        fprintf(stderr, "Error: cannot create hub directory %s: %s\n",
+                hub_dir, strerror(errno));
+        return EXIT_ERROR;
+    }
 
     char audits[PATH_BUF_SIZE];
     snprintf(audits, sizeof(audits), "%s/%s", project_dir, HUB_AUDITS);
-    ensure_dir(audits);
+    if (ensure_dir(audits) != 0) {
+        fprintf(stderr, "Error: cannot create audits directory %s: %s\n",
+                audits, strerror(errno));
+        return EXIT_ERROR;
+    }
 
     char gates[PATH_BUF_SIZE];
     snprintf(gates, sizeof(gates), "%s/%s", project_dir, HUB_GATES);
-    ensure_dir(gates);
+    if (ensure_dir(gates) != 0) {
+        fprintf(stderr, "Error: cannot create gates directory %s: %s\n",
+                gates, strerror(errno));
+        return EXIT_ERROR;
+    }
 
     /* Ensure .nbs/chat/ exists */
     char chat_dir[PATH_BUF_SIZE];
     snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", project_dir);
-    ensure_dir(chat_dir);
+    if (ensure_dir(chat_dir) != 0) {
+        fprintf(stderr, "Error: cannot create chat directory %s: %s\n",
+                chat_dir, strerror(errno));
+        return EXIT_ERROR;
+    }
 
     /* Write manifest */
     char manifest[PATH_BUF_SIZE];
@@ -296,10 +502,8 @@ int cmd_init(const char *project_dir, const char *goal)
     char chat_path[PATH_BUF_SIZE];
     snprintf(chat_path, sizeof(chat_path), "%s/%s", project_dir, HUB_CHAT);
     if (!file_exists(chat_path)) {
-        char cmd[PATH_BUF_SIZE];
-        snprintf(cmd, sizeof(cmd), "nbs-chat create '%s' 2>/dev/null",
-                 chat_path);
-        (void)system(cmd);
+        const char *argv[] = {"nbs-chat", "create", chat_path, NULL};
+        (void)exec_silent(argv);
     }
 
     hub_log(project_dir, "Hub initialised");
@@ -347,10 +551,10 @@ int cmd_status(const char *project_dir)
     char required[32] = "0";
     state_read(state_path, "audit_counter", counter, sizeof(counter));
     state_read(state_path, "audit_required", required, sizeof(required));
-    int cnt = atoi(counter);
-    int req = atoi(required);
+    long cnt = strtol(counter, NULL, 10);
+    long req = strtol(required, NULL, 10);
 
-    printf("Audit: %d/%d results since last check", cnt, AUDIT_THRESHOLD);
+    printf("Audit: %ld/%d results since last check", cnt, AUDIT_THRESHOLD);
     if (req)
         printf(" [AUDIT REQUIRED — spawns blocked]");
     printf("\n\n");
@@ -379,11 +583,12 @@ int cmd_status(const char *project_dir)
     /* Workers — delegate to nbs-workers list */
     printf("Workers:\n");
     fflush(stdout);
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers list 2>/dev/null | head -30",
-             project_dir);
-    (void)system(cmd);
+    {
+        const char *argv[] = {
+            "nbs-workers", "--project", project_dir, "list", NULL
+        };
+        (void)exec_silent(argv);
+    }
     printf("\n");
 
     /* Last 10 log entries */
@@ -408,7 +613,7 @@ int cmd_spawn(const char *slug, const char *task_desc,
     /* Check audit gate */
     char required[32] = "0";
     state_read(state_path, "audit_required", required, sizeof(required));
-    if (atoi(required)) {
+    if (strtol(required, NULL, 10)) {
         fprintf(stderr,
                 "Error: spawn REFUSED — audit required.\n"
                 "%d workers completed since last self-check.\n"
@@ -418,35 +623,37 @@ int cmd_spawn(const char *slug, const char *task_desc,
         return EXIT_AUDIT_REQUIRED;
     }
 
-    /* Delegate to nbs-workers spawn */
-    char cmd[PATH_BUF_SIZE * 2];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers spawn '%s' '%s' '%s'",
-             project_dir, slug, project_dir, task_desc);
+    /* Delegate to nbs-workers spawn via fork+exec+pipe */
+    const char *spawn_argv[] = {
+        "nbs-workers", "--project", project_dir,
+        "spawn", slug, project_dir, task_desc, NULL
+    };
+    char capture_buf[LINE_BUF_SIZE];
+    int rc = exec_capture(spawn_argv, capture_buf, sizeof(capture_buf));
 
-    FILE *p = popen(cmd, "r");
-    if (!p) {
-        fprintf(stderr, "Error: failed to execute nbs-workers spawn\n");
-        return EXIT_ERROR;
-    }
+    /* Print captured output */
+    if (capture_buf[0])
+        fputs(capture_buf, stdout);
 
-    char worker_name[256] = "";
-    char line[LINE_BUF_SIZE];
-    while (fgets(line, (int)sizeof(line), p)) {
-        fputs(line, stdout);
-        /* nbs-workers spawn prints worker name as last line */
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-        /* Worker name matches slug-XXXX pattern */
-        if (strstr(line, slug) == line) {
-            snprintf(worker_name, sizeof(worker_name), "%s", line);
-        }
-    }
-
-    int rc = pclose(p);
     if (rc != 0)
         return EXIT_ERROR;
+
+    /* Extract worker name from output — matches slug-XXXX pattern */
+    char worker_name[256] = "";
+    char *line_start = capture_buf;
+    while (*line_start) {
+        char *nl = strchr(line_start, '\n');
+        size_t len = nl ? (size_t)(nl - line_start) : strlen(line_start);
+        if (len > 0 && len < sizeof(worker_name)) {
+            char tmp[256];
+            memcpy(tmp, line_start, len);
+            tmp[len] = '\0';
+            if (strstr(tmp, slug) == tmp)
+                snprintf(worker_name, sizeof(worker_name), "%s", tmp);
+        }
+        if (!nl) break;
+        line_start = nl + 1;
+    }
 
     /* Update last spawn time */
     char ts_buf[32];
@@ -467,13 +674,13 @@ int cmd_check(const char *worker_name, const char *project_dir)
     ASSERT_MSG(worker_name != NULL, "cmd_check: worker_name is NULL");
     ASSERT_MSG(project_dir != NULL, "cmd_check: project_dir is NULL");
 
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers status '%s'",
-             project_dir, worker_name);
-
     check_stall(project_dir);
-    return system(cmd) == 0 ? EXIT_SUCCESS_CODE : EXIT_ERROR;
+
+    const char *argv[] = {
+        "nbs-workers", "--project", project_dir,
+        "status", worker_name, NULL
+    };
+    return exec_simple(argv) == 0 ? EXIT_SUCCESS_CODE : EXIT_ERROR;
 }
 
 int cmd_result(const char *worker_name, const char *project_dir)
@@ -482,11 +689,11 @@ int cmd_result(const char *worker_name, const char *project_dir)
     ASSERT_MSG(project_dir != NULL, "cmd_result: project_dir is NULL");
 
     /* Delegate to nbs-workers results */
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers results '%s'",
-             project_dir, worker_name);
-    int rc = system(cmd);
+    const char *argv[] = {
+        "nbs-workers", "--project", project_dir,
+        "results", worker_name, NULL
+    };
+    int rc = exec_simple(argv);
     if (rc != 0)
         return EXIT_ERROR;
 
@@ -497,7 +704,7 @@ int cmd_result(const char *worker_name, const char *project_dir)
 
     char counter_str[32] = "0";
     state_read(state_path, "audit_counter", counter_str, sizeof(counter_str));
-    int counter = atoi(counter_str) + 1;
+    int counter = (int)strtol(counter_str, NULL, 10) + 1;
 
     snprintf(counter_str, sizeof(counter_str), "%d", counter);
     state_write(state_path, "audit_counter", counter_str);
@@ -524,12 +731,11 @@ int cmd_dismiss(const char *worker_name, const char *project_dir)
     ASSERT_MSG(worker_name != NULL, "cmd_dismiss: worker_name is NULL");
     ASSERT_MSG(project_dir != NULL, "cmd_dismiss: project_dir is NULL");
 
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers dismiss '%s'",
-             project_dir, worker_name);
-
-    int rc = system(cmd);
+    const char *argv[] = {
+        "nbs-workers", "--project", project_dir,
+        "dismiss", worker_name, NULL
+    };
+    int rc = exec_simple(argv);
 
     char log_msg[VALUE_BUF_SIZE];
     snprintf(log_msg, sizeof(log_msg), "DISMISS: %s", worker_name);
@@ -542,12 +748,12 @@ int cmd_list(const char *project_dir)
 {
     ASSERT_MSG(project_dir != NULL, "cmd_list: project_dir is NULL");
 
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && nbs-workers list", project_dir);
-
     check_stall(project_dir);
-    return system(cmd) == 0 ? EXIT_SUCCESS_CODE : EXIT_ERROR;
+
+    const char *argv[] = {
+        "nbs-workers", "--project", project_dir, "list", NULL
+    };
+    return exec_simple(argv) == 0 ? EXIT_SUCCESS_CODE : EXIT_ERROR;
 }
 
 int cmd_audit(const char *audit_file, const char *project_dir)
@@ -604,9 +810,10 @@ int cmd_audit(const char *audit_file, const char *project_dir)
     snprintf(archive, sizeof(archive), "%s/%s/audit-%s.md",
              project_dir, HUB_AUDITS, ts);
 
-    char cmd[PATH_BUF_SIZE * 2];
-    snprintf(cmd, sizeof(cmd), "cp '%s' '%s'", audit_file, archive);
-    (void)system(cmd);
+    if (copy_file(audit_file, archive) != 0) {
+        fprintf(stderr, "Error: failed to archive audit to %s\n", archive);
+        return EXIT_ERROR;
+    }
 
     /* Reset audit state */
     char state_path[PATH_BUF_SIZE];
@@ -667,7 +874,7 @@ int cmd_gate(const char *phase_name, const char *test_file,
     char phase_num_str[32] = "0";
     state_read(state_path, "phase_num", phase_num_str,
                sizeof(phase_num_str));
-    int phase_num = atoi(phase_num_str) + 1;
+    int phase_num = (int)strtol(phase_num_str, NULL, 10) + 1;
     snprintf(phase_num_str, sizeof(phase_num_str), "%d", phase_num);
     state_write(state_path, "phase_num", phase_num_str);
     state_write(state_path, "phase_name", "UNNAMED");
@@ -680,13 +887,23 @@ int cmd_gate(const char *phase_name, const char *test_file,
     snprintf(archive_base, sizeof(archive_base), "%s/%s/gate-%d-%s",
              project_dir, HUB_GATES, phase_num - 1, ts);
 
-    char cmd[PATH_BUF_SIZE * 2];
-    snprintf(cmd, sizeof(cmd), "cp '%s' '%s-tests.md'",
-             test_file, archive_base);
-    (void)system(cmd);
-    snprintf(cmd, sizeof(cmd), "cp '%s' '%s-audit.md'",
-             audit_file, archive_base);
-    (void)system(cmd);
+    char archive_tests[PATH_BUF_SIZE];
+    snprintf(archive_tests, sizeof(archive_tests), "%s-tests.md",
+             archive_base);
+    if (copy_file(test_file, archive_tests) != 0) {
+        fprintf(stderr, "Error: failed to archive test results to %s\n",
+                archive_tests);
+        return EXIT_ERROR;
+    }
+
+    char archive_audit[PATH_BUF_SIZE];
+    snprintf(archive_audit, sizeof(archive_audit), "%s-audit.md",
+             archive_base);
+    if (copy_file(audit_file, archive_audit) != 0) {
+        fprintf(stderr, "Error: failed to archive audit to %s\n",
+                archive_audit);
+        return EXIT_ERROR;
+    }
 
     char log_msg[VALUE_BUF_SIZE];
     snprintf(log_msg, sizeof(log_msg),
@@ -722,7 +939,7 @@ int cmd_phase(const char *project_dir)
 
     printf("Phase: %s -- %s\n", phase_num, phase_name);
     printf("Audit: %s/%d results since last check", counter, AUDIT_THRESHOLD);
-    if (atoi(required))
+    if (strtol(required, NULL, 10))
         printf(" [AUDIT REQUIRED]");
     printf("\n");
 
@@ -899,9 +1116,10 @@ int cmd_log(int n, const char *project_dir)
 
     printf("Log (last %d):\n", n);
 
-    char cmd[PATH_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd), "tail -n %d '%s'", n, log_path);
-    (void)system(cmd);
+    char n_str[32];
+    snprintf(n_str, sizeof(n_str), "%d", n);
+    const char *argv[] = {"tail", "-n", n_str, log_path, NULL};
+    (void)exec_simple(argv);
 
     return EXIT_SUCCESS_CODE;
 }

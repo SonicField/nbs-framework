@@ -86,6 +86,15 @@ static int env_int(const char *name, int default_val) {
                 name, val, default_val);
         return default_val;
     }
+    /* H4 fix: reject 0 when the default is positive. Fields like
+     * bus_check_interval and notify_fail_threshold must be > 0; accepting
+     * 0 from the environment would cause division-by-zero or infinite loops.
+     * Fields where 0 is valid (poll_interval, flush_interval) have default 0. */
+    if (v == 0 && default_val > 0) {
+        fprintf(stderr, "warning: %s='0' invalid (must be > 0), using default %d\n",
+                name, default_val);
+        return default_val;
+    }
     return (int)v;
 }
 

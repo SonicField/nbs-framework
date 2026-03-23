@@ -162,6 +162,15 @@ static int read_event_dedup_key(const char *filepath, char *key_buf, size_t key_
     int found = -1;
 
     while (fgets(line, sizeof(line), fp)) {
+        /* H11: detect truncated lines — if no newline and not at EOF,
+         * the line was longer than our buffer. Skip the remainder. */
+        if (strchr(line, '\n') == NULL && !feof(fp)) {
+            /* Consume the rest of this truncated line */
+            int ch;
+            while ((ch = fgetc(fp)) != EOF && ch != '\n')
+                ;
+            continue;
+        }
         if (strncmp(line, "dedup-key: ", 11) == 0) {
             /* Trim trailing newline */
             char *nl = strchr(line + 11, '\n');
@@ -266,14 +275,18 @@ static void format_age(long long delta_us, char *buf, size_t len)
     long long seconds = delta_us / 1000000;
     if (seconds < 0) seconds = 0;
 
+    int n;
     if (seconds < 60)
-        snprintf(buf, len, "%llds ago", seconds);
+        n = snprintf(buf, len, "%llds ago", seconds);
     else if (seconds < 3600)
-        snprintf(buf, len, "%lldm ago", seconds / 60);
+        n = snprintf(buf, len, "%lldm ago", seconds / 60);
     else if (seconds < 86400)
-        snprintf(buf, len, "%lldh ago", seconds / 3600);
+        n = snprintf(buf, len, "%lldh ago", seconds / 3600);
     else
-        snprintf(buf, len, "%lldd ago", seconds / 86400);
+        n = snprintf(buf, len, "%lldd ago", seconds / 86400);
+
+    ASSERT_MSG(n >= 0 && (size_t)n < len,
+               "format_age: output truncated (wrote %d, buf size %zu)", n, len);
 }
 
 /* Comparison function for sorting events: by priority (asc), then timestamp (asc) */
@@ -348,6 +361,20 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
         count++;
     }
 
+    /* B4: warn if we hit the event limit — events beyond max_events are silently dropped */
+    if (count == max_events) {
+        /* Check if there are more .event files we couldn't store */
+        while ((entry = readdir(dir)) != NULL) {
+            const char *extra_name = entry->d_name;
+            size_t extra_nlen = strlen(extra_name);
+            if (extra_nlen >= 7 && strcmp(extra_name + extra_nlen - 6, ".event") == 0) {
+                fprintf(stderr, "Warning: event limit reached (%d), some events were not listed\n",
+                        max_events);
+                break;
+            }
+        }
+    }
+
     closedir(dir);
     return count;
 }
@@ -394,10 +421,14 @@ int bus_load_config(const char *events_dir, bus_config_t *cfg)
         char *val = colon + 1;
         while (*val && isspace((unsigned char)*val))
             val++;
-        if (strlen(val) == 0) continue;
-        char *end = val + strlen(val) - 1;
-        while (end > val && isspace((unsigned char)*end))
-            *end-- = '\0';
+        /* B5/H8: cache strlen, trim trailing whitespace, THEN check empty */
+        size_t val_len = strlen(val);
+        if (val_len > 0) {
+            char *end = val + val_len - 1;
+            while (end > val && isspace((unsigned char)*end))
+                *end-- = '\0';
+        }
+        if (val[0] == '\0') continue;
 
         /* Match keys */
         if (key_len == 19 && strncmp(line, "retention-max-bytes", 19) == 0) {
@@ -562,19 +593,21 @@ int bus_publish(const char *events_dir, const char *source, const char *type,
         }
     }
 
-    if (fclose(fp) != 0) {
-        if (unlink(tmp_path) != 0)
-            fprintf(stderr, "Warning: failed to remove temp file %s: %s\n",
-                    tmp_path, strerror(errno));
-        fprintf(stderr, "Error: failed to flush event file: %s\n", strerror(errno));
-        return -1;
+    /* H2: check write errors BEFORE fclose using fflush+ferror,
+     * so we detect errors while the FILE* is still valid. */
+    if (!write_err) {
+        if (fflush(fp) != 0 || ferror(fp))
+            write_err = 1;
     }
+
+    if (fclose(fp) != 0)
+        write_err = 1;
 
     if (write_err) {
         if (unlink(tmp_path) != 0)
             fprintf(stderr, "Warning: failed to remove temp file %s: %s\n",
                     tmp_path, strerror(errno));
-        fprintf(stderr, "Error: write error creating event file\n");
+        fprintf(stderr, "Error: write error creating event file: %s\n", strerror(errno));
         return -1;
     }
 
@@ -641,19 +674,32 @@ int bus_check(const char *events_dir, const char *handle)
 }
 
 /* SECURITY: shared path traversal and suffix validation for event filenames.
- * Returns 0 if valid, -1 if rejected. */
+ * Checks: non-empty, no '/', no ".." prefix, no ".", .event suffix, length limit.
+ * Returns 0 if valid, -1 if rejected.
+ * NOTE: logic is kept consistent with validate_event_filename in main.c (S6). */
 static int validate_event_filename(const char *event_file)
 {
     ASSERT_MSG(event_file != NULL, "validate_event_filename: event_file is NULL");
 
-    if (event_file[0] == '\0' || strchr(event_file, '/') != NULL ||
-        strcmp(event_file, "..") == 0 || strcmp(event_file, ".") == 0) {
+    if (event_file[0] == '\0') {
+        fprintf(stderr, "Error: invalid event filename (empty)\n");
+        return -1;
+    }
+
+    if (strchr(event_file, '/') != NULL ||
+        strncmp(event_file, "..", 2) == 0 || strcmp(event_file, ".") == 0) {
         fprintf(stderr, "Error: invalid event filename (path traversal): %s\n",
                 event_file);
         return -1;
     }
 
     size_t elen = strlen(event_file);
+    if (elen >= BUS_MAX_FILENAME) {
+        fprintf(stderr, "Error: event filename too long (%zu >= %d): %s\n",
+                elen, BUS_MAX_FILENAME, event_file);
+        return -1;
+    }
+
     if (elen < 7 || strcmp(event_file + elen - 6, ".event") != 0) {
         fprintf(stderr, "Error: invalid event filename (must end in .event): %s\n",
                 event_file);
@@ -840,6 +886,10 @@ int bus_prune(const char *events_dir, long long max_bytes)
                    "bus_prune: filename truncated for %s", name);
         pe->timestamp_us = ts_us;
         pe->size = st.st_size;
+        /* H9: overflow check before accumulating total_size */
+        ASSERT_MSG(total_size <= LLONG_MAX - (long long)st.st_size,
+                   "bus_prune: total_size overflow at %lld + %lld",
+                   total_size, (long long)st.st_size);
         total_size += st.st_size;
         count++;
     }
@@ -940,6 +990,10 @@ int bus_status(const char *events_dir)
             struct stat fst;
             if (stat(fullpath, &fst) == 0 && S_ISREG(fst.st_mode)) {
                 processed_count++;
+                /* H10: overflow check before accumulating processed_size */
+                ASSERT_MSG(processed_size <= LLONG_MAX - (long long)fst.st_size,
+                           "bus_status: processed_size overflow at %lld + %lld",
+                           processed_size, (long long)fst.st_size);
                 processed_size += fst.st_size;
             }
         }

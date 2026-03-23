@@ -137,6 +137,13 @@ static char spawn_worker_path[SPAWN_PATH_LEN];
 
 static const char *resolve_spawn_worker(void)
 {
+    /* B5 fix: file-scope static is not synchronised — assert main thread.
+     * Same rationale as resolve_nbs_workers above. */
+    ASSERT_MSG((pid_t)syscall(SYS_gettid) == getpid(),
+               "resolve_spawn_worker: called from non-main thread (tid=%ld, pid=%d) "
+               "— file-scope statics are not synchronised",
+               (long)syscall(SYS_gettid), (int)getpid());
+
     if (spawn_worker_path[0] != '\0')
         return spawn_worker_path;
 
@@ -204,13 +211,21 @@ static void write_last_run(const char *nbs_root, const char *ts_filename,
     ASSERT_MSG(n > 0 && (size_t)n < sizeof(path),
                "write_last_run(%s): timestamp path overflow (%d >= %zu)",
                ts_filename, n, sizeof(path));
-    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    /* S1 fix: use mkstemp instead of predictable .tmp suffix to prevent
+     * symlink attacks in shared directories. */
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.XXXXXX", path);
     ASSERT_MSG(tn > 0 && (size_t)tn < sizeof(tmp_path),
                "write_last_run(%s): tmp path overflow (%d >= %zu)",
                ts_filename, tn, sizeof(tmp_path));
 
-    FILE *f = fopen(tmp_path, "w");
-    if (f) {
+    int tmp_fd = mkstemp(tmp_path);
+    if (tmp_fd >= 0) {
+        FILE *f = fdopen(tmp_fd, "w");
+        if (!f) {
+            close(tmp_fd);
+            unlink(tmp_path);
+            return;
+        }
         if (fprintf(f, "%lld\n", (long long)when) < 0) {
             fclose(f);
             unlink(tmp_path);

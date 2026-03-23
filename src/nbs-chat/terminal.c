@@ -92,7 +92,11 @@ static void history_add(const char *msg) {
         g_history_count = HISTORY_MAX - 1;
     }
     g_history[g_history_count] = strdup(msg);
-    if (g_history[g_history_count]) g_history_count++;
+    if (g_history[g_history_count]) {
+        g_history_count++;
+    } else {
+        fprintf(stderr, "warning: history_add: strdup failed, history entry dropped\n");
+    }
 }
 
 static void history_free(void) {
@@ -129,6 +133,9 @@ static watchdog_state_t g_watchdog;
 
 /* Resolve project root by walking up from chat file to find .nbs/ directory */
 static int resolve_project_root(const char *chat_path, char *out, size_t out_size) {
+    ASSERT_MSG(chat_path != NULL, "resolve_project_root: chat_path is NULL");
+    ASSERT_MSG(out != NULL, "resolve_project_root: out is NULL");
+    ASSERT_MSG(out_size > 0, "resolve_project_root: out_size must be positive, got %zu", out_size);
     /* Resolve to absolute path first — handles relative paths like
      * .nbs/chat/live.chat which would otherwise fail the walk-up */
     char *abs = realpath(chat_path, NULL);
@@ -207,6 +214,9 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
         }
     }
 
+    /* Double-fork to avoid zombie processes: the intermediate child
+     * exits immediately, so the parent can waitpid it. The grandchild
+     * is reparented to init/PID 1 which reaps it automatically. */
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "warning: fork for /%s failed: %s\n",
@@ -214,13 +224,20 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
         return -1;
     }
     if (pid == 0) {
-        /* Child: exec the spawn script via bash.
-         * Same pattern as /restart — proven to work from the terminal. */
-        execlp("bash", "bash", script, role, project_root,
-               skill_file, task_desc, (char *)NULL);
-        _exit(127);
+        /* Intermediate child: fork again and exit */
+        pid_t pid2 = fork();
+        if (pid2 == 0) {
+            /* Grandchild: exec the spawn script via bash */
+            execlp("bash", "bash", script, role, project_root,
+                   skill_file, task_desc, (char *)NULL);
+            _exit(127);
+        }
+        /* Intermediate child exits immediately — grandchild reparented to init */
+        _exit(pid2 < 0 ? 127 : 0);
     }
-    /* Parent: don't wait — script runs in background */
+    /* Parent: reap intermediate child (exits immediately) */
+    int wstatus;
+    waitpid(pid, &wstatus, 0);
     return 0;
 }
 
@@ -260,22 +277,62 @@ static void *watchdog_thread_fn(void *arg) {
         }
 
         /* Count alive agent sessions for THIS chat only.
-         * Count alive nbs-ts sessions. */
+         * Count alive nbs-ts sessions.
+         *
+         * Uses fork+exec+pipe instead of popen — popen is not
+         * async-signal-safe and must not be called from a
+         * multi-threaded process. */
         int count = 0;
         {
-            FILE *fp = popen("nbs-ts list 2>/dev/null | grep -c alive || echo 0", "r");
-            if (fp) {
-                if (fscanf(fp, "%d", &count) != 1) count = 0;
-                pclose(fp);
+            int pipefd[2];
+            if (pipe(pipefd) == 0) {
+                pid_t cpid = fork();
+                if (cpid == 0) {
+                    /* Child: redirect stdout to pipe, exec shell */
+                    close(pipefd[0]);
+                    if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
+                        int devnull = open("/dev/null", O_WRONLY);
+                        if (devnull >= 0) {
+                            dup2(devnull, STDERR_FILENO);
+                            close(devnull);
+                        }
+                        execlp("sh", "sh", "-c",
+                               "nbs-ts list 2>/dev/null | grep -c alive || echo 0",
+                               (char *)NULL);
+                    }
+                    _exit(127);
+                } else if (cpid > 0) {
+                    /* Parent: read count from pipe */
+                    close(pipefd[1]);
+                    FILE *fp = fdopen(pipefd[0], "r");
+                    if (fp) {
+                        if (fscanf(fp, "%d", &count) != 1) count = 0;
+                        fclose(fp); /* closes pipefd[0] */
+                    } else {
+                        close(pipefd[0]);
+                    }
+                    int wstatus;
+                    waitpid(cpid, &wstatus, 0);
+                } else {
+                    /* fork failed */
+                    close(pipefd[0]);
+                    close(pipefd[1]);
+                }
             }
         }
         /* nbs-ts is the only session transport — no fallback needed */
 
-        watchdog_decision_t d = watchdog_evaluate(ws, count, time(NULL));
+        time_t eval_now = time(NULL);
+        if (eval_now == (time_t)-1) continue; /* clock error — skip this cycle */
+        watchdog_decision_t d = watchdog_evaluate(ws, count, eval_now);
         if (d == WATCHDOG_RESTART) {
             char script[4096 + 64];
             if (resolve_restart_script(ws->project_root,
                                         script, sizeof(script)) == 0) {
+                /* Safety: fork in a multi-threaded process is POSIX-legal
+                 * provided the child calls only async-signal-safe functions
+                 * before exec. execlp and _exit satisfy this constraint.
+                 * No heap allocation, no stdio, no mutex acquisition. */
                 pid_t rpid = fork();
                 if (rpid == 0) {
                     /* Child: exec restart script with project_root and chat_path */
@@ -1307,12 +1364,6 @@ int main(int argc, char **argv) {
      * before killing them. Must happen before raw mode (needs canonical
      * input for Y/N prompt). */
     if (restart_immediately) {
-        /* Count running nbs-* tmux sessions for this chat */
-        char count_cmd[4096];
-        snprintf(count_cmd, sizeof(count_cmd),
-                 "tmux list-sessions -F '#{session_name}' 2>/dev/null "
-                 "| grep -c '^nbs-.*-%s$' 2>/dev/null || echo 0",
-                 g_chat_file);  /* approximate — uses chat file basename */
         FILE *fp = popen("tmux list-sessions -F '#{session_name}' 2>/dev/null "
                          "| grep -c '^nbs-' 2>/dev/null || echo 0", "r");
         int running = 0;
@@ -1710,6 +1761,13 @@ int main(int argc, char **argv) {
 
             /* /pause — freeze team in place, no process kills */
             if (strcmp(edit.buf, "/pause") == 0) {
+                if (g_watchdog.project_root[0] == '\0') {
+                    printf("  %sWatchdog not initialised — cannot pause.%s\n",
+                           DIM, RESET);
+                    line_state_reset(&edit);
+                    print_prompt(g_handle);
+                    continue;
+                }
                 char pause_path[8192];
                 snprintf(pause_path, sizeof(pause_path),
                          "%s/.nbs/control-pause", g_watchdog.project_root);
@@ -1737,6 +1795,13 @@ int main(int argc, char **argv) {
 
             /* /resume — wake up paused team */
             if (strcmp(edit.buf, "/resume") == 0) {
+                if (g_watchdog.project_root[0] == '\0') {
+                    printf("  %sWatchdog not initialised — cannot resume.%s\n",
+                           DIM, RESET);
+                    line_state_reset(&edit);
+                    print_prompt(g_handle);
+                    continue;
+                }
                 char pause_path[8192];
                 snprintf(pause_path, sizeof(pause_path),
                          "%s/.nbs/control-pause", g_watchdog.project_root);
@@ -1764,18 +1829,27 @@ int main(int argc, char **argv) {
                     char rscript[4096 + 64];
                     if (resolve_restart_script(g_watchdog.project_root,
                                                rscript, sizeof(rscript)) == 0) {
+                        /* Double-fork to avoid zombie: intermediate child
+                         * exits immediately, grandchild reparented to init. */
                         pid_t rpid = fork();
                         if (rpid == 0) {
-                            /* Child: exec restart script */
-                            execlp("bash", "bash", rscript,
-                                   g_watchdog.project_root,
-                                   g_watchdog.chat_path, (char *)NULL);
-                            _exit(127);
+                            pid_t rpid2 = fork();
+                            if (rpid2 == 0) {
+                                /* Grandchild: exec restart script */
+                                execlp("bash", "bash", rscript,
+                                       g_watchdog.project_root,
+                                       g_watchdog.chat_path, (char *)NULL);
+                                _exit(127);
+                            }
+                            _exit(rpid2 < 0 ? 127 : 0);
                         } else if (rpid < 0) {
                             fprintf(stderr, "warning: fork for /restart failed: %s\n",
                                     strerror(errno));
+                        } else {
+                            /* Parent: reap intermediate child */
+                            int wstatus;
+                            waitpid(rpid, &wstatus, 0);
                         }
-                        /* Parent: do not wait — restart runs in background */
                     }
                 }
                 line_state_reset(&edit);

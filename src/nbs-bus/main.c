@@ -205,8 +205,10 @@ static int validate_handle(const char *handle)
     return 0;
 }
 
-/* Validate that an event filename is safe: no path separators,
- * no ".." prefix, within length limits. Returns 0 if valid, -1 if invalid. */
+/* Validate that an event filename is safe: non-empty, no path separators,
+ * no ".." prefix, no ".", .event suffix, within length limits.
+ * Returns 0 if valid, -1 if invalid.
+ * NOTE: logic is kept consistent with validate_event_filename in bus.c (S6). */
 static int validate_event_filename(const char *event_file)
 {
     ASSERT_MSG(event_file != NULL, "validate_event_filename: event_file is NULL");
@@ -219,8 +221,8 @@ static int validate_event_filename(const char *event_file)
                 event_file);
         return -1;
     }
-    if (strncmp(event_file, "..", 2) == 0) {
-        fprintf(stderr, "Error: event-file must not start with '..': '%s'\n",
+    if (strncmp(event_file, "..", 2) == 0 || strcmp(event_file, ".") == 0) {
+        fprintf(stderr, "Error: event-file must not be '.' or start with '..': '%s'\n",
                 event_file);
         return -1;
     }
@@ -228,6 +230,11 @@ static int validate_event_filename(const char *event_file)
     if (ef_len >= BUS_MAX_FILENAME) {
         fprintf(stderr, "Error: event-file name too long (%zu >= %d): '%s'\n",
                 ef_len, BUS_MAX_FILENAME, event_file);
+        return -1;
+    }
+    if (ef_len < 7 || strcmp(event_file + ef_len - 6, ".event") != 0) {
+        fprintf(stderr, "Error: event-file must end in .event: '%s'\n",
+                event_file);
         return -1;
     }
     return 0;
@@ -272,8 +279,15 @@ static int cmd_publish(int argc, char **argv)
 
     /* Payload is the first positional arg after priority that doesn't start with -- */
     const char *payload = NULL;
-    if (argc > 6 && strncmp(argv[6], "--", 2) != 0)
-        payload = argv[6];
+    if (argc > 6) {
+        if (strncmp(argv[6], "--", 2) != 0) {
+            payload = argv[6];
+        } else {
+            /* H12: warn when payload looks like a flag — it will be skipped */
+            fprintf(stderr, "Warning: argv[6] '%s' starts with '--', treating as option not payload\n",
+                    argv[6]);
+        }
+    }
 
     if (payload != NULL && strlen(payload) >= BUS_MAX_PAYLOAD) {
         fprintf(stderr, "Error: payload too long (%zu >= %d)\n",

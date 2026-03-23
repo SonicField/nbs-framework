@@ -132,6 +132,19 @@ int exec_capture(const char *const argv[], char *out_buf, size_t out_size)
     ASSERT_MSG(total < out_size,
                "exec_capture postcondition: total %zu >= out_size %zu — "
                "NUL terminator would be out of bounds", total, out_size);
+
+    /* H1 fix: drain remaining pipe data if buffer is full.
+     * If the child produced more output than out_size-1, the read loop
+     * stopped but the pipe still has data. The child may block on write()
+     * waiting for pipe space, preventing it from exiting. Drain the pipe
+     * so waitpid() below does not deadlock. */
+    if (total >= out_size - 1) {
+        char drain[4096];
+        while (1) {
+            ssize_t d = read(pipefd[0], drain, sizeof(drain));
+            if (d <= 0) break;  /* EOF or error */
+        }
+    }
     close(pipefd[0]);
 
     /* Reap child — retry on EINTR */

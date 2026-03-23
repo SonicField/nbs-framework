@@ -29,6 +29,7 @@
 #include "../nbs-common/nbs_assert.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,8 +159,13 @@ done:
         if (registry_find_first(registry_path, "chat",
                                  chat_path, sizeof(chat_path)) == 0) {
             char msg[SIDECAR_MAX_MESSAGE];
-            snprintf(msg, sizeof(msg),
+            int sn_urgent = snprintf(msg, sizeof(msg),
                      "URGENT: @supervisor - agent unresponsive %s", cfg->handle);
+            /* H6 fix: assert URGENT message was not truncated — a truncated
+             * URGENT message could lose the handle, making it unactionable. */
+            ASSERT_MSG(sn_urgent >= 0 && (size_t)sn_urgent < sizeof(msg),
+                       "handle_interrupt: URGENT message truncated for handle '%s'",
+                       cfg->handle);
             int rc = chat_client_send(chat_path, "sidecar", msg);
             if (rc != 0) {
                 fprintf(stderr, "handle_interrupt: chat_client_send URGENT failed "
@@ -219,15 +225,11 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     }
     truncated[toff] = '\0';
 
-    /* Escape @ signs to prevent mention feedback loops */
+    /* Escape @ signs to prevent mention feedback loops.
+     * sanitise_at_signs replaces all '@' with '#' in-place — after this,
+     * escape_mentions would be a no-op (no '@' chars remain to escape).
+     * B2/B3 fix: removed dead escape_mentions call and its NULL check. */
     sanitise_at_signs(truncated);
-    char *escaped = escape_mentions(truncated);
-    if (!escaped) {
-        fprintf(stderr, "handle_query: escape_mentions returned NULL for '%s'\n",
-                cfg->handle);
-        free(content);
-        return -1;
-    }
 
     /* Find first registered chat and send */
     char chat_path[SIDECAR_MAX_PATH];
@@ -235,21 +237,19 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
                              chat_path, sizeof(chat_path)) != 0) {
         fprintf(stderr, "handle_query: no chat registered for '%s'\n",
                 cfg->handle);
-        free(escaped);
         free(content);
         return -1;
     }
 
     char msg[SIDECAR_MAX_CONTENT];
     snprintf(msg, sizeof(msg),
-             "session output for %s:\n%s", cfg->handle, escaped);
+             "session output for %s:\n%s", cfg->handle, truncated);
     int rc = chat_client_send(chat_path, "sidecar", msg);
     if (rc != 0) {
         fprintf(stderr, "handle_query: chat_client_send failed for '%s'\n",
                 cfg->handle);
     }
 
-    free(escaped);
     free(content);
     return rc;
 }
@@ -354,7 +354,11 @@ static int should_inject_notify(const sidecar_config_t *cfg,
     now = time(NULL);
     time_t elapsed = now - state->last_notify_time;
 
+    /* H8 fix: only access mention_payload when mention_detected is set.
+     * When mention_detected==0, mention_payload may contain stale data
+     * from a previous cycle. Short-circuit evaluation prevents the access. */
     int mention_bypasses_cooldown = (state->mention_detected == 1 &&
+        state->mention_payload[0] != '\0' &&
         strstr(state->mention_payload, "from sidecar:") == NULL);
 
     if (strcmp(state->bus_max_priority, "critical") != 0 &&
@@ -842,8 +846,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             }
         }
 
-        state.idle_seconds++;
-        state.bus_check_counter++;
+        /* H2 fix: cap idle_seconds to prevent int overflow.
+         * At 1 tick/second, INT_MAX (~2^31) is ~68 years — unreachable in
+         * practice, but capping is cheap and makes the invariant falsifiable. */
+        if (state.idle_seconds < INT_MAX)
+            state.idle_seconds++;
+        if (state.bus_check_counter < INT_MAX)
+            state.bus_check_counter++;
 
         /* Bus-aware check */
         if (state.bus_check_counter >= cfg->bus_check_interval) {

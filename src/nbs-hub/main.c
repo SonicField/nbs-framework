@@ -17,6 +17,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/stat.h>
 
 /*
@@ -258,8 +259,10 @@ int main(int argc, char *argv[])
     if (strcmp(command, "log") == 0) {
         int n = MAX_LOG_DEFAULT;
         if (arg_start + 1 < argc) {
-            n = atoi(argv[arg_start + 1]);
-            if (n <= 0) n = MAX_LOG_DEFAULT;
+            char *endptr;
+            long val = strtol(argv[arg_start + 1], &endptr, 10);
+            if (endptr != argv[arg_start + 1] && val > 0 && val <= INT_MAX)
+                n = (int)val;
         }
         return cmd_log(n, project_dir);
     }

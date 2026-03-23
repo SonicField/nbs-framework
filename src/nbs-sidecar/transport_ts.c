@@ -10,12 +10,9 @@
  *   ~/.nbs-ts/sessions/<handle>/pid          — child process PID
  */
 
-/*
- * GCC's -Wformat-truncation computes worst-case buffer sizes from
- * declared array lengths. Our path buffers (4096 bytes) are far larger
- * than actual paths (~50 bytes), so truncation cannot occur in practice.
- */
-#pragma GCC diagnostic ignored "-Wformat-truncation"
+/* H5 fix: removed blanket -Wformat-truncation suppression.
+ * All snprintf calls in this file check return values and handle
+ * truncation explicitly — the pragma was masking potential issues. */
 
 #include "transport.h"
 #include "../nbs-common/nbs_assert.h"
@@ -81,6 +78,8 @@ static pid_t read_pid(const ts_ctx_t *ctx)
     char *endptr;
     long val = strtol(buf, &endptr, 10);
     if (errno != 0 || endptr == buf || *endptr != '\0') return -1;
+    /* B4 fix: reject pid=0 (kernel) and negative values (invalid) */
+    if (val <= 0) return -1;
     return (pid_t)val;
 }
 
@@ -138,7 +137,11 @@ static char *ts_capture(const transport_t *self, int scrollback)
         return empty;
     }
 
-    /* If scrollback > 0, find the last `scrollback` lines */
+    /* If scrollback > 0, find the last `scrollback` lines.
+     * H3: scrollback=0 means "return all captured data" (up to
+     * TS_CAPTURE_BUF_SIZE bytes from the tail of output.log).
+     * This is used internally for full-buffer operations; normal
+     * callers pass scrollback > 0 for line-limited captures. */
     if (scrollback > 0) {
         int lines_found = 0;
         ssize_t pos = n - 1;
@@ -335,6 +338,15 @@ int transport_ts_init(transport_t *tp, const char *handle)
 
     if (handle[0] == '\0') {
         fprintf(stderr, "transport_ts_init: handle is empty\n");
+        return -1;
+    }
+
+    /* S2 fix: reject path traversal in session handle.
+     * Handle is used to construct ~/.nbs-ts/sessions/<handle>/ — a handle
+     * containing '/' or '..' could escape the sessions directory. */
+    if (strchr(handle, '/') != NULL || strstr(handle, "..") != NULL) {
+        fprintf(stderr, "transport_ts_init: handle contains path traversal "
+                "characters: '%s'\n", handle);
         return -1;
     }
 

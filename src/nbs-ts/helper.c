@@ -18,6 +18,8 @@
 
 #define _GNU_SOURCE
 
+#include "nbs_assert.h"
+
 #include <errno.h>
 #include <stdarg.h>
 #include <fcntl.h>
@@ -41,8 +43,10 @@ static char g_sock_path[104];  /* must fit in sun_path (108 bytes) */
 static volatile sig_atomic_t g_quit = 0;
 
 static void handle_signal(int sig) {
+    int saved_errno = errno;
     (void)sig;
     g_quit = 1;
+    errno = saved_errno;
 }
 
 static void log_msg(const char *fmt, ...) {
@@ -63,6 +67,9 @@ static void log_msg(const char *fmt, ...) {
 }
 
 static int send_fd(int sock, int fd) {
+    ASSERT_MSG(sock >= 0, "send_fd: invalid socket fd: %d", sock);
+    ASSERT_MSG(fd >= 0, "send_fd: invalid fd to send: %d", fd);
+
     char buf[1] = {'F'};
     struct iovec iov = { .iov_base = buf, .iov_len = 1 };
 
@@ -95,6 +102,8 @@ static void reap_children(void) {
 }
 
 static void handle_client(int client_fd) {
+    ASSERT_MSG(client_fd >= 0, "handle_client: invalid client_fd: %d", client_fd);
+
     /* Verify peer credentials */
     struct ucred cred;
     socklen_t cred_len = sizeof(cred);
@@ -112,18 +121,30 @@ static void handle_client(int client_fd) {
         return;
     }
 
-    /* Read command */
+    /* Read command — loop until EOF (client closes after sending) */
     char cmd[MAX_CMD_LEN];
-    ssize_t n = read(client_fd, cmd, sizeof(cmd) - 1);
-    if (n <= 0) {
+    size_t cmd_len = 0;
+    for (;;) {
+        ssize_t n = read(client_fd, cmd + cmd_len, sizeof(cmd) - 1 - cmd_len);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            log_msg("reject: read error: %s (peer_pid=%d)", strerror(errno), cred.pid);
+            close(client_fd);
+            return;
+        }
+        if (n == 0) break;  /* EOF — client closed write end */
+        cmd_len += (size_t)n;
+        if (cmd_len >= sizeof(cmd) - 1) break;
+    }
+    if (cmd_len == 0) {
         log_msg("reject: empty command (peer_pid=%d)", cred.pid);
         close(client_fd);
         return;
     }
-    cmd[n] = '\0';
+    cmd[cmd_len] = '\0';
 
     /* Strip trailing newline if present */
-    if (n > 0 && cmd[n - 1] == '\n') cmd[n - 1] = '\0';
+    if (cmd_len > 0 && cmd[cmd_len - 1] == '\n') cmd[cmd_len - 1] = '\0';
 
     /* Create PTY */
     int master_fd, slave_fd;
@@ -248,8 +269,16 @@ int main(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    /* Ignore SIGCHLD — reap in main loop */
-    signal(SIGCHLD, SIG_IGN);
+    /* SIGCHLD: use SA_NOCLDSTOP so stopped children don't wake us,
+     * but leave the default handler so zombies accumulate for
+     * reap_children() to collect via waitpid(WNOHANG). */
+    {
+        struct sigaction sa_chld;
+        memset(&sa_chld, 0, sizeof(sa_chld));
+        sa_chld.sa_handler = SIG_DFL;
+        sa_chld.sa_flags = SA_NOCLDSTOP;
+        sigaction(SIGCHLD, &sa_chld, NULL);
+    }
 
     log_msg("nbs-ts-helper started (pid %d)", getpid());
     log_msg("Listening on %s", g_sock_path);

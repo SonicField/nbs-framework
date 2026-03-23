@@ -55,13 +55,34 @@
 
 /* ── Accessor functions for io.c and wait.c ───────────────────────── */
 
-int nbs_ts_get_master_fd(const nbs_ts_session_t *s)  { return s->master_fd; }
-const char *nbs_ts_get_output_log_path(const nbs_ts_session_t *s)  { return s->output_log_path; }
-const char *nbs_ts_get_completion_log_path(const nbs_ts_session_t *s) { return s->completion_log_path; }
-off_t nbs_ts_get_read_cursor(const nbs_ts_session_t *s)  { return s->read_cursor; }
-void nbs_ts_set_read_cursor(nbs_ts_session_t *s, off_t pos)  { s->read_cursor = pos; }
-unsigned long nbs_ts_get_completion_cursor(const nbs_ts_session_t *s)  { return s->completion_cursor; }
-void nbs_ts_set_completion_cursor(nbs_ts_session_t *s, unsigned long seq)  { s->completion_cursor = seq; }
+int nbs_ts_get_master_fd(const nbs_ts_session_t *s) {
+    ASSERT_MSG(s != NULL, "nbs_ts_get_master_fd: session is NULL");
+    return s->master_fd;
+}
+const char *nbs_ts_get_output_log_path(const nbs_ts_session_t *s) {
+    ASSERT_MSG(s != NULL, "nbs_ts_get_output_log_path: session is NULL");
+    return s->output_log_path;
+}
+const char *nbs_ts_get_completion_log_path(const nbs_ts_session_t *s) {
+    ASSERT_MSG(s != NULL, "nbs_ts_get_completion_log_path: session is NULL");
+    return s->completion_log_path;
+}
+off_t nbs_ts_get_read_cursor(const nbs_ts_session_t *s) {
+    ASSERT_MSG(s != NULL, "nbs_ts_get_read_cursor: session is NULL");
+    return s->read_cursor;
+}
+void nbs_ts_set_read_cursor(nbs_ts_session_t *s, off_t pos) {
+    ASSERT_MSG(s != NULL, "nbs_ts_set_read_cursor: session is NULL");
+    s->read_cursor = pos;
+}
+unsigned long nbs_ts_get_completion_cursor(const nbs_ts_session_t *s) {
+    ASSERT_MSG(s != NULL, "nbs_ts_get_completion_cursor: session is NULL");
+    return s->completion_cursor;
+}
+void nbs_ts_set_completion_cursor(nbs_ts_session_t *s, unsigned long seq) {
+    ASSERT_MSG(s != NULL, "nbs_ts_set_completion_cursor: session is NULL");
+    s->completion_cursor = seq;
+}
 
 /* ── Utilities ────────────────────────────────────────────────────── */
 
@@ -132,9 +153,11 @@ static int write_file(const char *path, const char *content)
     fsync(fd);
     close(fd);
 
-    ASSERT_MSG(w == (ssize_t)len,
-               "write_file: partial write to '%s': wrote %zd of %zu bytes",
-               path, w, len);
+    if (w != (ssize_t)len) {
+        fprintf(stderr, "write_file: partial write to '%s': wrote %zd of %zu bytes\n",
+                path, w, len);
+        return -1;
+    }
 
     return 0;
 }
@@ -146,7 +169,11 @@ static void *capture_thread_fn(void *arg)
     nbs_ts_session_t *s = (nbs_ts_session_t *)arg;
 
     int log_fd = open(s->output_log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (log_fd < 0) return NULL;
+    if (log_fd < 0) {
+        fprintf(stderr, "capture_thread: open '%s' failed: %s\n",
+                s->output_log_path, strerror(errno));
+        return NULL;
+    }
 
     char buf[4096];
     ssize_t n;
@@ -182,8 +209,8 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     s->child_pid = -1;
 
     if (generate_handle(s->handle, sizeof(s->handle)) < 0) {
-        ASSERT_MSG(0, "nbs_ts_create: generate_handle failed: %s",
-                   strerror(errno));
+        fprintf(stderr, "nbs_ts_create: generate_handle failed: %s\n",
+                strerror(errno));
         free(s);
         return NULL;
     }
@@ -235,6 +262,13 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     {
         char cwd_prefix[NBS_TS_MAX_FILE_PATH + 16] = "";
         if (opts && opts->cwd) {
+            /* Reject cwd containing single quotes to prevent shell injection */
+            if (strchr(opts->cwd, '\'') != NULL) {
+                fprintf(stderr, "nbs_ts_create: cwd contains single quote "
+                        "(shell injection risk), rejected\n");
+                free(s);
+                return NULL;
+            }
             snprintf(cwd_prefix, sizeof(cwd_prefix), "cd '%s' && ", opts->cwd);
         }
         snprintf(setup, sizeof(setup),
@@ -359,7 +393,7 @@ void nbs_ts_destroy(nbs_ts_session_t *s)
 
     if (s->master_fd >= 0) {
         close(s->master_fd);
-        s->master_fd = -999; /* double-free guard: sentinel value */
+        s->master_fd = -1; /* mark as closed */
     }
 
     if (s->capture_running) {

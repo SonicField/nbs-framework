@@ -91,6 +91,10 @@ static int parse_int_option(const char *arg, int default_val)
 
 static char *read_file_str(const char *path, char *buf, size_t bufsize)
 {
+    ASSERT_MSG(path != NULL, "read_file_str: path is NULL");
+    ASSERT_MSG(buf != NULL, "read_file_str: buf is NULL");
+    ASSERT_MSG(bufsize > 1, "read_file_str: bufsize too small: %zu", bufsize);
+
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
         fprintf(stderr, "nbs-ts: read_file_str: open '%s' failed: %s\n",
@@ -113,6 +117,9 @@ static char *read_file_str(const char *path, char *buf, size_t bufsize)
 
 static int write_file_str(const char *path, const char *content)
 {
+    ASSERT_MSG(path != NULL, "write_file_str: path is NULL");
+    ASSERT_MSG(content != NULL, "write_file_str: content is NULL");
+
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         fprintf(stderr, "nbs-ts: write_file_str: open '%s' failed: %s\n",
@@ -169,7 +176,12 @@ static pid_t session_pid(const char *handle)
 
     char buf[32];
     if (!read_file_str(path, buf, sizeof(buf))) return -1;
-    return (pid_t)atoi(buf);
+    errno = 0;
+    char *endptr;
+    long val = strtol(buf, &endptr, 10);
+    if (errno != 0 || endptr == buf || *endptr != '\0' || val <= 0 || val > (long)INT_MAX)
+        return -1;
+    return (pid_t)val;
 }
 
 static int session_is_alive(const char *handle)
@@ -223,7 +235,12 @@ static void daemon_relay(int master_fd, const char *output_log_path,
 
     /* Make master_fd non-blocking for poll */
     int flags = fcntl(master_fd, F_GETFL);
-    if (flags >= 0) fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags >= 0) {
+        if (fcntl(master_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            fprintf(stderr, "nbs-ts: daemon_relay: fcntl F_SETFL failed: %s\n",
+                    strerror(errno));
+        }
+    }
 
     char buf[4096];
     int running = 1;
@@ -266,7 +283,15 @@ static void daemon_relay(int master_fd, const char *output_log_path,
             /* Drain any remaining data */
             ssize_t n;
             while ((n = read(master_fd, buf, sizeof(buf))) > 0) {
-                write(log_fd, buf, (size_t)n);
+                ssize_t dw = 0;
+                while (dw < n) {
+                    ssize_t w = write(log_fd, buf + dw, (size_t)(n - dw));
+                    if (w < 0) {
+                        if (errno == EINTR) continue;
+                        break;
+                    }
+                    dw += w;
+                }
             }
             fsync(log_fd);
             running = 0;
@@ -659,8 +684,13 @@ static int cmd_read_new(const char *handle, int strip)
 
     off_t cursor = 0;
     char cursor_buf[32];
-    if (read_file_str(cursor_path, cursor_buf, sizeof(cursor_buf)))
-        cursor = (off_t)atol(cursor_buf);
+    if (read_file_str(cursor_path, cursor_buf, sizeof(cursor_buf))) {
+        errno = 0;
+        char *endptr;
+        long val = strtol(cursor_buf, &endptr, 10);
+        if (errno == 0 && endptr != cursor_buf && *endptr == '\0' && val >= 0)
+            cursor = (off_t)val;
+    }
 
     int fd = open(log_path, O_RDONLY);
     if (fd < 0) return NBS_TS_EXIT_SUCCESS;
@@ -857,7 +887,13 @@ static int cmd_wait_pattern(const char *handle, const char *pattern,
     if (wd < 0) { close(ifd); return NBS_TS_EXIT_ERROR; }
 
     struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) {
+        fprintf(stderr, "nbs-ts: cmd_wait_pattern: clock_gettime failed: %s\n",
+                strerror(errno));
+        inotify_rm_watch(ifd, wd);
+        close(ifd);
+        return NBS_TS_EXIT_ERROR;
+    }
     deadline.tv_sec += timeout_sec;
 
     int found = 0;
@@ -895,7 +931,7 @@ static int cmd_wait_pattern(const char *handle, const char *pattern,
         if (found) break;
 
         struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) break;
         long long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000LL +
                                  (deadline.tv_nsec - now.tv_nsec) / 1000000LL;
         if (remaining_ms <= 0) break;
@@ -946,7 +982,13 @@ static int cmd_wait_complete(const char *handle, int timeout_sec)
     if (wd < 0) { close(ifd); return NBS_TS_EXIT_ERROR; }
 
     struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) {
+        fprintf(stderr, "nbs-ts: cmd_wait_complete: clock_gettime failed: %s\n",
+                strerror(errno));
+        inotify_rm_watch(ifd, wd);
+        close(ifd);
+        return NBS_TS_EXIT_ERROR;
+    }
     deadline.tv_sec += timeout_sec;
 
     int found = 0;
@@ -972,7 +1014,7 @@ static int cmd_wait_complete(const char *handle, int timeout_sec)
         if (found) break;
 
         struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) break;
         long long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000LL +
                                  (deadline.tv_nsec - now.tv_nsec) / 1000000LL;
         if (remaining_ms <= 0) break;
@@ -1029,8 +1071,13 @@ static int cmd_kill(const char *handle)
     snprintf(dpid_path, sizeof(dpid_path), "%s/daemon_pid", dir);
     char dpid_buf[32];
     if (read_file_str(dpid_path, dpid_buf, sizeof(dpid_buf))) {
-        pid_t dpid = (pid_t)atoi(dpid_buf);
-        if (dpid > 0) {
+        errno = 0;
+        char *endptr;
+        long dpid_val = strtol(dpid_buf, &endptr, 10);
+        pid_t dpid = (dpid_val > 1 && dpid_val <= (long)INT_MAX &&
+                      errno == 0 && endptr != dpid_buf && *endptr == '\0')
+                     ? (pid_t)dpid_val : -1;
+        if (dpid > 1) {
             kill(dpid, SIGTERM);
             usleep(50000);
             if (kill(dpid, 0) == 0) kill(dpid, SIGKILL);
@@ -1065,6 +1112,7 @@ static int cmd_list(void)
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
         if (ent->d_name[0] == '.') continue;
+        if (!is_valid_handle(ent->d_name)) continue;
 
         char meta_path[MAX_FILE_PATH];
         snprintf(meta_path, sizeof(meta_path), "%s/%s/meta",

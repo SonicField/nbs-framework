@@ -5,6 +5,7 @@
  */
 
 #include "helper_client.h"
+#include "nbs_assert.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -17,7 +18,9 @@
 #define MAX_CMD_LEN 4096
 
 int helper_request_pty(const char *command) {
-    if (!command || command[0] == '\0') return -1;
+    ASSERT_MSG(command != NULL, "helper_request_pty: command is NULL");
+    ASSERT_MSG(command[0] != '\0', "helper_request_pty: command is empty");
+
 
     /* Build socket path */
     const char *home = getenv("HOME");
@@ -49,9 +52,17 @@ int helper_request_pty(const char *command) {
         close(s);
         return -1;
     }
-    if (write(s, command, cmd_len) < 0) {
-        close(s);
-        return -1;
+    {
+        size_t written = 0;
+        while (written < cmd_len) {
+            ssize_t w = write(s, command + written, cmd_len - written);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                close(s);
+                return -1;
+            }
+            written += (size_t)w;
+        }
     }
 
     /* Receive fd via SCM_RIGHTS */

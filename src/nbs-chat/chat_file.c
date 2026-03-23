@@ -48,6 +48,8 @@ static int safe_parse_int64(const char *str, int64_t *out) {
 }
 
 static void get_timestamp(char *buf, size_t buf_size) {
+    ASSERT_MSG(buf != NULL, "get_timestamp: buf is NULL");
+    ASSERT_MSG(buf_size > 0, "get_timestamp: buf_size must be positive, got %zu", buf_size);
     time_t now = time(NULL);
     ASSERT_MSG(now != (time_t)-1, "get_timestamp: time() failed");
     struct tm tm_buf;
@@ -63,6 +65,8 @@ static void get_timestamp(char *buf, size_t buf_size) {
  * This is self-referential: we must solve for N.
  */
 static int64_t compute_file_length(const char *content_without_length) {
+    ASSERT_MSG(content_without_length != NULL,
+               "compute_file_length: content_without_length is NULL");
     /* Write content without the file-length line, measure it */
     int64_t base_size = (int64_t)strlen(content_without_length); /* content already ends with \n */
 
@@ -334,6 +338,12 @@ static int chat_auto_archive(const char *path, char **all_lines,
         archive_content[aoff++] = '\n';
     }
     archive_content[aoff] = '\0';
+
+    /* Postcondition: all content was copied exactly */
+    ASSERT_MSG(aoff == archive_content_size,
+               "chat_auto_archive: content copy mismatch: "
+               "aoff=%zu != archive_content_size=%zu",
+               aoff, archive_content_size);
 
     int64_t archive_file_len = compute_file_length(archive_content);
 
@@ -1499,6 +1509,7 @@ void chat_state_free(chat_state_t *state) {
     }
     state->message_count = 0;
     state->skipped_count = 0;
+    state->participant_count = 0;
 }
 
 /* --- Read cursor tracking --- */
