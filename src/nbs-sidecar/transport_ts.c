@@ -46,6 +46,10 @@ typedef struct {
  */
 static int resolve_session_dir(const char *handle, char *buf, size_t bufsize)
 {
+    ASSERT_MSG(handle != NULL, "resolve_session_dir: handle is NULL");
+    ASSERT_MSG(buf != NULL, "resolve_session_dir: buf is NULL");
+    ASSERT_MSG(bufsize > 0, "resolve_session_dir: bufsize is 0");
+
     const char *home = getenv("HOME");
     if (!home || home[0] == '\0') return -1;
 
@@ -60,6 +64,8 @@ static int resolve_session_dir(const char *handle, char *buf, size_t bufsize)
  */
 static pid_t read_pid(const ts_ctx_t *ctx)
 {
+    ASSERT_MSG(ctx != NULL, "read_pid: ctx is NULL");
+
     int fd = open(ctx->pid_path, O_RDONLY);
     if (fd < 0) return -1;
 
@@ -70,7 +76,12 @@ static pid_t read_pid(const ts_ctx_t *ctx)
 
     buf[n] = '\0';
     if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
-    return (pid_t)atoi(buf);
+
+    errno = 0;
+    char *endptr;
+    long val = strtol(buf, &endptr, 10);
+    if (errno != 0 || endptr == buf || *endptr != '\0') return -1;
+    return (pid_t)val;
 }
 
 /*
@@ -99,6 +110,7 @@ static char *ts_capture(const transport_t *self, int scrollback)
     if (file_size <= 0) {
         close(fd);
         char *empty = calloc(1, 1);
+        ASSERT_MSG(empty != NULL, "ts_capture: calloc(1,1) failed — out of memory");
         return empty;
     }
 
@@ -110,6 +122,8 @@ static char *ts_capture(const transport_t *self, int scrollback)
     off_t read_offset = file_size - (off_t)read_size;
     char *buf = malloc(read_size + 1);
     if (!buf) {
+        fprintf(stderr, "ts_capture: malloc(%zu) failed — out of memory\n",
+                read_size + 1);
         close(fd);
         return NULL;
     }
@@ -120,6 +134,7 @@ static char *ts_capture(const transport_t *self, int scrollback)
     if (n <= 0) {
         free(buf);
         char *empty = calloc(1, 1);
+        ASSERT_MSG(empty != NULL, "ts_capture: calloc(1,1) failed — out of memory");
         return empty;
     }
 
@@ -173,7 +188,18 @@ static int ts_send_text(const transport_t *self, const char *text)
 
     /* Clear O_NONBLOCK after open so writes block until complete */
     int flags = fcntl(fd, F_GETFL);
-    if (flags >= 0) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+    if (flags < 0) {
+        fprintf(stderr, "ts_send_text: fcntl F_GETFL failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        fprintf(stderr, "ts_send_text: fcntl F_SETFL failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
 
     /* Wrap content in bracketed paste markers so TUI apps (like Claude
      * Code) that enable bracketed paste mode ([?2004h]) treat the input
@@ -182,7 +208,12 @@ static int ts_send_text(const transport_t *self, const char *text)
     static const char paste_start[] = "\x1b[200~";
     static const char paste_end[] = "\x1b[201~";
 
-    write(fd, paste_start, sizeof(paste_start) - 1);
+    if (write(fd, paste_start, sizeof(paste_start) - 1) < 0) {
+        fprintf(stderr, "ts_send_text: write paste_start failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
 
     size_t len = strlen(text);
     size_t written = 0;
@@ -198,7 +229,12 @@ static int ts_send_text(const transport_t *self, const char *text)
         written += (size_t)w;
     }
 
-    write(fd, paste_end, sizeof(paste_end) - 1);
+    if (write(fd, paste_end, sizeof(paste_end) - 1) < 0) {
+        fprintf(stderr, "ts_send_text: write paste_end failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
 
     close(fd);
     return 0;
@@ -207,7 +243,7 @@ static int ts_send_text(const transport_t *self, const char *text)
 /*
  * ts_send_key — Send a named key to the session.
  *
- * "Enter" → '\n', "Escape" → '\x1b'. Direct byte injection.
+ * "Enter" → '\r' (CR), "Escape" → '\x1b'. Direct byte injection.
  */
 static int ts_send_key(const transport_t *self, const char *key)
 {
@@ -237,8 +273,19 @@ static int ts_send_key(const transport_t *self, const char *key)
         return -1;
     }
 
-    int flags = fcntl(fd, F_GETFL);
-    if (flags >= 0) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+    int sflags = fcntl(fd, F_GETFL);
+    if (sflags < 0) {
+        fprintf(stderr, "ts_send_key: fcntl F_GETFL failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if (fcntl(fd, F_SETFL, sflags & ~O_NONBLOCK) < 0) {
+        fprintf(stderr, "ts_send_key: fcntl F_SETFL failed: %s\n",
+                strerror(errno));
+        close(fd);
+        return -1;
+    }
 
     ssize_t w = write(fd, data, len);
     close(fd);
@@ -308,15 +355,40 @@ int transport_ts_init(transport_t *tp, const char *handle)
     }
 
     ts_ctx_t *ctx = calloc(1, sizeof(ts_ctx_t));
-    if (!ctx) return -1;
+    if (!ctx) {
+        fprintf(stderr, "transport_ts_init: calloc(%zu) failed — out of memory\n",
+                sizeof(ts_ctx_t));
+        return -1;
+    }
 
-    snprintf(ctx->session_dir, sizeof(ctx->session_dir), "%s", session_dir);
-    snprintf(ctx->output_log, sizeof(ctx->output_log),
-             "%s/output.log", session_dir);
-    snprintf(ctx->input_fifo, sizeof(ctx->input_fifo),
-             "%s/input.fifo", session_dir);
-    snprintf(ctx->pid_path, sizeof(ctx->pid_path),
-             "%s/pid", session_dir);
+    int r;
+    r = snprintf(ctx->session_dir, sizeof(ctx->session_dir), "%s", session_dir);
+    if (r < 0 || (size_t)r >= sizeof(ctx->session_dir)) {
+        fprintf(stderr, "transport_ts_init: session_dir path truncated\n");
+        free(ctx);
+        return -1;
+    }
+    r = snprintf(ctx->output_log, sizeof(ctx->output_log),
+                 "%s/output.log", session_dir);
+    if (r < 0 || (size_t)r >= sizeof(ctx->output_log)) {
+        fprintf(stderr, "transport_ts_init: output_log path truncated\n");
+        free(ctx);
+        return -1;
+    }
+    r = snprintf(ctx->input_fifo, sizeof(ctx->input_fifo),
+                 "%s/input.fifo", session_dir);
+    if (r < 0 || (size_t)r >= sizeof(ctx->input_fifo)) {
+        fprintf(stderr, "transport_ts_init: input_fifo path truncated\n");
+        free(ctx);
+        return -1;
+    }
+    r = snprintf(ctx->pid_path, sizeof(ctx->pid_path),
+                 "%s/pid", session_dir);
+    if (r < 0 || (size_t)r >= sizeof(ctx->pid_path)) {
+        fprintf(stderr, "transport_ts_init: pid_path path truncated\n");
+        free(ctx);
+        return -1;
+    }
 
     tp->capture = ts_capture;
     tp->send_text = ts_send_text;

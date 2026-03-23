@@ -29,7 +29,11 @@
 static long long get_monotonic_ms(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        fprintf(stderr, "get_monotonic_ms: clock_gettime failed: errno=%d\n",
+                errno);
+        return -1;
+    }
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
@@ -38,15 +42,23 @@ int nbs_ts_wait_complete(nbs_ts_session_t *s, int timeout_ms,
 {
     ASSERT_MSG(s != NULL, "nbs_ts_wait_complete: session is NULL");
     ASSERT_MSG(out != NULL, "nbs_ts_wait_complete: out is NULL");
+    ASSERT_MSG(timeout_ms >= 0, "nbs_ts_wait_complete: timeout_ms must be "
+               "non-negative, got %d", timeout_ms);
 
     unsigned long cursor = s->completion_cursor;
 
     int ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    if (ifd < 0) return -1;
+    if (ifd < 0) {
+        fprintf(stderr, "nbs_ts_wait_complete: inotify_init1 failed: "
+                "errno=%d\n", errno);
+        return -1;
+    }
 
     int wd = inotify_add_watch(ifd, s->completion_log_path,
                                IN_MODIFY | IN_CLOSE_WRITE);
     if (wd < 0) {
+        fprintf(stderr, "nbs_ts_wait_complete: inotify_add_watch failed: "
+                "path=%s errno=%d\n", s->completion_log_path, errno);
         close(ifd);
         return -1;
     }
@@ -104,13 +116,22 @@ int nbs_ts_wait_pattern(nbs_ts_session_t *s, const char *pattern,
 {
     ASSERT_MSG(s != NULL, "nbs_ts_wait_pattern: session is NULL");
     ASSERT_MSG(pattern != NULL, "nbs_ts_wait_pattern: pattern is NULL");
+    ASSERT_MSG(pattern[0] != '\0', "nbs_ts_wait_pattern: pattern is empty");
+    ASSERT_MSG(timeout_ms >= 0, "nbs_ts_wait_pattern: timeout_ms must be "
+               "non-negative, got %d", timeout_ms);
 
     int ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    if (ifd < 0) return -1;
+    if (ifd < 0) {
+        fprintf(stderr, "nbs_ts_wait_pattern: inotify_init1 failed: "
+                "errno=%d\n", errno);
+        return -1;
+    }
 
     int wd = inotify_add_watch(ifd, s->output_log_path,
                                IN_MODIFY | IN_CLOSE_WRITE);
     if (wd < 0) {
+        fprintf(stderr, "nbs_ts_wait_pattern: inotify_add_watch failed: "
+                "path=%s errno=%d\n", s->output_log_path, errno);
         close(ifd);
         return -1;
     }

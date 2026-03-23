@@ -91,11 +91,19 @@ static int parse_int_option(const char *arg, int default_val)
 static char *read_file_str(const char *path, char *buf, size_t bufsize)
 {
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
+    if (fd < 0) {
+        fprintf(stderr, "nbs-ts: read_file_str: open '%s' failed: %s\n",
+                path, strerror(errno));
+        return NULL;
+    }
 
     ssize_t n = read(fd, buf, bufsize - 1);
     close(fd);
-    if (n <= 0) return NULL;
+    if (n <= 0) {
+        fprintf(stderr, "nbs-ts: read_file_str: read '%s' failed: %s\n",
+                path, strerror(errno));
+        return NULL;
+    }
 
     buf[n] = '\0';
     if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
@@ -105,12 +113,21 @@ static char *read_file_str(const char *path, char *buf, size_t bufsize)
 static int write_file_str(const char *path, const char *content)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        fprintf(stderr, "nbs-ts: write_file_str: open '%s' failed: %s\n",
+                path, strerror(errno));
+        return -1;
+    }
     size_t len = strlen(content);
     ssize_t w = write(fd, content, len);
     fsync(fd);
     close(fd);
-    return (w == (ssize_t)len) ? 0 : -1;
+    if (w != (ssize_t)len) {
+        fprintf(stderr, "nbs-ts: write_file_str: write '%s' failed: %s\n",
+                path, strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 /*
@@ -177,13 +194,19 @@ static void daemon_relay(int master_fd, const char *output_log_path,
                          pid_t child_pid, const char *exit_code_path)
 {
     int log_fd = open(output_log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (log_fd < 0) return;
+    if (log_fd < 0) {
+        fprintf(stderr, "nbs-ts: daemon_relay: open log '%s' failed: %s\n",
+                output_log_path, strerror(errno));
+        _exit(1);
+    }
 
     /* Create the input FIFO */
     unlink(input_fifo_path);
     if (mkfifo(input_fifo_path, 0600) < 0) {
+        fprintf(stderr, "nbs-ts: daemon_relay: mkfifo '%s' failed: %s\n",
+                input_fifo_path, strerror(errno));
         close(log_fd);
-        return;
+        _exit(1);
     }
 
     /* Open FIFO in read-write non-blocking mode. O_RDWR keeps the
@@ -191,8 +214,10 @@ static void daemon_relay(int master_fd, const char *output_log_path,
      * POLLHUP and eliminating the reopen race window. */
     int fifo_fd = open(input_fifo_path, O_RDWR | O_NONBLOCK);
     if (fifo_fd < 0) {
+        fprintf(stderr, "nbs-ts: daemon_relay: open fifo '%s' failed: %s\n",
+                input_fifo_path, strerror(errno));
         close(log_fd);
-        return;
+        _exit(1);
     }
 
     /* Make master_fd non-blocking for poll */
@@ -285,8 +310,15 @@ static void daemon_relay(int master_fd, const char *output_log_path,
             char code_str[32];
             snprintf(code_str, sizeof(code_str), "%d", code);
             int efd = open(exit_code_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-            if (efd >= 0) {
-                write(efd, code_str, strlen(code_str));
+            if (efd < 0) {
+                fprintf(stderr, "nbs-ts: daemon: open exit_code '%s' failed: %s\n",
+                        exit_code_path, strerror(errno));
+            } else {
+                ssize_t ew = write(efd, code_str, strlen(code_str));
+                if (ew < 0) {
+                    fprintf(stderr, "nbs-ts: daemon: write exit_code failed: %s\n",
+                            strerror(errno));
+                }
                 close(efd);
             }
         }
@@ -308,6 +340,7 @@ static int cmd_create(const char *command)
         if (n != 4) return NBS_TS_EXIT_ERROR;
         snprintf(handle, sizeof(handle), "%02x%02x%02x%02x",
                  bytes[0], bytes[1], bytes[2], bytes[3]);
+        ASSERT_MSG(is_valid_handle(handle), "cmd_create: generated handle '%s' is invalid", handle);
     }
 
     /* Create session directory */
@@ -337,8 +370,25 @@ static int cmd_create(const char *command)
     snprintf(input_fifo, sizeof(input_fifo), "%s/input.fifo", session_dir);
 
     /* Create empty log files */
-    close(open(output_log, O_WRONLY | O_CREAT | O_TRUNC, 0600));
-    close(open(completion_log, O_WRONLY | O_CREAT | O_TRUNC, 0600));
+    {
+        int ofd = open(output_log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (ofd < 0) {
+            fprintf(stderr, "nbs-ts: create output log '%s' failed: %s\n",
+                    output_log, strerror(errno));
+            rmdir(session_dir);
+            return NBS_TS_EXIT_ERROR;
+        }
+        close(ofd);
+        int cfd = open(completion_log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (cfd < 0) {
+            fprintf(stderr, "nbs-ts: create completion log '%s' failed: %s\n",
+                    completion_log, strerror(errno));
+            unlink(output_log);
+            rmdir(session_dir);
+            return NBS_TS_EXIT_ERROR;
+        }
+        close(cfd);
+    }
 
     /* Create PTY */
     int master_fd, slave_fd;
@@ -352,7 +402,12 @@ static int cmd_create(const char *command)
     }
 
     /* Save slave PTY path */
-    write_file_str(slave_path_file, slave_name);
+    if (write_file_str(slave_path_file, slave_name) < 0) {
+        fprintf(stderr, "nbs-ts: write slave path failed\n");
+        close(master_fd);
+        close(slave_fd);
+        return NBS_TS_EXIT_ERROR;
+    }
 
     /* Write the rcfile for PROMPT_COMMAND before forking */
     char rcfile_path[MAX_FILE_PATH];
@@ -367,16 +422,32 @@ static int cmd_create(const char *command)
              completion_log);
 
     int rcfd = open(rcfile_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (rcfd >= 0) {
-        write(rcfd, rcfile_content, strlen(rcfile_content));
+    if (rcfd < 0) {
+        fprintf(stderr, "nbs-ts: create rcfile '%s' failed: %s\n",
+                rcfile_path, strerror(errno));
+        close(master_fd);
+        close(slave_fd);
+        return NBS_TS_EXIT_ERROR;
+    }
+    {
+        size_t rc_len = strlen(rcfile_content);
+        ssize_t rc_w = write(rcfd, rcfile_content, rc_len);
         close(rcfd);
+        if (rc_w != (ssize_t)rc_len) {
+            fprintf(stderr, "nbs-ts: write rcfile '%s' failed: %s\n",
+                    rcfile_path, strerror(errno));
+            close(master_fd);
+            close(slave_fd);
+            return NBS_TS_EXIT_ERROR;
+        }
     }
 
     /* Write metadata */
     char meta_buf[MAX_FILE_PATH * 2];
     snprintf(meta_buf, sizeof(meta_buf), "command: %s\nstart: %ld\n",
              command, (long)time(NULL));
-    write_file_str(meta_path, meta_buf);
+    if (write_file_str(meta_path, meta_buf) < 0)
+        fprintf(stderr, "nbs-ts: warning: failed to write metadata\n");
 
     /*
      * Fork the daemon. The daemon then forks the child.
@@ -759,7 +830,15 @@ static int cmd_wait_pattern(const char *handle, const char *pattern,
                 size_t to_read = (size_t)(end - (off_t)search_offset);
                 if (to_read > 1024 * 1024) to_read = 1024 * 1024;
                 char *buf = malloc(to_read + 1);
-                if (buf) {
+                if (!buf) {
+                    fprintf(stderr, "nbs-ts: cmd_wait_pattern: malloc(%zu) failed: %s\n",
+                            to_read + 1, strerror(errno));
+                    close(fd);
+                    inotify_rm_watch(ifd, wd);
+                    close(ifd);
+                    return NBS_TS_EXIT_ERROR;
+                }
+                {
                     ssize_t n = pread(fd, buf, to_read, (off_t)search_offset);
                     if (n > 0) {
                         buf[n] = '\0';
@@ -1025,7 +1104,11 @@ static char *join_args(int argc, char *argv[], int start)
         if (i < argc - 1) total++;
     }
     char *buf = malloc(total + 1);
-    if (!buf) return NULL;
+    if (!buf) {
+        fprintf(stderr, "nbs-ts: join_args: malloc(%zu) failed: %s\n",
+                total + 1, strerror(errno));
+        return NULL;
+    }
     size_t pos = 0;
     for (int i = start; i < argc; i++) {
         size_t len = strlen(argv[i]);

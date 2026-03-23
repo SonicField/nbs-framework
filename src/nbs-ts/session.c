@@ -74,7 +74,9 @@ static int generate_handle(char *buf, size_t bufsize)
 
     unsigned char bytes[4];
     ssize_t n = read(fd, bytes, sizeof(bytes));
-    close(fd);
+    int close_err = close(fd);
+    ASSERT_MSG(close_err == 0, "generate_handle: close(/dev/urandom) failed: %s",
+               strerror(errno));
 
     if (n != (ssize_t)sizeof(bytes)) return -1;
 
@@ -88,10 +90,8 @@ int nbs_ts_sessions_dir(char *buf, size_t bufsize)
     ASSERT_MSG(buf != NULL, "nbs_ts_sessions_dir: buf is NULL");
 
     const char *home = getenv("HOME");
-    if (!home || home[0] == '\0') {
-        fprintf(stderr, "nbs-ts: HOME not set\n");
-        return -1;
-    }
+    ASSERT_MSG(home != NULL && home[0] != '\0',
+               "nbs_ts_sessions_dir: HOME environment variable not set");
 
     int n = snprintf(buf, bufsize, "%s/.nbs-ts/sessions", home);
     if (n < 0 || (size_t)n >= bufsize) return -1;
@@ -120,6 +120,9 @@ int nbs_ts_session_dir(const char *handle, char *buf, size_t bufsize)
 
 static int write_file(const char *path, const char *content)
 {
+    ASSERT_MSG(path != NULL, "write_file: path is NULL");
+    ASSERT_MSG(content != NULL, "write_file: content is NULL");
+
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return -1;
 
@@ -128,7 +131,11 @@ static int write_file(const char *path, const char *content)
     fsync(fd);
     close(fd);
 
-    return (w == (ssize_t)len) ? 0 : -1;
+    ASSERT_MSG(w == (ssize_t)len,
+               "write_file: partial write to '%s': wrote %zd of %zu bytes",
+               path, w, len);
+
+    return 0;
 }
 
 /* ── Output capture thread ────────────────────────────────────────── */
@@ -174,6 +181,8 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     s->child_pid = -1;
 
     if (generate_handle(s->handle, sizeof(s->handle)) < 0) {
+        ASSERT_MSG(0, "nbs_ts_create: generate_handle failed: %s",
+                   strerror(errno));
         free(s);
         return NULL;
     }
@@ -197,16 +206,24 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
              "%s/completion.log", s->session_dir);
 
     int out_fd = open(s->output_log_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (out_fd >= 0) close(out_fd);
+    ASSERT_MSG(out_fd >= 0,
+               "nbs_ts_create: failed to create output log '%s': %s",
+               s->output_log_path, strerror(errno));
+    close(out_fd);
 
     int comp_fd = open(s->completion_log_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (comp_fd >= 0) close(comp_fd);
+    ASSERT_MSG(comp_fd >= 0,
+               "nbs_ts_create: failed to create completion log '%s': %s",
+               s->completion_log_path, strerror(errno));
+    close(comp_fd);
 
     /* Create PTY */
     int slave_fd;
     struct winsize ws = { .ws_row = 24, .ws_col = 80 };
 
     if (openpty(&s->master_fd, &slave_fd, NULL, NULL, &ws) < 0) {
+        /* Cleanup is idempotent: unlink/rmdir silently ignore ENOENT,
+         * so this block is safe even if log files were not created. */
         unlink(s->output_log_path);
         unlink(s->completion_log_path);
         rmdir(s->session_dir);
@@ -239,7 +256,11 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
         if (slave_fd > STDERR_FILENO) close(slave_fd);
 
         if (opts && opts->cwd) {
-            if (chdir(opts->cwd) < 0) _exit(127);
+            if (chdir(opts->cwd) < 0) {
+                fprintf(stderr, "nbs-ts: chdir('%s') failed: %s\n",
+                        opts->cwd, strerror(errno));
+                _exit(127);
+            }
         }
 
         unsetenv("TMUX");
@@ -279,7 +300,10 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     snprintf(pid_str, sizeof(pid_str), "%d", (int)s->child_pid);
     char pid_path[NBS_TS_MAX_FILE_PATH];
     snprintf(pid_path, sizeof(pid_path), "%s/pid", s->session_dir);
-    write_file(pid_path, pid_str);
+    if (write_file(pid_path, pid_str) < 0) {
+        fprintf(stderr, "nbs-ts: warning: failed to write pid file '%s'\n",
+                pid_path);
+    }
 
     char meta_path[NBS_TS_MAX_FILE_PATH];
     snprintf(meta_path, sizeof(meta_path), "%s/meta", s->session_dir);
@@ -287,12 +311,17 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
     time_t now = time(NULL);
     snprintf(meta_buf, sizeof(meta_buf), "command: %s\nstart: %ld\n",
              command, (long)now);
-    write_file(meta_path, meta_buf);
+    if (write_file(meta_path, meta_buf) < 0) {
+        fprintf(stderr, "nbs-ts: warning: failed to write meta file '%s'\n",
+                meta_path);
+    }
 
     /* Start capture thread */
-    if (pthread_create(&s->capture_thread, NULL, capture_thread_fn, s) == 0) {
-        s->capture_running = 1;
-    }
+    int pt_err = pthread_create(&s->capture_thread, NULL, capture_thread_fn, s);
+    ASSERT_MSG(pt_err == 0,
+               "nbs_ts_create: pthread_create failed: %s — session without capture is critically broken",
+               strerror(pt_err));
+    s->capture_running = 1;
 
     return s;
 }
@@ -319,7 +348,7 @@ void nbs_ts_destroy(nbs_ts_session_t *s)
 
     if (s->master_fd >= 0) {
         close(s->master_fd);
-        s->master_fd = -1;
+        s->master_fd = -999; /* double-free guard: sentinel value */
     }
 
     if (s->capture_running) {
@@ -354,6 +383,12 @@ nbs_ts_status_t nbs_ts_status(nbs_ts_session_t *s)
     pid_t r = waitpid(s->child_pid, &status, WNOHANG);
 
     if (r == 0) return NBS_TS_ALIVE;
+
+    if (r < 0) {
+        fprintf(stderr, "nbs-ts: waitpid(%d) failed: %s\n",
+                (int)s->child_pid, strerror(errno));
+        return NBS_TS_UNKNOWN;
+    }
 
     if (r == s->child_pid) {
         s->child_exited = 1;
