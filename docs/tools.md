@@ -2,19 +2,28 @@
 
 Available tools in `~/.nbs/bin/`. This file is auto-generated — do not edit manually.
 
-## Remote Machine Access
+## Local Command Execution
 
-Use these instead of raw `pty-session` + SSH. They handle session creation, SSH, and cleanup automatically.
+Run commands with the user's full login environment (proxy access, credentials).
 
 | Tool | Usage | Purpose |
 |------|-------|---------|
-| `nbs-remote-session` | `nbs-remote-session <host> [--name=N] [--cwd=PATH]` | Create a persistent SSH shell. Returns session name for use with `pty-session send/read/kill`. |
-| `nbs-remote-run` | `nbs-remote-run <host> [--cwd=PATH] '<command>'` | Run a single command on a remote machine. Ephemeral — creates session, runs, returns output, cleans up. Default timeout 300s. |
-| `nbs-remote-read` | `nbs-remote-read <host> <path> [--head=N\|--tail=N]` | Read a file (or part of it) on a remote machine. |
-| `nbs-remote-edit` | `nbs-remote-edit pull/push/diff <host> <path>` | Download a remote file, edit locally with the Edit tool, push back. Safe — no sed corruption. |
-| `nbs-remote-build` | `nbs-remote-build <session> '<cmd>' [--chat=FILE --handle=NAME]` | Run a build on an existing pty-session. Stays chat-responsive during long builds. |
-| `nbs-remote-diff` | `nbs-remote-diff <session> [--cwd=DIR] [--commit=REF]` | Pull git diff output from a remote session. |
-| `nbs-remote-status` | `nbs-remote-status <session> [--cwd=DIR]` | Quick state check: HEAD commit, branch, modified files, diffstat. |
+| `nbs-local-run` | `nbs-local-run '<command>'` | Run a command and return output. For git push, proxy access, builds. |
+| `nbs-local-session` | `nbs-local-session [--name=N]` | Create a persistent login shell. Returns handle for `nbs-ts send/read-new/kill`. |
+
+## Remote Machine Access
+
+Run commands on remote machines via SSH.
+
+| Tool | Usage | Purpose |
+|------|-------|---------|
+| `nbs-remote-run` | `nbs-remote-run <host> [--cwd=PATH] '<command>'` | Run a single command on a remote machine. Ephemeral — returns output, cleans up. |
+| `nbs-remote-session` | `nbs-remote-session <host> [--name=N] [--cwd=PATH]` | Create a persistent SSH shell. Returns handle for `nbs-ts send/read-new/kill`. |
+| `nbs-remote-read` | `nbs-remote-read <host> <path> [--head=N\|--tail=N]` | Read a file on a remote machine. |
+| `nbs-remote-edit` | `nbs-remote-edit pull/push/diff <host> <path>` | Download, edit locally, push back. Safe — no sed corruption. |
+| `nbs-remote-build` | `nbs-remote-build <session> '<cmd>' [--chat=FILE --handle=NAME]` | Chat-responsive build on a remote session. |
+| `nbs-remote-diff` | `nbs-remote-diff <session> [--cwd=DIR] [--commit=REF]` | Pull git diff from a remote session. |
+| `nbs-remote-status` | `nbs-remote-status <session> [--cwd=DIR]` | Quick state check: HEAD, branch, modified files. |
 
 ## Chat and Communication
 
@@ -64,7 +73,12 @@ Use these instead of raw `pty-session` + SSH. They handle session creation, SSH,
 
 ## Common Patterns
 
-**SSH to a remote machine and run a command:**
+**Run a local command with proxy/credential access:**
+```bash
+nbs-local-run 'https_proxy=http://fwdproxy:8080 git push origin master'
+```
+
+**Run a command on a remote machine:**
 ```bash
 nbs-remote-run build-server.example.com --cwd=/path/to/project 'git log --oneline -5'
 ```

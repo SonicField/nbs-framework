@@ -31,6 +31,7 @@
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
 #include "session_internal.h"
+#include "helper_client.h"
 #include "nbs_assert.h"
 
 #include <stdio.h>
@@ -217,83 +218,93 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
                s->completion_log_path, strerror(errno));
     close(comp_fd);
 
-    /* Create PTY */
-    int slave_fd;
-    struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+    /*
+     * Session creation: try nbs-ts-helper first, fall back to direct fork.
+     *
+     * The helper provides centralised process management and consistent
+     * process context. If it's not running, direct fork works for local
+     * commands but some operations may be restricted.
+     *
+     * When using the helper, PROMPT_COMMAND setup is embedded in the
+     * command string so the helper's child runs it. When using direct
+     * fork, it's set up in the child process before exec.
+     */
 
-    if (openpty(&s->master_fd, &slave_fd, NULL, NULL, &ws) < 0) {
-        /* Cleanup is idempotent: unlink/rmdir silently ignore ENOENT,
-         * so this block is safe even if log files were not created. */
-        unlink(s->output_log_path);
-        unlink(s->completion_log_path);
-        rmdir(s->session_dir);
-        free(s);
-        return NULL;
-    }
-
-    /* Fork child */
-    s->child_pid = fork();
-    if (s->child_pid < 0) {
-        close(s->master_fd);
-        close(slave_fd);
-        unlink(s->output_log_path);
-        unlink(s->completion_log_path);
-        rmdir(s->session_dir);
-        free(s);
-        return NULL;
-    }
-
-    if (s->child_pid == 0) {
-        /* ── Child process ── */
-        close(s->master_fd);
-
-        setsid();
-        ioctl(slave_fd, TIOCSCTTY, 0);
-
-        dup2(slave_fd, STDIN_FILENO);
-        dup2(slave_fd, STDOUT_FILENO);
-        dup2(slave_fd, STDERR_FILENO);
-        if (slave_fd > STDERR_FILENO) close(slave_fd);
-
+    /* Build the command with PROMPT_COMMAND wrapper */
+    char setup[NBS_TS_MAX_FILE_PATH * 2 + 1024];
+    {
+        char cwd_prefix[NBS_TS_MAX_FILE_PATH + 16] = "";
         if (opts && opts->cwd) {
-            if (chdir(opts->cwd) < 0) {
-                fprintf(stderr, "nbs-ts: chdir('%s') failed: %s\n",
-                        opts->cwd, strerror(errno));
-                _exit(127);
-            }
+            snprintf(cwd_prefix, sizeof(cwd_prefix), "cd '%s' && ", opts->cwd);
         }
-
-        unsetenv("TMUX");
-
-        /*
-         * Set up PROMPT_COMMAND for completion signalling.
-         *
-         * We use bash -c to execute the user's command wrapped with
-         * PROMPT_COMMAND setup. For interactive shells (bare "bash"),
-         * PROMPT_COMMAND fires after each command and writes seq+exit_code
-         * to the completion log.
-         *
-         * For non-interactive commands, PROMPT_COMMAND won't fire, but
-         * that's fine — the caller uses wait_pattern or checks exit code
-         * via process status instead.
-         *
-         * Note: PROMPT_COMMAND does not fire if the shell exits via
-         * exit(N). Use nbs_ts_exit_code() for the final exit code.
-         */
-        char setup[NBS_TS_MAX_FILE_PATH * 2];
         snprintf(setup, sizeof(setup),
                  "NBS_TS_SEQ=0; "
                  "PROMPT_COMMAND='NBS_TS_SEQ=$((NBS_TS_SEQ + 1)); "
                  "echo \"$NBS_TS_SEQ $?\" >> \"%s\"'; "
+                 "%s"
                  "exec %s",
-                 s->completion_log_path, command);
-
-        execlp("bash", "bash", "-c", setup, (char *)NULL);
-        _exit(127);
+                 s->completion_log_path, cwd_prefix, command);
     }
 
-    /* ── Parent process ── */
-    close(slave_fd);
+    /* Try helper first */
+    int helper_fd = helper_request_pty(setup);
+    if (helper_fd >= 0) {
+        s->master_fd = helper_fd;
+        /* Helper forked the child — we don't know the PID directly.
+         * Read it from the PTY (the shell's PID is the session leader). */
+        s->child_pid = 0;  /* Will be populated from pid file if needed */
+    } else {
+        /* Fallback: direct openpty + fork + exec */
+        static int warned_once = 0;
+        if (!warned_once) {
+            fprintf(stderr, "nbs-ts: helper not running — using direct fork "
+                    "(some operations may be restricted)\n");
+            warned_once = 1;
+        }
+
+        int slave_fd;
+        struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+
+        if (openpty(&s->master_fd, &slave_fd, NULL, NULL, &ws) < 0) {
+            unlink(s->output_log_path);
+            unlink(s->completion_log_path);
+            rmdir(s->session_dir);
+            free(s);
+            return NULL;
+        }
+
+        s->child_pid = fork();
+        if (s->child_pid < 0) {
+            close(s->master_fd);
+            close(slave_fd);
+            unlink(s->output_log_path);
+            unlink(s->completion_log_path);
+            rmdir(s->session_dir);
+            free(s);
+            return NULL;
+        }
+
+        if (s->child_pid == 0) {
+            /* ── Child process ── */
+            close(s->master_fd);
+
+            setsid();
+            ioctl(slave_fd, TIOCSCTTY, 0);
+
+            dup2(slave_fd, STDIN_FILENO);
+            dup2(slave_fd, STDOUT_FILENO);
+            dup2(slave_fd, STDERR_FILENO);
+            if (slave_fd > STDERR_FILENO) close(slave_fd);
+
+            unsetenv("TMUX");
+
+            execlp("bash", "bash", "-c", setup, (char *)NULL);
+            _exit(127);
+        }
+
+        /* ── Parent process ── */
+        close(slave_fd);
+    }
 
     /* Write metadata files */
     char pid_str[32];

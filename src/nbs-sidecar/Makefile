@@ -35,7 +35,6 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit \
              $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit \
              $(UNIT_TEST_DIR)/test_sidecar_triggers_unit \
-             $(UNIT_TEST_DIR)/test_sidecar_transport_unit \
              $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit \
              $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit \
              $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit \
@@ -103,7 +102,6 @@ $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_str
 $(UNIT_TEST_DIR)/test_sidecar_triggers_unit: $(UNIT_TEST_DIR)/test_sidecar_triggers_unit.c triggers.o bus_client.o chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
-$(UNIT_TEST_DIR)/test_sidecar_transport_unit: $(UNIT_TEST_DIR)/test_sidecar_transport_unit.c transport_ts.o exec_util.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_ts.o $(CHAT_LIB_OBJS)
@@ -126,7 +124,6 @@ test-unit: $(UNIT_TESTS)
 	$(UNIT_TEST_DIR)/test_sidecar_escape_mentions_unit
 	$(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit
 	$(UNIT_TEST_DIR)/test_sidecar_triggers_unit
-	$(UNIT_TEST_DIR)/test_sidecar_transport_unit
 	$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit
 	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit
 	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit

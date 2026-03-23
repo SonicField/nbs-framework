@@ -1,0 +1,73 @@
+#!/bin/bash
+# nbs-local-run: Run a command through nbs-ts-helper, return output
+#
+# Provides the user's full login environment (proxy access, credentials,
+# SSH agent) regardless of the caller's process context.
+#
+# Usage:
+#   nbs-local-run '<command>'
+#   nbs-local-run --timeout=<secs> '<command>'
+#
+# Examples:
+#   nbs-local-run 'git push origin master'
+#   nbs-local-run 'https_proxy=http://fwdproxy:8080 git push origin master'
+#   nbs-local-run --timeout=300 'make -j8'
+#
+# Exit codes:
+#   0 - Command ran (check output for command-level errors)
+#   1 - nbs-ts not found or helper not running
+#   2 - Invalid arguments
+#   3 - Command timed out
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
+
+die() { local rc="$1"; shift; echo "Error: $*" >&2; exit "$rc"; }
+
+[[ -x "$NBS_TS" ]] || die 1 "nbs-ts not found"
+
+TIMEOUT=300
+CMD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --timeout=*) TIMEOUT="${1#*=}"; shift ;;
+        --help|-h)
+            sed -n '2,/^$/{ /^#/p }' "$0" | cut -c3-
+            exit 0
+            ;;
+        -*)          die 2 "Unknown option: $1" ;;
+        *)
+            if [[ -z "$CMD" ]]; then
+                CMD="$1"
+            else
+                die 2 "Unexpected argument: $1 (command must be a single quoted string)"
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$CMD" ]] || die 2 "Usage: nbs-local-run '<command>'"
+
+SESSION=$("$NBS_TS" create "bash --login -c '$CMD'" 2>&1) || {
+    die 1 "Failed to create session (is nbs-ts-helper running?)"
+}
+
+# Wait for completion — the command runs and exits
+if ! "$NBS_TS" wait-pattern "$SESSION" "" --timeout="$TIMEOUT" >/dev/null 2>&1; then
+    # Timeout or pattern not found — read whatever output exists
+    true
+fi
+
+# Wait for process to finish
+sleep 1
+
+# Read all output, strip ANSI
+"$NBS_TS" read-new "$SESSION" --strip 2>/dev/null || true
+
+# Cleanup
+"$NBS_TS" kill "$SESSION" 2>/dev/null || true

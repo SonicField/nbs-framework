@@ -100,5 +100,4 @@ sleep 1
     | sed -n "/${START_MARKER}/,/${END_MARKER}/p" \
     | grep -v "$START_MARKER" \
     | grep -v "$END_MARKER" \
-    | tail -n +2 \
     || true

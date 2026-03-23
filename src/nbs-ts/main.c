@@ -12,6 +12,7 @@
 
 #include "nbs_ts.h"
 #include "session_internal.h"
+#include "helper_client.h"
 #include "nbs_assert.h"
 
 #include <stdio.h>
@@ -390,15 +391,47 @@ static int cmd_create(const char *command)
         close(cfd);
     }
 
-    /* Create PTY */
-    int master_fd, slave_fd;
-    char slave_name[256];
-    struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+    /* Create PTY — try helper first, fall back to direct openpty.
+     *
+     * The helper provides centralised process management. If it's running,
+     * it allocates the PTY and forks the child. If not, we do it directly.
+     */
+    int master_fd, slave_fd = -1;
+    char slave_name[256] = "";
+    int used_helper = 0;
 
-    if (openpty(&master_fd, &slave_fd, slave_name, NULL, &ws) < 0) {
-        perror("nbs-ts: openpty");
-        rmdir(session_dir);
-        return NBS_TS_EXIT_ERROR;
+    {
+        /* Build the full command with PROMPT_COMMAND wrapper for helper */
+        char helper_cmd[MAX_FILE_PATH * 4];
+        snprintf(helper_cmd, sizeof(helper_cmd),
+                 "NBS_TS_SEQ=-1; "
+                 "PROMPT_COMMAND='NBS_TS_LAST_EXIT=$?; "
+                 "NBS_TS_SEQ=$((NBS_TS_SEQ + 1)); "
+                 "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"'; "
+                 "exec %s",
+                 completion_log, command);
+
+        int hfd = helper_request_pty(helper_cmd);
+        if (hfd >= 0) {
+            master_fd = hfd;
+            used_helper = 1;
+        }
+    }
+
+    if (!used_helper) {
+        static int helper_warned = 0;
+        if (!helper_warned) {
+            fprintf(stderr, "nbs-ts: helper not running — using direct fork "
+                    "(start nbs-ts-helper for full capabilities)\n");
+            helper_warned = 1;
+        }
+
+        struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+        if (openpty(&master_fd, &slave_fd, slave_name, NULL, &ws) < 0) {
+            perror("nbs-ts: openpty");
+            rmdir(session_dir);
+            return NBS_TS_EXIT_ERROR;
+        }
     }
 
     /* Save slave PTY path */
@@ -470,49 +503,57 @@ static int cmd_create(const char *command)
         /* ── Daemon process ── */
         setsid();
 
-        /* Fork the child from within the daemon */
-        pid_t child_pid = fork();
-        if (child_pid < 0) _exit(1);
+        pid_t child_pid = 0;
 
-        if (child_pid == 0) {
-            /* ── Child: run the command in the PTY ── */
-            close(master_fd);
-            setsid();
-            ioctl(slave_fd, TIOCSCTTY, 0);
+        if (used_helper) {
+            /* Helper already forked the child — we have the master fd.
+             * Write PID 0 (unknown — helper's child is not our descendant). */
+            child_pid = 0;
+        } else {
+            /* Direct mode: fork the child from within the daemon */
+            child_pid = fork();
+            if (child_pid < 0) _exit(1);
 
-            dup2(slave_fd, STDIN_FILENO);
-            dup2(slave_fd, STDOUT_FILENO);
-            dup2(slave_fd, STDERR_FILENO);
-            if (slave_fd > STDERR_FILENO) close(slave_fd);
+            if (child_pid == 0) {
+                /* ── Child: run the command in the PTY ── */
+                close(master_fd);
+                setsid();
+                ioctl(slave_fd, TIOCSCTTY, 0);
 
-            unsetenv("TMUX");
-            setenv("BASH_ENV", rcfile_path, 1);
-            setenv("NBS_TS_COMPLETION_LOG", completion_log, 1);
+                dup2(slave_fd, STDIN_FILENO);
+                dup2(slave_fd, STDOUT_FILENO);
+                dup2(slave_fd, STDERR_FILENO);
+                if (slave_fd > STDERR_FILENO) close(slave_fd);
 
-            char pc[MAX_FILE_PATH * 2];
-            snprintf(pc, sizeof(pc),
-                     "NBS_TS_LAST_EXIT=$?; "
-                     "NBS_TS_SEQ=$((${NBS_TS_SEQ:--1} + 1)); "
-                     "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"",
-                     completion_log);
-            setenv("PROMPT_COMMAND", pc, 1);
-            setenv("NBS_TS_SEQ", "-1", 1);
+                unsetenv("TMUX");
+                setenv("BASH_ENV", rcfile_path, 1);
+                setenv("NBS_TS_COMPLETION_LOG", completion_log, 1);
 
-            if (strcmp(command, "bash") == 0 || strcmp(command, "bash -i") == 0) {
-                execlp("bash", "bash", "--rcfile", rcfile_path, "-i",
-                       (char *)NULL);
-            } else {
-                char setup[MAX_FILE_PATH * 2];
-                snprintf(setup, sizeof(setup),
-                         "source \"%s\"; %s",
-                         rcfile_path, command);
-                execlp("bash", "bash", "-c", setup, (char *)NULL);
+                char pc[MAX_FILE_PATH * 2];
+                snprintf(pc, sizeof(pc),
+                         "NBS_TS_LAST_EXIT=$?; "
+                         "NBS_TS_SEQ=$((${NBS_TS_SEQ:--1} + 1)); "
+                         "echo \"$NBS_TS_SEQ $NBS_TS_LAST_EXIT\" >> \"%s\"",
+                         completion_log);
+                setenv("PROMPT_COMMAND", pc, 1);
+                setenv("NBS_TS_SEQ", "-1", 1);
+
+                if (strcmp(command, "bash") == 0 || strcmp(command, "bash -i") == 0) {
+                    execlp("bash", "bash", "--rcfile", rcfile_path, "-i",
+                           (char *)NULL);
+                } else {
+                    char setup[MAX_FILE_PATH * 2];
+                    snprintf(setup, sizeof(setup),
+                             "source \"%s\"; %s",
+                             rcfile_path, command);
+                    execlp("bash", "bash", "-c", setup, (char *)NULL);
+                }
+                _exit(127);
             }
-            _exit(127);
         }
 
-        /* Daemon: child is forked. Write its PID. */
-        close(slave_fd);
+        /* Daemon: child is running. Write its PID. */
+        if (slave_fd >= 0) close(slave_fd);
 
         char buf[64];
         snprintf(buf, sizeof(buf), "%d", (int)child_pid);

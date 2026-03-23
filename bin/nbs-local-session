@@ -1,0 +1,56 @@
+#!/bin/bash
+# nbs-local-session: Create a persistent local shell via nbs-ts-helper
+#
+# Provides the user's full login environment. Returns a session handle
+# for use with nbs-ts send/read-new/wait-pattern/kill.
+#
+# Usage:
+#   nbs-local-session                    # Auto-named
+#   nbs-local-session --name=build       # Named session
+#
+# Examples:
+#   HANDLE=$(nbs-local-session --name=build)
+#   nbs-ts send "$HANDLE" 'make -j8'
+#   nbs-ts read-new "$HANDLE" --strip
+#   nbs-ts kill "$HANDLE"
+#
+# Exit codes:
+#   0 - Session created, handle printed to stdout
+#   1 - nbs-ts not found or helper not running
+#   2 - Invalid arguments
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+[[ -x "$NBS_TS" ]] || NBS_TS="${HOME}/.nbs/bin/nbs-ts"
+
+die() { echo "Error: $*" >&2; exit "${1:-1}"; }
+
+[[ -x "$NBS_TS" ]] || die 1 "nbs-ts not found"
+
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h)
+            sed -n '2,/^$/{ /^#/p }' "$0" | cut -c3-
+            exit 0
+            ;;
+        -*)  die 2 "Unknown option: $arg" ;;
+        *)   die 2 "Unexpected argument: $arg" ;;
+    esac
+done
+
+HANDLE=$("$NBS_TS" create 'bash --login' 2>&1) || {
+    die 1 "Failed to create session (is nbs-ts-helper running?)"
+}
+
+# Wait for login shell to be ready
+MARKER="__NBS_LOCAL_READY_${RANDOM}__"
+sleep 2
+"$NBS_TS" send "$HANDLE" "echo $MARKER" 2>/dev/null
+if ! "$NBS_TS" wait-pattern "$HANDLE" "$MARKER" --timeout=10 >/dev/null 2>&1; then
+    "$NBS_TS" kill "$HANDLE" 2>/dev/null || true
+    die 1 "Login shell did not become ready (10s)"
+fi
+
+echo "$HANDLE"
