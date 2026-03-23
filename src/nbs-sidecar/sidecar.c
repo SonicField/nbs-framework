@@ -18,6 +18,8 @@
 #include "detect.h"
 #include "hash.h"
 #include "bus_client.h"
+
+#include <sys/stat.h>
 #include "chat_client.h"
 #include "registry.h"
 #include "triggers.h"
@@ -83,9 +85,9 @@ static void build_notify_prompt(const sidecar_config_t *cfg,
     ASSERT_MSG(out_size > 0, "build_notify_prompt: out_size is 0");
 
     int sn = snprintf(out, out_size,
-        "%s — ack events with nbs-bus ack-all .nbs/events/ then "
+        "[NBS-CHAT-NOTIFICATION] %s — ack events with nbs-bus ack-all .nbs/events/ then "
         "read unread chats with nbs-chat read <file> --unread=%s and respond if needed. "
-        "Return to prompt when done.",
+        "Return to prompt when done. [THIS MESSAGE WAS MACHINE GENERATED]",
         notify_message, cfg->handle);
 
     /* Truncation is acceptable — the message may be long but the
@@ -557,6 +559,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     /* Main loop */
     while (1) {
         sleep(1);
+
+        /* Team pause check — if control-pause file exists, skip everything.
+         * Agents keep their context, sidecars stay alive, but no notifications,
+         * triggers, or polling occurs. Created by /pause, deleted by /resume. */
+        {
+            char pause_path[8192];
+            snprintf(pause_path, sizeof(pause_path),
+                     "%s/.nbs/control-pause", cfg->nbs_root);
+            struct stat pause_st;
+            if (stat(pause_path, &pause_st) == 0) {
+                sleep(4);  /* total 5s with the sleep(1) above */
+                continue;
+            }
+        }
 
         /* Periodic state invariant verification (sidecar.h lines 80-84).
          * Detects corruption from integer overflow or logic errors. */

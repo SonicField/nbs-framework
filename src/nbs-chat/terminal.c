@@ -231,6 +231,15 @@ static void *watchdog_thread_fn(void *arg) {
         sleep(WATCHDOG_POLL_INTERVAL_S);
         if (!watchdog_is_enabled(ws)) break;
 
+        /* Skip if team is paused */
+        {
+            char pause_path[8192];
+            snprintf(pause_path, sizeof(pause_path),
+                     "%s/.nbs/control-pause", ws->project_root);
+            struct stat pause_st;
+            if (stat(pause_path, &pause_st) == 0) continue;
+        }
+
         /* Derive session prefix from chat filename.
          * live.chat → "live", nn.Module.chat → "nn-Module"
          * Dots replaced with dashes (tmux rejects dots in session names). */
@@ -384,6 +393,8 @@ static void print_help(void) {
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
+    printf("  %s/pause%s      Pause team — agents keep context, stop receiving work\n", DIM, RESET);
+    printf("  %s/resume%s     Resume paused team\n", DIM, RESET);
     printf("  %s/shutdown%s   Send wrap-up message and disable auto-restart\n", DIM, RESET);
     printf("  %s/restart%s    Manually restart the agent team\n", DIM, RESET);
     printf("  %s/pythia%s     Spawn pythia (trajectory & risk assessment)\n", DIM, RESET);
@@ -1694,6 +1705,52 @@ int main(int argc, char **argv) {
                            DIM, RESET);
                 } else {
                     printf("  %sWatchdog already disabled.%s\n", DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /pause — freeze team in place, no process kills */
+            if (strcmp(edit.buf, "/pause") == 0) {
+                char pause_path[8192];
+                snprintf(pause_path, sizeof(pause_path),
+                         "%s/.nbs/control-pause", g_watchdog.project_root);
+                struct stat pst;
+                if (stat(pause_path, &pst) == 0) {
+                    printf("  %sTeam already paused.%s\n", DIM, RESET);
+                } else {
+                    /* Create pause file with timestamp */
+                    FILE *pf = fopen(pause_path, "w");
+                    if (pf) {
+                        fprintf(pf, "%lld\n", (long long)time(NULL));
+                        fclose(pf);
+                    }
+                    watchdog_disable(&g_watchdog);
+                    do_send("@team SYSTEM: Team paused. Stop all work immediately. "
+                            "Do not start any new tasks or tool calls. "
+                            "This is a temporary pause — you will be resumed shortly.");
+                    printf("  %sTeam paused. Type /resume to continue.%s\n",
+                           DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /resume — wake up paused team */
+            if (strcmp(edit.buf, "/resume") == 0) {
+                char pause_path[8192];
+                snprintf(pause_path, sizeof(pause_path),
+                         "%s/.nbs/control-pause", g_watchdog.project_root);
+                struct stat pst;
+                if (stat(pause_path, &pst) != 0) {
+                    printf("  %sTeam is not paused.%s\n", DIM, RESET);
+                } else {
+                    unlink(pause_path);
+                    watchdog_enable(&g_watchdog);
+                    do_send("@team SYSTEM: Team resumed. Continue where you left off.");
+                    printf("  %sTeam resumed.%s\n", DIM, RESET);
                 }
                 line_state_reset(&edit);
                 print_prompt(g_handle);
