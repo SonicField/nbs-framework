@@ -39,6 +39,7 @@ const trigger_periodic_t TRIGGER_PYTHIA = {
     .role = TRIGGER_ROLE_PYTHIA,
     .skill_file = TRIGGER_SKILL_PYTHIA,
     .task_desc = TRIGGER_DESC_PYTHIA,
+    .first_delay_secs = 600,   /* 10 min — let scribe accumulate decisions first */
 };
 
 const trigger_periodic_t TRIGGER_SHEPARD = {
@@ -48,6 +49,7 @@ const trigger_periodic_t TRIGGER_SHEPARD = {
     .role = TRIGGER_ROLE_SHEPARD,
     .skill_file = TRIGGER_SKILL_SHEPARD,
     .task_desc = TRIGGER_DESC_SHEPARD,
+    .first_delay_secs = 600,   /* 10 min — let team settle first */
 };
 
 const trigger_periodic_t TRIGGER_FIXUP = {
@@ -57,6 +59,7 @@ const trigger_periodic_t TRIGGER_FIXUP = {
     .role = TRIGGER_ROLE_FIXUP,
     .skill_file = TRIGGER_SKILL_FIXUP,
     .task_desc = TRIGGER_DESC_FIXUP,
+    .first_delay_secs = 600,   /* 10 min — agents need time to initialise */
 };
 
 const trigger_periodic_t TRIGGER_LIBRARIAN = {
@@ -66,6 +69,7 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
     .role = TRIGGER_ROLE_LIBRARIAN,
     .skill_file = TRIGGER_SKILL_LIBRARIAN,
     .task_desc = TRIGGER_DESC_LIBRARIAN,
+    .first_delay_secs = 300,   /* 5 min — early first post to introduce herself */
 };
 
 /* --- nbs-workers path resolution --- */
@@ -237,9 +241,13 @@ int trigger_periodic_check(const char *nbs_root, int interval_secs,
     time_t now = time(NULL);
     time_t last_run = read_last_run(nbs_root, trigger->ts_filename);
 
-    /* First run: initialise timestamp without firing */
+    /* First run: initialise timestamp.
+     * Seed to (now - interval + first_delay) so the first fire happens
+     * after first_delay seconds, not after the full interval. This lets
+     * agents settle before the first check while still firing early. */
     if (last_run == 0) {
-        write_last_run(nbs_root, trigger->ts_filename, now);
+        time_t seed = now - interval_secs + trigger->first_delay_secs;
+        write_last_run(nbs_root, trigger->ts_filename, seed);
         return 1;
     }
 

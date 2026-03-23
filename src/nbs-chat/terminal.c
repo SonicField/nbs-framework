@@ -1295,6 +1295,38 @@ int main(int argc, char **argv) {
                 strerror(errno));
     }
 
+    /* --restart safety check: if agents are already running, confirm
+     * before killing them. Must happen before raw mode (needs canonical
+     * input for Y/N prompt). */
+    if (restart_immediately) {
+        /* Count running nbs-* tmux sessions for this chat */
+        char count_cmd[4096];
+        snprintf(count_cmd, sizeof(count_cmd),
+                 "tmux list-sessions -F '#{session_name}' 2>/dev/null "
+                 "| grep -c '^nbs-.*-%s$' 2>/dev/null || echo 0",
+                 g_chat_file);  /* approximate — uses chat file basename */
+        FILE *fp = popen("tmux list-sessions -F '#{session_name}' 2>/dev/null "
+                         "| grep -c '^nbs-' 2>/dev/null || echo 0", "r");
+        int running = 0;
+        if (fp) {
+            if (fscanf(fp, "%d", &running) != 1) running = 0;
+            pclose(fp);
+        }
+        if (running > 0) {
+            printf("%s%d agent session(s) currently running. "
+                   "Restart will kill them all.%s\n", BOLD, running, RESET);
+            printf("Continue? [y/N] ");
+            fflush(stdout);
+            int ch = getchar();
+            if (ch != 'y' && ch != 'Y') {
+                printf("Cancelled.\n");
+                return 0;
+            }
+            /* consume trailing newline */
+            if (ch != '\n') { int c; while ((c = getchar()) != '\n' && c != EOF); }
+        }
+    }
+
     /* Put terminal in raw-ish mode (disable echo and canonical mode,
      * but keep signal generation for Ctrl-C) */
     struct termios orig_termios, raw;
@@ -1372,15 +1404,15 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* --goal-file disables the watchdog. The team has a defined mission
-         * with explicit verification gates. When agents finish (or crash),
-         * fixup handles recovery. The watchdog's auto-restart loop would
-         * re-launch agents that have completed their goal — pure waste. */
+        /* Always init the watchdog — it holds the project root needed
+         * by /pythia, /shepard, /librarian, /fixup trigger commands.
+         * Only start the auto-restart THREAD when --goal-file is not set. */
+        watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
+
         if (goal_file_path != NULL) {
-            printf("%sWatchdog disabled (--goal-file mode: fixup handles crashes)%s\n",
+            printf("%sAuto-restart disabled (--goal-file mode: fixup handles crashes)%s\n",
                    DIM, RESET);
         } else {
-            watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
             pthread_t watchdog_tid;
             if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
                                &g_watchdog) == 0) {

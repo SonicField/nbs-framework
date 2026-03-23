@@ -24,6 +24,7 @@ typedef struct {
     const char *role;           /* Worker role for nbs-workers spawn */
     const char *skill_file;     /* Skill file relative to .nbs/ (e.g. "commands/nbs-pythia.md") */
     const char *task_desc;      /* Task instructions appended after skill content */
+    int first_delay_secs;       /* Delay before first fire (0 = use full interval) */
 } trigger_periodic_t;
 
 /* Static trigger definitions */

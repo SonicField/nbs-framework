@@ -64,6 +64,12 @@ for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
     pkill -f "nbs-sidecar.*--pane-id=${pane}" 2>/dev/null || true
 done
 rm -f .nbs/pids/*.pid 2>/dev/null || true
+# Reset trigger timestamps so librarian/pythia/shepard/fixup use their
+# first_delay timing (e.g. librarian fires after 5 min, not 15).
+rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run" \
+      "${PROJECT_ROOT}/.nbs/pythia-last-run" \
+      "${PROJECT_ROOT}/.nbs/shepard-last-run" \
+      "${PROJECT_ROOT}/.nbs/fixup-last-run" 2>/dev/null || true
 
 sleep 2
 
