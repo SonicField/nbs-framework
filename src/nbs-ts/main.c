@@ -999,6 +999,7 @@ static int cmd_help(void)
     printf("  read-new <handle> [--strip]       Read new output since last read\n");
     printf("  read <handle> [--offset=N|--last=N] Read output from offset or last N lines\n");
     printf("  wait-complete <handle> [--timeout=N]  Wait for command completion\n");
+    printf("                                        (does not detect exit/logout — use exit-code)\n");
     printf("  wait-pattern <handle> <pattern> [--timeout=N]  Wait for pattern\n");
     printf("  status <handle>                   Check session status\n");
     printf("  exit-code <handle>                Get exit code\n");

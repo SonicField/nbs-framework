@@ -255,6 +255,9 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
          * For non-interactive commands, PROMPT_COMMAND won't fire, but
          * that's fine — the caller uses wait_pattern or checks exit code
          * via process status instead.
+         *
+         * Note: PROMPT_COMMAND does not fire if the shell exits via
+         * exit(N). Use nbs_ts_exit_code() for the final exit code.
          */
         char setup[NBS_TS_MAX_FILE_PATH * 2];
         snprintf(setup, sizeof(setup),
