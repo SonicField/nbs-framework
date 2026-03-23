@@ -41,8 +41,7 @@ Use these instead of raw `pty-session` + SSH. They handle session creation, SSH,
 
 | Tool | Usage | Purpose |
 |------|-------|---------|
-| `pty-session` | `pty-session create/send/read/wait/kill <name> ...` | Low-level terminal session management via tmux. Prefer `nbs-remote-*` tools for remote work. |
-| `pty-session-lock` | `pty-session-lock acquire/release <session> <handle>` | Exclusive session reservation. Prevents two agents from sending to the same session. |
+| `nbs-ts` | `nbs-ts create/send/read-new/wait-complete/wait-pattern/kill/list/attach <handle> ...` | Terminal session service. Append-only output log, inotify-based completion signalling, no polling. Infrastructure — prefer `nbs-remote-*` tools for remote work. |
 
 ## Worker and Agent Management
 
@@ -72,10 +71,10 @@ nbs-remote-run build-server.example.com --cwd=/path/to/project 'git log --onelin
 
 **Create a persistent remote shell for interactive work:**
 ```bash
-SESSION=$(nbs-remote-session build-server.example.com --name=build --cwd=/path/to/project)
-pty-session send "$SESSION" 'make -j8'
-pty-session read "$SESSION" --last=20
-pty-session kill "$SESSION"
+HANDLE=$(nbs-remote-session build-server.example.com --name=build --cwd=/path/to/project)
+nbs-ts send "$HANDLE" 'make -j8'
+nbs-ts read-new "$HANDLE" --strip
+nbs-ts kill "$HANDLE"
 ```
 
 **Edit a remote file safely:**
