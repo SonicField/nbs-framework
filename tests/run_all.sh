@@ -125,6 +125,24 @@ run_unit_tests() {
         unit_failed=1
     fi
 
+    # Build and run sidecar unit tests
+    echo "  Building nbs-sidecar unit tests..."
+    if (cd "$PROJECT_DIR/src/nbs-sidecar" && make test-unit 2>&1); then
+        echo "  PASSED: nbs-sidecar unit tests"
+    else
+        echo "  FAILED: nbs-sidecar unit tests"
+        unit_failed=1
+    fi
+
+    # Build and run workers unit tests
+    echo "  Building nbs-workers unit tests..."
+    if (cd "$PROJECT_DIR/src/nbs-workers" && make test-unit 2>&1); then
+        echo "  PASSED: nbs-workers unit tests"
+    else
+        echo "  FAILED: nbs-workers unit tests"
+        unit_failed=1
+    fi
+
     if [[ $unit_failed -eq 0 ]]; then
         PASSED=$((PASSED + 1))
     else
