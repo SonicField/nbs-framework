@@ -126,21 +126,38 @@ done
 # NBS_TRANSPORT=ts. Do NOT wrap it in another nbs-ts create — that
 # produces double-nesting where the outer session is tail -f and
 # skill injection via nbs-ts send hits tail instead of claude.
-# Skills are passed via NBS_INITIAL_PROMPT so the sidecar injects
-# them after detecting the Claude prompt.
-declare -A AGENT_SKILLS
-AGENT_SKILLS[scribe]="/nbs-scribe"
-AGENT_SKILLS[gatekeeper]="/nbs-gatekeeper"
-AGENT_SKILLS[testkeeper]="/nbs-testkeeper"
-AGENT_SKILLS[theologian]="/nbs-theologian"
-AGENT_SKILLS[generalist]="/nbs-teams-chat"
-AGENT_SKILLS[supervisor]="/nbs-supervisor"
+# Role prompts are read from skill files and passed as plain text via
+# NBS_INITIAL_PROMPT. The sidecar injects this directly into Claude's
+# input — no slash command expansion needed.
+declare -A AGENT_SKILL_FILES
+AGENT_SKILL_FILES[scribe]="nbs-scribe.md"
+AGENT_SKILL_FILES[gatekeeper]="nbs-gatekeeper.md"
+AGENT_SKILL_FILES[testkeeper]="nbs-testkeeper.md"
+AGENT_SKILL_FILES[theologian]="nbs-theologian.md"
+AGENT_SKILL_FILES[generalist]="nbs-teams-chat.md"
+AGENT_SKILL_FILES[supervisor]="nbs-supervisor.md"
+
+# Resolve commands directory
+COMMANDS_DIR=""
+if [[ -d "${PROJECT_ROOT}/.nbs/commands" ]]; then
+    COMMANDS_DIR="${PROJECT_ROOT}/.nbs/commands"
+elif [[ -d "${HOME}/.nbs/commands" ]]; then
+    COMMANDS_DIR="${HOME}/.nbs/commands"
+fi
 
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+    SKILL_CONTENT=""
+    if [[ -n "$COMMANDS_DIR" && -f "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}" ]]; then
+        SKILL_CONTENT=$(cat "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}")
+    fi
+    if [[ -z "$SKILL_CONTENT" ]]; then
+        echo "[watchdog] Warning: skill file not found for $h, using fallback" >&2
+        SKILL_CONTENT="You are the ${h}. Read the chat history and follow the team's direction."
+    fi
     (
         NBS_HANDLE="$h" \
         NBS_TRANSPORT=ts \
-        NBS_INITIAL_PROMPT="${AGENT_SKILLS[$h]}" \
+        NBS_INITIAL_PROMPT="$SKILL_CONTENT" \
         NBS_FORCE_SPAWN=1 \
         exec "${NBS_BIN}/nbs-claude" --root="$PROJECT_ROOT" --dangerously-skip-permissions
     ) >/dev/null 2>&1 &
