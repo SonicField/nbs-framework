@@ -24,20 +24,16 @@ pass() { echo "   PASS: $1"; }
 fail() { echo "   FAIL: $1"; ERRORS=$((ERRORS + 1)); }
 
 cleanup() {
-    # Kill agent and its children
-    if [[ -n "$AGENT_PID" ]]; then
-        kill "$AGENT_PID" 2>/dev/null || true
-        wait "$AGENT_PID" 2>/dev/null || true
-    fi
     if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
-        # Kill nbs-ts session via metadata
-        if [[ -f "$TMPDIR/.nbs/sessions/supervisor.json" ]]; then
-            local h
-            h=$(grep -o '"nbs_ts_handle": "[^"]*"' "$TMPDIR/.nbs/sessions/supervisor.json" 2>/dev/null \
-                | cut -d'"' -f4)
-            [[ -n "$h" ]] && "$NBS_TS" kill "$h" 2>/dev/null || true
-        fi
-        pkill -f "nbs-sidecar.*--handle=supervisor.*$TMPDIR" 2>/dev/null || true
+        # Kill everything associated with this test's temp directory.
+        # The agent runs in a setsid'd process group — kill by pattern.
+        pkill -9 -f "nbs-claude.*$TMPDIR" 2>/dev/null || true
+        pkill -9 -f "nbs-sidecar.*$TMPDIR" 2>/dev/null || true
+        # Kill nbs-ts sessions
+        "$NBS_TS" list --name=test 2>/dev/null | cut -f1 | while read h; do
+            "$NBS_TS" kill "$h" 2>/dev/null || true
+        done
+        sleep 1
         rm -rf "$TMPDIR"
     fi
 }
