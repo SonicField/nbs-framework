@@ -44,9 +44,9 @@ run_test() {
     echo ""
 }
 
-# Run AI tests via pty-session when inside Claude Code to avoid the
+# Run AI tests via nbs-ts when inside Claude Code to avoid the
 # nested session restriction. The test script runs unchanged in a
-# fresh tmux session with the user's full environment.
+# fresh session with the user's full environment.
 run_ai_test() {
     local test_script="$1"
     local name=$(basename "$test_script" .sh)
@@ -64,11 +64,11 @@ run_ai_test() {
             FAILED=$((FAILED + 1))
         fi
     else
-        # Inside Claude Code — route through pty-session
+        # Inside Claude Code — route through nbs-ts
         local session="test-${name}-$$"
-        local PTY="${PROJECT_DIR}/bin/pty-session"
-        if [[ ! -x "$PTY" ]]; then
-            echo "SKIPPED: pty-session not available"
+        local NBS_TS="${PROJECT_DIR}/bin/nbs-ts"
+        if [[ ! -x "$NBS_TS" ]]; then
+            echo "SKIPPED: nbs-ts not available"
             SKIPPED=$((SKIPPED + 1))
             echo ""
             return
@@ -79,13 +79,13 @@ run_ai_test() {
         # which contains ANSI escapes and command echo.
         local rc_file="/tmp/nbs-test-rc-${name}-$$"
         rm -f "$rc_file"
-        "$PTY" create "$session" bash 2>/dev/null
-        # Unset TMUX so tests that use pty-session internally can create
-        # their own tmux sessions without tmux refusing to nest.
-        "$PTY" send "$session" "unset TMUX; $test_script; echo \$? > $rc_file; exit" 2>/dev/null
+        "$NBS_TS" create "$session" bash 2>/dev/null
+        # Unset TMUX so tests that use nbs-ts internally can create
+        # their own sessions without tmux refusing to nest.
+        "$NBS_TS" send "$session" "unset TMUX; $test_script; echo \$? > $rc_file; exit" 2>/dev/null
         # Wait for session to exit (read --wait blocks until process dies)
-        "$PTY" read "$session" --wait --timeout=300 2>/dev/null || true
-        "$PTY" kill "$session" 2>/dev/null || true
+        "$NBS_TS" read "$session" --wait --timeout=300 2>/dev/null || true
+        "$NBS_TS" kill "$session" 2>/dev/null || true
         local exit_code="1"
         if [[ -f "$rc_file" ]]; then
             exit_code=$(cat "$rc_file")
@@ -153,7 +153,7 @@ run_test "$SCRIPT_DIR/automated/test_install.sh"
 run_test "$SCRIPT_DIR/automated/test_install_paths.sh"
 run_test "$SCRIPT_DIR/automated/test_home_validation.sh"
 
-# pty-session tests (quick, deterministic)
+# nbs-ts (pty-session) tests (quick, deterministic)
 run_test "$SCRIPT_DIR/automated/test_pty_session_lifecycle.sh"
 
 # nbs-chat tests (deterministic)
@@ -196,7 +196,7 @@ fi
 
 # --- Previously orphaned tests (added by testkeeper audit 2026-03-02) ---
 
-# pty-session adversarial and feature tests
+# nbs-ts (pty-session) adversarial and feature tests
 run_test "$SCRIPT_DIR/automated/test_pty_session_adversarial.sh"
 run_test "$SCRIPT_DIR/automated/test_pty_session_adv_invalid.sh"
 run_test "$SCRIPT_DIR/automated/test_pty_session_adv_no_collision.sh"
