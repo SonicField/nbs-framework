@@ -227,7 +227,7 @@ In `.nbs/events/config.yaml`:
 
 ```yaml
 # Number of decisions between Pythia checkpoints (default: 20)
-pythia-interval: 20
+pythia-interval: 10
 
 # Chat channel for Pythia assessments (default: live.chat)
 pythia-channel: live.chat
@@ -250,7 +250,7 @@ These integrate with existing bus event types. The bus does not need modificatio
 ### Worked Example
 
 ```bash
-# Scribe logs decision #20 (pythia-interval is 20)
+# Scribe logs decision #10 (pythia-interval is 10)
 nbs-bus publish .nbs/events/ scribe decision-logged normal \
   "D-1707760800 Accept O(n^2) parser cost"
 
@@ -341,7 +341,7 @@ Chat: live.chat
 EOF
 
 # 3. Optionally set Pythia interval in config
-echo "pythia-interval: 20" >> .nbs/events/config.yaml
+echo "pythia-interval: 10" >> .nbs/events/config.yaml
 
 # 4. Start Scribe instance (persistent)
 # Scribe runs as a Claude instance with /nbs-scribe skill loaded
@@ -399,7 +399,7 @@ These must hold. Violations indicate bugs.
 
 **Symptoms:** Pythia's assessment generates decisions that immediately trigger another checkpoint.
 
-**Mitigation:** The `pythia-interval` threshold counts decisions, not events. A single Pythia assessment typically generates at most 1–2 decisions (risk acceptances or mitigations). At the default interval of 20, this cannot cause a loop. If the interval is set very low (e.g., 2), increase it or ensure Pythia assessments do not themselves count as decisions.
+**Mitigation:** The `pythia-interval` threshold counts decisions, not events. A single Pythia assessment typically generates at most 1–2 decisions (risk acceptances or mitigations). At the default interval of 10, this cannot cause a loop. If the interval is set very low (e.g., 2), increase it or ensure Pythia assessments do not themselves count as decisions.
 
 ### Bus events lost
 
