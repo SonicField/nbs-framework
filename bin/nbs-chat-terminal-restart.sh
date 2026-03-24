@@ -194,6 +194,7 @@ for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
         NBS_FORCE_SPAWN=1 \
         exec "${NBS_BIN}/nbs-claude" --root="$PROJECT_ROOT" --dangerously-skip-permissions
     ) >/dev/null 2>&1 &
+    disown $!
     echo "[watchdog] Spawned $h (pid $!)"
     sleep 5
 done
