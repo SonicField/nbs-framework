@@ -544,7 +544,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         char *content = tp->capture(tp, 5);
         if (!content) continue;
 
-        if (detect_prompt_visible(content)) {
+        if (detect_prompt_visible(content) &&
+            /* Skip the trust dialog — it also has ❯ but with "trust"
+             * nearby. Only inject initial prompt at the real Claude
+             * input prompt. */
+            strstr(content, "trust this folder") == NULL) {
             /* Send initial prompt with paste brackets so Claude treats
              * multi-line content (e.g. full skill file) as a single
              * input, not line-by-line submits. */

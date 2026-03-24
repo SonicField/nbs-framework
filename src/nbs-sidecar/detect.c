@@ -207,18 +207,7 @@ int detect_prompt_visible(const char *content)
     ASSERT_MSG(search_start >= content && search_start <= content + len,
                "detect_prompt_visible: search_start out of bounds");
 
-    /* Require both the prompt character AND "bypass permissions" or
-     * "auto-accept" nearby.  The trust dialog also contains ❯ but with
-     * "Yes, I trust" — checking for the permissions line avoids a
-     * false positive that would consume the initial prompt. */
-    int result = 0;
-    if (strstr(search_start, prompt_utf8) != NULL) {
-        if (strstr(search_start, "bypass") != NULL ||
-            strstr(search_start, "auto-accept") != NULL ||
-            strstr(search_start, "permissions") != NULL) {
-            result = 1;
-        }
-    }
+    int result = strstr(search_start, prompt_utf8) != NULL;
 
     /* Postcondition: return value is boolean */
     ASSERT_MSG(result == 0 || result == 1,
