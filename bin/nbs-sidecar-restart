@@ -26,12 +26,14 @@ esac
 
 MODE="restart"
 TARGET_HANDLE=""
+NAME_PATTERN=""
 
 for arg in "$@"; do
     case "$arg" in
         --respawn) MODE="respawn" ;;
+        --name=*) NAME_PATTERN="${arg#--name=}" ;;
         --help|-h)
-            echo "Usage: $(basename "$0") [--respawn] [handle]"
+            echo "Usage: $(basename "$0") [--respawn] [--name=PATTERN] [handle]"
             echo ""
             echo "Hot-restart or respawn nbs-sidecar processes."
             echo "Agents (Claude sessions) are not affected."
@@ -39,6 +41,7 @@ for arg in "$@"; do
             echo "  (no args)     Restart all running sidecars (pick up new binary)"
             echo "  <handle>      Restart only the sidecar for this handle"
             echo "  --respawn     Scan all teams, spawn missing sidecars, restart existing ones"
+            echo "  --name=PAT    Filter nbs-ts sessions by name substring (reduces scan)"
             exit 0
             ;;
         *) TARGET_HANDLE="$arg" ;;
@@ -124,9 +127,13 @@ respawn_missing() {
     # Try nbs-ts sessions first, nbs-ts only
     if [[ -x "$NBS_TS" ]]; then
         local TS_SESSIONS
-        TS_SESSIONS=$("$NBS_TS" list 2>/dev/null | grep "alive" || true)
+        local LIST_CMD=("$NBS_TS" list)
+        if [[ -n "$NAME_PATTERN" ]]; then
+            LIST_CMD+=("--name=$NAME_PATTERN")
+        fi
+        TS_SESSIONS=$("${LIST_CMD[@]}" 2>/dev/null | grep "alive" || true)
         if [[ -n "$TS_SESSIONS" ]]; then
-            while IFS=$'\t' read -r ts_handle ts_status ts_cmd; do
+            while IFS=$'\t' read -r ts_handle ts_status ts_name ts_cmd; do
                 [[ -n "$ts_handle" ]] || continue
                 # Check if a sidecar is already watching this session
                 if pgrep -f "nbs-sidecar.*--session=${ts_handle}" >/dev/null 2>&1; then

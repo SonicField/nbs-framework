@@ -112,7 +112,7 @@ fi
 
 WORKER_CMD="cd $(printf '%q' "$PROJECT_ROOT") && NBS_HANDLE=${ROLE} NBS_TRANSPORT=ts NBS_INITIAL_PROMPT='Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete.' ${NBS_CLAUDE} --dangerously-skip-permissions"
 
-TS_HANDLE=$("$NBS_TS" create "$WORKER_CMD") || {
+TS_HANDLE=$("$NBS_TS" create --name="nbs-${ROLE}-worker-${SUFFIX}" "$WORKER_CMD") || {
     echo "Error: Failed to create nbs-ts worker session" >&2
     exit 1
 }

@@ -272,11 +272,38 @@ static void build_events_dir(char *buf, size_t bufsz, const char *cwd)
                "build_events_dir: path too long");
 }
 
+/*
+ * build_session_name — Construct nbs-ts session name from worker name.
+ *
+ * Worker name format: <slug>-<4hex> (e.g., "testworker-a1b2")
+ * Session name format: nbs-<slug>-worker-<4hex> (e.g., "nbs-testworker-worker-a1b2")
+ *
+ * This must match the naming convention used by nbs-spawn-worker:
+ *   --name="nbs-${ROLE}-worker-${SUFFIX}"
+ */
 static void build_session_name(char *buf, size_t bufsz, const char *name)
 {
     ASSERT_MSG(buf != NULL, "build_session_name: buf is NULL");
     ASSERT_MSG(name != NULL, "build_session_name: name is NULL");
-    int n = snprintf(buf, bufsz, "%s%s", TMUX_PREFIX, name);
+
+    /* Find the last '-' to split slug and hex suffix */
+    const char *dash = strrchr(name, '-');
+    if (dash == NULL || dash == name) {
+        /* No dash — fall back to simple format */
+        int n = snprintf(buf, bufsz, "%s%s%s",
+                         SESSION_NAME_PREFIX, name, SESSION_NAME_SUFFIX);
+        ASSERT_MSG(n > 0 && (size_t)n < bufsz,
+                   "build_session_name: name too long");
+        return;
+    }
+
+    /* Split: slug = name[0..dash), hex = dash+1 */
+    size_t slug_len = (size_t)(dash - name);
+    int n = snprintf(buf, bufsz, "%s%.*s%s-%s",
+                     SESSION_NAME_PREFIX,
+                     (int)slug_len, name,
+                     SESSION_NAME_SUFFIX,
+                     dash + 1);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_session_name: name too long");
 }
@@ -500,6 +527,55 @@ static int nbs_ts_read_new(const char *handle, char *buf, size_t bufsz)
     ASSERT_MSG(handle != NULL, "nbs_ts_read_new: handle is NULL");
     const char *argv[] = {"nbs-ts", "read-new", handle, "--strip", NULL};
     return exec_capture(argv, buf, bufsz);
+}
+
+/*
+ * nbs_ts_find_by_name — Look up a session's hex handle by its name.
+ *
+ * Uses `nbs-ts find <name>` which does an exact match.
+ * Returns 0 and writes the handle to buf if found, -1 if not found.
+ */
+static int nbs_ts_find_by_name(const char *name, char *buf, size_t bufsz)
+{
+    ASSERT_MSG(name != NULL, "nbs_ts_find_by_name: name is NULL");
+    ASSERT_MSG(buf != NULL, "nbs_ts_find_by_name: buf is NULL");
+    const char *argv[] = {"nbs-ts", "find", name, NULL};
+    int rc = exec_capture(argv, buf, bufsz);
+    if (rc != 0) return -1;
+    /* Strip trailing newline */
+    char *nl = strchr(buf, '\n');
+    if (nl) *nl = '\0';
+    return 0;
+}
+
+/*
+ * nbs_ts_has_named_session — Check if a named session is alive.
+ *
+ * Resolves the name to a hex handle via `nbs-ts find`, then checks
+ * status via `nbs-ts status`. Returns 1 if alive, 0 otherwise.
+ */
+static int nbs_ts_has_named_session(const char *name)
+{
+    ASSERT_MSG(name != NULL, "nbs_ts_has_named_session: name is NULL");
+    char handle[16];
+    if (nbs_ts_find_by_name(name, handle, sizeof(handle)) != 0)
+        return 0;
+    return nbs_ts_has_session(handle);
+}
+
+/*
+ * nbs_ts_kill_named_session — Kill a session identified by name.
+ *
+ * Resolves the name to a hex handle via `nbs-ts find`, then kills
+ * via `nbs-ts kill`. Returns 0 on success, -1 if not found.
+ */
+static int nbs_ts_kill_named_session(const char *name)
+{
+    ASSERT_MSG(name != NULL, "nbs_ts_kill_named_session: name is NULL");
+    char handle[16];
+    if (nbs_ts_find_by_name(name, handle, sizeof(handle)) != 0)
+        return -1;
+    return nbs_ts_kill_session(handle);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1264,15 +1340,18 @@ int cmd_spawn(const char *slug, const char *project_dir,
                    "cmd_spawn: session_cmd too long");
     }
 
-    /* Create nbs-ts session. Prepend cd to project dir since nbs-ts
-     * create does not have a --cwd flag. */
+    /* Create nbs-ts session with --name for discoverability.
+     * Prepend cd to project dir since nbs-ts create does not have
+     * a --cwd flag. */
     {
         char full_cmd[PATH_BUF_SIZE * 3];
         int n = snprintf(full_cmd, sizeof(full_cmd),
                          "cd \"%s\" && %s", abs_project_dir, session_cmd);
         ASSERT_MSG(n > 0 && (size_t)n < sizeof(full_cmd),
                    "cmd_spawn: full_cmd too long");
-        const char *argv[] = {"nbs-ts", "create", full_cmd, NULL};
+        char name_flag[NAME_MAX_LEN + 8];
+        snprintf(name_flag, sizeof(name_flag), "--name=%s", session);
+        const char *argv[] = {"nbs-ts", "create", name_flag, full_cmd, NULL};
         char handle_buf[64];
         int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));
         if (rc != 0) {
@@ -1280,7 +1359,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
             unlink(task_file);
             return EXIT_ERROR;
         }
-        /* nbs-ts create prints the handle — store it as the session name */
+        /* nbs-ts create prints the hex handle — store for monitoring */
         char *nl = strchr(handle_buf, '\n');
         if (nl) *nl = '\0';
         snprintf(session, sizeof(session), "%s", handle_buf);
@@ -1517,7 +1596,7 @@ int cmd_status(const char *name, const char *cwd)
     char session[NAME_MAX_LEN];
     build_session_name(session, sizeof(session), name);
 
-    int alive = nbs_ts_has_session(session);
+    int alive = nbs_ts_has_named_session(session);
 
     char state[64];
     get_state_field(task_file, state, sizeof(state));
@@ -1849,8 +1928,8 @@ int cmd_dismiss(const char *name, const char *cwd)
     build_session_name(session, sizeof(session), name);
 
     /* Kill nbs-ts session if alive */
-    if (nbs_ts_has_session(session)) {
-        if (nbs_ts_kill_session(session) == 0) {
+    if (nbs_ts_has_named_session(session)) {
+        if (nbs_ts_kill_named_session(session) == 0) {
             printf("Killed nbs-ts session: %s\n", session);
         } else {
             fprintf(stderr,
@@ -2242,7 +2321,7 @@ int cmd_list(const char *cwd)
         /* Check nbs-ts session */
         char session[NAME_MAX_LEN];
         build_session_name(session, sizeof(session), filename);
-        const char *alive = nbs_ts_has_session(session) ? "alive" : "dead";
+        const char *alive = nbs_ts_has_named_session(session) ? "alive" : "dead";
 
         /* Check log file */
         char log_info[64];

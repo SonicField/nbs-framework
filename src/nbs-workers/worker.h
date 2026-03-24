@@ -23,7 +23,8 @@
 #define EXIT_BAD_ARGS       4
 
 /* Constants */
-#define TMUX_PREFIX         "pty_"
+#define SESSION_NAME_PREFIX "nbs-"
+#define SESSION_NAME_SUFFIX "-worker"
 #define WORKERS_SUBDIR      ".nbs/workers"
 #define SESSIONS_SUBDIR     ".nbs/sessions"
 #define EVENTS_SUBDIR       ".nbs/events"
@@ -116,7 +117,7 @@ int validate_safe_model(const char *model);
  *
  * Postconditions:
  *   - On success (0): worker task file created at <project_dir>/.nbs/workers/<slug>-<4hex>.md,
- *                     nbs-ts session running with handle pty_<slug>-<4hex>
+ *                     nbs-ts session running with name nbs-<slug>-worker-<4hex>
  *   - On error (1): project directory invalid or I/O failure, no worker created
  *   - On bad args (4): slug invalid or required parameters empty/NULL
  */
