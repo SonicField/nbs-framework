@@ -50,7 +50,21 @@ Run commands on remote machines via SSH.
 
 | Tool | Usage | Purpose |
 |------|-------|---------|
-| `nbs-ts` | `nbs-ts create/send/read-new/wait-complete/wait-pattern/kill/list/attach <handle> ...` | Terminal session service. Append-only output log, inotify-based completion signalling, no polling. Infrastructure — prefer `nbs-remote-*` tools for remote work. |
+| `nbs-ts create` | `nbs-ts create [--name=NAME] '<command>'` | Create a session. Returns hex handle. Name is optional metadata for debugging. |
+| `nbs-ts send` | `nbs-ts send <handle> '<text>'` | Send text to a session's input. |
+| `nbs-ts read-new` | `nbs-ts read-new <handle> [--strip]` | Read new output since last read. `--strip` removes ANSI escapes. |
+| `nbs-ts read` | `nbs-ts read <handle> [--last=N\|--offset=N]` | Read output from offset or last N lines. |
+| `nbs-ts status` | `nbs-ts status <handle>` | Check if session is alive or dead, show exit code. |
+| `nbs-ts exit-code` | `nbs-ts exit-code <handle>` | Get the session's exit code. |
+| `nbs-ts list` | `nbs-ts list [--name=PATTERN]` | List sessions. Optional substring filter by name. Output: `handle\tstatus\tname\tcommand`. |
+| `nbs-ts find` | `nbs-ts find <name>` | Find session by exact name. Prints handle, exit 0. Exit 2 if not found. |
+| `nbs-ts kill` | `nbs-ts kill <handle>` | Terminate a session and clean up. |
+| `nbs-ts gc` | `nbs-ts gc [--hours=N]` | Remove dead sessions older than N hours (default 4). |
+| `nbs-ts attach` | `nbs-ts attach <handle>` | Tail output (human viewer). |
+| `nbs-ts wait-complete` | `nbs-ts wait-complete <handle> [--timeout=N]` | Wait for command completion via PROMPT_COMMAND signalling. |
+| `nbs-ts wait-pattern` | `nbs-ts wait-pattern <handle> '<pattern>' [--timeout=N]` | Wait for pattern in output. |
+
+Session names follow `nbs-<handle>-<tag>` convention (e.g. `nbs-supervisor-poem`). Names are optional — sessions without `--name` work the same but show `-` in list output. Infrastructure — prefer `nbs-remote-*` tools for remote work.
 
 ## Worker and Agent Management
 
@@ -66,8 +80,8 @@ Run commands on remote machines via SSH.
 | Tool | Usage | Purpose |
 |------|-------|---------|
 | `nbs-sidecar` | Runs automatically with `nbs-claude` | Background session monitor. Handles notifications, periodic triggers (Pythia, Shepard, Fixup, Librarian), idle detection. |
-| `nbs-sidecar-restart` | `nbs-sidecar-restart [--respawn] [handle]` | Hot-restart running sidecars to pick up binary updates. |
-| `nbs-chat-init` | `nbs-chat-init <project-root>` | Bootstrap NBS framework infrastructure for a new project. |
+| `nbs-sidecar-restart` | `nbs-sidecar-restart [--respawn] [--name=PATTERN] [handle]` | Hot-restart running sidecars. `--respawn` spawns missing ones. `--name` filters by session name. |
+| `nbs-chat-init` | `nbs-chat-init --name=NAME [--root=PATH]` | Bootstrap NBS infrastructure for a project. Creates chat, bus, scribe log, workers, pids. |
 | `nbs-doctor` | `nbs-doctor [--fix]` | Diagnose and optionally fix common NBS installation issues. |
 | `nbs-hub` | `nbs-hub <config>` | Deterministic process enforcement for AI supervisors. |
 
