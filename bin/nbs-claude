@@ -377,23 +377,29 @@ EOF
 
     SIDECAR_ARGS+=("--transport=ts" "--session=$SESSION_NAME")
 
-    # Start C sidecar with auto-restart (ts mode)
+    # Start C sidecar with auto-restart (ts mode).
+    # Write the loop to a temp script and run via setsid so it survives
+    # parent exit and signal delivery. disown does not work in
+    # non-interactive bash (which is how the restart script runs us).
     if [[ "$POLL_DISABLE" != "1" ]]; then
-        (
-            while true; do
-                "${SIDECAR_ARGS[@]}"
-                rc=$?
-                # Check if nbs-ts session still alive
-                if ! "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; then
-                    break  # Session gone — clean exit
-                fi
-                echo "warning: sidecar exited (rc=$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
-                sleep 5
-            done
-        ) &
+        SIDECAR_LOOP=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
+        cat > "$SIDECAR_LOOP" << SIDECAR_EOF
+#!/bin/bash
+while true; do
+    $(printf '%q ' "${SIDECAR_ARGS[@]}")
+    rc=\$?
+    if ! "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; then
+        break
+    fi
+    echo "warning: sidecar exited (rc=\$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
+    sleep 5
+done
+rm -f "$SIDECAR_LOOP"
+SIDECAR_EOF
+        chmod +x "$SIDECAR_LOOP"
+        setsid bash "$SIDECAR_LOOP" >/dev/null 2>&1 &
         SIDECAR_PID=$!
-        disown "$SIDECAR_PID"
-        sleep 0.2
+        sleep 0.5
         if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
             echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
             exit 1
