@@ -38,36 +38,26 @@ tests/
 
 ## Automated Tests
 
-### Running All Tests
+### Running Tests
 
 ```bash
-cd tests/automated
+# Run the full test suite (auto-discovers all test_*.sh in automated/)
+./tests/run_all.sh
 
-# Run individually
-./test_install.sh
-./test_nbs_command.sh
-./test_nbs_discovery.sh
-./test_nbs_recovery.sh
-./test_nbs_dispatch.sh
-./test_dispatch_adversarial.sh
-./test_investigation_branch.sh
-./test_investigation_file.sh
-./test_investigation_ask.sh
-./test_investigation_adversarial.sh
-./test_investigation_adv_no_normal.sh
-./test_investigation_adv_no_silent.sh
-./test_pty_session_basic.sh
-./test_pty_session_wait.sh
-./test_pty_session_timeout.sh
-./test_pty_session_adv_no_collision.sh
-./test_pty_session_adv_invalid.sh
-./test_evaluator_catches_bad.sh
-./test_nbs_worker_lifecycle.sh
-./test_nbs_worker_search.sh
-./test_supervisor_nbs_worker.sh
-./test_supervisor_adv_no_old_pattern.sh
-./test_help_nbs_worker.sh
+# Quick mode — skip AI-evaluated tests
+./tests/run_all.sh --quick
+
+# Run only tests matching a substring
+./tests/run_all.sh --target=nbs_ts
+
+# C unit tests only (fast, <10s)
+make test-unit
+
+# Run a single test directly
+bash tests/automated/test_nbs_chat_lifecycle.sh
 ```
+
+`run_all.sh` auto-discovers all `test_*.sh` files in `automated/`. New tests are included automatically — you do not need to edit `run_all.sh` when adding a test.
 
 ### Test Descriptions
 
@@ -85,7 +75,7 @@ cd tests/automated
 | `test_investigation_adversarial.sh` | Tests NO investigation dispatch without markers (P0) | Fails if investigation review incorrectly triggered |
 | `test_investigation_adv_no_normal.sh` | Tests file at root does NOT produce normal review (P2) | Fails if normal review produced instead of investigation review |
 | `test_investigation_adv_no_silent.sh` | Tests file in subdirectory does NOT silently proceed (P2) | Fails if AI produces complete review without asking |
-| `test_pty_session_basic.sh` | Tests pty-session create/send/read/kill cycle | Fails if any operation errors |
+| `test_pty_session_lifecycle.sh` | Tests nbs-ts (pty-session) create/send/read/kill cycle | Fails if any operation errors |
 | `test_pty_session_wait.sh` | Tests pty-session wait pattern detection | Fails if wait doesn't detect pattern |
 | `test_pty_session_timeout.sh` | Tests pty-session wait timeout | Fails if timeout doesn't work |
 | `test_pty_session_adv_no_collision.sh` | Tests pty-session isolation from user sessions | Fails if user sessions affected |
@@ -173,6 +163,10 @@ Used to evaluate the framework on real-world messiness, not synthetic scenarios.
 ---
 
 ## Adding New Tests
+
+Create a new `test_*.sh` file in `tests/automated/`. It will be auto-discovered by `run_all.sh` on the next run — no registration needed.
+
+If the test requires AI (Claude), add its name to the `AI_TESTS` list in `run_all.sh` so it is skipped with `--quick` and routed through `nbs-ts` when running inside Claude Code.
 
 ### Automated Test Pattern
 
