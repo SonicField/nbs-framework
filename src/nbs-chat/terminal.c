@@ -32,6 +32,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -1362,14 +1363,34 @@ int main(int argc, char **argv) {
 
     /* --restart safety check: if agents are already running, confirm
      * before killing them. Must happen before raw mode (needs canonical
-     * input for Y/N prompt). */
+     * input for Y/N prompt).
+     * Count THIS project's agents via .nbs/pids/ (project-scoped),
+     * not nbs-ts list (global, includes unrelated sessions). */
     if (restart_immediately) {
-        FILE *fp = popen("nbs-ts list 2>/dev/null | grep -c 'alive' "
-                         "2>/dev/null || echo 0", "r");
         int running = 0;
-        if (fp) {
-            if (fscanf(fp, "%d", &running) != 1) running = 0;
-            pclose(fp);
+        char pr[4096];
+        if (resolve_project_root(g_chat_file, pr, sizeof(pr)) == 0) {
+            char pids_dir[4096 + 16];
+            snprintf(pids_dir, sizeof(pids_dir), "%s/.nbs/pids", pr);
+            DIR *dp = opendir(pids_dir);
+            if (dp) {
+                struct dirent *de;
+                while ((de = readdir(dp)) != NULL) {
+                    size_t nlen = strlen(de->d_name);
+                    if (nlen < 5) continue;
+                    if (strcmp(de->d_name + nlen - 4, ".pid") != 0) continue;
+                    char ppath[4096 + 64];
+                    snprintf(ppath, sizeof(ppath), "%s/%s", pids_dir, de->d_name);
+                    FILE *pf = fopen(ppath, "r");
+                    if (!pf) continue;
+                    int pid = 0;
+                    if (fscanf(pf, "%d", &pid) == 1 && pid > 0) {
+                        if (kill(pid, 0) == 0) running++;
+                    }
+                    fclose(pf);
+                }
+                closedir(dp);
+            }
         }
         if (running > 0) {
             printf("%s%d agent session(s) currently running. "
