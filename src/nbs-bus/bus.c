@@ -1190,14 +1190,43 @@ int bus_publish_dedup(const char *events_dir, const char *source,
     ASSERT_MSG(n_key >= 0 && (size_t)n_key < sizeof(proposed_key),
                "bus_publish_dedup: dedup key truncated for %s:%s", source, type);
 
+    /* Acquire a lock file to prevent the TOCTOU race where two concurrent
+     * publishers both pass the dedup scan before either publishes.
+     * The lock is held across the scan+publish sequence. */
+    char lockpath[BUS_MAX_FULLPATH];
+    int n_lock = snprintf(lockpath, sizeof(lockpath), "%s/.dedup.lock", events_dir);
+    ASSERT_MSG(n_lock >= 0 && (size_t)n_lock < sizeof(lockpath),
+               "bus_publish_dedup: lockpath truncated");
+
+    int lock_fd = open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (lock_fd < 0) {
+        /* Cannot create lock file — fall through to publish without dedup */
+        fprintf(stderr, "Warning: cannot create dedup lock %s: %s\n",
+                lockpath, strerror(errno));
+        return bus_publish(events_dir, source, type, priority, payload);
+    }
+
+    struct flock fl = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0
+    };
+    if (fcntl(lock_fd, F_SETLKW, &fl) < 0) {
+        fprintf(stderr, "Warning: cannot acquire dedup lock: %s\n", strerror(errno));
+        close(lock_fd);
+        return bus_publish(events_dir, source, type, priority, payload);
+    }
+
     long long current_us = now_us();
     long long cutoff_us = current_us - dedup_window_us;
     if (cutoff_us < 0) cutoff_us = 0; /* Clamp: avoid underflow when window > current time */
 
-    /* Scan pending events directory for duplicates */
+    /* Scan pending events directory for duplicates (under lock) */
     DIR *dir = opendir(events_dir);
     if (!dir) {
-        /* Directory doesn't exist — proceed to publish (it will fail there) */
+        /* Directory doesn't exist — release lock and proceed */
+        close(lock_fd);
         return bus_publish(events_dir, source, type, priority, payload);
     }
 
@@ -1242,11 +1271,16 @@ int bus_publish_dedup(const char *events_dir, const char *source,
 
     closedir(dir);
 
+    int result;
     if (duplicate_found) {
         fprintf(stderr, "Dedup: event %s dropped (duplicate within window)\n",
                 proposed_key);
-        return BUS_EXIT_DEDUP;
+        result = BUS_EXIT_DEDUP;
+    } else {
+        result = bus_publish(events_dir, source, type, priority, payload);
     }
 
-    return bus_publish(events_dir, source, type, priority, payload);
+    /* Release dedup lock */
+    close(lock_fd);
+    return result;
 }
