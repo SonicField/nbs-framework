@@ -1285,6 +1285,104 @@ static int cmd_find(const char *name)
     return NBS_TS_EXIT_NOT_FOUND;
 }
 
+/* ── Garbage collection ───────────────────────────────────────────── */
+
+/*
+ * remove_session_dir — unlink all known session files, then rmdir.
+ * Same file list as cmd_kill's cleanup. Does NOT use system("rm -rf").
+ */
+static void remove_session_dir(const char *dir)
+{
+    char path[MAX_FILE_PATH];
+    const char *files[] = {
+        "output.log", "completion.log", "pid", "meta", "name",
+        "daemon_pid", "slave_pty", "read_cursor", "completion_cursor",
+        "input.fifo", "bashrc", "exit_code", NULL
+    };
+    for (int i = 0; files[i]; i++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, files[i]);
+        unlink(path);
+    }
+    rmdir(dir);
+}
+
+static int cmd_gc(int max_age_hours)
+{
+    ASSERT_MSG(max_age_hours >= 0, "cmd_gc: max_age_hours is negative: %d",
+               max_age_hours);
+
+    char sessions_dir[NBS_TS_MAX_PATH];
+    if (nbs_ts_sessions_dir(sessions_dir, sizeof(sessions_dir)) < 0)
+        return NBS_TS_EXIT_SUCCESS;
+
+    DIR *d = opendir(sessions_dir);
+    if (!d) return NBS_TS_EXIT_SUCCESS;
+
+    time_t now = time(NULL);
+    long max_age_sec = (long)max_age_hours * 3600;
+    int removed = 0, kept_alive = 0, kept_recent = 0;
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        if (!is_valid_handle(ent->d_name)) continue;
+
+        /* Skip alive sessions */
+        if (session_is_alive(ent->d_name)) {
+            kept_alive++;
+            continue;
+        }
+
+        /* Read session directory */
+        char dir[NBS_TS_MAX_PATH];
+        snprintf(dir, sizeof(dir), "%s/%s", sessions_dir, ent->d_name);
+
+        /* Read session name */
+        char name_path[MAX_FILE_PATH];
+        snprintf(name_path, sizeof(name_path), "%s/name", dir);
+        char name_buf[MAX_SESSION_NAME + 1];
+        const char *session_name = "-";
+        if (read_file_str_quiet(name_path, name_buf, sizeof(name_buf)))
+            session_name = name_buf;
+
+        /* Read start timestamp from meta file */
+        char meta_path[MAX_FILE_PATH];
+        snprintf(meta_path, sizeof(meta_path), "%s/meta", dir);
+        char meta_buf[1024];
+        char *meta = read_file_str_quiet(meta_path, meta_buf,
+                                         sizeof(meta_buf));
+
+        time_t start_time = 0;  /* default: treat missing as epoch (old) */
+        if (meta) {
+            char *start_line = strstr(meta, "start: ");
+            if (start_line) {
+                errno = 0;
+                char *endptr;
+                long val = strtol(start_line + 7, &endptr, 10);
+                if (errno == 0 && endptr != start_line + 7 && val > 0)
+                    start_time = (time_t)val;
+            }
+        }
+
+        long age_sec = (long)(now - start_time);
+        if (age_sec < max_age_sec) {
+            kept_recent++;
+            continue;
+        }
+
+        long dead_hours = age_sec / 3600;
+        printf("gc: removed %s (%s), dead for %ldh\n",
+               ent->d_name, session_name, dead_hours);
+        remove_session_dir(dir);
+        removed++;
+    }
+
+    closedir(d);
+    printf("gc: removed %d sessions, kept %d alive + %d recent dead\n",
+           removed, kept_alive, kept_recent);
+    return NBS_TS_EXIT_SUCCESS;
+}
+
 static int cmd_attach(const char *handle)
 {
     if (!session_exists(handle)) {
@@ -1321,6 +1419,7 @@ static int cmd_help(void)
     printf("  list [--name=PATTERN]             List sessions (filter by name substring)\n");
     printf("  find <name>                       Find session by exact name (exit 2 if not found)\n");
     printf("  attach <handle>                   Tail output (human viewer)\n");
+    printf("  gc [--hours=N]                    Remove dead sessions older than N hours (default: 4)\n");
     printf("  help                              Show this help\n\n");
     printf("Name: [a-zA-Z0-9_.-], max 64 chars. Optional metadata for debugging.\n");
     printf("Exit codes: 0=success 1=error 2=not-found 3=timeout 4=bad-args\n");
@@ -1557,6 +1656,29 @@ int main(int argc, char *argv[])
             return NBS_TS_EXIT_BAD_ARGS;
         }
         return cmd_find(argv[2]);
+
+    } else if (strcmp(cmd, "gc") == 0) {
+        int hours = 4;
+        for (int i = 2; i < argc; i++) {
+            if (strncmp(argv[i], "--hours=", 8) == 0) {
+                errno = 0;
+                char *endptr;
+                long val = strtol(argv[i] + 8, &endptr, 10);
+                if (errno != 0 || *endptr != '\0' || val < 0 || val > 8760) {
+                    fprintf(stderr,
+                            "Error: invalid value in '%s': must be 0..8760\n",
+                            argv[i]);
+                    return NBS_TS_EXIT_BAD_ARGS;
+                }
+                hours = (int)val;
+            } else {
+                char safe[MAX_DISPLAY_LEN];
+                sanitise_for_display(argv[i], safe, sizeof(safe));
+                fprintf(stderr, "Error: unrecognised option '%s'\n", safe);
+                return NBS_TS_EXIT_BAD_ARGS;
+            }
+        }
+        return cmd_gc(hours);
 
     } else if (strcmp(cmd, "attach") == 0) {
         if (argc < 3) {
