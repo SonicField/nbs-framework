@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# Source shared cleanup to prevent session/process leaks
+source "$(dirname "$0")/test_helpers.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
