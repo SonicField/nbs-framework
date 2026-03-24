@@ -312,6 +312,11 @@ if $QUICK_MODE; then
     skip_test "test_nbs_chat_ai_integration"
     skip_test "test_nbs_chat_search_ai"
     skip_test "test_worker_spawn_survival"
+    skip_test "test_pythia_ai"
+    skip_test "test_pythia_adversarial"
+    skip_test "test_pythia_adv_no_chat"
+    skip_test "test_scribe_ai"
+    skip_test "test_scribe_log_ai"
 else
     if [[ -f "$SCRIPT_DIR/automated/test_install_worker.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_install_worker.sh"
@@ -340,6 +345,12 @@ else
     if [[ -f "$SCRIPT_DIR/automated/test_worker_spawn_survival.sh" ]]; then
         run_ai_test "$SCRIPT_DIR/automated/test_worker_spawn_survival.sh"
     fi
+    # Pythia and Scribe AI tests
+    run_ai_test "$SCRIPT_DIR/automated/test_pythia_ai.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_pythia_adversarial.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_pythia_adv_no_chat.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_scribe_ai.sh"
+    run_ai_test "$SCRIPT_DIR/automated/test_scribe_log_ai.sh"
 fi
 
 echo "=== Summary ==="
