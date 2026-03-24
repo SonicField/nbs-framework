@@ -379,6 +379,101 @@ static int scan_events(const char *events_dir, bus_event_t *events, int max_even
     return count;
 }
 
+/*
+ * scan_events_dynamic — heap-allocated variant that reads ALL events.
+ *
+ * Unlike scan_events() which truncates at max_events (silently dropping
+ * events by directory order regardless of priority), this function reads
+ * every .event file and returns them all. The caller is responsible for
+ * freeing *out_events when done.
+ *
+ * Returns the count of events read, or -1 on error.
+ * On success, *out_events points to a heap-allocated array (or NULL if count is 0).
+ */
+static int scan_events_dynamic(const char *events_dir, bus_event_t **out_events)
+{
+    ASSERT_MSG(events_dir != NULL, "scan_events_dynamic: events_dir is NULL");
+    ASSERT_MSG(out_events != NULL, "scan_events_dynamic: out_events is NULL");
+
+    *out_events = NULL;
+
+    DIR *dir = opendir(events_dir);
+    if (!dir) {
+        fprintf(stderr, "Error: cannot open events directory %s: %s\n",
+                events_dir, strerror(errno));
+        return -1;
+    }
+
+    int count = 0;
+    int capacity = BUS_MAX_EVENTS; /* Start with default capacity */
+    bus_event_t *events = malloc((size_t)capacity * sizeof(bus_event_t));
+    if (!events) {
+        closedir(dir);
+        fprintf(stderr, "Error: malloc failed for event scan\n");
+        return -1;
+    }
+
+    struct dirent *entry;
+
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        size_t nlen = strlen(name);
+        if (nlen < 7 || strcmp(name + nlen - 6, ".event") != 0)
+            continue;
+
+        char fullpath[BUS_MAX_FULLPATH];
+        int n_fullpath = snprintf(fullpath, sizeof(fullpath), "%s/%s", events_dir, name);
+        ASSERT_MSG(n_fullpath >= 0 && (size_t)n_fullpath < sizeof(fullpath),
+                   "scan_events_dynamic: path truncated for %s/%s", events_dir, name);
+        struct stat st;
+        if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+
+        long long ts_us;
+        if (parse_event_filename_timestamp(name, &ts_us) != 0) {
+            fprintf(stderr, "Warning: skipping malformed event filename: %s\n", name);
+            continue;
+        }
+
+        /* Grow array if needed */
+        if (count >= capacity) {
+            capacity *= 2;
+            bus_event_t *new_events = realloc(events, (size_t)capacity * sizeof(bus_event_t));
+            if (!new_events) {
+                free(events);
+                closedir(dir);
+                fprintf(stderr, "Error: realloc failed for event scan at %d events\n", count);
+                return -1;
+            }
+            events = new_events;
+        }
+
+        bus_event_t *ev = &events[count];
+        if (read_event_fields(fullpath, &ev->priority,
+                              ev->source, sizeof(ev->source),
+                              ev->type, sizeof(ev->type)) != 0) {
+            fprintf(stderr, "Warning: skipping unreadable event file: %s\n", fullpath);
+            continue;
+        }
+
+        int n_fn = snprintf(ev->filename, sizeof(ev->filename), "%s", name);
+        ASSERT_MSG(n_fn >= 0 && (size_t)n_fn < sizeof(ev->filename),
+                   "scan_events_dynamic: filename truncated for %s", name);
+        ev->timestamp_us = ts_us;
+        count++;
+    }
+
+    closedir(dir);
+
+    if (count == 0) {
+        free(events);
+        *out_events = NULL;
+    } else {
+        *out_events = events;
+    }
+    return count;
+}
+
 /* ------------------------------------------------------------------ */
 /* Configuration                                                       */
 /* ------------------------------------------------------------------ */
@@ -639,9 +734,12 @@ int bus_check(const char *events_dir, const char *handle)
         return -1;
     }
 
-    /* ~196 KB stack allocation (sizeof(bus_event_t) * 256). */
-    bus_event_t events[BUS_MAX_EVENTS];
-    int count = scan_events(events_dir, events, BUS_MAX_EVENTS);
+    /* Read ALL events (heap-allocated) so priority sort sees everything.
+     * Previous implementation used a fixed 256-element stack array which
+     * silently dropped events by directory order, not priority — a flood
+     * of low-priority events could hide critical ones. */
+    bus_event_t *events = NULL;
+    int count = scan_events_dynamic(events_dir, &events);
     if (count < 0) {
         fprintf(stderr, "Error: cannot scan events directory: %s\n", events_dir);
         return -1;
@@ -666,10 +764,12 @@ int bus_check(const char *events_dir, const char *handle)
                events[i].filename,
                age) < 0) {
             fprintf(stderr, "Error: failed to write event listing to stdout\n");
+            free(events);
             return -1;
         }
     }
 
+    free(events);
     return 0;
 }
 
