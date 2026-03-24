@@ -27,7 +27,7 @@ A chat file is a plain text file with a header and base64-encoded messages. Any 
 last-writer: test-runner
 last-write: 2026-02-12 14:23:45
 file-length: 847
-participants: parser-worker, test-runner, alex
+participants: parser-worker, test-runner, human
 ---
 cGFyc2VyLXdvcmtlcjogRm91bmQgMyBmYWlsaW5nIHRlc3Rz
 dGVzdC1ydW5uZXI6IENvbmZpcm1lZCAtIHRlc3RfcGFyc2VfaW50IGZhaWxz
@@ -91,7 +91,7 @@ nbs-chat send .nbs/chat/debug.chat test-runner "Confirmed - fails on -42, root c
 
 ```bash
 # Human opens an interactive terminal view
-nbs-chat-terminal .nbs/chat/debug.chat alex
+nbs-chat-terminal .nbs/chat/debug.chat <your-handle>
 ```
 
 The terminal shows a scrolling message view and accepts typed input. See [nbs-chat-terminal](#terminal-client) below.

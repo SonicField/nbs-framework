@@ -62,7 +62,7 @@ echo "[watchdog] Restarting team for ${CHAT_TAG}..."
 # sessions). Wait for them to exit so their traps complete before we
 # spawn new agents — otherwise the old traps race with the new agents
 # and can destroy freshly-created sessions.
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     # Kill nbs-claude wrapper (reads PID from pidfile)
     pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
     if [[ -f "$pidfile" ]]; then
@@ -81,7 +81,7 @@ while IFS=$'\t' read -r handle status name cmd; do
 done < <("$NBS_TS" list --name="$CHAT_TAG" 2>/dev/null || true)
 
 # Wait for old nbs-claude processes to finish their cleanup traps
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
     if [[ -f "$pidfile" ]]; then
         oldpid=$(cat "$pidfile" 2>/dev/null)
@@ -129,7 +129,7 @@ fi
 CHAT_ABS=$(cd "$(dirname "$CHAT_FILE")" && pwd)/$(basename "$CHAT_FILE")
 EVENTS_DIR="${PROJECT_ROOT}/.nbs/events"
 mkdir -p "${EVENTS_DIR}/processed"
-for handle in scribe gatekeeper testkeeper supervisor generalist theologian; do
+for handle in scribe supervisor gatekeeper theologian testkeeper generalist; do
     REG="${PROJECT_ROOT}/.nbs/control-registry-${handle}"
     # Ensure chat entry
     if ! grep -qF "chat:${CHAT_ABS}" "$REG" 2>/dev/null; then
@@ -144,7 +144,7 @@ done
 # 3. Reset cursors to current end
 HEADER_LINES=6
 MESSAGE_COUNT=$(( $(wc -l < "$CHAT_FILE") - HEADER_LINES ))
-for handle in scribe gatekeeper testkeeper supervisor generalist theologian; do
+for handle in scribe supervisor gatekeeper theologian testkeeper generalist; do
     if [ -f "${CHAT_FILE}.cursors" ]; then
         if grep -q "^${handle}=" "${CHAT_FILE}.cursors" 2>/dev/null; then
             sed -i "s/^${handle}=.*/${handle}=${MESSAGE_COUNT}/" "${CHAT_FILE}.cursors"
@@ -178,7 +178,7 @@ elif [[ -d "${HOME}/.nbs/commands" ]]; then
     COMMANDS_DIR="${HOME}/.nbs/commands"
 fi
 
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     SKILL_CONTENT=""
     if [[ -n "$COMMANDS_DIR" && -f "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}" ]]; then
         SKILL_CONTENT=$(cat "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}")
@@ -205,10 +205,10 @@ done
 # Only reference the digest if it was actually produced.
 if [[ "$DIGEST_OK" == "true" ]]; then
     "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-        "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
+        "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until the human leader confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
 else
     "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-        "@team Auto-restart by terminal watchdog. No digest available. Read the chat history above for context. If the human leader has posted a goal or plan, follow it. Otherwise, propose 3 candidate goals to the human leader — do not begin work until Alex confirms a direction." 2>/dev/null || true
+        "@team Auto-restart by terminal watchdog. No digest available. Read the chat history above for context. If the human leader has posted a goal or plan, follow it. Otherwise, propose 3 candidate goals to the human leader — do not begin work until the human leader confirms a direction." 2>/dev/null || true
 fi
 
 echo "[watchdog] Team restarted successfully"

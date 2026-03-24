@@ -84,7 +84,7 @@ Scribe: scribe
 ### D-1707753600 Use recursive descent for the parser
 
 - **Chat ref:** live.chat:~L4200
-- **Participants:** claude, alex
+- **Participants:** claude, human
 - **Artefacts:** src/parser.c
 - **Risk tags:** perf-risk
 - **Status:** decided
@@ -96,7 +96,7 @@ Scribe: scribe
 ### D-1707760800 Accept O(n^2) parser cost
 
 - **Chat ref:** live.chat:~L4350
-- **Participants:** claude, alex, bench-claude
+- **Participants:** claude, human, bench-claude
 - **Artefacts:** tests/bench_parser.c
 - **Risk tags:** perf-risk, reversible
 - **Status:** accepted-risk

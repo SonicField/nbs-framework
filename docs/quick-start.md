@@ -86,7 +86,7 @@ nbs-bus status .nbs/events/
 Join a chat channel interactively:
 
 ```bash
-nbs-chat-terminal .nbs/chat/live.chat alex
+nbs-chat-terminal .nbs/chat/live.chat <your-handle>
 ```
 
 Type messages, see agent responses in real time. Use `@handle` to address a specific agent.

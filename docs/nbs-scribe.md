@@ -58,7 +58,7 @@ Decision count: 0
 
 ### D-1707753600 Coordination bus replaces polling
 - **Chat ref:** live.chat:~L342
-- **Participants:** alex, claude
+- **Participants:** human, claude
 - **Artefacts:** docs/nbs-bus.md, bin/nbs-bus
 - **Risk tags:** none
 - **Status:** decided
@@ -69,7 +69,7 @@ Decision count: 0
 
 ### D-1707840000 MVP-first for bus implementation
 - **Chat ref:** live.chat:~L869
-- **Participants:** alex, claude, bench-claude
+- **Participants:** human, claude, bench-claude
 - **Artefacts:** —
 - **Risk tags:** scope-creep
 - **Status:** decided
@@ -129,7 +129,7 @@ grep "^### D-" .nbs/scribe/live-log.md
 grep -A6 "^### D-" .nbs/scribe/live-log.md | grep -B1 "Risk tags:" | grep -v "none"
 
 # Decisions involving a specific participant
-grep -A6 "^### D-" .nbs/scribe/live-log.md | grep -B2 "alex"
+grep -A6 "^### D-" .nbs/scribe/live-log.md | grep -B2 "<handle>"
 
 # Decisions by status
 grep -A6 "^### D-" .nbs/scribe/live-log.md | grep "Status: superseded"
@@ -204,7 +204,7 @@ EOF
 
 ## Design Decisions
 
-**Why a separate file, not a supervisor state file?** Supervisor coordination happens via chat, which is per-session. The decision log is project-wide and role-independent. A decision made by bench-claude and alex is as relevant to doc-claude as to claude. The log must outlive any individual session.
+**Why a separate file, not a supervisor state file?** Supervisor coordination happens via chat, which is per-session. The decision log is project-wide and role-independent. A decision made by bench-claude and the human leader is as relevant to doc-claude as to claude. The log must outlive any individual session.
 
 **Why markdown, not YAML?** The log is meant to be read by humans scanning a file. Markdown headings are visually scannable. YAML would require tooling to read comfortably. The structured fields within each entry use a consistent format that is both human-readable and grep-parseable.
 
