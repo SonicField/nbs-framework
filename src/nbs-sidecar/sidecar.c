@@ -195,7 +195,10 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
-    char *content = tp->capture(tp, 8);
+    /* Read more lines than we need, strip ANSI and blanks, keep the
+     * last 32 non-empty lines.  Claude's terminal output contains many
+     * blank lines from cursor movements and thinking animations. */
+    char *content = tp->capture(tp, 128);
     if (!content) {
         fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
         return -1;
@@ -203,25 +206,48 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     strip_ansi(content);
 
-    /* Truncate each line to 80 characters */
+    /* Collect non-blank lines, truncate each to 80 chars, keep last 32 */
     char truncated[SIDECAR_MAX_CONTENT];
     truncated[0] = '\0';
-    size_t toff = 0;
+
+    /* First pass: collect pointers to non-blank lines */
+    char *lines[128];
+    size_t line_lens[128];
+    int nlines = 0;
+
     char *line = content;
-    while (line && *line) {
+    while (line && *line && nlines < 128) {
         char *nl = strchr(line, '\n');
         size_t llen = nl ? (size_t)(nl - line) : strlen(line);
-        size_t capped = llen > 80 ? 80 : llen;
-        /* Guard against size_t underflow: if toff is within 2 bytes of
-         * the buffer end, the subtraction would wrap unsigned. */
-        if (toff + 2 >= sizeof(truncated)) break;
-        size_t space = sizeof(truncated) - toff - 2;
-        if (capped > space) break;
-        memcpy(truncated + toff, line, capped);
-        toff += capped;
-        truncated[toff++] = '\n';
+
+        /* Skip blank lines (all whitespace) */
+        int blank = 1;
+        for (size_t i = 0; i < llen; i++) {
+            if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r') {
+                blank = 0;
+                break;
+            }
+        }
+        if (!blank) {
+            lines[nlines] = line;
+            line_lens[nlines] = llen > 80 ? 80 : llen;
+            nlines++;
+        }
         if (!nl) break;
         line = nl + 1;
+    }
+
+    /* Take last 32 non-blank lines */
+    int start = nlines > 32 ? nlines - 32 : 0;
+    size_t toff = 0;
+    for (int i = start; i < nlines; i++) {
+        if (toff + 2 >= sizeof(truncated)) break;
+        size_t space = sizeof(truncated) - toff - 2;
+        size_t capped = line_lens[i];
+        if (capped > space) break;
+        memcpy(truncated + toff, lines[i], capped);
+        toff += capped;
+        truncated[toff++] = '\n';
     }
     truncated[toff] = '\0';
 
