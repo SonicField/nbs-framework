@@ -123,7 +123,7 @@ fi
 # SI2: Session runs claude, not tail
 echo "SI2. Session runs claude (not tail)..."
 if [[ -n "$TS_HANDLE" ]]; then
-    SESSION_CMD=$("$NBS_TS" list 2>/dev/null | grep "^$TS_HANDLE" | cut -f3)
+    SESSION_CMD=$("$NBS_TS" list 2>/dev/null | grep "^$TS_HANDLE" | cut -f4)
     if echo "$SESSION_CMD" | grep -q "claude"; then
         pass "Session command is claude"
     elif echo "$SESSION_CMD" | grep -q "tail"; then

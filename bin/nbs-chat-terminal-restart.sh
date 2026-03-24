@@ -74,11 +74,11 @@ for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
     # Kill sidecar
     pkill -f "nbs-sidecar.*--handle=${h}.*${PROJECT_ROOT}" 2>/dev/null || true
 done
-# Kill nbs-ts sessions
-while IFS=$'\t' read -r handle status cmd; do
+# Kill nbs-ts sessions — only those belonging to this team (name contains CHAT_TAG)
+while IFS=$'\t' read -r handle status name cmd; do
     [[ -n "$handle" ]] || continue
     "$NBS_TS" kill "$handle" 2>/dev/null || true
-done < <("$NBS_TS" list 2>/dev/null || true)
+done < <("$NBS_TS" list --name="$CHAT_TAG" 2>/dev/null || true)
 
 # Wait for old nbs-claude processes to finish their cleanup traps
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do

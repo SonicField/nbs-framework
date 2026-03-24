@@ -336,7 +336,22 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
     # so claude would otherwise open in the wrong directory.
     CLAUDE_CMD="cd $(printf '%q' "$NBS_ROOT") && $CLAUDE_CMD"
 
-    SESSION_NAME=$("$NBS_TS" create "$CLAUDE_CMD") || {
+    # Derive session name tag from chat file in project root.
+    # Convention: nbs-<handle>-<tag> where tag comes from the first .chat file.
+    # e.g. poem.chat → nbs-supervisor-poem, nn.Module.chat → nbs-supervisor-nn-Module
+    NBS_TS_TAG=""
+    for chatf in "${NBS_ROOT}/.nbs/chat/"*.chat; do
+        if [[ -f "$chatf" ]]; then
+            NBS_TS_TAG=$(basename "$chatf" .chat | tr '.' '-')
+            break
+        fi
+    done
+    NBS_TS_NAME_FLAG=""
+    if [[ -n "$NBS_TS_TAG" ]]; then
+        NBS_TS_NAME_FLAG="--name=nbs-${SIDECAR_HANDLE}-${NBS_TS_TAG}"
+    fi
+
+    SESSION_NAME=$("$NBS_TS" create $NBS_TS_NAME_FLAG "$CLAUDE_CMD") || {
         echo "Error: Failed to create nbs-ts session" >&2
         exit 1
     }
