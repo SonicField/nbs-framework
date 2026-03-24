@@ -28,7 +28,9 @@ fi
 
 # Cleanup function — kills leaked sessions and processes
 _nbs_test_cleanup() {
-    # Kill any nbs-ts sessions created during this test
+    # Kill any nbs-ts sessions created during this test.
+    # Compare by handle (hex ID) — NOT by name, since name substring
+    # matching can kill live team agents (e.g. "test" matches "testkeeper").
     if [[ -x "$_NBS_TS_BIN" && -f "$_NBS_TEST_SESSIONS_BEFORE" ]]; then
         "$_NBS_TS_BIN" list 2>/dev/null | while IFS=$'\t' read -r handle status name cmd; do
             [[ -n "$handle" ]] || continue

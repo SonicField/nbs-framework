@@ -32,10 +32,8 @@ cleanup() {
         # The agent runs in a setsid'd process group — kill by pattern.
         pkill -9 -f "nbs-claude.*$TMPDIR" 2>/dev/null || true
         pkill -9 -f "nbs-sidecar.*$TMPDIR" 2>/dev/null || true
-        # Kill nbs-ts sessions
-        "$NBS_TS" list --name=test 2>/dev/null | cut -f1 | while read h; do
-            "$NBS_TS" kill "$h" 2>/dev/null || true
-        done
+        # Session cleanup handled by test_helpers.sh (handle-based, not name-based).
+        # Do NOT use --name=test — it matches "testkeeper" and kills the live team.
         sleep 1
         rm -rf "$TMPDIR"
     fi
