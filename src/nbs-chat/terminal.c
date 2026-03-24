@@ -1364,34 +1364,40 @@ int main(int argc, char **argv) {
     /* --restart safety check: if agents are already running, confirm
      * before killing them. Must happen before raw mode (needs canonical
      * input for Y/N prompt).
-     * Count THIS project's agents via .nbs/pids/ (project-scoped),
-     * not nbs-ts list (global, includes unrelated sessions). */
+     * Count THIS project's agents via nbs-ts list --name=<tag>
+     * (project-scoped by session name, not global). */
     if (restart_immediately) {
         int running = 0;
-        char pr[4096];
-        if (resolve_project_root(g_chat_file, pr, sizeof(pr)) == 0) {
-            char pids_dir[4096 + 16];
-            snprintf(pids_dir, sizeof(pids_dir), "%s/.nbs/pids", pr);
-            DIR *dp = opendir(pids_dir);
-            if (dp) {
-                struct dirent *de;
-                while ((de = readdir(dp)) != NULL) {
-                    size_t nlen = strlen(de->d_name);
-                    if (nlen < 5) continue;
-                    if (strcmp(de->d_name + nlen - 4, ".pid") != 0) continue;
-                    char ppath[4096 + 64];
-                    snprintf(ppath, sizeof(ppath), "%s/%s", pids_dir, de->d_name);
-                    FILE *pf = fopen(ppath, "r");
-                    if (!pf) continue;
-                    int pid = 0;
-                    if (fscanf(pf, "%d", &pid) == 1 && pid > 0) {
-                        if (kill(pid, 0) == 0) running++;
-                    }
-                    fclose(pf);
-                }
-                closedir(dp);
+
+        /* Derive chat_tag from g_chat_file basename:
+         * poem.chat → "poem", nn.Module.chat → "nn-Module" */
+        char restart_tag[256] = {0};
+        {
+            const char *base = strrchr(g_chat_file, '/');
+            base = base ? base + 1 : g_chat_file;
+            size_t blen = strlen(base);
+            if (blen > 5 && strcmp(base + blen - 5, ".chat") == 0)
+                blen -= 5;
+            if (blen >= sizeof(restart_tag)) blen = sizeof(restart_tag) - 1;
+            memcpy(restart_tag, base, blen);
+            restart_tag[blen] = '\0';
+            for (size_t i = 0; i < blen; i++)
+                if (restart_tag[i] == '.') restart_tag[i] = '-';
+        }
+
+        if (restart_tag[0] != '\0') {
+            /* popen is safe here — no threads have been started yet. */
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd),
+                     "nbs-ts list --name=%s 2>/dev/null | grep -c alive || echo 0",
+                     restart_tag);
+            FILE *fp = popen(cmd, "r");
+            if (fp) {
+                if (fscanf(fp, "%d", &running) != 1) running = 0;
+                pclose(fp);
             }
         }
+
         if (running > 0) {
             printf("%s%d agent session(s) currently running. "
                    "Restart will kill them all.%s\n", BOLD, running, RESET);
