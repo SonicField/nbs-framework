@@ -57,15 +57,48 @@ CHAT_TAG="${CHAT_BASE//./-}"
 
 echo "[watchdog] Restarting team for ${CHAT_TAG}..."
 
-# 1. Kill all agent sessions and sidecars for this chat
+# 1. Kill all agent processes, sidecars, and sessions.
+# Kill nbs-claude wrappers FIRST (they have cleanup traps that delete
+# sessions). Wait for them to exit so their traps complete before we
+# spawn new agents — otherwise the old traps race with the new agents
+# and can destroy freshly-created sessions.
+for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
+    # Kill nbs-claude wrapper (reads PID from pidfile)
+    pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
+    if [[ -f "$pidfile" ]]; then
+        oldpid=$(cat "$pidfile" 2>/dev/null)
+        if [[ -n "$oldpid" && "$oldpid" =~ ^[0-9]+$ ]]; then
+            kill "$oldpid" 2>/dev/null || true
+        fi
+    fi
+    # Kill sidecar
+    pkill -f "nbs-sidecar.*--handle=${h}.*${PROJECT_ROOT}" 2>/dev/null || true
+done
+# Kill nbs-ts sessions
 while IFS=$'\t' read -r handle status cmd; do
     [[ -n "$handle" ]] || continue
     "$NBS_TS" kill "$handle" 2>/dev/null || true
 done < <("$NBS_TS" list 2>/dev/null || true)
+
+# Wait for old nbs-claude processes to finish their cleanup traps
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    pkill -f "nbs-sidecar.*--handle=${h}" 2>/dev/null || true
+    pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
+    if [[ -f "$pidfile" ]]; then
+        oldpid=$(cat "$pidfile" 2>/dev/null)
+        if [[ -n "$oldpid" && "$oldpid" =~ ^[0-9]+$ ]]; then
+            # Wait up to 5s for each process to exit
+            for i in $(seq 1 10); do
+                kill -0 "$oldpid" 2>/dev/null || break
+                sleep 0.5
+            done
+            # Force kill if still alive
+            kill -9 "$oldpid" 2>/dev/null || true
+        fi
+    fi
 done
+
 rm -f .nbs/pids/*.pid 2>/dev/null || true
+rm -f .nbs/sessions/*.json 2>/dev/null || true
 # Reset trigger timestamps so librarian/pythia/shepard/fixup use their
 # first_delay timing (e.g. librarian fires after 5 min, not 15).
 rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run" \
@@ -73,7 +106,7 @@ rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run" \
       "${PROJECT_ROOT}/.nbs/shepard-last-run" \
       "${PROJECT_ROOT}/.nbs/fixup-last-run" 2>/dev/null || true
 
-sleep 2
+sleep 1
 
 # 2. Run digest (preserves institutional memory across restarts)
 # Skip for empty/new chats — nothing to digest, and the digest worker
