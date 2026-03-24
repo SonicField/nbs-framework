@@ -172,7 +172,7 @@ Within the dedup window, a second event with the same source and type is silentl
 | `task-failed` | worker | Worker failed |
 | `worker-spawned` | nbs-workers | Worker created and started |
 | `worker-dismissed` | nbs-workers | Worker dismissed by supervisor |
-| `worker-died` | nbs-workers | Worker tmux session died unexpectedly |
+| `worker-died` | nbs-workers | Worker nbs-ts session died unexpectedly |
 | `chat-message` | nbs-chat | New message in a chat channel |
 | `chat-mention` | nbs-chat | Message specifically @mentioning a handle |
 | `human-input` | nbs-chat-terminal | Human posted a message |
@@ -209,7 +209,7 @@ This is by design. Alex's rationale: "we can get a lot of good collaborations fr
 | Worker sets state to `failed` | `task-failed` | `high` |
 | Worker spawned | `worker-spawned` | `normal` |
 | Worker dismissed | `worker-dismissed` | `normal` |
-| Worker died (tmux dead, state still running) | `worker-died` | `high` |
+| Worker died (session dead, state still running) | `worker-died` | `high` |
 
 These events are published automatically by `nbs-workers` lifecycle commands. The bus directory is detected via `.nbs/events/`; if it does not exist, publishing is silently skipped.
 

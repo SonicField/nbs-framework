@@ -28,12 +28,7 @@ nbs-claude --resume abc123    # Resume session with polling
 
 `nbs-claude` works in two modes depending on the terminal environment:
 
-| Mode | Condition | How it works |
-|------|-----------|-------------|
-| **tmux** | Already inside tmux | Runs Claude in the current pane; sidecar monitors via `tmux capture-pane` |
-| **pty** | Not inside tmux | Creates a `pty-session`, attaches to it; sidecar monitors via `pty-session read` |
-
-Both modes have identical sidecar logic. The only difference is how pane content is captured and how keystrokes are injected.
+`nbs-claude` creates an nbs-ts session and runs Claude within it. The sidecar monitors via `nbs-ts read-new` and injects keystrokes via `nbs-ts send`.
 
 ## Sidecar Architecture
 
@@ -75,7 +70,7 @@ The sidecar checks the event bus and chat cursors directly, injecting `/nbs-noti
 
 **Cooldown**: After injecting `/nbs-notify`, the sidecar waits at least `NBS_NOTIFY_COOLDOWN` seconds (default 15) before injecting again. Critical-priority bus events bypass the cooldown.
 
-**Summary message**: The sidecar passes a summary as the `/nbs-notify` argument, e.g.: `2 event(s) in .nbs/events/. 3 unread in live.chat`. This is capped at 200 characters for tmux safety.
+**Summary message**: The sidecar passes a summary as the `/nbs-notify` argument, e.g.: `2 event(s) in .nbs/events/. 3 unread in live.chat`. This is capped at 200 characters.
 
 ### Idle Detection
 
@@ -175,7 +170,7 @@ The registry file uses `grep -v` with a temporary file and `mv` for unregister o
 
 ## Cleanup
 
-On exit (INT, TERM, or normal), the sidecar process is killed and any `pty-session` created in pty mode is cleaned up. The control inbox and registry persist for post-session analysis.
+On exit (INT, TERM, or normal), the sidecar process is killed and the nbs-ts session is cleaned up. The control inbox and registry persist for post-session analysis.
 
 ## File Layout
 
@@ -196,7 +191,7 @@ On exit (INT, TERM, or normal), the sidecar process is killed and any `pty-sessi
 | Code | Meaning |
 |------|---------|
 | 0 | Clean exit |
-| 1 | General error (pty-session not found, session creation failed) |
+| 1 | General error (nbs-ts not found, session creation failed) |
 | 4 | Invalid arguments |
 
 ## See Also

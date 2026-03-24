@@ -39,7 +39,7 @@ The verdict file is the deterministic state of truth. The test is falsifiable: e
 | Mode | Tool | When to Use |
 |------|------|-------------|
 | One-shot | `claude -p` | Evaluate output, no interaction needed |
-| Interactive | pty-session | Multi-turn, permission prompts, AskUserQuestion |
+| Interactive | nbs-ts | Multi-turn, permission prompts, AskUserQuestion |
 
 **One-shot**: Feed a prompt, get output, evaluate. Fast and simple. Use for most tests.
 

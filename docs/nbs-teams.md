@@ -80,7 +80,7 @@ If you're writing implementation steps, scope is too narrow. Set the goal, let w
 | `/nbs-testkeeper` | Testkeeper role reference |
 | `/nbs-teams-chat` | AI-to-AI chat reference |
 | `/nbs-teams-fixup` | Diagnose and restart stalled agents |
-| `/nbs-tmux-worker` | nbs-workers command reference |
+| `/nbs-ts-worker` | nbs-workers command reference |
 
 ### Getting Help
 

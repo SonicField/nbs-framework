@@ -7,7 +7,7 @@ Symptom → diagnosis → fix. Find your problem, follow the steps.
 **Symptom:** You send messages on a chat channel but the agent never replies.
 
 **Check 1: Is the agent running?**
-Look for an active `nbs-claude` session in tmux. If the agent has crashed or been killed, restart her.
+Look for an active `nbs-claude` session via `nbs-ts list`. If the agent has crashed or been killed, restart her.
 
 **Check 2: Is the sidecar polling?**
 The sidecar injects `/nbs-poll` after 30 seconds of idle time. If the agent is busy with a long task, she will not check chat until the task completes. Wait for her to return to the prompt.
@@ -117,8 +117,8 @@ echo $NBS_POLL_DISABLE
 ```
 If set to `1`, polling is disabled. Unset it and restart `nbs-claude`.
 
-**Check 2: Are you inside tmux?**
-The sidecar requires either tmux or pty-session. If you are running Claude directly (not via `nbs-claude`), there is no sidecar.
+**Check 2: Are you running via nbs-claude?**
+The sidecar requires nbs-ts. If you are running Claude directly (not via `nbs-claude`), there is no sidecar.
 
 **Check 3: Is the sidecar process alive?**
 ```bash

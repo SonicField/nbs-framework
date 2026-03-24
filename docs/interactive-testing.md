@@ -7,22 +7,21 @@ This guide covers testing Claude Code behaviour that requires multi-turn interac
 | Scenario | Method |
 |----------|--------|
 | Evaluate output from a single prompt | `claude -p` (one-shot) |
-| Test behaviour that requires AskUserQuestion | pty-session (interactive) |
-| Test permission prompt handling | pty-session |
-| Test multi-turn conversation flow | pty-session |
+| Test behaviour that requires AskUserQuestion | nbs-ts (interactive) |
+| Test permission prompt handling | nbs-ts |
+| Test multi-turn conversation flow | nbs-ts |
 
-Use `claude -p` when you can evaluate the output in isolation. Use pty-session when the test requires responding to prompts or observing interactive behaviour.
+Use `claude -p` when you can evaluate the output in isolation. Use nbs-ts when the test requires responding to prompts or observing interactive behaviour.
 
 ## The Pattern
 
 ```bash
-PTY_SESSION="$PROJECT_ROOT/bin/pty-session"
 SESSION_NAME="test_$$"
 TEST_REPO=$(mktemp -d)
 
 # Setup cleanup
 cleanup() {
-    "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
+    HANDLE=$(nbs-ts find "$SESSION_NAME" 2>/dev/null) && nbs-ts kill "$HANDLE" 2>/dev/null || true
     rm -rf "$TEST_REPO"
 }
 trap cleanup EXIT
@@ -33,27 +32,34 @@ git init -q
 # ... create test files ...
 
 # Start Claude
-"$PTY_SESSION" create "$SESSION_NAME" "cd '$TEST_REPO' && claude"
+HANDLE=$(nbs-ts create --name="$SESSION_NAME" "cd '$TEST_REPO' && claude")
 
-# Handle trust prompt
-if "$PTY_SESSION" wait "$SESSION_NAME" 'trust' --timeout=30; then
-    "$PTY_SESSION" send "$SESSION_NAME" ''  # Accept with Enter
-    sleep 2
-fi
+# Handle trust prompt (poll for 'trust' in output)
+for i in $(seq 1 30); do
+    if nbs-ts read-new "$HANDLE" --strip | grep -q 'trust'; then
+        nbs-ts send "$HANDLE" ''  # Accept with Enter
+        sleep 2
+        break
+    fi
+    sleep 1
+done
 
 # Wait for main prompt
-"$PTY_SESSION" wait "$SESSION_NAME" 'Welcome' --timeout=30
+for i in $(seq 1 30); do
+    if nbs-ts read-new "$HANDLE" --strip | grep -q 'Welcome'; then break; fi
+    sleep 1
+done
 
 # Send command
-"$PTY_SESSION" send "$SESSION_NAME" '/nbs'
+nbs-ts send "$HANDLE" '/nbs'
 sleep 1
-"$PTY_SESSION" send "$SESSION_NAME" ''  # Extra Enter for submission
+nbs-ts send "$HANDLE" ''  # Extra Enter for submission
 
 # Wait for processing
 sleep 60
 
 # Capture and evaluate
-"$PTY_SESSION" read "$SESSION_NAME" > "$OUTPUT_FILE"
+nbs-ts read-new "$HANDLE" --strip > "$OUTPUT_FILE"
 ```
 
 ## Gotchas
@@ -62,13 +68,17 @@ sleep 60
 
 When Claude enters a new directory, she shows "Do you trust the files in this folder?" This blocks all input until accepted.
 
-**Solution**: Wait for 'trust' pattern and send Enter to accept.
+**Solution**: Poll for 'trust' pattern and send Enter to accept.
 
 ```bash
-if "$PTY_SESSION" wait "$SESSION_NAME" 'trust' --timeout=30; then
-    "$PTY_SESSION" send "$SESSION_NAME" ''
-    sleep 2
-fi
+for i in $(seq 1 30); do
+    if nbs-ts read-new "$HANDLE" --strip | grep -q 'trust'; then
+        nbs-ts send "$HANDLE" ''
+        sleep 2
+        break
+    fi
+    sleep 1
+done
 ```
 
 ### AskUserQuestion Rendering
@@ -98,9 +108,9 @@ Some prompts require:
 2. Another Enter to submit
 
 ```bash
-"$PTY_SESSION" send "$SESSION_NAME" '/nbs'
+nbs-ts send "$HANDLE" '/nbs'
 sleep 1
-"$PTY_SESSION" send "$SESSION_NAME" ''  # Second Enter
+nbs-ts send "$HANDLE" ''  # Second Enter
 ```
 
 ### Timing
@@ -108,9 +118,13 @@ sleep 1
 Wait for prompts before sending commands. The process may not be ready immediately after create.
 
 ```bash
-"$PTY_SESSION" create "$SESSION_NAME" "claude"
-"$PTY_SESSION" wait "$SESSION_NAME" 'Welcome' --timeout=30  # Wait first
-"$PTY_SESSION" send "$SESSION_NAME" '/nbs'            # Then send
+HANDLE=$(nbs-ts create --name="$SESSION_NAME" "claude")
+# Poll for prompt before sending
+for i in $(seq 1 30); do
+    if nbs-ts read-new "$HANDLE" --strip | grep -q 'Welcome'; then break; fi
+    sleep 1
+done
+nbs-ts send "$HANDLE" '/nbs'            # Then send
 ```
 
 ## Working Directory: Isolated Repositories
@@ -154,7 +168,7 @@ Always kill sessions when done. Use trap to ensure cleanup on any exit.
 
 ```bash
 cleanup() {
-    "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
+    HANDLE=$(nbs-ts find "$SESSION_NAME" 2>/dev/null) && nbs-ts kill "$HANDLE" 2>/dev/null || true
     rm -rf "$TEST_REPO"
 }
 trap cleanup EXIT
@@ -162,5 +176,4 @@ trap cleanup EXIT
 
 ## See Also
 
-- [pty-session Reference](pty-session.md) - Command reference
 - [Testing Strategy](testing-strategy.md) - Overall approach

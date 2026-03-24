@@ -4,10 +4,10 @@ nbs-workers manages Claude worker instances for NBS teams with persistent loggin
 
 ## How It Works
 
-nbs-workers wraps tmux with a higher-level abstraction:
+nbs-workers wraps nbs-ts with a higher-level abstraction:
 
 - **Unique names** — Generated as `<slug>-<4-char-hash>` (e.g., `parser-a3f1`) to avoid collisions across supervisor sessions
-- **Persistent logging** — Uses `tmux pipe-pane` to stream all output to `.nbs/workers/<name>.log` from session start. Output survives any exit (natural or killed)
+- **Persistent logging** — Uses nbs-ts session output capture to stream all output to `.nbs/workers/<name>.log` from session start. Output survives any exit (natural or killed)
 - **Task file integration** — Automatically creates `.nbs/workers/<name>.md` with task description and status tracking
 - **ANSI stripping** — Search command strips terminal escape codes before matching
 
@@ -16,7 +16,7 @@ nbs-workers wraps tmux with a higher-level abstraction:
 | Command | Purpose |
 |---------|---------|
 | `nbs-workers spawn <slug> <dir> <desc>` | Create task file, start Claude, send prompt |
-| `nbs-workers status <name>` | tmux alive + State field from task file |
+| `nbs-workers status <name>` | Session alive + State field from task file |
 | `nbs-workers search <name> <regex> [--context=N]` | Search persistent log (default context: 50) |
 | `nbs-workers results <name>` | Extract Log section from task file |
 | `nbs-workers dismiss <name>` | Kill session, mark dismissed, preserve log |
@@ -44,9 +44,9 @@ nbs-workers dismiss $WORKER
 
 ## Status Logic
 
-The `status` command combines tmux session state with the task file's `State:` field:
+The `status` command combines nbs-ts session state with the task file's `State:` field:
 
-| tmux alive | State field | Reported status |
+| Session alive | State field | Reported status |
 |-----------|-------------|-----------------|
 | yes | running | running |
 | yes | completed | completed (session still open) |
@@ -74,7 +74,7 @@ When `.nbs/events/` exists, `nbs-workers` lifecycle commands automatically publi
 | `dismiss` | `worker-dismissed` | `normal` |
 | `status` (detects died) | `worker-died` | `high` |
 
-A `worker-died` event is published when `status` finds the tmux session dead but the task file still shows state `running`. This allows the supervisor to detect and respond to unexpected worker exits.
+A `worker-died` event is published when `status` finds the nbs-ts session dead but the task file still shows state `running`. This allows the supervisor to detect and respond to unexpected worker exits.
 
 If `.nbs/events/` does not exist, publishing is silently skipped — `nbs-workers` works without the bus.
 

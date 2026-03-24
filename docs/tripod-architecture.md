@@ -285,9 +285,9 @@ If the chat is `live.chat`, then:
 | Chat file | `.nbs/chat/live.chat` | `<name>.chat` |
 | Scribe log | `.nbs/scribe/live-log.md` | `<name>-log.md` |
 | Pythia worker | `.nbs/workers/pythia-live-<hash>.md` | `pythia-<name>-<hash>.md` |
-| Tmux session (Scribe) | `nbs-scribe-live` | `nbs-scribe-<name>` |
-| Tmux session (Claude) | `nbs-claude-live` | `nbs-claude-<name>` |
-| Tmux session (Pythia) | `nbs-pythia-live` | `nbs-pythia-<name>` |
+| nbs-ts session (Scribe) | `nbs-scribe-live` | `nbs-scribe-<name>` |
+| nbs-ts session (Claude) | `nbs-claude-live` | `nbs-claude-<name>` |
+| nbs-ts session (Pythia) | `nbs-pythia-live` | `nbs-pythia-<name>` |
 | Bus events | `*-scribe-decision-logged-*.event` | (unchanged — source is agent, not chat) |
 
 If a second chat `refactor.chat` exists, its resources are `refactor-log.md`, `pythia-refactor-<hash>.md`, `nbs-scribe-refactor`, etc. An AI can discover everything associated with a conversation by grepping for the chat name.
@@ -295,8 +295,8 @@ If a second chat `refactor.chat` exists, its resources are `refactor-log.md`, `p
 This convention:
 
 - **Avoids invented identifiers.** No project-id hashes or random suffixes. The chat filename is already unique within the project.
-- **Avoids tmux collisions.** Different chats produce different session names. Different projects use different chat names. Sessions are user-wide but names never collide.
-- **Enables discovery.** `tmux ls | grep live` shows all sessions for that conversation. `ls .nbs/workers/*live*` finds associated workers. `ls .nbs/scribe/live-*` finds the decision log.
+- **Avoids session collisions.** Different chats produce different session names. Different projects use different chat names. Sessions are user-wide but names never collide.
+- **Enables discovery.** `nbs-ts list --name=live` shows all sessions for that conversation. `ls .nbs/workers/*live*` finds associated workers. `ls .nbs/scribe/live-*` finds the decision log.
 - **Follows existing patterns.** Workers already use descriptive filenames for discovery. This extends the principle to all Tripod resources.
 
 ## Directory Structure

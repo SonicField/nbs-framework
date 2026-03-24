@@ -75,7 +75,7 @@ Processing rules by event type:
 | `chat-message` | Read the chat channel for context. Respond if addressed. |
 | `worker-spawned` | Note the new worker. No action required unless unexpected. |
 | `worker-dismissed` | Note the worker was dismissed. Update your tracking if relevant. |
-| `worker-died` | Worker tmux session died unexpectedly. Read the worker's task file and log. Decide whether to respawn or escalate. |
+| `worker-died` | Worker nbs-ts session died unexpectedly. Read the worker's task file and log. Decide whether to respawn or escalate. |
 | `decision-logged` | Scribe recorded a decision. No action required unless tracking decision activity. |
 | `pythia-checkpoint` | Decision threshold reached. Spawn a Pythia worker: `nbs-workers spawn pythia <dir> "Read .nbs/scribe/live-log.md and post checkpoint assessment."` |
 | `assessment-posted` | Pythia has posted an assessment to chat. Read and discuss as a team. Scribe logs any resulting decisions. |
