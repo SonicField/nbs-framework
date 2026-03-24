@@ -97,6 +97,12 @@ for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     fi
 done
 
+# Belt and braces: pkill any nbs-claude processes for this project
+# that escaped pidfile tracking (orphans from previous restarts,
+# crashed sessions, race conditions).
+pkill -9 -f "nbs-claude.*--root=${PROJECT_ROOT}" 2>/dev/null || true
+sleep 1
+
 rm -f .nbs/pids/*.pid 2>/dev/null || true
 rm -f .nbs/sessions/*.json 2>/dev/null || true
 rm -f .nbs/control-pause 2>/dev/null || true
@@ -202,14 +208,9 @@ for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     sleep 5
 done
 
-# 6. Post continuation directive
-# Only reference the digest if it was actually produced.
-if [[ "$DIGEST_OK" == "true" ]]; then
-    "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-        "@team Auto-restart by terminal watchdog. Read the chat digest above — it contains a CONTINUATION section with your next steps. If CONTINUATION: GOALS, create a plan to pursue those goals and begin work immediately. If CONTINUATION: REVIEW, review the prior session and propose 3 candidate goals to the human leader — do not begin work until the human leader confirms a direction. Diagnosis without implementation is not progress." 2>/dev/null || true
-else
-    "$NBS_CHAT" send "$CHAT_FILE" supervisor \
-        "@team Auto-restart by terminal watchdog. No digest available. Read the chat history above for context. If the human leader has posted a goal or plan, follow it. Otherwise, propose 3 candidate goals to the human leader — do not begin work until the human leader confirms a direction." 2>/dev/null || true
-fi
+# No canned restart message — the supervisor reads the chat history
+# and figures out context herself. Canned messages caused confusion
+# (agents searching for nonexistent digests, proposing goals when
+# a clear goal already exists in the chat).
 
 echo "[watchdog] Team restarted successfully"
