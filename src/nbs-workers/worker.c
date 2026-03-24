@@ -18,6 +18,7 @@
 #include "worker.h"
 #include "nbs_assert.h"
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -561,6 +562,52 @@ static int nbs_ts_has_named_session(const char *name)
     if (nbs_ts_find_by_name(name, handle, sizeof(handle)) != 0)
         return 0;
     return nbs_ts_has_session(handle);
+}
+
+/*
+ * nbs_ts_has_session_by_slug — Check if any session matching a slug
+ * pattern is alive. Uses `nbs-ts list --name=<slug>` (substring match).
+ * Returns 1 if at least one alive session matches, 0 otherwise.
+ */
+static int nbs_ts_has_session_by_slug(const char *slug)
+{
+    ASSERT_MSG(slug != NULL, "nbs_ts_has_session_by_slug: slug is NULL");
+    char name_flag[256];
+    snprintf(name_flag, sizeof(name_flag), "--name=%s", slug);
+    const char *argv[] = {"nbs-ts", "list", name_flag, NULL};
+    char buf[1024];
+    int rc = exec_capture(argv, buf, sizeof(buf));
+    if (rc != 0) return 0;
+    return (strstr(buf, "alive") != NULL);
+}
+
+/*
+ * nbs_ts_kill_session_by_slug — Kill all sessions matching a slug.
+ * Uses `nbs-ts list --name=<slug>` to find handles, kills each.
+ */
+static int nbs_ts_kill_session_by_slug(const char *slug)
+{
+    ASSERT_MSG(slug != NULL, "nbs_ts_kill_session_by_slug: slug is NULL");
+    char name_flag[256];
+    snprintf(name_flag, sizeof(name_flag), "--name=%s", slug);
+    const char *argv[] = {"nbs-ts", "list", name_flag, NULL};
+    char buf[4096];
+    int rc = exec_capture(argv, buf, sizeof(buf));
+    if (rc != 0) return -1;
+    /* Parse output: each line starts with hex handle\t */
+    char *line = buf;
+    while (line && *line) {
+        char *tab = strchr(line, '\t');
+        if (tab) {
+            *tab = '\0';
+            if (strlen(line) == 8) { /* hex handle */
+                nbs_ts_kill_session(line);
+            }
+        }
+        char *nl = strchr(tab ? tab + 1 : line, '\n');
+        line = nl ? nl + 1 : NULL;
+    }
+    return 0;
 }
 
 /*
@@ -1306,80 +1353,72 @@ int cmd_spawn(const char *slug, const char *project_dir,
      * Previous approach (previous approach) caused connection errors
      * because claude running as a child of interactive bash behaves
      * differently from claude running as the session command. */
-    char session_cmd[PATH_BUF_SIZE * 2];
+    /* session_cmd removed — nbs-claude is exec'd directly, not via
+     * a command string passed to nbs-ts create. */
+    /* Resolve nbs-claude path: try .nbs/bin/ then bin/ under project root. */
+    char nbs_claude_path[PATH_BUF_SIZE];
     {
-        /* Resolve nbs-claude path: try .nbs/bin/ then bin/ under project root.
-         * Must be absolute — nbs-ts runs session commands via /bin/sh -c which
-         * does not have PATH set up. PATH lookup causes connection errors
-         * because a different nbs-claude (or environment) is found. */
-        char nbs_claude_path[PATH_BUF_SIZE];
-        {
-            int cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
-                              "%s/.nbs/bin/nbs-claude", abs_project_dir);
+        int cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
+                          "%s/.nbs/bin/nbs-claude", abs_project_dir);
+        if (cp <= 0 || (size_t)cp >= sizeof(nbs_claude_path) ||
+            access(nbs_claude_path, X_OK) != 0) {
+            cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
+                          "%s/bin/nbs-claude", abs_project_dir);
             if (cp <= 0 || (size_t)cp >= sizeof(nbs_claude_path) ||
                 access(nbs_claude_path, X_OK) != 0) {
-                cp = snprintf(nbs_claude_path, sizeof(nbs_claude_path),
-                              "%s/bin/nbs-claude", abs_project_dir);
-                if (cp <= 0 || (size_t)cp >= sizeof(nbs_claude_path) ||
-                    access(nbs_claude_path, X_OK) != 0) {
-                    fprintf(stderr, "Error: nbs-claude not found under %s\n",
-                            abs_project_dir);
-                    unlink(task_file);
-                    return EXIT_ERROR;
-                }
+                fprintf(stderr, "Error: nbs-claude not found under %s\n",
+                        abs_project_dir);
+                unlink(task_file);
+                return EXIT_ERROR;
             }
         }
-
-        int n = snprintf(session_cmd, sizeof(session_cmd),
-                         "NBS_HANDLE=%s "
-                         "NBS_TRANSPORT=ts "
-                         "NBS_INITIAL_PROMPT='Read %s and execute the task. "
-                         "Update the Status and Log sections when complete.' "
-                         "%s --dangerously-skip-permissions",
-                         slug, task_file, nbs_claude_path);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(session_cmd),
-                   "cmd_spawn: session_cmd too long");
     }
 
-    /* Create nbs-ts session with --name for discoverability.
-     * Prepend cd to project dir since nbs-ts create does not have
-     * a --cwd flag. */
+    /* Run nbs-claude directly via fork+setsid. No nbs-ts create wrapper
+     * (that causes double sessions). No pipe (SIGPIPE kills tail -f).
+     *
+     * The monitor loop uses nbs-ts find to locate the session by name
+     * when it needs to check liveness — no handle needed upfront.
+     * nbs-claude creates a named session (nbs-<slug>-<tag>). */
     {
-        char full_cmd[PATH_BUF_SIZE * 3];
-        int n = snprintf(full_cmd, sizeof(full_cmd),
-                         "cd \"%s\" && %s", abs_project_dir, session_cmd);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(full_cmd),
-                   "cmd_spawn: full_cmd too long");
-        char name_flag[NAME_MAX_LEN + 8];
-        snprintf(name_flag, sizeof(name_flag), "--name=%s", session);
-        const char *argv[] = {"nbs-ts", "create", name_flag, full_cmd, NULL};
-        char handle_buf[64];
-        int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));
-        if (rc != 0) {
-            fprintf(stderr, "Error: Failed to create nbs-ts session\n");
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "Error: fork failed: %s\n", strerror(errno));
             unlink(task_file);
             return EXIT_ERROR;
         }
-        /* nbs-ts create prints the hex handle — store for monitoring */
-        char *nl = strchr(handle_buf, '\n');
-        if (nl) *nl = '\0';
-        snprintf(session, sizeof(session), "%s", handle_buf);
+        if (pid == 0) {
+            /* Child: setsid, redirect stdout/stderr, exec nbs-claude */
+            setsid();
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > STDERR_FILENO) close(devnull);
+            }
+            char root_flag[PATH_BUF_SIZE];
+            snprintf(root_flag, sizeof(root_flag), "--root=%s", abs_project_dir);
+            char handle_env[256];
+            snprintf(handle_env, sizeof(handle_env), "NBS_HANDLE=%s", slug);
+            putenv(handle_env);
+            char prompt_env[PATH_BUF_SIZE * 2];
+            snprintf(prompt_env, sizeof(prompt_env),
+                     "NBS_INITIAL_PROMPT=Read %s and execute the task. "
+                     "Update the Status and Log sections when complete.",
+                     task_file);
+            putenv(prompt_env);
+            putenv("NBS_TRANSPORT=ts");
+            putenv("NBS_FORCE_SPAWN=1");
+            execl(nbs_claude_path, "nbs-claude",
+                  root_flag, "--dangerously-skip-permissions",
+                  (char *)NULL);
+            _exit(127);
+        }
+        /* Parent continues — child is setsid'd, runs independently. */
     }
 
-    /* Output capture is automatic with nbs-ts — output capture is automatic */
-
-    /* Postcondition: nbs-ts session is alive */
-    if (!nbs_ts_has_session(session)) {
-        fprintf(stderr,
-                "Error: nbs-ts session died immediately after creation\n");
-        unlink(task_file);
-        return EXIT_ERROR;
-    }
-
-    /* Allow claude to initialise before polling for completion.
-     * The -p flag delivers the prompt at startup, so direct session
-     * timing issues. This delay just prevents premature polling. */
-    sleep(10);
+    /* Allow claude to initialise before polling for completion. */
+    sleep(5);
 
     /* Monitor for completion, then kill the session.
      *
@@ -1411,7 +1450,9 @@ int cmd_spawn(const char *slug, const char *project_dir,
              * exited on its own (crashed or clean exit). Either way,
              * nothing to kill.
              * Uses nbs_ts_has_session (fork+exec) — never system(). */
-            if (!nbs_ts_has_session(session)) {
+            /* Look up session by slug — nbs-claude creates nbs-<slug>-<tag>
+             * which differs from the worker session name. Substring match. */
+            if (!nbs_ts_has_session_by_slug(slug)) {
                 /* Session died — write death summary to log.
                  * The session log has ANSI noise; append a clean
                  * human-readable summary for easy diagnosis. */
@@ -1513,7 +1554,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
 
         /* Kill the session and clean up.
          * Uses nbs_ts_kill_session (fork+exec) — never system(). */
-        (void)nbs_ts_kill_session(session);
+        (void)nbs_ts_kill_session_by_slug(slug);
 
         /* Clean pidfile */
         {
