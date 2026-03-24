@@ -129,7 +129,7 @@ static int handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
         for (int w = 0; w < 10; w++) {
             sleep(1);
 
-            char *content = tp->capture(tp, 5);
+            char *content = tp->capture(tp, 30);
             if (!content) continue;
 
             if (detect_prompt_visible(content)) {
@@ -535,63 +535,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         fprintf(stderr, "sidecar_run: registry_seed failed\n");
     }
 
-    /* Wait for prompt and inject initial prompt */
-    int init_wait = 0;
-    while (init_wait < 60) {
-        sleep(2);
-        init_wait += 2;
+    /* No blocking init-wait. The main loop handles initial prompt
+     * injection alongside queries and interrupts. This ensures queries
+     * (@handle?) work from the first tick, not after a 60-second block. */
+    int init_prompt_pending = (cfg->initial_prompt && cfg->initial_prompt[0]);
+    time_t init_prompt_deadline = time(NULL) + 60;
 
-        char *content = tp->capture(tp, 5);
-        if (!content) continue;
+    state.sidecar_start_time = time(NULL);
+    state.last_flush_time = state.sidecar_start_time;
+    state.last_poll_time = state.sidecar_start_time;
+    state.last_fixup_check = state.sidecar_start_time;
+    state.last_librarian_check = state.sidecar_start_time;
+    state.last_pythia_check = state.sidecar_start_time;
+    state.last_shepard_check = state.sidecar_start_time;
 
-        if (detect_prompt_visible(content) &&
-            /* Skip the trust dialog — it also has ❯ but with "trust"
-             * nearby. Only inject initial prompt at the real Claude
-             * input prompt. */
-            strstr(content, "trust this folder") == NULL) {
-            /* Send initial prompt with paste brackets so Claude treats
-             * multi-line content (e.g. full skill file) as a single
-             * input, not line-by-line submits. */
-            if (tp->send_text(tp, cfg->initial_prompt) != 0) {
-                fprintf(stderr, "sidecar_run: initial prompt send_text failed\n");
-            }
-            usleep(300000); /* let paste settle */
-            if (tp->send_key(tp, "Enter") != 0) {
-                fprintf(stderr, "sidecar_run: initial prompt send_key Enter failed\n");
-            }
-            /* Wait for initial prompt to be consumed.
-             * Cap at startup_grace — with grace=0 we want fast start. */
-            int init_settle = (cfg->startup_grace < 5)
-                              ? (cfg->startup_grace > 0 ? cfg->startup_grace : 1)
-                              : 5;
-            sleep(init_settle);
-            state.sidecar_start_time = time(NULL);
-            state.last_flush_time = state.sidecar_start_time;
-            state.last_poll_time = state.sidecar_start_time;
-            state.last_fixup_check = state.sidecar_start_time;
-            state.last_librarian_check = state.sidecar_start_time;
-            state.last_pythia_check = state.sidecar_start_time;
-            state.last_shepard_check = state.sidecar_start_time;
-            free(content);
-            break;
-        }
-        free(content);
-    }
-
-    /* Enforce sidecar_start_time invariant (sidecar.h line 83):
-     * must be > 0 after the init-wait phase. If the prompt was never found
-     * (init-wait timed out), set it now so startup_grace works correctly. */
-    if (state.sidecar_start_time == 0) {
-        fprintf(stderr, "sidecar_run: init-wait timed out without finding prompt, "
-                "setting start_time now\n");
-        state.sidecar_start_time = time(NULL);
-        state.last_flush_time = state.sidecar_start_time;
-        state.last_poll_time = state.sidecar_start_time;
-        state.last_fixup_check = state.sidecar_start_time;
-        state.last_librarian_check = state.sidecar_start_time;
-        state.last_pythia_check = state.sidecar_start_time;
-        state.last_shepard_check = state.sidecar_start_time;
-    }
     ASSERT_MSG(state.sidecar_start_time > 0,
                "sidecar_run: sidecar_start_time invariant violated after init");
 
@@ -667,6 +624,35 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     if (handle_query(tp, cfg, registry_path) == 0) {
                         bus_client_ack_event(qbus_dir, qevent_file);
                     }
+                }
+            }
+        }
+
+        /* --- Initial prompt injection (non-blocking) ---
+         * Tried every tick until the prompt appears or 60s deadline passes.
+         * Uses 30 lines to reliably capture the prompt area. */
+        if (init_prompt_pending) {
+            if (time(NULL) > init_prompt_deadline) {
+                fprintf(stderr, "sidecar_run: init prompt deadline expired, "
+                        "giving up on initial prompt injection\n");
+                init_prompt_pending = 0;
+            } else {
+                char *init_content = tp->capture(tp, 30);
+                if (init_content) {
+                    if (detect_prompt_visible(init_content) &&
+                        strstr(init_content, "trust this folder") == NULL) {
+                        if (tp->send_text(tp, cfg->initial_prompt) != 0)
+                            fprintf(stderr, "sidecar_run: init prompt send_text failed\n");
+                        usleep(300000);
+                        if (tp->send_key(tp, "Enter") != 0)
+                            fprintf(stderr, "sidecar_run: init prompt Enter failed\n");
+                        init_prompt_pending = 0;
+                        int settle = (cfg->startup_grace < 5)
+                                     ? (cfg->startup_grace > 0 ? cfg->startup_grace : 1)
+                                     : 5;
+                        sleep(settle);
+                    }
+                    free(init_content);
                 }
             }
         }
@@ -766,8 +752,10 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             break;
         }
 
-        /* Capture content and hash */
-        char *content = tp->capture(tp, 5);
+        /* Capture content and hash. 30 lines to reliably include
+         * the prompt area (Claude's terminal has many blank/control
+         * lines between the prompt and the end of output). */
+        char *content = tp->capture(tp, 30);
         if (!content) continue;
 
         size_t content_len = strlen(content);
@@ -899,7 +887,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
                 if (should_inject_notify(cfg, &state, registry_path) == 0) {
                     /* TOCTOU re-capture before injection */
-                    char *fresh = tp->capture(tp, 5);
+                    char *fresh = tp->capture(tp, 30);
                     if (fresh) {
                         if (!detect_prompt_visible(fresh)) {
                             /* Prompt disappeared — abort */
@@ -932,7 +920,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     int injection_consumed = 0;
                     for (int retry = 1; retry <= 3; retry++) {
                         sleep(retry * 2);
-                        char *verify = tp->capture(tp, 5);
+                        char *verify = tp->capture(tp, 30);
                         if (!verify) continue;
 
                         if (strstr(verify, "sidecar detected") != NULL) {
