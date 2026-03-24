@@ -241,6 +241,11 @@ run_test "$SCRIPT_DIR/automated/test_supervisor_adv_no_old_pattern.sh"
 
 # Worker tests
 run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_worker_lifecycle.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_worker_search.sh"
+run_test "$SCRIPT_DIR/automated/test_worker_death_logging.sh"
+run_test "$SCRIPT_DIR/automated/test_worker_log_tooling.sh"
+run_test "$SCRIPT_DIR/automated/test_ephemeral_worker_exit.sh"
 
 # Digest and librarian tests
 run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
