@@ -138,12 +138,11 @@ AGENT_SKILLS[supervisor]="/nbs-supervisor"
 
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
     (
-        cd "$PROJECT_ROOT"
         NBS_HANDLE="$h" \
         NBS_TRANSPORT=ts \
         NBS_INITIAL_PROMPT="${AGENT_SKILLS[$h]}" \
         NBS_FORCE_SPAWN=1 \
-        exec "${NBS_BIN}/nbs-claude" --dangerously-skip-permissions
+        exec "${NBS_BIN}/nbs-claude" --root="$PROJECT_ROOT" --dangerously-skip-permissions
     ) >/dev/null 2>&1 &
     echo "[watchdog] Spawned $h (pid $!)"
     sleep 5

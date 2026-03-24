@@ -331,7 +331,11 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
         fi
     done
 
-    # Create nbs-ts session running claude
+    # Create nbs-ts session running claude.
+    # Prepend cd to NBS_ROOT — the helper spawns bash in HOME,
+    # so claude would otherwise open in the wrong directory.
+    CLAUDE_CMD="cd $(printf '%q' "$NBS_ROOT") && $CLAUDE_CMD"
+
     SESSION_NAME=$("$NBS_TS" create "$CLAUDE_CMD") || {
         echo "Error: Failed to create nbs-ts session" >&2
         exit 1
