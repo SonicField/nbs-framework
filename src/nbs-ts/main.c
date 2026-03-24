@@ -115,6 +115,28 @@ static char *read_file_str(const char *path, char *buf, size_t bufsize)
     return buf;
 }
 
+/*
+ * read_file_str_quiet — Like read_file_str but returns NULL silently
+ * when the file does not exist. Logs errors only for unexpected failures.
+ */
+static char *read_file_str_quiet(const char *path, char *buf, size_t bufsize)
+{
+    ASSERT_MSG(path != NULL, "read_file_str_quiet: path is NULL");
+    ASSERT_MSG(buf != NULL, "read_file_str_quiet: buf is NULL");
+    ASSERT_MSG(bufsize > 1, "read_file_str_quiet: bufsize too small: %zu", bufsize);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;  /* Silent on ENOENT or any open failure */
+
+    ssize_t n = read(fd, buf, bufsize - 1);
+    close(fd);
+    if (n <= 0) return NULL;
+
+    buf[n] = '\0';
+    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
+    return buf;
+}
+
 static int write_file_str(const char *path, const char *content)
 {
     ASSERT_MSG(path != NULL, "write_file_str: path is NULL");
@@ -391,9 +413,31 @@ static void daemon_relay(int master_fd, const char *output_log_path,
     }
 }
 
+/* ── Name validation ──────────────────────────────────────────────── */
+
+#define MAX_SESSION_NAME 64
+
+/*
+ * is_valid_session_name — Check that name matches [a-zA-Z0-9_.-]+
+ * and is at most MAX_SESSION_NAME chars. Returns 1 if valid, 0 if not.
+ */
+static int is_valid_session_name(const char *name)
+{
+    if (!name || name[0] == '\0') return 0;
+    size_t len = strlen(name);
+    if (len > MAX_SESSION_NAME) return 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-'))
+            return 0;
+    }
+    return 1;
+}
+
 /* ── CLI Commands ─────────────────────────────────────────────────── */
 
-static int cmd_create(const char *command)
+static int cmd_create(const char *command, const char *name)
 {
     /* Generate handle */
     char handle[NBS_TS_HANDLE_LEN];
@@ -419,6 +463,17 @@ static int cmd_create(const char *command)
     if (mkdir(session_dir, 0700) < 0) {
         perror("nbs-ts: mkdir session");
         return NBS_TS_EXIT_ERROR;
+    }
+
+    /* Write session name if provided */
+    if (name) {
+        char name_path[MAX_FILE_PATH];
+        snprintf(name_path, sizeof(name_path), "%s/name", session_dir);
+        if (write_file_str(name_path, name) < 0) {
+            fprintf(stderr, "nbs-ts: failed to write session name\n");
+            rmdir(session_dir);
+            return NBS_TS_EXIT_ERROR;
+        }
     }
 
     /* Set up file paths */
@@ -1127,7 +1182,7 @@ static int cmd_kill(const char *handle)
     /* Clean up files */
     char path[MAX_FILE_PATH];
     const char *files[] = {
-        "output.log", "completion.log", "pid", "meta",
+        "output.log", "completion.log", "pid", "meta", "name",
         "daemon_pid", "slave_pty", "read_cursor", "completion_cursor",
         "input.fifo", "bashrc", "exit_code", NULL
     };
@@ -1140,7 +1195,7 @@ static int cmd_kill(const char *handle)
     return NBS_TS_EXIT_SUCCESS;
 }
 
-static int cmd_list(void)
+static int cmd_list(const char *name_filter)
 {
     char sessions_dir[NBS_TS_MAX_PATH];
     if (nbs_ts_sessions_dir(sessions_dir, sizeof(sessions_dir)) < 0)
@@ -1161,6 +1216,19 @@ static int cmd_list(void)
         struct stat st;
         if (stat(meta_path, &st) != 0) continue;
 
+        /* Read session name if it exists */
+        char name_path[MAX_FILE_PATH];
+        snprintf(name_path, sizeof(name_path), "%s/%s/name",
+                 sessions_dir, ent->d_name);
+        char name_buf[MAX_SESSION_NAME + 1];
+        const char *session_name = "-";
+        if (read_file_str_quiet(name_path, name_buf, sizeof(name_buf)))
+            session_name = name_buf;
+
+        /* Apply name filter (substring match) */
+        if (name_filter && strstr(session_name, name_filter) == NULL)
+            continue;
+
         int alive = session_is_alive(ent->d_name);
 
         char meta_buf[1024];
@@ -1176,11 +1244,45 @@ static int cmd_list(void)
             }
         }
 
-        printf("%s\t%s\t%s\n", ent->d_name, alive ? "alive" : "dead", cmd_str);
+        printf("%s\t%s\t%s\t%s\n", ent->d_name, alive ? "alive" : "dead",
+               session_name, cmd_str);
     }
 
     closedir(d);
     return NBS_TS_EXIT_SUCCESS;
+}
+
+static int cmd_find(const char *name)
+{
+    ASSERT_MSG(name != NULL, "cmd_find: name is NULL");
+
+    char sessions_dir[NBS_TS_MAX_PATH];
+    if (nbs_ts_sessions_dir(sessions_dir, sizeof(sessions_dir)) < 0)
+        return NBS_TS_EXIT_NOT_FOUND;
+
+    DIR *d = opendir(sessions_dir);
+    if (!d) return NBS_TS_EXIT_NOT_FOUND;
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        if (!is_valid_handle(ent->d_name)) continue;
+
+        char name_path[MAX_FILE_PATH];
+        snprintf(name_path, sizeof(name_path), "%s/%s/name",
+                 sessions_dir, ent->d_name);
+
+        char name_buf[MAX_SESSION_NAME + 1];
+        if (read_file_str_quiet(name_path, name_buf, sizeof(name_buf)) &&
+            strcmp(name_buf, name) == 0) {
+            printf("%s\n", ent->d_name);
+            closedir(d);
+            return NBS_TS_EXIT_SUCCESS;
+        }
+    }
+
+    closedir(d);
+    return NBS_TS_EXIT_NOT_FOUND;
 }
 
 static int cmd_attach(const char *handle)
@@ -1206,7 +1308,7 @@ static int cmd_help(void)
 {
     printf("Usage: nbs-ts <command> [options]\n\n");
     printf("Commands:\n");
-    printf("  create <command>                  Create a new session\n");
+    printf("  create [--name=NAME] <command>    Create a new session\n");
     printf("  send <handle> <text>              Send text to a session\n");
     printf("  read-new <handle> [--strip]       Read new output since last read\n");
     printf("  read <handle> [--offset=N|--last=N] Read output from offset or last N lines\n");
@@ -1216,9 +1318,11 @@ static int cmd_help(void)
     printf("  status <handle>                   Check session status\n");
     printf("  exit-code <handle>                Get exit code\n");
     printf("  kill <handle>                     Terminate session\n");
-    printf("  list                              List all sessions\n");
+    printf("  list [--name=PATTERN]             List sessions (filter by name substring)\n");
+    printf("  find <name>                       Find session by exact name (exit 2 if not found)\n");
     printf("  attach <handle>                   Tail output (human viewer)\n");
     printf("  help                              Show this help\n\n");
+    printf("Name: [a-zA-Z0-9_.-], max 64 chars. Optional metadata for debugging.\n");
     printf("Exit codes: 0=success 1=error 2=not-found 3=timeout 4=bad-args\n");
     return NBS_TS_EXIT_SUCCESS;
 }
@@ -1269,13 +1373,31 @@ int main(int argc, char *argv[])
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "create") == 0) {
-        if (argc < 3) {
+        /* Parse --name=NAME from arguments before the command */
+        const char *session_name = NULL;
+        int cmd_start = 2;
+        for (int i = 2; i < argc; i++) {
+            if (strncmp(argv[i], "--name=", 7) == 0) {
+                session_name = argv[i] + 7;
+                cmd_start = i + 1;
+            } else {
+                break;  /* First non-flag arg starts the command */
+            }
+        }
+        if (cmd_start >= argc) {
             fprintf(stderr, "Error: create requires <command>\n");
             return NBS_TS_EXIT_BAD_ARGS;
         }
-        char *command = join_args(argc, argv, 2);
+        /* Validate name if provided */
+        if (session_name && !is_valid_session_name(session_name)) {
+            fprintf(stderr, "Error: invalid session name '%s': "
+                    "must match [a-zA-Z0-9_.-] and be at most %d chars\n",
+                    session_name, MAX_SESSION_NAME);
+            return NBS_TS_EXIT_BAD_ARGS;
+        }
+        char *command = join_args(argc, argv, cmd_start);
         if (!command) return NBS_TS_EXIT_ERROR;
-        int rc = cmd_create(command);
+        int rc = cmd_create(command, session_name);
         free(command);
         return rc;
 
@@ -1416,7 +1538,25 @@ int main(int argc, char *argv[])
         return cmd_kill(argv[2]);
 
     } else if (strcmp(cmd, "list") == 0) {
-        return cmd_list();
+        const char *name_filter = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strncmp(argv[i], "--name=", 7) == 0) {
+                name_filter = argv[i] + 7;
+            } else {
+                char safe[MAX_DISPLAY_LEN];
+                sanitise_for_display(argv[i], safe, sizeof(safe));
+                fprintf(stderr, "Error: unrecognised option '%s'\n", safe);
+                return NBS_TS_EXIT_BAD_ARGS;
+            }
+        }
+        return cmd_list(name_filter);
+
+    } else if (strcmp(cmd, "find") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: find requires <name>\n");
+            return NBS_TS_EXIT_BAD_ARGS;
+        }
+        return cmd_find(argv[2]);
 
     } else if (strcmp(cmd, "attach") == 0) {
         if (argc < 3) {
