@@ -538,7 +538,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     /* No blocking init-wait. The main loop handles initial prompt
      * injection alongside queries and interrupts. This ensures queries
      * (@handle?) work from the first tick, not after a 60-second block. */
-    int init_prompt_pending = (cfg->initial_prompt && cfg->initial_prompt[0]);
+    int init_prompt_pending = (cfg->initial_prompt[0] != '\0');
     time_t init_prompt_deadline = time(NULL) + 60;
 
     state.sidecar_start_time = time(NULL);

@@ -214,7 +214,7 @@ fi
 
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
-# --- Handle collision guard ---
+# --- PID file ---
 # Write PID file — used by the restart script to find and kill us.
 # No flock — the old flock mechanism caused fd 9 to be inherited by
 # child processes (sidecar, tail), which held the lock indefinitely

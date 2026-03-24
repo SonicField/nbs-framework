@@ -73,7 +73,6 @@ echo "SI1. Spawn agent without double-wrapping..."
     NBS_HANDLE=supervisor \
     NBS_TRANSPORT=ts \
     NBS_INITIAL_PROMPT="/nbs-supervisor" \
-    NBS_FORCE_SPAWN=1 \
     exec .nbs/bin/nbs-claude --dangerously-skip-permissions
 ) >/dev/null 2>&1 &
 AGENT_PID=$!

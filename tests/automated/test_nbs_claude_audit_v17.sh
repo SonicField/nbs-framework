@@ -2,7 +2,7 @@
 # Test nbs-claude V1.7/V1.8 audit fixes: verify all 7 violations are resolved
 #
 # Audit violations addressed:
-#   1. (BUG)       Lines 184-196: TOCTOU race in PID file — now uses flock
+#   1. (BUG)       Lines 184-196: TOCTOU race in PID file — flock removed, simple write
 #   2. (SECURITY)  Lines 224-235: JSON injection via SESSION_UUID — now validated
 #   3. (BUG)       Line 204: Silent fallback to non-UUID — now fails explicitly
 #   4. (HARDENING) Lines 140-141: NBS_ROOT newline chars — now rejected
@@ -39,22 +39,22 @@ echo "=== nbs-claude V1.7/V1.8 Audit Fix Tests ==="
 echo ""
 
 # =========================================================================
-# 1. (BUG) TOCTOU race — flock-based PID file acquisition
+# 1. (RESOLVED) PID file — simple write, no flock
 # =========================================================================
-echo "1. TOCTOU fix: flock-based PID file acquisition..."
+echo "1. PID file: simple write (flock removed)..."
 
-# Structural: flock is used
+# Structural: flock is NOT used for pidfiles
 if grep -q 'flock -n 9' "$NBS_CLAUDE"; then
-    pass "flock -n 9 present for atomic PID acquisition"
+    fail "flock -n 9 still present — should have been removed"
 else
-    fail "flock -n 9 not found — TOCTOU race still present"
+    pass "flock -n 9 removed from PID acquisition"
 fi
 
-# Structural: exec 9> opens the fd for flock
-if grep -q 'exec 9>"$PIDFILE"' "$NBS_CLAUDE"; then
-    pass "exec 9> opens PID file for flock"
+# Structural: simple echo $$ > PIDFILE pattern
+if grep -q 'echo "\$\$" > "\$PIDFILE"' "$NBS_CLAUDE"; then
+    pass "Simple PID write (echo \$\$ > PIDFILE) present"
 else
-    fail "exec 9> not found — flock has no fd to lock"
+    fail "Simple PID write pattern not found"
 fi
 
 # Structural: old check-then-write pattern removed
@@ -65,7 +65,6 @@ else
 fi
 
 # Structural: old kill -0 EXISTING_PID guard removed from acquisition path
-# (kill -0 was used to check if process was alive — now flock handles this)
 if grep -B2 -A2 'kill -0 "$EXISTING_PID"' "$NBS_CLAUDE" | grep -q 'EXISTING_PID=$(cat'; then
     fail "Old kill -0 liveness check still in acquisition path"
 else

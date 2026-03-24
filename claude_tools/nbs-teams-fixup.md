@@ -210,14 +210,14 @@ Kill the session:
 tmux kill-session -t nbs-<handle>-live
 ```
 
-Wait for the old process to die and clean up its PID file. Without this, the new `nbs-claude` will fail with "Handle already active" because the old process's flock has not been released yet:
+Wait for the old process to die and clean up its PID file. This ensures the restart script does not see a stale PID:
 
 ```bash
 sleep 2
 rm -f .nbs/pids/<handle>.pid
 ```
 
-**CRITICAL: Never invent a new handle name.** If `nbs-claude` reports "Handle already active", the old process has not finished dying. Wait and retry — do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
+**CRITICAL: Never invent a new handle name.** If a stale pidfile exists, delete it (`rm -f .nbs/pids/<handle>.pid`) and retry — do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
 
 Respawn with a fresh session. Use `NBS_INITIAL_PROMPT` to fold the role prompt into the sidecar's initial prompt when a custom role briefing is needed:
 

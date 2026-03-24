@@ -140,7 +140,7 @@ for pidfile in .nbs/pids/*.pid; do
 done
 ```
 
-This prevents "Handle already active" errors during respawn.
+This ensures the restart script does not see stale PIDs during respawn.
 
 ### Step 5b: Stale Cursor Cleanup
 
@@ -382,7 +382,7 @@ For full cross-machine recovery procedures, see `docs/cross-machine-runbook.md` 
 - **Infrastructure before agents.** Verify chat, bus, and scribe log before recovering agents.
 - **Recovery order matters.** Scribe → gatekeeper → testkeeper → workers.
 - **Batch pings, serialise compacts.** Pings are safe in parallel; compacts need individual monitoring.
-- **NEVER invent new handle names.** If `nbs-claude` reports "Handle already active", wait, clean the PID file (`rm -f .nbs/pids/<handle>.pid`), and retry. Do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
+- **NEVER invent new handle names.** If a stale pidfile exists, clean it (`rm -f .nbs/pids/<handle>.pid`) and retry. Do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
 - **Brief recovered agents.** They have no memory — tell them what was happening.
 - **Post everything to chat.** Triage, actions, results. This is the institutional memory.
 - **Never use AskUserQuestion.** Post questions to chat instead.

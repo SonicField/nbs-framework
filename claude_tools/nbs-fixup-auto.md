@@ -57,7 +57,7 @@ Exit immediately after posting. Do not engage in conversation.
 - **Low context is NOT a failure state.** Claude agents autocompact automatically when context runs low. An agent at 3% context with a spinner is working normally — it will autocompact to ~60% within a few turns. Do not escalate, compact, or restart an agent based on context percentage alone. Only act if the agent is genuinely unresponsive (no spinner, no output for 5+ minutes).
 - **Always hard-restart the scribe.** Scribe state lives in the log file, not in her session. A fresh scribe re-loads the skill and prevents role drift (prose commentary instead of tool usage). Kill and respawn her every fixup cycle regardless of health.
 - **Respect the escalation ladder** for all other agents. Level 1 before Level 2, Level 2 before Level 4.
-- **NEVER invent new handle names.** If `nbs-claude` reports "Handle already active", wait 3 seconds and delete `.nbs/pids/<handle>.pid`, then retry. Do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
+- **NEVER invent new handle names.** If a stale pidfile exists, delete `.nbs/pids/<handle>.pid` and retry. Do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
 - **Always clean PID files before respawning.** After `tmux kill-session`, run `sleep 2 && rm -f .nbs/pids/<handle>.pid` before `tmux new-session`.
 - **Post everything to chat.** The summary is institutional memory.
 - **Be brief.** One line per agent. Total summary under 20 lines.

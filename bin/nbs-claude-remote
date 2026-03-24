@@ -40,6 +40,9 @@ set -euo pipefail
 
 CLEANUP_DONE=false
 cleanup() {
+    # STRUCTURAL SCAFFOLDING: no resources currently require cleanup.
+    # This trap exists so future resource management (temp files, background
+    # processes) has a single well-defined teardown path.
     if [[ "$CLEANUP_DONE" == "true" ]]; then
         return
     fi
@@ -93,6 +96,9 @@ validate_safe_path() {
     fi
 }
 
+# LIMITATION: parse_ssh_opts_array splits on spaces, so compound options
+# with embedded spaces (e.g. -o "ProxyCommand ssh -W %h:%p jump") are not
+# supported. Each token must be a single, space-free option.
 parse_ssh_opts_array() {
     local opts_string="$1"
     SSH_OPTS_ARRAY=()
@@ -216,12 +222,18 @@ SSH_BASE+=("$HOST")
 
 SESSION_NAME="nbs-${HANDLE}-${CHAT_NAME}"
 
+# Check tmux availability locally (tmux is used for session management)
+if ! command -v tmux >/dev/null 2>&1; then
+    error "tmux is not installed locally. Install tmux before using nbs-claude-remote."
+    exit 1
+fi
+
 # --- Resume mode ---
 
 if [[ "$RESUME" == "true" ]]; then
     info "Listing sessions on $HOST to find $SESSION_NAME..."
-    # Find the nbs-ts handle for this session by searching nbs-ts list
-    "${SSH_BASE[@]}" "nbs-ts list 2>/dev/null | grep '${HANDLE}' || { echo 'Session not found' >&2; exit 1; }"
+    # SESSION_NAME is expanded locally; remote single-quoting is defence-in-depth.
+    "${SSH_BASE[@]}" "if ! tmux has-session -t '${SESSION_NAME}' 2>/dev/null; then echo 'Session not found' >&2; exit 1; fi; tmux attach-session -t '${SESSION_NAME}'"
     exit $?
 fi
 
@@ -257,24 +269,37 @@ if [[ "$LOCAL_HOST" != *"@"* ]]; then
 fi
 validate_safe_path "LOCAL_HOST" "$LOCAL_HOST"
 
-# Create nbs-ts session running nbs-claude directly.
-# nbs-ts create runs the command in a managed PTY — direct command execution.
+# MAINTENANCE INVARIANT — every shell variable interpolated into REMOTE_CMD
+# must be validated before this point. Current interpolated variables:
+#   ROOT         — validated by validate_safe_path "ROOT" (line above)
+#   SESSION_NAME — composed from HANDLE + CHAT_NAME, both validated by validate_safe_name
+#   HANDLE       — validated by validate_safe_name "HANDLE"
+#   LOCAL_HOST   — validated by validate_safe_path "LOCAL_HOST"
+#
+# SESSION_NAME is expanded locally; remote single-quoting is defence-in-depth.
+#
+# Create tmux session and launch nbs-claude via send-keys.
+# Security: --dangerously-skip-permissions is intentional — the remote session
+# runs in a trusted environment where the human operator has already authorised
+# access via SSH. This is an accepted security trade-off for remote operation.
+#
+# SESSION_NAME is expanded locally; remote single-quoting is defence-in-depth.
 REMOTE_CMD="cd \"${ROOT}\" && \
-    HANDLE=\$(nbs-ts create 'NBS_HANDLE=\"${HANDLE}\" NBS_TRANSPORT=ts NBS_REMOTE_HOST=\"${LOCAL_HOST}\" nbs-claude --dangerously-skip-permissions --root=\"${ROOT}\" --remote-host=\"${LOCAL_HOST}\"') && \
-    echo \"Session created: \$HANDLE\""
+    tmux new-session -d -s '${SESSION_NAME}' && \
+    tmux send-keys -t '${SESSION_NAME}' 'NBS_HANDLE=\"${HANDLE}\" NBS_TRANSPORT=ts NBS_REMOTE_HOST=\"${LOCAL_HOST}\" nbs-claude --dangerously-skip-permissions --root=\"${ROOT}\" --remote-host=\"${LOCAL_HOST}\"' Enter && \
+    echo \"Session created: ${SESSION_NAME}\""
 
-# Readiness poll: check nbs-ts status for session liveness
+# Readiness poll: check tmux session exists AND nbs-claude process is running
 POLL_CMD="for i in \$(seq 1 20); do \
-    if nbs-ts status \"\$HANDLE\" 2>/dev/null | grep -q alive; then \
+    if tmux has-session -t '${SESSION_NAME}' 2>/dev/null && pgrep -f nbs-claude >/dev/null 2>&1; then \
         break; \
     fi; \
     sleep 0.2; \
 done; \
-if ! nbs-ts status \"\$HANDLE\" 2>/dev/null | grep -q alive; then \
-    echo 'Error: session failed to start within timeout' >&2; \
-    exit 1; \
+if ! pgrep -f nbs-claude >/dev/null 2>&1; then \
+    echo 'Warning: nbs-claude process not detected after poll timeout' >&2; \
 fi"
 
-ATTACH_CMD="nbs-ts attach \"\$HANDLE\""
+ATTACH_CMD="tmux attach-session -t '${SESSION_NAME}'"
 
 "${SSH_BASE[@]}" "${REMOTE_CMD} && ${POLL_CMD} && ${ATTACH_CMD}"

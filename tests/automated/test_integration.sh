@@ -23,7 +23,7 @@
 #   T15 (73-79): Concurrent chat under SIGKILL (Phase 2d)
 #   T16 (80-87): Bus event delivery under contention (Phase 2e)
 #   T17 (88-95): Permissions prompt detection robustness
-#   T18 (96-102): Handle collision guard (pre-spawn pidfile check)
+#   T18 (96-102): Pidfile lifecycle (simple PID storage, no locking)
 #   T19 (103-110): CSMA/CD standup trigger (temporal carrier sense)
 #   T20 (111-117): Conditional notification (event-gated /nbs-notify)
 #   T21 (118-122): UTC timestamp display in nbs-chat read/search output
@@ -1594,8 +1594,8 @@ echo ""
 
 # --- Test 76: Chat remains writable after SIGKILL ---
 echo "76. Chat remains writable after SIGKILL..."
-# The lock file should have been released when the process died
-# (flock is released on fd close, which happens on process death)
+# The chat file lock should have been released when the process died
+# (chat flock is released on fd close, which happens on process death)
 "$NBS_CHAT" send "$T75_CHAT" survivor "Post-kill message" 2>/dev/null
 POST_KILL_RC=$?
 check "send succeeds after writer killed" "$( [[ $POST_KILL_RC -eq 0 ]] && echo pass || echo fail )"
@@ -1617,7 +1617,7 @@ ALPHA_UNREAD=$("$NBS_CHAT" read "$T15_CHAT" --unread=alpha 2>/dev/null)
 check "Alpha sees new message as unread" "$( echo "$ALPHA_UNREAD" | grep -q 'New message after kill' && echo pass || echo fail )"
 echo ""
 
-# --- Test 78: Lock not held after SIGKILL (flock released on process death) ---
+# --- Test 78: Chat lock not held after SIGKILL (flock released on process death) ---
 echo "78. Lock released after writer SIGKILL..."
 T78_CHAT="$T15_SIGKILL_DIR/.nbs/chat/sigkill78.chat"
 "$NBS_CHAT" create "$T78_CHAT" >/dev/null 2>&1
@@ -2001,18 +2001,17 @@ check "Plan mode also detected in combined content" "$( detect_plan_mode "$BOTH_
 echo ""
 
 # ============================================================
-# T18: Handle collision guard (pre-spawn pidfile check)
+# T18: Pidfile lifecycle (simple PID storage, no locking)
 # ============================================================
 #
-# nbs-claude uses pidfiles at .nbs/pids/<handle>.pid to prevent
-# two instances from running with the same handle. The guard:
-# - Checks for existing pidfile on startup
-# - If pidfile exists AND the PID is alive, refuses to spawn (exit 1)
-# - --force flag overrides the guard (exits 0 with warning)
-# - Stale pidfiles (dead PID) are ignored
+# nbs-claude writes pidfiles at .nbs/pids/<handle>.pid for the
+# restart script to find and kill agents. The pidfile is simple
+# PID storage — no flock, no collision guard.
+# - Pidfile is written on startup (echo $$ > pidfile)
 # - Cleanup removes pidfile on exit (only if PID matches)
+# - Stale pidfiles from crashed agents are harmless (no blocking)
 
-echo "T18: Handle collision guard"
+echo "T18: Pidfile lifecycle"
 echo ""
 
 T18_DIR="$TEST_DIR/t18-collision"
@@ -2107,35 +2106,16 @@ fi
 check "Guard allows when no pidfile exists" "$( [[ "$GUARD_RESULT" == "allowed" ]] && echo pass || echo fail )"
 echo ""
 
-# --- Test 100: --force overrides guard ---
-echo "100. --force overrides guard..."
-sleep 300 &
-LIVE_PID=$!
-T18_PIDS+=($!)
+# --- Test 100: Pidfile overwritten on new spawn (no collision guard) ---
+echo "100. Pidfile overwritten on new spawn..."
 T100_HANDLE="test-agent-100"
 T100_PIDFILE="$T18_DIR/.nbs/pids/${T100_HANDLE}.pid"
-echo "$LIVE_PID" > "$T100_PIDFILE"
-FORCE_SPAWN=1
-GUARD_RESULT="blocked"
-if [[ -f "$T100_PIDFILE" ]]; then
-    EXISTING_PID=$(cat "$T100_PIDFILE" 2>/dev/null)
-    if [[ -n "$EXISTING_PID" ]] && kill -0 "$EXISTING_PID" 2>/dev/null; then
-        if [[ "$FORCE_SPAWN" == "1" ]]; then
-            GUARD_RESULT="forced"
-        else
-            GUARD_RESULT="blocked"
-        fi
-    else
-        GUARD_RESULT="allowed"
-    fi
-else
-    GUARD_RESULT="allowed"
-fi
-check "--force overrides guard on live PID" "$( [[ "$GUARD_RESULT" == "forced" ]] && echo pass || echo fail )"
-kill "$LIVE_PID" 2>/dev/null || true
-wait "$LIVE_PID" 2>/dev/null || true
+# Write an old PID, then overwrite with current PID (simulating new spawn)
+echo "99999" > "$T100_PIDFILE"
+echo "$$" > "$T100_PIDFILE"
+CURRENT_PID=$(cat "$T100_PIDFILE" 2>/dev/null)
+check "Pidfile overwritten with new PID (no guard)" "$( [[ "$CURRENT_PID" == "$$" ]] && echo pass || echo fail )"
 rm -f "$T100_PIDFILE"
-FORCE_SPAWN=0
 echo ""
 
 # --- Test 101: Cleanup removes only own pidfile ---

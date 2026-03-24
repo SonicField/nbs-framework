@@ -68,7 +68,7 @@ Record the chosen handles. They are needed for Steps 8 and 9.
 mkdir -p .nbs/chat .nbs/events/processed .nbs/scribe .nbs/workers .nbs/pids
 ```
 
-The `pids/` directory stores pidfiles for handle collision guards — prevents two agents from running with the same handle.
+The `pids/` directory stores pidfiles (simple PID storage, no locking). Used by the restart script to find and kill agents.
 
 ### Step 5: Create Chat Channel
 
@@ -167,7 +167,7 @@ tmux capture-pane -t nbs-<handle>-live -p -S -20
 Common causes:
 - Claude's prompt (`>`) did not appear within 60 seconds (slow startup)
 - Permissions modal blocked the initial prompt
-- Handle collision with an existing agent
+- Stale pidfile from a crashed agent (delete it and retry)
 
 **9c. Pidfiles exist:**
 
@@ -197,7 +197,7 @@ Created:
 - .nbs/events/             (bus for event-driven coordination)
 - .nbs/scribe/             (Scribe writes decision logs here)
 - .nbs/workers/            (worker task files go here)
-- .nbs/pids/               (handle collision guards)
+- .nbs/pids/               (agent PID storage for restart script)
 
 Agents running:
 - nbs-<handle1>-live       (<role>)
@@ -225,7 +225,7 @@ If the team includes agents on remote machines, additional setup is required aft
 **Prerequisites:**
 - SSH access from remote machine to coordination host (see cross-machine plan, Section 9)
 - `nbs-chat-remote` and `nbs-bus-remote` installed on remote machine
-- Same OS user on both machines (flock and cursor tracking require this)
+- Same OS user on both machines (chat file locking and cursor tracking require this)
 
 **Remote agent startup:**
 
@@ -250,7 +250,7 @@ NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions \
 **Causes:**
 - `bin/nbs-claude` not found or not executable (`chmod +x bin/nbs-claude`)
 - `pty-session` not found (install from `~/.nbs/bin/` or project `bin/`)
-- Handle collision — another agent with the same handle is already running
+- Stale pidfile from a previous agent (delete `.nbs/pids/<handle>.pid` and retry)
 **Fix:** Check the log file at `.nbs/nbs-claude-*.log`. Fix the cause. Kill the dead tmux session and respawn.
 
 ### Sidecar fails to inject initial prompt
@@ -270,20 +270,20 @@ tmux send-keys -t nbs-<handle>-live "Your NBS handle is '<handle>'. Load /nbs-te
 
 ### Stale pidfiles after crash
 
-**Symptom:** `nbs-claude` refuses to start with "Handle already active" error.
+**Symptom:** Pidfile exists but the PID inside is dead.
 **Cause:** Previous agent crashed without running its cleanup trap. Pidfile still contains the old PID.
-**Fix:** Verify the PID is dead (`kill -0 <pid>`), then delete the pidfile:
+**Note:** Pidfiles are simple PID storage (no locking). They do not block new spawns. The restart script uses them to find and kill old agents before respawning.
+**Fix:** Delete the stale pidfile:
 ```bash
 rm .nbs/pids/<handle>.pid
 ```
-Or use `--force` to override: `bin/nbs-claude --force`
 
 ## Rules
 
 - **Terminal goal is mandatory.** Do not create structure without it.
 - **Confirm before overwriting.** Existing `.nbs/` directories contain valuable state.
 - **Verify after spawning.** Do not assume agents are alive — check tmux, chat, and pidfiles.
-- **Stagger spawns.** Wait 5 seconds between agents to reduce lock contention.
+- **Stagger spawns.** Wait 5 seconds between agents to avoid startup contention.
 - **Explain what was created.** The user should understand the structure.
 - **One question, one action, confirmation.** This is not a wizard that asks 10 questions upfront.
 

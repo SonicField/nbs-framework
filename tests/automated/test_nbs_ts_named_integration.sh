@@ -82,7 +82,6 @@ done
     NBS_HANDLE=supervisor \
     NBS_TRANSPORT=ts \
     NBS_INITIAL_PROMPT="Say hello" \
-    NBS_FORCE_SPAWN=1 \
     exec .nbs/bin/nbs-claude --dangerously-skip-permissions
 ) >/dev/null 2>&1 &
 AGENT_PID=$!

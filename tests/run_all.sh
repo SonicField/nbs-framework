@@ -27,20 +27,47 @@ should_run() {
     [[ -z "$TARGET" ]] || [[ "$1" == *"$TARGET"* ]]
 }
 
+# Session leak guard: record sessions before each test, kill any new
+# ones after. Prevents tests from leaking nbs-ts sessions and claude
+# processes that accumulate and exhaust PTYs or API connections.
+NBS_TS_BIN="${PROJECT_DIR}/bin/nbs-ts"
+cleanup_leaked_sessions() {
+    local before_file="$1"
+    if [[ ! -x "$NBS_TS_BIN" || ! -f "$before_file" ]]; then return; fi
+    # Kill any sessions that didn't exist before the test
+    "$NBS_TS_BIN" list 2>/dev/null | while IFS=$'\t' read -r handle status name cmd; do
+        [[ -n "$handle" ]] || continue
+        grep -q "^${handle}$" "$before_file" 2>/dev/null || \
+            "$NBS_TS_BIN" kill "$handle" 2>/dev/null || true
+    done
+    # Also kill any nbs-claude/sidecar from /tmp/nbs- test dirs
+    pkill -9 -f 'nbs-restart-test\.' 2>/dev/null || true
+    pkill -9 -f 'nbs-claude.*/tmp/' 2>/dev/null || true
+    pkill -9 -f 'nbs-sidecar.*/tmp/' 2>/dev/null || true
+    rm -f "$before_file"
+}
+
 run_test() {
     local test_script="$1"
     local name=$(basename "$test_script" .sh)
 
     if ! should_run "$name"; then return; fi
 
+    # Record sessions before test
+    local before_file="/tmp/nbs-test-sessions-before-$$"
+    "$NBS_TS_BIN" list 2>/dev/null | cut -f1 > "$before_file" 2>/dev/null || true
+
     echo "--- $name ---"
-    if "$test_script"; then
+    if timeout 120 "$test_script"; then
         echo "PASSED: $name"
         PASSED=$((PASSED + 1))
     else
         echo "FAILED: $name"
         FAILED=$((FAILED + 1))
     fi
+
+    # Kill leaked sessions
+    cleanup_leaked_sessions "$before_file"
     echo ""
 }
 
