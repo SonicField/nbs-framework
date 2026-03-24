@@ -499,29 +499,6 @@ if [[ -d "${PROJECT_ROOT}/.nbs/digests" ]]; then
     run rm -f "${PROJECT_ROOT}/.nbs/digests/"*.md
 fi
 
-printf '\n'
-printf '          .     .\n'
-printf '       .  :  .  :  .\n'
-printf '    .  :  |  :  |  :  .\n'
-printf ' .  :  |  |  |  |  |  :  .\n'
-printf ':  |  |  | \\|/ |  |  |  :\n'
-printf '|  |  | \\|/   \\|/ |  |  |\n'
-printf '|  | \\|/    \033[31m*\033[0m    \\|/ |  |\n'
-printf '| \\|/    \033[31m*  *  *\033[0m    \\|/ |\n'
-printf '\\|/   \033[31m*  * NBS *  *\033[0m   \\|/\n'
-printf '   \033[31m*  *  * *** *  *  *\033[0m\n'
-printf '\033[31m*  *  *  WARP CORE  *  *  *\033[0m\n'
-printf '   \033[31m*  *  * *** *  *  *\033[0m\n'
-printf '/|\\   \033[31m*  * BRE *  *\033[0m   /|\\\n'
-printf '| /|\\    \033[31m*  A  *\033[0m    /|\\ |\n'
-printf '|  | /|\\    \033[31mC\033[0m    /|\\ |  |\n'
-printf '|  |  | /|\\ \033[31mH\033[0m /|\\ |  |  |\n'
-printf ':  |  |  | /|\\ |  |  |  :\n'
-printf ' '"'"'  :  |  :  |  :  |  :  '"'"'\n'
-printf '    '"'"'  :  |  :  |  :  '"'"'\n'
-printf '       '"'"'  :  '"'"'  :  '"'"'\n'
-printf '          '"'"'     '"'"'\n'
-printf '\n'
 ok "  Previous state destroyed"
 
 # ============================================================
