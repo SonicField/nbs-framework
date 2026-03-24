@@ -177,37 +177,18 @@ int detect_prompt_visible(const char *content)
     if (len == 0)
         return 0;
 
-    /*
-     * Find the start of the last 6 lines.
-     * Walk backwards from end using indices (not pointers) to avoid
-     * undefined behaviour when the scan exhausts the entire string.
-     * 6 lines covers: prompt line + separator + bypass permissions +
-     * blank line + context percentage + possible extra status line.
-     */
-    const char *search_start = content;
-    int newlines_found = 0;
-    size_t i = len;
+    /* Search the entire captured content (caller controls the window
+     * via the capture line count — typically 30 lines). The prompt
+     * character or interrupted prompt text can appear anywhere in
+     * the captured window depending on how many blank/control lines
+     * Claude has emitted. */
 
-    /* Skip trailing newlines (terminal output may pad with empty lines) */
-    while (i > 0 && content[i - 1] == '\n')
-        i--;
+    /* Normal prompt: ❯ character */
+    int result = strstr(content, prompt_utf8) != NULL;
 
-    /* Find the 6th newline from the (non-padded) end */
-    while (i > 0) {
-        i--;
-        if (content[i] == '\n') {
-            newlines_found++;
-            if (newlines_found == 6) {
-                search_start = content + i + 1;
-                break;
-            }
-        }
-    }
-
-    ASSERT_MSG(search_start >= content && search_start <= content + len,
-               "detect_prompt_visible: search_start out of bounds");
-
-    int result = strstr(search_start, prompt_utf8) != NULL;
+    /* Interrupted prompt: Claude shows this after Escape */
+    if (!result)
+        result = strstr(content, "What should Claude do") != NULL;
 
     /* Postcondition: return value is boolean */
     ASSERT_MSG(result == 0 || result == 1,
