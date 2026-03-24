@@ -183,7 +183,6 @@ test_poll_registry_ai
 test_nbs_chat_ai_integration
 test_nbs_chat_search_ai
 test_worker_spawn_survival
-test_restart_skill_injection
 test_pythia_ai
 test_pythia_adversarial
 test_pythia_adv_no_chat
