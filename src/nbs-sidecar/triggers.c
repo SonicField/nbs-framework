@@ -128,50 +128,8 @@ static const char *resolve_nbs_workers(void)
     return nbs_workers_path;
 }
 
-/*
- * resolve_spawn_worker — Find the nbs-spawn-worker script.
- * Looks next to the sidecar binary (same directory).
- */
-#define SPAWN_PATH_LEN 4096
-static char spawn_worker_path[SPAWN_PATH_LEN];
-
-static const char *resolve_spawn_worker(void)
-{
-    /* B5 fix: file-scope static is not synchronised — assert main thread.
-     * Same rationale as resolve_nbs_workers above. */
-    ASSERT_MSG((pid_t)syscall(SYS_gettid) == getpid(),
-               "resolve_spawn_worker: called from non-main thread (tid=%ld, pid=%d) "
-               "— file-scope statics are not synchronised",
-               (long)syscall(SYS_gettid), (int)getpid());
-
-    if (spawn_worker_path[0] != '\0')
-        return spawn_worker_path;
-
-    char self[SPAWN_PATH_LEN];
-    ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
-    if (len <= 0)
-        return "nbs-spawn-worker";
-    self[len] = '\0';
-
-    char *slash = strrchr(self, '/');
-    if (!slash)
-        return "nbs-spawn-worker";
-
-    size_t dir_len = (size_t)(slash - self);
-    if (dir_len + sizeof("/nbs-spawn-worker") > sizeof(spawn_worker_path))
-        return "nbs-spawn-worker";
-
-    memcpy(spawn_worker_path, self, dir_len);
-    memcpy(spawn_worker_path + dir_len, "/nbs-spawn-worker",
-           sizeof("/nbs-spawn-worker"));
-
-    if (access(spawn_worker_path, X_OK) != 0) {
-        spawn_worker_path[0] = '\0';
-        return "nbs-spawn-worker";
-    }
-
-    return spawn_worker_path;
-}
+/* resolve_spawn_worker removed — nbs-workers spawn is the single
+ * entry point for worker lifecycle. */
 
 /* --- Shared timestamp file I/O --- */
 
@@ -342,13 +300,13 @@ int trigger_periodic_spawn(const char *nbs_root,
      * updates the timestamp, preventing duplicate spawns. */
     write_last_run(nbs_root, trigger->ts_filename, time(NULL));
 
-    /* Fork+exec nbs-spawn-worker (bash script).
-     * Uses the same nbs-ts create pattern as the restart script,
-     * which is proven to work. The script handles skill embedding,
-     * task file creation, and session launch. */
+    /* Fork+exec nbs-workers spawn. Single source of truth for
+     * worker lifecycle — handles task file, session, naming. */
+    char skill_flag[4096];
+    snprintf(skill_flag, sizeof(skill_flag), "--skill=%s", trigger->skill_file);
     const char *argv[] = {
-        "bash", resolve_spawn_worker(), trigger->role,
-        nbs_root, trigger->skill_file, trigger->task_desc, NULL
+        resolve_nbs_workers(), "spawn", trigger->role,
+        nbs_root, skill_flag, trigger->task_desc, NULL
     };
     int rc = exec_fire_and_forget(argv);
 

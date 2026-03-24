@@ -56,10 +56,54 @@ int main(int argc, char *argv[])
                     "Error: spawn requires <slug> <project-dir> "
                     "<task-description>\n"
                     "Usage: nbs-workers spawn <slug> <project-dir> "
-                    "<task-description>\n");
+                    "[--skill=FILE] <task-description>\n");
             return EXIT_BAD_ARGS;
         }
-        return cmd_spawn(argv[2], argv[3], argv[4], cwd);
+
+        /* Parse optional --skill=FILE before the task description */
+        const char *skill_file = NULL;
+        int task_arg = 4;
+        for (int i = 4; i < argc; i++) {
+            if (strncmp(argv[i], "--skill=", 8) == 0) {
+                skill_file = argv[i] + 8;
+                task_arg = i + 1;
+            }
+        }
+        if (task_arg >= argc) {
+            fprintf(stderr, "Error: missing task-description after --skill\n");
+            return EXIT_BAD_ARGS;
+        }
+
+        /* If --skill given, read file and prepend to task description */
+        char combined_task[65536];
+        const char *task_desc = argv[task_arg];
+        if (skill_file) {
+            FILE *sf = fopen(skill_file, "r");
+            if (!sf) {
+                /* Try ~/.nbs/<skill_file> */
+                char alt_path[PATH_BUF_SIZE];
+                const char *home = getenv("HOME");
+                if (home) {
+                    snprintf(alt_path, sizeof(alt_path), "%s/.nbs/%s", home, skill_file);
+                    sf = fopen(alt_path, "r");
+                }
+                if (!sf) {
+                    fprintf(stderr, "Error: skill file not found: %s\n", skill_file);
+                    return EXIT_BAD_ARGS;
+                }
+            }
+            size_t skill_len = fread(combined_task, 1, sizeof(combined_task) - 2, sf);
+            fclose(sf);
+            combined_task[skill_len] = '\n';
+            size_t remaining = sizeof(combined_task) - skill_len - 1;
+            size_t task_len = strlen(argv[task_arg]);
+            if (task_len >= remaining) task_len = remaining - 1;
+            memcpy(combined_task + skill_len + 1, argv[task_arg], task_len);
+            combined_task[skill_len + 1 + task_len] = '\0';
+            task_desc = combined_task;
+        }
+
+        return cmd_spawn(argv[2], argv[3], task_desc, cwd);
     }
 
     /* --- status --- */

@@ -71,7 +71,6 @@ Session names follow `nbs-<handle>-<tag>` convention (e.g. `nbs-supervisor-poem`
 | Tool | Usage | Purpose |
 |------|-------|---------|
 | `nbs-workers` | `nbs-workers spawn/status/search/dismiss/results <name> ...` | Worker lifecycle management — spawn, monitor, search output, dismiss. |
-| `nbs-spawn-worker` | `nbs-spawn-worker <role> <root> <skill> '<instructions>'` | Spawn an ephemeral worker agent (used internally by sidecar triggers). |
 | `nbs-claude` | `nbs-claude [options]` | Launch Claude Code with nbs-sidecar attached. |
 | `nbs-claude-remote` | `nbs-claude-remote --host=USER@HOST --root=PATH` | Launch Claude Code on a remote machine via SSH. |
 

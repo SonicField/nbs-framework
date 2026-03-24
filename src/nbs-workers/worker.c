@@ -278,7 +278,7 @@ static void build_events_dir(char *buf, size_t bufsz, const char *cwd)
  * Worker name format: <slug>-<4hex> (e.g., "testworker-a1b2")
  * Session name format: nbs-<slug>-worker-<4hex> (e.g., "nbs-testworker-worker-a1b2")
  *
- * This must match the naming convention used by nbs-spawn-worker:
+ * Naming convention for worker sessions:
  *   --name="nbs-${ROLE}-worker-${SUFFIX}"
  */
 static void build_session_name(char *buf, size_t bufsz, const char *name)

@@ -182,12 +182,10 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
 }
 
 /*
- * spawn_trigger_worker — Fork+exec nbs-spawn-worker shell script.
+ * spawn_trigger_worker — Fork+exec nbs-workers spawn.
  *
- * Uses the exact same fork+execlp("bash",...) pattern as /restart,
- * which is proven to work from the terminal. The shell script
- * handles session creation, task file writing, and log setup
- * using the same agent launch pattern as the restart script.
+ * Single source of truth for worker lifecycle. Double-fork to
+ * avoid zombie processes.
  *
  * Returns 0 on spawn success, -1 on failure.
  */
@@ -199,25 +197,27 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     ASSERT_MSG(task_desc != NULL, "spawn_trigger_worker: task_desc is NULL");
     ASSERT_MSG(project_root != NULL, "spawn_trigger_worker: project_root is NULL");
 
-    /* Find nbs-spawn-worker script: try .nbs/bin/ then bin/ */
-    char script[4096];
-    int n = snprintf(script, sizeof(script),
-                     "%s/.nbs/bin/nbs-spawn-worker", project_root);
-    if (n <= 0 || (size_t)n >= sizeof(script) ||
-        access(script, X_OK) != 0) {
-        n = snprintf(script, sizeof(script),
-                     "%s/bin/nbs-spawn-worker", project_root);
-        if (n <= 0 || (size_t)n >= sizeof(script) ||
-            access(script, X_OK) != 0) {
-            fprintf(stderr, "warning: nbs-spawn-worker not found in %s\n",
+    /* Find nbs-workers: try .nbs/bin/ then bin/ */
+    char workers_bin[4096];
+    int n = snprintf(workers_bin, sizeof(workers_bin),
+                     "%s/.nbs/bin/nbs-workers", project_root);
+    if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
+        access(workers_bin, X_OK) != 0) {
+        n = snprintf(workers_bin, sizeof(workers_bin),
+                     "%s/bin/nbs-workers", project_root);
+        if (n <= 0 || (size_t)n >= sizeof(workers_bin) ||
+            access(workers_bin, X_OK) != 0) {
+            fprintf(stderr, "warning: nbs-workers not found in %s\n",
                     project_root);
             return -1;
         }
     }
 
-    /* Double-fork to avoid zombie processes: the intermediate child
-     * exits immediately, so the parent can waitpid it. The grandchild
-     * is reparented to init/PID 1 which reaps it automatically. */
+    /* Build --skill=FILE flag */
+    char skill_flag[4096];
+    snprintf(skill_flag, sizeof(skill_flag), "--skill=%s", skill_file);
+
+    /* Double-fork to avoid zombie processes */
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "warning: fork for /%s failed: %s\n",
@@ -225,15 +225,13 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
         return -1;
     }
     if (pid == 0) {
-        /* Intermediate child: fork again and exit */
         pid_t pid2 = fork();
         if (pid2 == 0) {
-            /* Grandchild: exec the spawn script via bash */
-            execlp("bash", "bash", script, role, project_root,
-                   skill_file, task_desc, (char *)NULL);
+            /* Grandchild: exec nbs-workers spawn */
+            execl(workers_bin, "nbs-workers", "spawn", role,
+                  project_root, skill_flag, task_desc, (char *)NULL);
             _exit(127);
         }
-        /* Intermediate child exits immediately — grandchild reparented to init */
         _exit(pid2 < 0 ? 127 : 0);
     }
     /* Parent: reap intermediate child (exits immediately) */
