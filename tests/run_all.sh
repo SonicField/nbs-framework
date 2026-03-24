@@ -246,6 +246,9 @@ run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
 run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
 run_test "$SCRIPT_DIR/automated/test_librarian.sh"
 
+# Integration tests (comprehensive, 122 sub-tests)
+run_test "$SCRIPT_DIR/automated/test_integration.sh"
+
 # nbs-ts tests (session management)
 run_test "$SCRIPT_DIR/automated/test_nbs_ts_lifecycle.sh"
 run_test "$SCRIPT_DIR/automated/test_nbs_ts_cleanup.sh"
