@@ -153,40 +153,40 @@ echo ""
 echo "I2. Restart kills only its team..."
 
 # Create two named sessions: one for "poem" team, one for "other" team
-H_POEM=$("$NBS_TS" create --name=nbs-fake-poem bash 2>&1 | tr -d '[:space:]')
+H_POEM=$("$NBS_TS" create --name=nbs-fake-test-alpha bash 2>&1 | tr -d '[:space:]')
 EXTRA_HANDLES+=("$H_POEM")
-H_OTHER=$("$NBS_TS" create --name=nbs-fake-other bash 2>&1 | tr -d '[:space:]')
+H_OTHER=$("$NBS_TS" create --name=nbs-fake-test-beta bash 2>&1 | tr -d '[:space:]')
 EXTRA_HANDLES+=("$H_OTHER")
 sleep 0.5
 
 # Verify both are alive
 LIST_BEFORE=$("$NBS_TS" list 2>/dev/null)
-if echo "$LIST_BEFORE" | grep -q "${H_POEM}.*alive.*nbs-fake-poem" && \
-   echo "$LIST_BEFORE" | grep -q "${H_OTHER}.*alive.*nbs-fake-other"; then
+if echo "$LIST_BEFORE" | grep -q "${H_POEM}.*alive.*nbs-fake-test-alpha" && \
+   echo "$LIST_BEFORE" | grep -q "${H_OTHER}.*alive.*nbs-fake-test-beta"; then
     pass "Both sessions alive before simulated restart"
 else
     fail "Sessions not alive before restart"
     echo "   List: $LIST_BEFORE"
 fi
 
-# Simulate what the restart script does: use nbs-ts list --name=poem to find
-# poem sessions, then kill only those
+# Simulate what the restart script does: use nbs-ts list --name=test-alpha to find
+# test-alpha sessions, then kill only those
 while IFS=$'\t' read -r handle status name cmd; do
     [[ -n "$handle" ]] || continue
     "$NBS_TS" kill "$handle" 2>/dev/null || true
-done < <("$NBS_TS" list --name=poem 2>/dev/null || true)
+done < <("$NBS_TS" list --name=test-alpha 2>/dev/null || true)
 
 sleep 0.5
 
-# Verify: poem session should be dead, other should be alive
+# Verify: test-alpha session should be dead, other should be alive
 LIST_AFTER=$("$NBS_TS" list 2>/dev/null)
 POEM_STATUS=$("$NBS_TS" status "$H_POEM" 2>/dev/null || echo "dead/gone")
 OTHER_STATUS=$("$NBS_TS" status "$H_OTHER" 2>/dev/null || echo "dead/gone")
 
 if echo "$POEM_STATUS" | grep -q "dead\|exited"; then
-    pass "Poem session killed"
+    pass "Test-alpha session killed"
 else
-    fail "Poem session still alive after targeted kill: $POEM_STATUS"
+    fail "Test-alpha session still alive after targeted kill: $POEM_STATUS"
 fi
 
 if echo "$OTHER_STATUS" | grep -q "alive"; then
@@ -196,11 +196,11 @@ else
 fi
 
 # Also verify --name filter is correct
-FILTERED=$("$NBS_TS" list --name=poem 2>/dev/null || true)
+FILTERED=$("$NBS_TS" list --name=test-alpha 2>/dev/null || true)
 if ! echo "$FILTERED" | grep -q "$H_OTHER"; then
-    pass "list --name=poem does not show 'other' session"
+    pass "list --name=test-alpha does not show 'other' session"
 else
-    fail "list --name=poem incorrectly includes 'other' session"
+    fail "list --name=test-alpha incorrectly includes 'other' session"
 fi
 
 # ================================================================
