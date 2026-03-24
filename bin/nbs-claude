@@ -26,7 +26,7 @@
 #   NBS_MODEL               Model to use (e.g. opus, sonnet)
 #   NBS_CONTINUE_SESSION    Session ID to continue
 #   NBS_INITIAL_PROMPT      Custom initial prompt
-#   NBS_FORCE_SPAWN         Set to 1 to override handle collision
+#   NBS_FORCE_SPAWN         (deprecated — flock removed, no effect)
 #   (All other NBS_* variables are passed through to nbs-sidecar)
 #
 # Exit codes:
@@ -44,7 +44,9 @@ NBS_ROOT="${NBS_ROOT:-.}"
 NBS_MODEL="${NBS_MODEL:-opus[1m]}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
-FORCE_SPAWN="${NBS_FORCE_SPAWN:-0}"
+# NBS_FORCE_SPAWN removed — flock mechanism deleted. Handle collision
+# is no longer guarded; the restart script's cleanup is responsible
+# for killing old agents before spawning new ones.
 NBS_REMOTE_HOST="${NBS_REMOTE_HOST:-}"
 NBS_REMOTE_SSH_OPTS="${NBS_REMOTE_SSH_OPTS:-}"
 NBS_TRANSPORT="${NBS_TRANSPORT:-}"
@@ -155,7 +157,8 @@ for arg in "$@"; do
             NBS_REMOTE_SSH_OPTS="${arg#--remote-ssh-opts=}"
             ;;
         --force)
-            FORCE_SPAWN=1
+            # Accepted for backwards compatibility but does nothing.
+            # Flock mechanism removed.
             ;;
         *)
             BUILDER_ARGS+=("$arg")
@@ -212,27 +215,12 @@ fi
 NBS_LOG_FILE="${NBS_ROOT}/.nbs/nbs-claude-$$.log"
 
 # --- Handle collision guard ---
-# V1.7: Use flock for atomic PID file acquisition (fixes TOCTOU race where
-# two instances could both see a stale/absent PID and both write their PID)
+# Write PID file — used by the restart script to find and kill us.
+# No flock — the old flock mechanism caused fd 9 to be inherited by
+# child processes (sidecar, tail), which held the lock indefinitely
+# and blocked subsequent spawns of the same handle.
 mkdir -p "${NBS_ROOT}/.nbs/pids"
 PIDFILE="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
-exec 9>"$PIDFILE"
-if ! flock -n 9; then
-    EXISTING_PID=$(cat "$PIDFILE" 2>/dev/null)
-    # V1.8: Validate PID is numeric before use in messages (prevents
-    # misleading output from corrupted/tampered PID files)
-    if [[ -n "$EXISTING_PID" && ! "$EXISTING_PID" =~ ^[0-9]+$ ]]; then
-        echo "Error: PID file '$PIDFILE' contains non-numeric value: '$EXISTING_PID'" >&2
-        exit 1
-    fi
-    if [[ "$FORCE_SPAWN" == "1" ]]; then
-        echo "Warning: Handle '$SIDECAR_HANDLE' already locked (PID ${EXISTING_PID:-unknown}) — --force specified, proceeding" >&2
-    else
-        echo "Error: Handle '$SIDECAR_HANDLE' already active (PID ${EXISTING_PID:-unknown})" >&2
-        echo "  Use --force to override, or choose a different NBS_HANDLE." >&2
-        exit 1
-    fi
-fi
 echo "$$" > "$PIDFILE"
 
 # --- Session ID ---

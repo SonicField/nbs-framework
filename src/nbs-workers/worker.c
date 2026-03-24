@@ -38,16 +38,7 @@
 /* Internal helpers                                                    */
 /* ------------------------------------------------------------------ */
 
-/*
- * sigalrm_noop — No-op SIGALRM handler to interrupt blocking syscalls.
- *
- * Must be a real handler (not SIG_IGN) so that blocking calls like
- * fcntl(F_SETLKW) return EINTR when the alarm fires.
- */
-static void sigalrm_noop(int sig)
-{
-    (void)sig;
-}
+/* sigalrm_noop removed — flock mechanism deleted. */
 
 /*
  * redirect_stderr_to_devnull — Redirect stderr to /dev/null in child.
@@ -1292,52 +1283,13 @@ int cmd_spawn(const char *slug, const char *project_dir,
     /* Postcondition: task file exists */
     ASSERT_MSG(file_exists(task_file), "task file not created: %s", task_file);
 
-    /* Clean up stale pidfile from previous run of this role.
-     * Ephemeral workers reuse the slug (e.g., "pythia") as the handle.
-     * If the previous worker's nbs-claude is still shutting down, its
-     * flock on the pidfile will block the new spawn. Wait briefly for
-     * the lock to release, then remove the stale pidfile. */
+    /* Remove stale pidfile from previous run. */
     {
         char pidfile[PATH_BUF_SIZE];
         int pn = snprintf(pidfile, sizeof(pidfile),
                           "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
         if (pn > 0 && (size_t)pn < sizeof(pidfile)) {
-            int pfd = open(pidfile, O_RDWR, 0600);
-            if (pfd >= 0) {
-                /* Try to acquire the lock — if we get it, no one else
-                 * is using this handle and the pidfile is stale. */
-                struct flock fl = {
-                    .l_type = F_WRLCK,
-                    .l_whence = SEEK_SET,
-                    .l_start = 0,
-                    .l_len = 0,
-                };
-                /* Try non-blocking first */
-                if (fcntl(pfd, F_SETLK, &fl) < 0) {
-                    /* Lock held — previous worker still shutting down.
-                     * Wait up to 5s for it to release. */
-                    fprintf(stderr, "cmd_spawn: waiting for previous %s to release lock...\n", slug);
-                    struct flock bfl = fl;
-                    /* Install no-op SIGALRM handler so alarm() interrupts
-                     * the blocking fcntl with EINTR rather than killing
-                     * the process. SIG_IGN would not interrupt. */
-                    {
-                        struct sigaction sa;
-                        memset(&sa, 0, sizeof(sa));
-                        sa.sa_handler = sigalrm_noop;
-                        sa.sa_flags = 0; /* no SA_RESTART — must interrupt */
-                        sigaction(SIGALRM, &sa, NULL);
-                    }
-                    alarm(5);
-                    int got = fcntl(pfd, F_SETLKW, &bfl);
-                    alarm(0);
-                    if (got < 0) {
-                        fprintf(stderr, "cmd_spawn: previous %s lock timed out, proceeding anyway\n", slug);
-                    }
-                }
-                close(pfd);
-                unlink(pidfile);
-            }
+            unlink(pidfile);
         }
     }
 
@@ -1408,7 +1360,6 @@ int cmd_spawn(const char *slug, const char *project_dir,
                      task_file);
             putenv(prompt_env);
             putenv("NBS_TRANSPORT=ts");
-            putenv("NBS_FORCE_SPAWN=1");
             execl(nbs_claude_path, "nbs-claude",
                   root_flag, "--dangerously-skip-permissions",
                   (char *)NULL);

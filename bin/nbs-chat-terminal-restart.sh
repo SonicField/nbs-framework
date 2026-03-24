@@ -212,7 +212,6 @@ for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     NBS_HANDLE="$h" \
     NBS_TRANSPORT=ts \
     NBS_INITIAL_PROMPT="Read ${SKILL_FILE} and follow the role instructions. Then read the chat history and begin work." \
-    NBS_FORCE_SPAWN=1 \
     setsid "${NBS_BIN}/nbs-claude" --root="$PROJECT_ROOT" --dangerously-skip-permissions \
         >/dev/null 2>&1 &
     echo "[watchdog] Spawned $h (pid $!)"
