@@ -543,13 +543,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (!content) continue;
 
         if (detect_prompt_visible(content)) {
-            /* Send initial prompt as raw text (no paste brackets).
-             * Using send_key bypasses the paste-bracket wrapping in
-             * send_text. Enter is sent as CR (0x0d) which the raw PTY
-             * treats as submit — no timing delays needed. */
-            if (tp->send_key(tp, cfg->initial_prompt) != 0) {
-                fprintf(stderr, "sidecar_run: initial prompt send_key failed\n");
+            /* Send initial prompt with paste brackets so Claude treats
+             * multi-line content (e.g. full skill file) as a single
+             * input, not line-by-line submits. */
+            if (tp->send_text(tp, cfg->initial_prompt) != 0) {
+                fprintf(stderr, "sidecar_run: initial prompt send_text failed\n");
             }
+            usleep(300000); /* let paste settle */
             if (tp->send_key(tp, "Enter") != 0) {
                 fprintf(stderr, "sidecar_run: initial prompt send_key Enter failed\n");
             }
