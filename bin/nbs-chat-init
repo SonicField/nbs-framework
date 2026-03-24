@@ -412,6 +412,48 @@ fi
 
 info "Phase 0: Clearing previous state..."
 
+# Derive chat tag for session name filtering
+INIT_TAG=$(echo "$CHAT_NAME" | tr '.' '-')
+
+# Kill processes first — files second.
+# nbs-ts sessions belonging to this project
+if [[ -x "$NBS_TS_BIN" ]]; then
+    while IFS=$'\t' read -r ts_handle ts_status ts_name ts_cmd; do
+        [[ -n "$ts_handle" ]] || continue
+        "$NBS_TS_BIN" kill "$ts_handle" 2>/dev/null || true
+    done < <("$NBS_TS_BIN" list --name="$INIT_TAG" 2>/dev/null || true)
+fi
+
+# Kill nbs-claude wrappers via pid files
+if [[ -d "${PROJECT_ROOT}/.nbs/pids" ]]; then
+    for pidfile in "${PROJECT_ROOT}/.nbs/pids/"*.pid; do
+        [[ -f "$pidfile" ]] || continue
+        oldpid=$(cat "$pidfile" 2>/dev/null)
+        if [[ -n "$oldpid" && "$oldpid" =~ ^[0-9]+$ ]]; then
+            kill "$oldpid" 2>/dev/null || true
+        fi
+    done
+fi
+
+# Kill sidecars for this project
+pkill -f "nbs-sidecar.*--root=${PROJECT_ROOT}" 2>/dev/null || true
+
+# Wait for processes to die
+sleep 2
+
+# Force-kill any survivors
+if [[ -d "${PROJECT_ROOT}/.nbs/pids" ]]; then
+    for pidfile in "${PROJECT_ROOT}/.nbs/pids/"*.pid; do
+        [[ -f "$pidfile" ]] || continue
+        oldpid=$(cat "$pidfile" 2>/dev/null)
+        if [[ -n "$oldpid" && "$oldpid" =~ ^[0-9]+$ ]]; then
+            kill -9 "$oldpid" 2>/dev/null || true
+        fi
+    done
+fi
+
+# Now remove all files — no process holds them.
+
 # Control files
 run rm -f "${PROJECT_ROOT}/.nbs/control-pause"
 for f in "${PROJECT_ROOT}/.nbs/"control-registry-*; do
