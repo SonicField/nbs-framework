@@ -60,6 +60,48 @@ Complete the nbs-ts migration: make nbs-ts the sole session management system, r
 - Digest task description simplified (removed slash command dependency)
 - Agent count in terminal.c scoped to project (was global nbs-ts list)
 
+### Phase 7: Skill file rewrites (commit 36f80cf)
+
+All 6 team skill files rewritten. Added "How you receive work" section near the top of each, explaining the `[NBS-CHAT-NOTIFICATION]` mechanism and explicitly forbidding `sleep`, timers, and polling loops. Teams-chat trimmed from 253 to 142 lines. Root cause: agents were creating `sleep 300` polling loops because the "do not poll" instruction was buried at line 200+.
+
+### Phase 8: Scorched earth init (commits 4482a89 → b05ab80)
+
+`nbs-chat-init` Phase 0 now destroys all state from previous runs: kills nbs-ts sessions (by name), kills nbs-claude wrappers (by pid), kills sidecars (by pkill), waits for death, force-kills survivors, then removes control-pause, registries, pids, sessions, trigger timestamps, worker files, bus events (pending and processed), sidecar logs, scribe logs, archives, digests, and locks.
+
+Root cause: stale `control-pause` file from a previous `/pause` survived across restarts and silently disabled all sidecars.
+
+### Phase 9: Detection refactor (commit 2dd5677)
+
+Split `detect_prompt_visible` into three functions:
+- `detect_prompt_idle` — ❯ visible (notifications)
+- `detect_prompt_ready` — ❯ OR interrupted prompt (interrupt handler)
+- `detect_prompt_not_trust` — ❯ AND NOT trust dialog (init-wait)
+
+Root cause: one function serving five callers with different requirements. Every hardening change for one caller broke another.
+
+### Phase 10: Spawn consolidation (commit b9bc5e9)
+
+Deleted `nbs-spawn-worker` (bash). `nbs-workers spawn` (C) is now the single entry point for worker lifecycle. Added `--skill=FILE` to `nbs-workers spawn`. Updated `triggers.c` and `terminal.c` to call `nbs-workers spawn` instead.
+
+### Phase 11: Sidecar auto-restart fix (commit 710434a)
+
+Replaced `disown` with `setsid` + temp script for the sidecar auto-restart loop. `disown` doesn't work in non-interactive bash (which is how the restart script spawns agents). The sidecar loop died on first signal with no recovery.
+
+### Phase 12: Miscellaneous fixes
+
+- `nbs-ts gc` command — garbage collect dead sessions (cleaned 3500+ orphans)
+- Removed digest banner (posted before digest completed)
+- Fixed pythia-interval default (20 → 10, matching nbs-chat-init)
+- Removed hardcoded 'Alex' from restart messages and docs
+- Fixed spawn order: scribe → supervisor → gatekeeper → theologian → testkeeper → generalist
+- Non-blocking sidecar init (queries work from first tick)
+- 30-line capture window for prompt detection (was 5)
+- Interrupted prompt detection ("What should Claude do")
+- tools.md updated with full nbs-ts command reference
+- nbs-teams-start.md rewritten to call nbs-chat-init
+- nbs-fixup-auto.md and nbs-teams-fixup.md updated for nbs-ts
+- new-goal.md written for poem team's next phase
+
 ## What failed
 
 - **Overcorrection cascade**: Adding "bypass" to detect_prompt_visible broke notification injection everywhere. Should have been a local guard in init-wait only.
@@ -99,3 +141,20 @@ Complete the nbs-ts migration: make nbs-ts the sole session management system, r
 20. `0ce766f` Named sessions Phase 4 (terminal.c + sidecar)
 21. `ff50a46` Docs updated for nbs-ts
 22. `4b02336` Plan + miscellaneous
+23. `36f80cf` Rewrite all 6 team skill files — fix notification model
+24. `2ccd993` Remove digest banner, simplify task, add progress log
+25. `a01e714` Add nbs-ts gc — garbage collect dead sessions
+26. `1ad817b` Update tools.md — full nbs-ts command reference
+27. `41dce29` Redesign sidecar startup — no blocking init-wait
+28. `46aaf16` Fix pythia-interval default (20 → 10)
+29. `cfa38a2` Fix spawn order, remove hardcoded 'Alex'
+30. `51b9ba7` Clear control-pause on restart
+31. `4482a89` Phase 0 scorched earth cleanup in nbs-chat-init
+32. `47d1ddd` Phase 0: kill processes before clearing files
+33. `0a3d66a` Phase 0: destroy scribe logs, archives, digests
+34. `b05ab80` Phase 0: destroy processed bus events
+35. `c30d78b` Detect Claude's interrupted prompt state
+36. `2dd5677` Refactor: split detect_prompt_visible into three functions
+37. `b9bc5e9` Delete nbs-spawn-worker — consolidate to nbs-workers spawn
+38. `710434a` Fix sidecar auto-restart — setsid instead of disown
+39. `5a63085` Plan: nbs-claude --daemon
