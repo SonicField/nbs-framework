@@ -1342,6 +1342,10 @@ int cmd_spawn(const char *slug, const char *project_dir,
         if (pid == 0) {
             /* Child: setsid, redirect stdout/stderr, exec nbs-claude */
             setsid();
+            /* Redirect stdout/stderr to /dev/null. Do NOT redirect
+             * stdin — nbs-claude needs it open (even though the actual
+             * Claude session gets a PTY from nbs-ts, the nbs-claude
+             * bash script itself reads stdin during attach). */
             int devnull = open("/dev/null", O_RDWR);
             if (devnull >= 0) {
                 dup2(devnull, STDOUT_FILENO);
