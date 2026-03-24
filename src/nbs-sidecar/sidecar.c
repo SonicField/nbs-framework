@@ -220,15 +220,18 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         char *nl = strchr(line, '\n');
         size_t llen = nl ? (size_t)(nl - line) : strlen(line);
 
-        /* Skip blank lines (all whitespace) */
-        int blank = 1;
-        for (size_t i = 0; i < llen; i++) {
-            if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r') {
-                blank = 0;
-                break;
-            }
+        /* Skip junk lines: blank, or too few alphanumeric chars.
+         * Claude's thinking animation (stars, dots, Unicode decorations)
+         * leaves 1-2 char lines after ANSI stripping. Require >= 4
+         * alphanumeric chars for a line to be meaningful. */
+        int alnum_count = 0;
+        for (size_t i = 0; i < llen && alnum_count < 4; i++) {
+            unsigned char c = (unsigned char)line[i];
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9'))
+                alnum_count++;
         }
-        if (!blank) {
+        if (alnum_count >= 4) {
             lines[nlines] = line;
             line_lens[nlines] = llen > 80 ? 80 : llen;
             nlines++;
