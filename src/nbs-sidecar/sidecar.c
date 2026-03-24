@@ -195,10 +195,12 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
-    /* Read more lines than we need, strip ANSI and blanks, keep the
-     * last 32 non-empty lines.  Claude's terminal output contains many
-     * blank lines from cursor movements and thinking animations. */
-    char *content = tp->capture(tp, 128);
+    /* Read the full capture buffer (up to 32KB from tail of output.log).
+     * Claude's terminal output has ~5:1 junk-to-content ratio (cursor
+     * movements, thinking animations, blank lines).  128 lines only
+     * covers a few seconds of animation.  Reading the full buffer then
+     * filtering gives us actual content to work with. */
+    char *content = tp->capture(tp, 0);
     if (!content) {
         fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
         return -1;
@@ -211,12 +213,12 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     truncated[0] = '\0';
 
     /* First pass: collect pointers to non-blank lines */
-    char *lines[128];
-    size_t line_lens[128];
+    char *lines[512];
+    size_t line_lens[512];
     int nlines = 0;
 
     char *line = content;
-    while (line && *line && nlines < 128) {
+    while (line && *line && nlines < 512) {
         char *nl = strchr(line, '\n');
         size_t llen = nl ? (size_t)(nl - line) : strlen(line);
 
