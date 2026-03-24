@@ -58,26 +58,13 @@ if [[ $ARTIFACTS_FOUND -eq 0 ]]; then
     pass "All pty-session and tmux artifacts removed"
 fi
 
-# NT2: Full nbs-ts test suite passes without tmux
-echo "NT2. Full nbs-ts test suite passes..."
-SUITE_PASS=0
-SUITE_FAIL=0
-for t in "$PROJECT_ROOT/tests/automated/test_nbs_ts_"*.sh; do
-    TNAME=$(basename "$t")
-    # Skip ourselves to avoid infinite recursion
-    [[ "$TNAME" == "test_nbs_ts_no_tmux.sh" ]] && continue
-    if timeout 120 bash "$t" >/dev/null 2>&1; then
-        SUITE_PASS=$((SUITE_PASS + 1))
-    else
-        SUITE_FAIL=$((SUITE_FAIL + 1))
-        fail "Test suite failed: $TNAME"
-    fi
-done
-if [[ $SUITE_FAIL -eq 0 ]]; then
-    pass "All $SUITE_PASS nbs-ts test suites pass"
-else
-    fail "$SUITE_FAIL/$((SUITE_PASS + SUITE_FAIL)) test suites failed"
-fi
+# NT2 removed — it recursively ran all test_nbs_ts_*.sh tests, each of
+# which spawns nbs-ts sessions. When multiple agents ran run_all.sh
+# simultaneously, NT2 cascaded into 10,000+ processes (fork bomb).
+# Individual nbs-ts tests are run directly by run_all.sh — NT2 was
+# redundant and dangerous.
+echo "NT2. (removed — individual tests run by run_all.sh)"
+pass "NT2 skipped (fork bomb prevention)"
 
 echo ""
 echo "=== Result ==="
