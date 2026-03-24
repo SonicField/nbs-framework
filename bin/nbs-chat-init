@@ -476,9 +476,12 @@ if [[ -d "${PROJECT_ROOT}/.nbs/workers" ]]; then
     run rm -f "${PROJECT_ROOT}/.nbs/workers/"*.log
 fi
 
-# Pending bus events (stale events from dead agents cause confusion)
+# Bus events — pending and processed
 if [[ -d "${PROJECT_ROOT}/.nbs/events" ]]; then
     find "${PROJECT_ROOT}/.nbs/events" -maxdepth 1 -name '*.event' -delete 2>/dev/null || true
+    if [[ -d "${PROJECT_ROOT}/.nbs/events/processed" ]]; then
+        find "${PROJECT_ROOT}/.nbs/events/processed" -name '*.event' -delete 2>/dev/null || true
+    fi
 fi
 
 # Sidecar logs
