@@ -99,6 +99,7 @@ done
 
 rm -f .nbs/pids/*.pid 2>/dev/null || true
 rm -f .nbs/sessions/*.json 2>/dev/null || true
+rm -f .nbs/control-pause 2>/dev/null || true
 # Reset trigger timestamps so librarian/pythia/shepard/fixup use their
 # first_delay timing (e.g. librarian fires after 5 min, not 15).
 rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run" \
