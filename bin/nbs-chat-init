@@ -190,6 +190,9 @@ spawn_agent_ts() {
     local project_root="$3"
     local prompt="${4:-}"
 
+    # SECURITY RISK: --dangerously-skip-permissions bypasses Claude's permission system.
+    # Architectural decision: NBS agents run autonomously in monitored sessions;
+    # the permission system is replaced by NBS-level controls (bus, watchdog, scribe).
     SPAWN_HANDLE=$("$NBS_TS_BIN" create "cd $(printf '%q' "$project_root") && NBS_HANDLE=${role} NBS_TRANSPORT=ts ${nbs_claude} --dangerously-skip-permissions") || {
         error "Failed to create nbs-ts session for $role"
         return 1

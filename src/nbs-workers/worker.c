@@ -1332,6 +1332,7 @@ int cmd_spawn(const char *slug, const char *project_dir,
 
         int n = snprintf(session_cmd, sizeof(session_cmd),
                          "NBS_HANDLE=%s "
+                         "NBS_TRANSPORT=ts "
                          "NBS_INITIAL_PROMPT='Read %s and execute the task. "
                          "Update the Status and Log sections when complete.' "
                          "%s --dangerously-skip-permissions",

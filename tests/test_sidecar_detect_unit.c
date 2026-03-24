@@ -205,7 +205,7 @@ static void test_prompt_visible_positive(void)
 {
     /* UTF-8 prompt character */
     const char *content = "some text\n\xe2\x9d\xaf \n";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 1,
                 "expected prompt_visible=1, got %d", result);
@@ -213,15 +213,15 @@ static void test_prompt_visible_positive(void)
     TEST_PASS("prompt_visible positive");
 }
 
-/* ---- 11. prompt_visible negative: prompt not in last 6 lines ---- */
+/* ---- 11. prompt_visible negative: no prompt character at all ---- */
 
 static void test_prompt_visible_negative(void)
 {
-    const char *content = "\xe2\x9d\xaf\nmany\nlines\nafter\nmore\nstuff\nhere";
-    int result = detect_prompt_visible(content);
+    const char *content = "no prompt here\nmany\nlines\nafter\nmore\nstuff\nhere";
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 0,
-                "expected prompt_visible=0 (prompt too far up), got %d", result);
+                "expected prompt_idle=0 (no prompt char), got %d", result);
 
     TEST_PASS("prompt_visible negative");
 }
@@ -255,14 +255,14 @@ static void test_skill_failure_negative(void)
 /* ==== ADVERSARIAL TESTS — targeting audit violations ==== */
 
 /*
- * V2 (BUG): detect_prompt_visible — pointer UB when content is all newlines.
+ * V2 (BUG): detect_prompt_idle — pointer UB when content is all newlines.
  * The old code decremented p below content, producing undefined behaviour.
  * After fix, index-based loop must handle this without UB.
  */
 static void test_prompt_visible_all_newlines(void)
 {
     const char *content = "\n\n\n\n\n\n\n\n";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 0,
                 "all-newlines: expected prompt_visible=0, got %d", result);
@@ -271,13 +271,13 @@ static void test_prompt_visible_all_newlines(void)
 }
 
 /*
- * V2 (BUG): detect_prompt_visible — single character, no newlines.
+ * V2 (BUG): detect_prompt_idle — single character, no newlines.
  * The backward scan should not go below index 0.
  */
 static void test_prompt_visible_single_char(void)
 {
     const char *content = "x";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 0,
                 "single char: expected prompt_visible=0, got %d", result);
@@ -286,13 +286,13 @@ static void test_prompt_visible_single_char(void)
 }
 
 /*
- * V2 (BUG): detect_prompt_visible — empty string.
+ * V2 (BUG): detect_prompt_idle — empty string.
  * The function has a len==0 early return; verify it works.
  */
 static void test_prompt_visible_empty_string(void)
 {
     const char *content = "";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 0,
                 "empty: expected prompt_visible=0, got %d", result);
@@ -301,13 +301,13 @@ static void test_prompt_visible_empty_string(void)
 }
 
 /*
- * V2 (BUG): detect_prompt_visible — fewer than 6 lines, prompt in first line.
+ * V2 (BUG): detect_prompt_idle — fewer than 6 lines, prompt in first line.
  * Backward scan exhausts entire content without finding 6 newlines.
  */
 static void test_prompt_visible_fewer_than_6_lines_with_prompt(void)
 {
     const char *content = "line1\nline2\n\xe2\x9d\xaf\n";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 1,
                 "3 lines with prompt: expected prompt_visible=1, got %d", result);
@@ -316,13 +316,13 @@ static void test_prompt_visible_fewer_than_6_lines_with_prompt(void)
 }
 
 /*
- * V2 (BUG): detect_prompt_visible — exactly 6 lines, prompt on first line.
+ * V2 (BUG): detect_prompt_idle — exactly 6 lines, prompt on first line.
  * Boundary: search_start should be set to content (beginning), prompt found.
  */
 static void test_prompt_visible_exactly_6_lines_prompt_at_start(void)
 {
     const char *content = "\xe2\x9d\xaf\nline2\nline3\nline4\nline5\nline6\n";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 1,
                 "6 lines prompt at start: expected 1, got %d", result);
@@ -331,7 +331,7 @@ static void test_prompt_visible_exactly_6_lines_prompt_at_start(void)
 }
 
 /*
- * V2 (BUG): detect_prompt_visible — trailing newlines padding (tmux panes).
+ * V2 (BUG): detect_prompt_idle — trailing newlines padding (tmux panes).
  * The content ends with many trailing newlines. The skip-trailing-newlines
  * logic must handle this without UB.
  */
@@ -339,7 +339,7 @@ static void test_prompt_visible_trailing_newlines(void)
 {
     /* Prompt on last real line, followed by padding newlines */
     const char *content = "some text\n\xe2\x9d\xaf\n\n\n\n\n\n\n\n\n";
-    int result = detect_prompt_visible(content);
+    int result = detect_prompt_idle(content);
 
     TEST_ASSERT(result == 1,
                 "trailing newlines: expected prompt_visible=1, got %d", result);

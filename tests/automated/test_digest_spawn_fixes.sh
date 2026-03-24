@@ -201,22 +201,25 @@ echo "test-worker-abc1"
 STUBEOF
 chmod +x "$FAKE_BIN/nbs-workers"
 
-# --- Test 8: BUG - banner post failure reported (not swallowed) ---
-echo "8. Banner post failure reported (not swallowed)..."
-# Create a nbs-chat that fails
+# --- Test 8: Banner removed — digest worker posts its own summary ---
+echo "8. No banner post (worker posts its own summary to chat)..."
+# Verify the script does NOT call nbs-chat send for a banner.
+# The digest worker posts its own summary, so no separate banner is needed.
+# Create a nbs-chat that would fail if called — to prove it's not called.
 cat > "$FAKE_BIN/nbs-chat" << 'STUBEOF'
 #!/bin/bash
-echo "connection refused" >&2
+echo "nbs-chat should not be called for banner" >&2
 exit 1
 STUBEOF
 chmod +x "$FAKE_BIN/nbs-chat"
 
 OUTPUT=$("$FAKE_BIN/nbs-digest-spawn" "$CHAT_FILE" 2>&1)
-# The script should report the failure (warning or error), not silently swallow it
-if echo "$OUTPUT" | grep -qi "fail\|warning\|error.*banner\|connection refused"; then
-    pass "banner post failure is reported"
+RC=$?
+# Script should succeed (exit 0) because nbs-chat is never called for banner
+if [[ "$RC" -eq 0 ]]; then
+    pass "no banner post — worker handles its own chat posting"
 else
-    fail "banner failure was silently swallowed: $OUTPUT"
+    fail "unexpected failure (exit $RC): $OUTPUT"
 fi
 
 # Restore working nbs-chat stub

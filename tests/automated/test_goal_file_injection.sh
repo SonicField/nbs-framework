@@ -203,7 +203,7 @@ mkdir -p "${PROJECT_DIR}/.nbs/chat"
 echo "watchdog test goal" > "${TMPDIR}/wd_goal.md"
 OUTPUT=$(timeout 5 "$TERMINAL" "${PROJECT_DIR}/.nbs/chat/test.chat" alex \
     --goal-file="${TMPDIR}/wd_goal.md" 2>&1 </dev/null || true)
-echo "$OUTPUT" | grep -q 'Watchdog disabled'; check "--goal-file disables watchdog" $?
+echo "$OUTPUT" | grep -q 'Auto-restart disabled'; check "--goal-file disables watchdog" $?
 
 # Test 13: without --goal-file, watchdog is NOT disabled
 echo ""
@@ -211,7 +211,7 @@ echo "Test 13: without --goal-file, watchdog is not disabled"
 "$CHAT" create "${PROJECT_DIR}/.nbs/chat/test2.chat" >/dev/null 2>&1
 OUTPUT=$(timeout 5 "$TERMINAL" "${PROJECT_DIR}/.nbs/chat/test2.chat" alex \
     2>&1 </dev/null || true)
-DISABLED_COUNT=$(echo "$OUTPUT" | grep -c 'Watchdog disabled' || true)
+DISABLED_COUNT=$(echo "$OUTPUT" | grep -c 'Auto-restart disabled' || true)
 [[ "$DISABLED_COUNT" -eq 0 ]]; check "no --goal-file: watchdog not disabled" $?
 
 # ═══════════════════════════════════════════════════════════════

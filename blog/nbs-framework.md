@@ -15,7 +15,7 @@ NBS — No Bullshit — is a framework for making every claim carry its own fals
 
 ## What Happened: CinderX
 
-The strongest evidence for (and against) NBS comes from a real project: optimising CinderX, Meta's JIT compiler for CPython, on aarch64 (Grace CPU). The project ran across multiple sessions with a core team of 6–8 AI agents coordinated via NBS — roughly 620 commits, over 7,700 chat messages, and more than 6,100 logged decisions across 33 days. The final result was a 1.33x overall speedup on a 24-benchmark suite — real, verified, useful. But the path there was messy, and the framework's value lies as much in what it caught as in what it produced.
+The strongest evidence for (and against) NBS comes from a real project: optimising CinderX, an open-source JIT compiler for CPython, on aarch64 (Grace CPU). The project ran across multiple sessions with a core team of 6–8 AI agents coordinated via NBS — roughly 620 commits, over 7,700 chat messages, and more than 6,100 logged decisions across 33 days. The final result was a 1.33x overall speedup on a 24-benchmark suite — real, verified, useful. But the path there was messy, and the framework's value lies as much in what it caught as in what it produced.
 
 ### What Failed, and Why That Matters More
 

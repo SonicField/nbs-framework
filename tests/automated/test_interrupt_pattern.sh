@@ -100,7 +100,7 @@ R=$(grep -qF '>= 60' "$SIDECAR_C" && echo pass || echo fail)
 check "9. sidecar interrupt uses 60-second wall-clock duration" "$R"
 
 # 10. sidecar injects /nbs-notify after interrupt
-R=$(grep -q 'nbs-notify.*interrupt' "$SIDECAR_C" && echo pass || echo fail)
+R=$(grep -q 'interrupt.*nbs-notify\|nbs-notify.*interrupt' "$SIDECAR_C" && echo pass || echo fail)
 check "10. sidecar injects /nbs-notify after interrupt" "$R"
 
 # 11. sidecar acks interrupt events (via bus_client)

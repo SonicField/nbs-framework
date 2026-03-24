@@ -136,7 +136,6 @@ Don't use when:
 To run multiple teams, use separate project directories with separate `.nbs/` state. For example:
 
 ```
-~/local/cinderx-work/     → live.chat team (CinderX benchmarks)
 ~/local/pytorch-source/   → live.chat team (nn.Module work)
 ```
 

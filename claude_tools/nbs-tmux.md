@@ -192,16 +192,16 @@ nbs-remote-edit diff <host> <remote-path>   # Show diff between local and remote
 
 ```bash
 # 1. Download the file
-nbs-remote-edit pull devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
-# Returns: .nbs/remote-edit/devserver.example.com/data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit pull devserver.example.com /home/user/project/Jit/pyjit.cpp
+# Returns: .nbs/remote-edit/devserver.example.com/home/user/project/Jit/pyjit.cpp
 
 # 2. Edit locally using the normal Edit tool (no sed needed!)
 
 # 3. Check what changed
-nbs-remote-edit diff devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit diff devserver.example.com /home/user/project/Jit/pyjit.cpp
 
 # 4. Push back
-nbs-remote-edit push devserver.example.com /data/users/dev/project/Jit/pyjit.cpp
+nbs-remote-edit push devserver.example.com /home/user/project/Jit/pyjit.cpp
 ```
 
 ### When to Use

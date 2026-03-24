@@ -6,7 +6,7 @@ A team of eight AI agents spent ten sessions optimising a JIT compiler. They pro
 
 ## 1. The Team
 
-The NBS framework coordinates AI agents through a supervisor/worker pattern with specialised roles. The system under study comprised eight agents working on CinderX, Meta's JIT compiler for CPython 3.12, running on an aarch64 devserver.
+The NBS framework coordinates AI agents through a supervisor/worker pattern with specialised roles. The system under study comprised eight agents working on CinderX, an open-source JIT compiler for CPython 3.12, running on an aarch64 server.
 
 ### 1.1 Roles
 

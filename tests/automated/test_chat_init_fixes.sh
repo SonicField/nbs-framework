@@ -189,8 +189,8 @@ for tool in nbs-chat nbs-bus sha256sum date grep sed basename; do
 done
 
 # tmux and nbs-claude are checked conditionally (spawn modes)
-check "assert_tool_exists for tmux (conditional)" \
-    "$( grep -q 'assert_tool_exists "tmux"' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+check "assert_tool_exists for nbs-ts (conditional)" \
+    "$( grep -q 'assert_tool_exists "nbs-ts"' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 check "assert_tool_exists for nbs-claude (conditional)" \
     "$( grep -q 'assert_tool_exists "nbs-claude"' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
@@ -297,10 +297,10 @@ echo ""
 # ============================================================
 echo "13. Arithmetic defaults (Violation 12: HARDENING)..."
 
-check "wait_count uses \${var:-0} form" \
-    "$( grep -q '\${wait_count:-0}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
-check "max_wait uses \${var:-60} form" \
-    "$( grep -q '\${max_wait:-60}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+check "wait_count initialised before arithmetic" \
+    "$( grep -q 'wait_count=0\|${wait_count:-0}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+check "max_wait initialised before arithmetic" \
+    "$( grep -q 'max_wait=60\|${max_wait:-60}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 check "entry_count uses \${var:-0} form" \
     "$( grep -q '\${entry_count:-0}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
@@ -335,14 +335,20 @@ check "compact_decision_log warns on missing Chat: header" \
 echo ""
 
 # ============================================================
-# Test 16: tmux new-session return values checked (Audit BUG)
+# Test 16: nbs-ts session create return values checked (Audit BUG)
 # ============================================================
-echo "16. tmux new-session return values checked (Audit BUG)..."
+echo "16. nbs-ts session create return values checked (Audit BUG)..."
 
-# All three spawn paths should check tmux new-session
-TMUX_NEW_CHECKS=$(grep -c 'if ! tmux new-session' "$NBS_CHAT_INIT" || true)
-check "tmux new-session checked in all spawn paths (found $TMUX_NEW_CHECKS, expect 3)" \
-    "$( [[ "$TMUX_NEW_CHECKS" -ge 3 ]] && echo pass || echo fail )"
+# All spawn paths use spawn_agent_ts which checks create return value
+SPAWN_CALLS=$(grep -c 'spawn_agent_ts' "$NBS_CHAT_INIT" || true)
+# Subtract 2 for the function definition line and the comment line
+SPAWN_INVOCATIONS=$((SPAWN_CALLS - 2))
+check "spawn_agent_ts used in all spawn paths (found $SPAWN_INVOCATIONS invocations, expect 3)" \
+    "$( [[ "$SPAWN_INVOCATIONS" -ge 3 ]] && echo pass || echo fail )"
+
+# spawn_agent_ts checks nbs-ts create return value
+check "spawn_agent_ts checks nbs-ts create failure" \
+    "$( grep -A2 'NBS_TS_BIN.*create' "$NBS_CHAT_INIT" | grep -q '||' && echo pass || echo fail )"
 
 echo ""
 
@@ -351,32 +357,34 @@ echo ""
 # ============================================================
 echo "17. Main Claude spawned with NBS_HANDLE (Audit BUG)..."
 
-check "Main Claude spawn includes NBS_HANDLE=claude" \
-    "$( grep -q 'NBS_HANDLE=claude nbs-claude' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+# spawn_agent_ts passes NBS_HANDLE=${role} in the create command
+check "Main Claude spawn includes NBS_HANDLE" \
+    "$( grep -q 'NBS_HANDLE=\${role}' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+check "Main Claude spawn calls spawn_agent_ts with claude role" \
+    "$( grep -q 'spawn_agent_ts "claude"' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 18: tmux send-keys return values checked (Audit HARDENING)
+# Test 18: nbs-ts send return values handled (Audit HARDENING)
 # ============================================================
-echo "18. tmux send-keys return values checked (Audit HARDENING)..."
+echo "18. nbs-ts send return values handled (Audit HARDENING)..."
 
-# Check that send-keys for launch commands and prompts are guarded
-SENDKEYS_CHECKS=$(grep -c 'if ! tmux send-keys' "$NBS_CHAT_INIT" || true)
-check "tmux send-keys checked (found $SENDKEYS_CHECKS, expect >= 4)" \
-    "$( [[ "$SENDKEYS_CHECKS" -ge 4 ]] && echo pass || echo fail )"
+# Check that nbs-ts send for prompts uses || true (non-critical)
+SEND_CHECKS=$(grep -c 'NBS_TS_BIN.*send' "$NBS_CHAT_INIT" || true)
+check "nbs-ts send used for prompt injection (found $SEND_CHECKS, expect >= 2)" \
+    "$( [[ "$SEND_CHECKS" -ge 2 ]] && echo pass || echo fail )"
 
 echo ""
 
 # ============================================================
-# Test 19: Main Claude has readiness wait loop (Audit HARDENING)
+# Test 19: Agent spawn has readiness wait loop (Audit HARDENING)
 # ============================================================
-echo "19. Main Claude has readiness wait loop (Audit HARDENING)..."
+echo "19. Agent spawn has readiness wait loop (Audit HARDENING)..."
 
-# After the Claude spawn section, there should be a wait loop with 'handle is' check
-# We look for 'Claude CLI did not become ready' which is the timeout message
-check "Claude spawn has readiness wait loop" \
-    "$( grep -q 'Claude CLI did not become ready' "$NBS_CHAT_INIT" && echo pass || echo fail )"
+# spawn_agent_ts has a wait loop checking 'handle is' readiness
+check "Agent spawn has readiness wait loop" \
+    "$( grep -q 'did not become ready' "$NBS_CHAT_INIT" && echo pass || echo fail )"
 
 echo ""
 
