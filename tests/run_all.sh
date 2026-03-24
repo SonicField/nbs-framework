@@ -246,6 +246,24 @@ run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
 run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
 run_test "$SCRIPT_DIR/automated/test_librarian.sh"
 
+# nbs-ts tests (session management)
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_lifecycle.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_cleanup.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_status.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_read.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_wait.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_oneshot.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_sigkill.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_completion.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_completion_edge.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_transport.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_adversarial.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_adversarial_fifo.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_no_tmux.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_restart.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_remote.sh"
+run_test "$SCRIPT_DIR/automated/test_nbs_ts_worker.sh"
+
 # nbs-chat remote tests (requires ssh localhost or mock server)
 if [[ -f "$SCRIPT_DIR/automated/test_nbs_chat_remote.sh" ]] && should_run "test_nbs_chat_remote"; then
     if ssh -o BatchMode=yes -o ConnectTimeout=3 localhost true 2>/dev/null; then
