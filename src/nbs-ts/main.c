@@ -337,12 +337,40 @@ static void daemon_relay(int master_fd, const char *output_log_path,
                 code = 1;
             got_code = 1;
         } else {
-            /* Not our child (helper-spawned). The child already exited
-             * (PTY EOF triggered relay exit). We can't get the exit code
-             * via waitpid. Write 0 — the completion log from
-             * PROMPT_COMMAND has the per-command exit codes. */
-            code = 0;
-            got_code = 1;
+            /* Not our child (helper-spawned). Read exit code from
+             * completion.log — non-interactive commands write their
+             * exit code there explicitly. */
+            char comp_path[MAX_FILE_PATH];
+            /* exit_code_path is "<session_dir>/exit_code" — derive
+             * completion.log from the same directory. */
+            {
+                /* Find last '/' to get session_dir */
+                const char *slash = strrchr(exit_code_path, '/');
+                if (slash) {
+                    size_t dir_len = (size_t)(slash - exit_code_path);
+                    snprintf(comp_path, sizeof(comp_path),
+                             "%.*s/completion.log", (int)dir_len, exit_code_path);
+                    FILE *cfp = fopen(comp_path, "r");
+                    if (cfp) {
+                        char line[64];
+                        char last_line[64] = "";
+                        while (fgets(line, sizeof(line), cfp))
+                            memcpy(last_line, line, sizeof(last_line));
+                        fclose(cfp);
+                        if (last_line[0]) {
+                            int seq, rc;
+                            if (sscanf(last_line, "%d %d", &seq, &rc) == 2) {
+                                code = rc;
+                                got_code = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!got_code) {
+                code = 0;
+                got_code = 1;
+            }
         }
         if (got_code) {
             char code_str[32];
@@ -471,8 +499,15 @@ static int cmd_create(const char *command)
             snprintf(helper_cmd, sizeof(helper_cmd),
                      "bash --rcfile \"%s\" -i", rcfile_path);
         } else {
+            /* Non-interactive: use trap EXIT to capture exit code.
+             * PROMPT_COMMAND doesn't fire in non-interactive bash, and
+             * `exit N` terminates before any trailing commands run, so
+             * a trap is the only reliable mechanism.  The daemon can't
+             * waitpid on helper-spawned children. */
             snprintf(helper_cmd, sizeof(helper_cmd),
-                     "source \"%s\"; %s", rcfile_path, command);
+                     "trap 'echo \"0 $?\" >> \"%s\"' EXIT; "
+                     "source \"%s\"; %s",
+                     completion_log, rcfile_path, command);
         }
 
         int hfd = helper_request_pty(helper_cmd, &helper_child_pid);

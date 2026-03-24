@@ -1364,8 +1364,8 @@ int main(int argc, char **argv) {
      * before killing them. Must happen before raw mode (needs canonical
      * input for Y/N prompt). */
     if (restart_immediately) {
-        FILE *fp = popen("tmux list-sessions -F '#{session_name}' 2>/dev/null "
-                         "| grep -c '^nbs-' 2>/dev/null || echo 0", "r");
+        FILE *fp = popen("nbs-ts list 2>/dev/null | grep -c 'alive' "
+                         "2>/dev/null || echo 0", "r");
         int running = 0;
         if (fp) {
             if (fscanf(fp, "%d", &running) != 1) running = 0;

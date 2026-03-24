@@ -64,7 +64,9 @@ SUITE_PASS=0
 SUITE_FAIL=0
 for t in "$PROJECT_ROOT/tests/automated/test_nbs_ts_"*.sh; do
     TNAME=$(basename "$t")
-    if bash "$t" >/dev/null 2>&1; then
+    # Skip ourselves to avoid infinite recursion
+    [[ "$TNAME" == "test_nbs_ts_no_tmux.sh" ]] && continue
+    if timeout 120 bash "$t" >/dev/null 2>&1; then
         SUITE_PASS=$((SUITE_PASS + 1))
     else
         SUITE_FAIL=$((SUITE_FAIL + 1))

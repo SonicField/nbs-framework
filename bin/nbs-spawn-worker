@@ -120,6 +120,8 @@ TS_HANDLE=$("$NBS_TS" create "$WORKER_CMD") || {
 echo "$TS_HANDLE"
 
 # Monitor for completion, then kill the session.
+# Redirect stdout/stderr so background subshell doesn't hold the pipe
+# open (callers using $() would block until the monitor exits).
 (
     sleep 15  # let worker initialise
     for i in $(seq 1 60); do
@@ -145,4 +147,4 @@ echo "$TS_HANDLE"
 
     # Timeout — kill anyway
     "$NBS_TS" kill "$TS_HANDLE" 2>/dev/null || true
-) &
+) >/dev/null 2>&1 &
