@@ -242,8 +242,8 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         line = nl + 1;
     }
 
-    /* Take last 32 non-blank lines */
-    int start = nlines > 32 ? nlines - 32 : 0;
+    /* Take last 16 non-blank lines */
+    int start = nlines > 16 ? nlines - 16 : 0;
     size_t toff = 0;
     for (int i = start; i < nlines; i++) {
         if (toff + 2 >= sizeof(truncated)) break;
