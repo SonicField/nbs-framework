@@ -407,6 +407,45 @@ if [[ -d "$PROJECT_ROOT/.nbs" ]]; then
 fi
 
 # ============================================================
+# PHASE 0: Scorched Earth — remove all state from previous runs
+# ============================================================
+
+info "Phase 0: Clearing previous state..."
+
+# Control files
+run rm -f "${PROJECT_ROOT}/.nbs/control-pause"
+for f in "${PROJECT_ROOT}/.nbs/"control-registry-*; do
+    [[ -f "$f" ]] && run rm -f "$f"
+done
+
+# Session metadata and pid files
+run rm -f "${PROJECT_ROOT}/.nbs/pids/"*.pid
+run rm -f "${PROJECT_ROOT}/.nbs/sessions/"*.json
+
+# Trigger timestamps
+run rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run"
+run rm -f "${PROJECT_ROOT}/.nbs/pythia-last-run"
+run rm -f "${PROJECT_ROOT}/.nbs/shepard-last-run"
+run rm -f "${PROJECT_ROOT}/.nbs/fixup-last-run"
+
+# Worker task files and logs from previous runs
+if [[ -d "${PROJECT_ROOT}/.nbs/workers" ]]; then
+    run rm -f "${PROJECT_ROOT}/.nbs/workers/"*.md
+    run rm -f "${PROJECT_ROOT}/.nbs/workers/"*.log
+fi
+
+# Pending bus events (stale events from dead agents cause confusion)
+if [[ -d "${PROJECT_ROOT}/.nbs/events" ]]; then
+    find "${PROJECT_ROOT}/.nbs/events" -maxdepth 1 -name '*.event' -delete 2>/dev/null || true
+fi
+
+# Sidecar logs
+run rm -f "${PROJECT_ROOT}/.nbs/nbs-claude-"*.log
+run rm -f "${PROJECT_ROOT}/.nbs/sidecar-"*.log
+
+ok "  Previous state cleared"
+
+# ============================================================
 # PHASE 1: Bus Infrastructure
 # ============================================================
 
