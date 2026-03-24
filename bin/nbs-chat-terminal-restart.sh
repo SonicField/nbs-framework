@@ -34,10 +34,11 @@ CHAT_FILE="$2"
 cd "$PROJECT_ROOT"
 
 # Find tools: prefer .nbs/bin/ (installed projects), fall back to bin/ (framework itself)
-if [[ -x ".nbs/bin/nbs-chat" ]]; then
-    NBS_BIN=".nbs/bin"
-elif [[ -x "bin/nbs-chat" ]]; then
-    NBS_BIN="bin"
+# MUST use absolute paths — the cwd can be reset by the calling environment.
+if [[ -x "${PROJECT_ROOT}/.nbs/bin/nbs-chat" ]]; then
+    NBS_BIN="${PROJECT_ROOT}/.nbs/bin"
+elif [[ -x "${PROJECT_ROOT}/bin/nbs-chat" ]]; then
+    NBS_BIN="${PROJECT_ROOT}/bin"
 else
     echo "Error: cannot find nbs-chat in .nbs/bin/ or bin/" >&2
     exit 1
@@ -107,16 +108,16 @@ pkill -9 -f "nbs-sidecar.*--root=${PROJECT_ROOT}" 2>/dev/null || true
 sleep 2
 
 # Verify nothing survived
-SURVIVORS=$(pgrep -f "nbs-claude.*${PROJECT_ROOT}" 2>/dev/null | wc -l)
+SURVIVORS=$(pgrep -f "nbs-claude.*${PROJECT_ROOT}" 2>/dev/null | wc -l || true)
 if [[ "$SURVIVORS" -gt 0 ]]; then
     echo "[watchdog] Warning: $SURVIVORS processes survived cleanup" >&2
     pgrep -f "nbs-claude.*${PROJECT_ROOT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 1
 fi
 
-rm -f .nbs/pids/*.pid 2>/dev/null || true
-rm -f .nbs/sessions/*.json 2>/dev/null || true
-rm -f .nbs/control-pause 2>/dev/null || true
+rm -f "${PROJECT_ROOT}/.nbs/pids/"*.pid 2>/dev/null || true
+rm -f "${PROJECT_ROOT}/.nbs/sessions/"*.json 2>/dev/null || true
+rm -f "${PROJECT_ROOT}/.nbs/control-pause" 2>/dev/null || true
 # Reset trigger timestamps so librarian/pythia/shepard/fixup use their
 # first_delay timing (e.g. librarian fires after 5 min, not 15).
 rm -f "${PROJECT_ROOT}/.nbs/librarian-last-run" \
