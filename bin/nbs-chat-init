@@ -485,6 +485,17 @@ fi
 run rm -f "${PROJECT_ROOT}/.nbs/nbs-claude-"*.log
 run rm -f "${PROJECT_ROOT}/.nbs/sidecar-"*.log
 
+# Scribe log and archives
+if [[ -d "${PROJECT_ROOT}/.nbs/scribe" ]]; then
+    run rm -f "${PROJECT_ROOT}/.nbs/scribe/"*.md
+    run rm -f "${PROJECT_ROOT}/.nbs/scribe/"*.lock
+fi
+
+# Digests
+if [[ -d "${PROJECT_ROOT}/.nbs/digests" ]]; then
+    run rm -f "${PROJECT_ROOT}/.nbs/digests/"*.md
+fi
+
 ok "  Previous state cleared"
 
 # ============================================================
