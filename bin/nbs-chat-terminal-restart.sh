@@ -122,29 +122,31 @@ for handle in scribe gatekeeper testkeeper supervisor generalist theologian; do
 done
 
 # 4. Spawn agents (scribe first, 5s stagger)
-declare -A AGENT_HANDLES
-for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    AGENT_HANDLES[$h]=$("$NBS_TS" create "cd $(printf '%q' "$PROJECT_ROOT") && NBS_HANDLE=${h} NBS_TRANSPORT=ts ${NBS_BIN}/nbs-claude --dangerously-skip-permissions") || {
-        echo "[watchdog] Error: failed to create nbs-ts session for $h" >&2
-        continue
-    }
-    sleep 5
-done
+# nbs-claude handles its own nbs-ts session creation internally when
+# NBS_TRANSPORT=ts. Do NOT wrap it in another nbs-ts create — that
+# produces double-nesting where the outer session is tail -f and
+# skill injection via nbs-ts send hits tail instead of claude.
+# Skills are passed via NBS_INITIAL_PROMPT so the sidecar injects
+# them after detecting the Claude prompt.
+declare -A AGENT_SKILLS
+AGENT_SKILLS[scribe]="/nbs-scribe"
+AGENT_SKILLS[gatekeeper]="/nbs-gatekeeper"
+AGENT_SKILLS[testkeeper]="/nbs-testkeeper"
+AGENT_SKILLS[theologian]="/nbs-theologian"
+AGENT_SKILLS[generalist]="/nbs-teams-chat"
+AGENT_SKILLS[supervisor]="/nbs-supervisor"
 
-# 5. Wait for init, inject skills
-sleep 15
 for h in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    [[ -n "${AGENT_HANDLES[$h]:-}" ]] || continue
-    local_handle="${AGENT_HANDLES[$h]}"
-    case "$h" in
-        scribe)     "$NBS_TS" send "$local_handle" "/nbs-scribe" 2>/dev/null || true ;;
-        gatekeeper) "$NBS_TS" send "$local_handle" "/nbs-gatekeeper" 2>/dev/null || true ;;
-        testkeeper) "$NBS_TS" send "$local_handle" "/nbs-testkeeper" 2>/dev/null || true ;;
-        theologian) "$NBS_TS" send "$local_handle" "/nbs-theologian" 2>/dev/null || true ;;
-        generalist) "$NBS_TS" send "$local_handle" "/nbs-teams-chat" 2>/dev/null || true ;;
-        supervisor) "$NBS_TS" send "$local_handle" "/nbs-supervisor" 2>/dev/null || true ;;
-    esac
-    sleep 1
+    (
+        cd "$PROJECT_ROOT"
+        NBS_HANDLE="$h" \
+        NBS_TRANSPORT=ts \
+        NBS_INITIAL_PROMPT="${AGENT_SKILLS[$h]}" \
+        NBS_FORCE_SPAWN=1 \
+        exec "${NBS_BIN}/nbs-claude" --dangerously-skip-permissions
+    ) >/dev/null 2>&1 &
+    echo "[watchdog] Spawned $h (pid $!)"
+    sleep 5
 done
 
 # 6. Post continuation directive
