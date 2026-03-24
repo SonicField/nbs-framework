@@ -53,16 +53,34 @@ dialogue_type_t detect_blocking_dialogue(const char *content,
 int detect_context_stress(const char *content);
 
 /*
- * detect_prompt_visible — Check if Claude's prompt is visible.
+ * detect_prompt_idle — Is Claude idle at its normal prompt?
  *
- * Checks the last 6 lines of content for the UTF-8 prompt character.
+ * Checks for the ❯ character anywhere in the captured content.
+ * Used by notification injection and its verification checks.
  *
- * Preconditions:
- *   - content != NULL
- *
- * Returns 1 if visible, 0 otherwise.
+ * Returns 1 if idle at prompt, 0 otherwise.
  */
-int detect_prompt_visible(const char *content);
+int detect_prompt_idle(const char *content);
+
+/*
+ * detect_prompt_ready — Is Claude ready for input after interruption?
+ *
+ * Checks for ❯ OR the interrupted prompt ("What should Claude do").
+ * Used only by the interrupt handler after sending Escape.
+ *
+ * Returns 1 if ready for input, 0 otherwise.
+ */
+int detect_prompt_ready(const char *content);
+
+/*
+ * detect_prompt_not_trust — Is Claude at its real prompt, not the trust dialog?
+ *
+ * Checks for ❯ AND absence of "trust this folder".
+ * Used only by init-wait to avoid injecting into the trust dialog.
+ *
+ * Returns 1 if at real prompt, 0 otherwise.
+ */
+int detect_prompt_not_trust(const char *content);
 
 /*
  * detect_skill_failure — Check if Claude rejected an injection.

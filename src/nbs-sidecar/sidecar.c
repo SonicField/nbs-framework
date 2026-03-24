@@ -132,8 +132,8 @@ static int handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
             char *content = tp->capture(tp, 30);
             if (!content) continue;
 
-            if (detect_prompt_visible(content)) {
-                /* Inject interrupt as plain text (not /nbs-notify slash command) */
+            if (detect_prompt_ready(content)) {
+                /* Inject interrupt as plain text */
                 char interrupt_prompt[SIDECAR_MAX_PROMPT];
                 build_notify_prompt(cfg, "INTERRUPT — you were @mentioned with ! priority",
                                      interrupt_prompt, sizeof(interrupt_prompt));
@@ -639,8 +639,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             } else {
                 char *init_content = tp->capture(tp, 30);
                 if (init_content) {
-                    if (detect_prompt_visible(init_content) &&
-                        strstr(init_content, "trust this folder") == NULL) {
+                    if (detect_prompt_not_trust(init_content)) {
                         if (tp->send_text(tp, cfg->initial_prompt) != 0)
                             fprintf(stderr, "sidecar_run: init prompt send_text failed\n");
                         usleep(300000);
@@ -875,7 +874,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (state.bus_check_counter >= cfg->bus_check_interval) {
             state.bus_check_counter = 0;
 
-            if (detect_prompt_visible(content)) {
+            if (detect_prompt_idle(content)) {
                 /* Context stress — back off */
                 if (detect_context_stress(content)) {
                     state.idle_seconds = 0;
@@ -889,7 +888,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     /* TOCTOU re-capture before injection */
                     char *fresh = tp->capture(tp, 30);
                     if (fresh) {
-                        if (!detect_prompt_visible(fresh)) {
+                        if (!detect_prompt_idle(fresh)) {
                             /* Prompt disappeared — abort */
                             free(fresh);
                             state.idle_seconds = 0;

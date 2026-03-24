@@ -166,35 +166,32 @@ int detect_context_stress(const char *content)
     return result;
 }
 
-int detect_prompt_visible(const char *content)
+/* UTF-8 sequence for the prompt character (U+276F): 0xe2 0x9d 0xaf */
+static const char prompt_utf8[] = "\xe2\x9d\xaf";
+
+int detect_prompt_idle(const char *content)
 {
-    ASSERT_MSG(content != NULL, "detect_prompt_visible: content is NULL");
+    ASSERT_MSG(content != NULL, "detect_prompt_idle: content is NULL");
+    if (content[0] == '\0') return 0;
+    return strstr(content, prompt_utf8) != NULL;
+}
 
-    /* UTF-8 sequence for the prompt character (U+276F): 0xe2 0x9d 0xaf */
-    static const char prompt_utf8[] = "\xe2\x9d\xaf";
+int detect_prompt_ready(const char *content)
+{
+    ASSERT_MSG(content != NULL, "detect_prompt_ready: content is NULL");
+    if (content[0] == '\0') return 0;
+    if (strstr(content, prompt_utf8) != NULL) return 1;
+    if (strstr(content, "What should Claude do") != NULL) return 1;
+    return 0;
+}
 
-    size_t len = strlen(content);
-    if (len == 0)
-        return 0;
-
-    /* Search the entire captured content (caller controls the window
-     * via the capture line count — typically 30 lines). The prompt
-     * character or interrupted prompt text can appear anywhere in
-     * the captured window depending on how many blank/control lines
-     * Claude has emitted. */
-
-    /* Normal prompt: ❯ character */
-    int result = strstr(content, prompt_utf8) != NULL;
-
-    /* Interrupted prompt: Claude shows this after Escape */
-    if (!result)
-        result = strstr(content, "What should Claude do") != NULL;
-
-    /* Postcondition: return value is boolean */
-    ASSERT_MSG(result == 0 || result == 1,
-               "detect_prompt_visible postcondition: result %d is not 0 or 1", result);
-
-    return result;
+int detect_prompt_not_trust(const char *content)
+{
+    ASSERT_MSG(content != NULL, "detect_prompt_not_trust: content is NULL");
+    if (content[0] == '\0') return 0;
+    if (strstr(content, prompt_utf8) == NULL) return 0;
+    if (strstr(content, "trust this folder") != NULL) return 0;
+    return 1;
 }
 
 int detect_skill_failure(const char *content)
