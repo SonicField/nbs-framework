@@ -246,6 +246,15 @@ run_test "$SCRIPT_DIR/automated/test_worker_adv_no_raw_log.sh"
 run_test "$SCRIPT_DIR/automated/test_digest_spawn_fixes.sh"
 run_test "$SCRIPT_DIR/automated/test_librarian.sh"
 
+# Investigation tests
+run_test "$SCRIPT_DIR/automated/test_investigation_adversarial.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_adv_no_normal.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_adv_no_silent.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_ask.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_branch.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_dispatch.sh"
+run_test "$SCRIPT_DIR/automated/test_investigation_file.sh"
+
 # Integration tests (comprehensive, 122 sub-tests)
 run_test "$SCRIPT_DIR/automated/test_integration.sh"
 
