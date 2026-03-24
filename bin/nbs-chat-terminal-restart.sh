@@ -97,11 +97,22 @@ for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     fi
 done
 
-# Belt and braces: pkill any nbs-claude processes for this project
-# that escaped pidfile tracking (orphans from previous restarts,
-# crashed sessions, race conditions).
+# Belt and braces: pkill any nbs-claude and nbs-sidecar processes
+# for this project that escaped pidfile tracking.
 pkill -9 -f "nbs-claude.*--root=${PROJECT_ROOT}" 2>/dev/null || true
-sleep 1
+pkill -9 -f "nbs-claude.*${PROJECT_ROOT}.*dangerously" 2>/dev/null || true
+pkill -9 -f "nbs-sidecar.*--root=${PROJECT_ROOT}" 2>/dev/null || true
+
+# Wait for all kills to finish before proceeding
+sleep 2
+
+# Verify nothing survived
+SURVIVORS=$(pgrep -f "nbs-claude.*${PROJECT_ROOT}" 2>/dev/null | wc -l)
+if [[ "$SURVIVORS" -gt 0 ]]; then
+    echo "[watchdog] Warning: $SURVIVORS processes survived cleanup" >&2
+    pgrep -f "nbs-claude.*${PROJECT_ROOT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
 
 rm -f .nbs/pids/*.pid 2>/dev/null || true
 rm -f .nbs/sessions/*.json 2>/dev/null || true
