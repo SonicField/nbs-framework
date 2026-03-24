@@ -591,11 +591,18 @@ int bus_bridge_after_send(const char *chat_path, const char *handle,
                 }
             }
         } else {
-            /* Single-handle mention/interrupt/query */
+            /* Single-handle mention/interrupt/query.
+             * Include target handle in event type so dedup keys are
+             * unique per target (e.g. chat-query-gatekeeper). Without
+             * this, @gatekeeper? dedupes against @supervisor? because
+             * both have dedup-key nbs-chat:chat-query. */
+            char typed_event[1152];
+            snprintf(typed_event, sizeof(typed_event), "%s-%s",
+                     event_type, mentions[i]);
             char mention_payload[MAX_PAYLOAD_LEN];
             snprintf(mention_payload, sizeof(mention_payload),
                      "@%s from %s: %s", mentions[i], handle, message);
-            if (bus_publish(events_dir, "nbs-chat", event_type, priority,
+            if (bus_publish(events_dir, "nbs-chat", typed_event, priority,
                             mention_payload) != 0) {
                 fprintf(stderr, "bus_bridge_after_send: failed to publish "
                         "%s event for @%s\n", event_type, mentions[i]);
