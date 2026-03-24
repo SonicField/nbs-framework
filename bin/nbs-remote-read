@@ -47,7 +47,7 @@ die() {
 
 [[ -x "$NBS_TS" ]] || die 1 "nbs-ts not found"
 
-# scp via short-lived nbs-ts session (bypasses BpfJailer)
+# scp via short-lived nbs-ts session (bypasses sandbox SSH restrictions)
 fetch_file() {
     local host="$1"
     local remote_path="$2"

@@ -83,7 +83,7 @@ After the fix, Pythia fired immediately, detecting 44 missed checkpoints and res
 
 The scribe was constructing decision log entries via heredoc, publishing bus events manually, and checking Pythia thresholds by grepping config files — all LLM-executed bash. Three of these steps are mechanical. `nbs-scribe-log` makes them deterministic: the scribe identifies the decision, calls the tool, the tool handles timestamps, formatting, locking, bus events, and log initialisation.
 
-The remote-edit rewrite deserves attention. The original `nbs-remote-edit-pty` used base64 encoding to transfer files through pty-session, avoiding BpfJailer's SSH block. 370 lines: chunked encoding, markers, polling loops, md5 verification. The fix: `scp` via pty-session. One line. The entire base64 machinery existed because no one tried the obvious thing.
+The remote-edit rewrite deserves attention. The original `nbs-remote-edit-pty` used base64 encoding to transfer files through pty-session, avoiding the sandbox's SSH restrictions. 370 lines: chunked encoding, markers, polling loops, md5 verification. The fix: `scp` via pty-session. One line. The entire base64 machinery existed because no one tried the obvious thing.
 
 ### 2.5 Status Visibility
 

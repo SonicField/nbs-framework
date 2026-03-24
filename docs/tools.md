@@ -88,7 +88,7 @@ Session names follow `nbs-<handle>-<tag>` convention (e.g. `nbs-supervisor-poem`
 
 **Run a local command with proxy/credential access:**
 ```bash
-nbs-local-run 'https_proxy=http://fwdproxy:8080 git push origin master'
+nbs-local-run 'https_proxy=http://your-proxy:8080 git push origin master'
 ```
 
 **Run a command on a remote machine:**

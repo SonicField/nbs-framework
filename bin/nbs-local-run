@@ -10,7 +10,7 @@
 #
 # Examples:
 #   nbs-local-run 'git push origin master'
-#   nbs-local-run 'https_proxy=http://fwdproxy:8080 git push origin master'
+#   nbs-local-run 'https_proxy=http://your-proxy:8080 git push origin master'
 #   nbs-local-run --timeout=300 'make -j8'
 #
 # Exit codes:

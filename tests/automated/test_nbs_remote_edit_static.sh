@@ -2,7 +2,7 @@
 # Test: nbs-remote-edit argument validation and local operations
 # These tests do NOT require SSH — they test the tool's local behaviour.
 # For SSH integration tests, use test_nbs_remote_edit_mock.py on a machine
-# where BpfJailer allows SSH to localhost.
+# where the sandbox allows SSH to localhost.
 #
 # Covers audit violations:
 #   V1 (SECURITY): hostname injection rejection
