@@ -646,6 +646,27 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             fprintf(stderr, "sidecar_run: registry_process_inbox failed\n");
         }
 
+        /* --- Out-of-band query check (every tick, FIRST) ---
+         * Queries (@handle?) are instant status checks from the human.
+         * Process before mentions/interrupts so they don't queue behind
+         * events with sleep(3) delays. */
+        {
+            char qbus_dir[SIDECAR_MAX_PATH];
+            if (registry_find_first(registry_path, "bus",
+                                     qbus_dir, sizeof(qbus_dir)) == 0) {
+                char qpayload[SIDECAR_MAX_MESSAGE];
+                char qevent_file[SIDECAR_MAX_PATH];
+                if (bus_client_check_typed(qbus_dir, "chat-query",
+                                            cfg->handle, qpayload,
+                                            sizeof(qpayload),
+                                            qevent_file, sizeof(qevent_file)) == 0) {
+                    if (handle_query(tp, cfg, registry_path) == 0) {
+                        bus_client_ack_event(qbus_dir, qevent_file);
+                    }
+                }
+            }
+        }
+
         /* --- Out-of-band interrupt check (every tick) --- */
         {
             char bus_dir[SIDECAR_MAX_PATH];
@@ -732,34 +753,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             }
         }
 
-        /* --- Out-of-band query check (every tick) --- */
-        {
-            char bus_dir[SIDECAR_MAX_PATH];
-            if (registry_find_first(registry_path, "bus",
-                                     bus_dir, sizeof(bus_dir)) == 0) {
-                char payload[SIDECAR_MAX_MESSAGE];
-                char event_file[SIDECAR_MAX_PATH];
-                if (bus_client_check_typed(bus_dir, "chat-query",
-                                            cfg->handle, payload,
-                                            sizeof(payload),
-                                            event_file, sizeof(event_file)) == 0) {
-                    if (handle_query(tp, cfg, registry_path) == 0) {
-                        bus_client_ack_event(bus_dir, event_file);
-                        state.query_retry_count = 0;
-                    } else {
-                        state.query_retry_count++;
-                        if (state.query_retry_count >= 3) {
-                            fprintf(stderr, "sidecar: query failed 3 times, "
-                                    "acking to clear\n");
-                            bus_client_ack_event(bus_dir, event_file);
-                            state.query_retry_count = 0;
-                        }
-                    }
-                } else {
-                    state.query_retry_count = 0;
-                }
-            }
-        }
+        /* Query check moved to top of loop (before interrupts/mentions) */
 
         /* Check transport alive */
         if (!tp->is_alive(tp)) {
