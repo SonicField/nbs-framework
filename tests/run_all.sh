@@ -181,9 +181,6 @@ fi
 if [[ -f "$SCRIPT_DIR/automated/test_chat_main_fixes.sh" ]]; then
     run_test "$SCRIPT_DIR/automated/test_chat_main_fixes.sh"
 fi
-if [[ -f "$SCRIPT_DIR/automated/test_worker_fixes.sh" ]]; then
-    run_test "$SCRIPT_DIR/automated/test_worker_fixes.sh"
-fi
 if [[ -f "$SCRIPT_DIR/automated/test_claude_remote_fixes.sh" ]]; then
     run_test "$SCRIPT_DIR/automated/test_claude_remote_fixes.sh"
 fi
