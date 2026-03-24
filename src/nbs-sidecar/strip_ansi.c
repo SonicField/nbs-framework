@@ -27,11 +27,32 @@ size_t strip_ansi(char *text) {
         if (*rd == '\x1b') {
             rd++; /* Skip ESC */
             if (*rd == '[') {
-                /* CSI sequence: ESC [ ... final_byte (0x40-0x7E) */
+                /* CSI sequence: ESC [ ... final_byte (0x40-0x7E).
+                 * Special case: cursor right (CSI <n> C) is used by
+                 * Claude's terminal to render spaces. Replace with
+                 * actual spaces instead of stripping. */
                 rd++;
+                /* Parse optional numeric parameter */
+                int param = 0;
+                int has_param = 0;
+                const char *param_start = rd;
                 while (*rd != '\0' && ((unsigned char)*rd < 0x40 || (unsigned char)*rd > 0x7E)) {
+                    if (*rd >= '0' && *rd <= '9') {
+                        param = param * 10 + (*rd - '0');
+                        has_param = 1;
+                    } else if (*rd == ';') {
+                        /* Multiple params — not a simple cursor right */
+                        has_param = 0;
+                    }
                     rd++;
                 }
+                if (*rd == 'C' && (has_param || rd == param_start)) {
+                    /* Cursor right: CSI C (1 space) or CSI <n> C */
+                    int spaces = has_param ? param : 1;
+                    if (spaces > 8) spaces = 8; /* cap to prevent abuse */
+                    for (int i = 0; i < spaces; i++) *wr++ = ' ';
+                }
+                /* else: strip the sequence */
                 if (*rd != '\0') rd++; /* Skip final byte */
             } else if (*rd == ']') {
                 /* OSC sequence: ESC ] ... ST (ESC \ or BEL) */
