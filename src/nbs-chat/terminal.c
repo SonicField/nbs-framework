@@ -2018,14 +2018,27 @@ int main(int argc, char **argv) {
                 } else if (!watchdog_is_enabled(&g_watchdog)) {
                     printf("  %sTeam is paused. Use /resume before spawning oracles.%s\n",
                            DIM, RESET);
-                } else if (desc && skill) {
-                    printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
-                    if (spawn_trigger_worker(role, skill, desc,
-                                              g_watchdog.project_root) == 0) {
-                        printf("  %s%s spawned (will post to chat when done).%s\n",
-                               DIM, role, RESET);
+                } else {
+                    /* Also check pause file — sidecars skip all work
+                     * when this exists, so the oracle would sit idle. */
+                    char pp[8192];
+                    snprintf(pp, sizeof(pp), "%s/.nbs/control-pause",
+                             g_watchdog.project_root);
+                    struct stat pps;
+                    if (stat(pp, &pps) == 0) {
+                        printf("  %sTeam is paused (control-pause file exists). "
+                               "Use /resume first.%s\n", DIM, RESET);
+                    } else if (!desc || !skill) {
+                        printf("  %sUnknown oracle: %s%s\n", DIM, role, RESET);
                     } else {
-                        printf("  %sFailed to spawn %s.%s\n", DIM, role, RESET);
+                        printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
+                        if (spawn_trigger_worker(role, skill, desc,
+                                                  g_watchdog.project_root) == 0) {
+                            printf("  %s%s spawned (will post to chat when done).%s\n",
+                                   DIM, role, RESET);
+                        } else {
+                            printf("  %sFailed to spawn %s.%s\n", DIM, role, RESET);
+                        }
                     }
                 }
                 line_state_reset(&edit);
