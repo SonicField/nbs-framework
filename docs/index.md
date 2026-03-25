@@ -38,7 +38,11 @@ Reference documentation for infrastructure components.
 | [nbs-spawn-worker](tools/nbs-spawn-worker.md) | Worker spawn pipeline and nbs-launch-agent |
 | [nbs-bus](tools/nbs-bus.md) | Event bus: publish, subscribe, dedup |
 | [nbs-bus Recovery](tools/nbs-bus-recovery.md) | Bus failure modes and recovery |
+| [nbs-oracle-reaper](tools/nbs-oracle-reaper.md) | Stateless oracle lifecycle management |
+| [nbs-hub](tools/nbs-hub.md) | Process enforcement for teams |
+| [nbs-scribe-log](tools/nbs-scribe-log.md) | Decision log binary (append-only) |
 | [nbs-workers](tools/nbs-workers.md) | Worker lifecycle: spawn, status, dismiss |
+| [Remote Tools](tools/nbs-remote.md) | nbs-remote-run/edit/read and nbs-local-run |
 | [Testing Strategy](tools/testing-strategy.md) | Test philosophy and methodology |
 | [Interactive Testing](tools/interactive-testing.md) | Manual testing procedures |
 
@@ -50,6 +54,17 @@ Running and operating agent teams.
 |----------|-------------|
 | [Teams Overview](team/nbs-teams.md) | Team structure, roles, operations |
 | [Tripod Architecture](team/tripod-architecture.md) | Scribe, Pythia, and the decision-logging triangle |
-| [Pythia](team/nbs-pythia.md) | Trajectory and risk assessment oracle |
+| **Permanent agents** | |
+| [Supervisor](team/nbs-supervisor.md) | Goal-keeper, task delegation, session boundaries |
+| [Generalist](team/nbs-generalist.md) | Implementation worker |
+| [Gatekeeper](team/nbs-gatekeeper.md) | Pre-push code review (read-only) |
+| [Theologian](team/nbs-theologian.md) | Architecture and design guidance |
+| [Testkeeper](team/nbs-testkeeper.md) | Test ownership and falsification |
 | [Scribe](team/nbs-scribe.md) | Decision logging and institutional memory |
+| **Ephemeral oracles** | |
+| [Pythia](team/nbs-pythia.md) | Trajectory and risk assessment |
+| [Shepard](team/nbs-shepard.md) | Team effectiveness assessment |
+| [Librarian](team/nbs-librarian.md) | Institutional memory watchdog |
+| [Fixup](team/nbs-fixup.md) | Team self-repair |
+| | |
 | [Help When Stuck](team/help-when-stuck.md) | Troubleshooting guide for stuck teams |
