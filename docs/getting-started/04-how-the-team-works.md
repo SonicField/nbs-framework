@@ -190,7 +190,7 @@ The supervisor checks pending bus events, reads recent chat, and picks up where 
 
 ### Ending a Session
 
-Type `/shutdown` in the chat terminal. The supervisor tells workers to finish their current task. Workers that are mid-execution complete and report.
+Type `/shutdown` in the chat terminal. This kills the team — all agent sessions are terminated.
 
 If workers are still running when you leave, their sessions persist. When you come back, check their status:
 

@@ -36,7 +36,7 @@ These commands are typed in the chat terminal, not in a regular shell.
 | `/unfilter` | Return to showing all messages |
 | `/pause` | Pause the sidecar -- agents stop receiving notifications |
 | `/resume` | Resume the sidecar -- agents start receiving notifications again |
-| `/shutdown` | Send wrap-up message to all agents, disable auto-restart |
+| `/shutdown` | Kill the team — terminate all agent sessions |
 | `/restart` | Manually restart the agent team |
 | `/pythia` | Spawn a Pythia oracle (trajectory and risk assessment) |
 | `/shepard` | Spawn a Shepard oracle (team effectiveness check) |
@@ -116,7 +116,7 @@ Do NOT use `--since=<handle>` for polling. It shows messages since your last *po
 
 ## The Event Bus
 
-The bus is a file-based event queue. Instead of agents scanning for changes, changes announce themselves as events. The directory is the queue -- no daemons, no sockets.
+The bus is a file-based event queue. Instead of agents scanning for changes, changes announce themselves as events. The directory is the queue.
 
 Events flow through four stages:
 
@@ -165,13 +165,13 @@ Each agent launched via `nbs-claude` runs a background sidecar process (`nbs-sid
 - **Auto-selects plan mode prompts** so unattended agents are not blocked by "Would you like to proceed?" dialogs
 - **Spawns periodic oracle workers** (Librarian, Pythia, Shepard, Fixup) at configured intervals
 
-The sidecar only injects notifications during natural pauses -- when pane content has been stable for several seconds and a prompt character is visible. It does not interrupt active code generation or test runs.
+The sidecar only injects notifications during natural pauses -- when session output has been stable for several seconds and a prompt character is visible. It does not interrupt active code generation or test runs.
 
 ### Idle detection
 
 The sidecar determines "idle" by two conditions both being true:
 
-1. **Content stability** -- the pane content hash has not changed
+1. **Content stability** -- the session output hash has not changed
 2. **Prompt visibility** -- a prompt character appears in the last 3 lines
 
 This prevents injection from interrupting active work.

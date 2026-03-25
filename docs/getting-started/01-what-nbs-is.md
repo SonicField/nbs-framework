@@ -62,7 +62,7 @@ An NBS team session gives you:
 - **Oracles** that periodically assess whether the project is on track
 - An **event bus** that coordinates all of this without polling
 
-The system is built on files. Chat messages are files. Events are files. Worker task files are files. Decision logs are files. No daemons, no databases, no sockets. When a machine dies, the messages survive. When a session restarts, the queue is intact.
+The system is built on files. Chat messages are files. Events are files. Worker task files are files. Decision logs are files. No databases. When a machine dies, the messages survive. When a session restarts, the queue is intact. Session management uses `nbs-ts-helper` (a lightweight daemon that allocates PTYs via Unix sockets), but all coordination state is plain files.
 
 ## What This Guide Covers
 

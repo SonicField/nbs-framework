@@ -7,7 +7,12 @@ Launches Claude Code with a bus-aware background sidecar that checks for pending
 ```bash
 nbs-claude [claude-args...]
 nbs-claude --resume abc123    # Resume session with polling
+nbs-claude --debug             # Enable debug logging to /tmp/nbs-claude-debug-PID.log
 ```
+
+### Debug Mode
+
+Set `NBS_DEBUG=1` or pass `--debug` to log every lifecycle step. Logs are written to `/tmp/nbs-claude-debug-<PID>.log`.
 
 ## Environment Variables
 
@@ -28,7 +33,7 @@ nbs-claude --resume abc123    # Resume session with polling
 
 `nbs-claude` works in two modes depending on the terminal environment:
 
-`nbs-claude` creates an nbs-ts session and runs Claude within it. The sidecar monitors via `nbs-ts read-new` and injects keystrokes via `nbs-ts send`.
+`nbs-claude` creates an nbs-ts session and runs Claude within it. The nbs-ts-helper daemon allocates a PTY, forks, and execs bash which runs Claude — the caller's environment does NOT reach Claude (it gets the helper's login environment instead). The sidecar monitors session output and injects keystrokes via the transport abstraction layer.
 
 ## Sidecar Architecture
 

@@ -154,7 +154,7 @@ mkdir -p .nbs/events/processed
 nbs-bus check .nbs/events/
 ```
 
-The bus is optional. Projects without `.nbs/events/` fall back to direct chat/worker scanning via `nbs-poll`. See [nbs-bus](nbs-bus.md) for the full reference and [Bus Recovery](nbs-bus-recovery.md) for startup/restart protocol.
+The bus is optional. See [nbs-bus](nbs-bus.md) for the full reference and [Bus Recovery](nbs-bus-recovery.md) for startup/restart protocol.
 
 ## See Also
 

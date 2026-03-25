@@ -8,9 +8,9 @@ All four share the same architecture: the sidecar tracks a wall-clock timestamp 
 
 ## Librarian
 
-**What it does:** Reads the last 100 chat messages. Searches the Scribe decision log for answers to questions or blockers the team is stuck on. Posts findings to chat with `@team!` if the decision log contains relevant prior decisions. Stays silent if nothing is relevant.
+**What it does:** Reads the last 100 chat messages. Searches the Scribe decision log for answers to questions or blockers the team is stuck on. Recommends tools, flags methodology drift, and references the Scribe as a colleague. Posts findings to chat every run — never stays silent.
 
-**When it runs:** Every 15 minutes of wall-clock time. The first run fires 15 minutes after the sidecar starts (not immediately).
+**When it runs:** Every 15 minutes of wall-clock time. The first run fires 5 minutes after the sidecar starts.
 
 **Configuration:**
 
@@ -56,7 +56,7 @@ This is the same principle as double-blind peer review. The reviewer assesses th
 
 ## Shepard
 
-**What it does:** Checks agent liveness by listing active sessions and capturing pane output. Reads the last 20 chat messages. Posts a brief team effectiveness assessment to chat.
+**What it does:** Checks agent liveness by listing active nbs-ts sessions and capturing session output. Reads the last 20 chat messages. Posts a brief team effectiveness assessment to chat.
 
 **When it runs:** Every 20 minutes of wall-clock time.
 

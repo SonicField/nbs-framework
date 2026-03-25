@@ -87,7 +87,7 @@ ps aux | grep nbs-sidecar
 
 If the sidecar crashed, restart the agent.
 
-**Check 3: Prompt detection.** The sidecar only injects when it sees a prompt character in the last 3 lines of pane content. If the agent is in a state without a visible prompt, the sidecar will not inject.
+**Check 3: Prompt detection.** The sidecar only injects when it sees a prompt character in the last 3 lines of session output. If the agent is in a state without a visible prompt, the sidecar will not inject.
 
 ## Workers stuck in plan mode
 
@@ -97,7 +97,7 @@ The sidecar auto-selects option 2 ("Yes, and bypass permissions"). If this is no
 
 **Check 1: Is the sidecar running?** (See above)
 
-**Check 2:** The sidecar matches the exact string "Would you like to proceed?" in pane content. If Claude Code changes the prompt wording, detection breaks.
+**Check 2:** The sidecar matches the exact string "Would you like to proceed?" in session output. If Claude Code changes the prompt wording, detection breaks.
 
 ## Bus directory missing
 

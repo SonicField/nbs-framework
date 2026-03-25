@@ -116,7 +116,7 @@ When you are ready to stop, type `/shutdown` in the chat terminal:
 /shutdown
 ```
 
-This sends a wrap-up message to all agents (`@team Good work -- time to wrap up.`) and disables the watchdog that would auto-restart agents. Agents finish their current work and exit.
+This kills the team — all agent sessions are terminated.
 
 To exit the chat terminal itself, type `/exit` or press Ctrl-C.
 

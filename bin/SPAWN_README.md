@@ -82,7 +82,7 @@ After spawning an agent, the monitor needs to find its nbs-ts session handle to 
 
 **Use: `nbs-ts list --name=<role>` (name-based lookup)**
 
-nbs-claude creates named sessions (`nbs-pythia-poem`, `nbs-supervisor-poem`). The name is written atomically by `nbs-ts create --name=`. The monitor greps `nbs-ts list` output for the role name and extracts the hex handle. This is deterministic — if the session exists, the name exists.
+nbs-claude creates named sessions with unique random suffixes (`nbs-pythia-a1b2c3d4-poem`, `nbs-supervisor-f7e8d9c0-poem`). The name is written atomically by `nbs-ts create --name=`. The monitor greps `nbs-ts list` output for the role name and extracts the hex handle. This is deterministic — if the session exists, the name exists.
 
 ```bash
 TS_HANDLE=$("$NBS_TS" list 2>/dev/null \
@@ -101,7 +101,7 @@ Parsing JSON in bash (`grep -o '"nbs_ts_handle"...' | sed ...`) is fragile. The 
 
 **Why names work:** nbs-ts sessions have unique names assigned at creation time. The name lives in the session directory as a simple file. `nbs-ts list` reads it atomically. No parsing, no race, no stale data. If the session is alive, the name is there. If it's dead, `nbs-ts list` says dead. Simple.
 
-**Naming convention:** `nbs-<handle>-<tag>` where tag comes from the chat filename. Examples: `nbs-pythia-poem`, `nbs-supervisor-live`, `nbs-librarian-poem`. These names are unique across teams (different tags) and roles (different handles). Use them for all session discovery.
+**Naming convention:** `nbs-<role>-<random>-<tag>` where random is a unique suffix per launch and tag comes from the chat filename. Examples: `nbs-pythia-a1b2c3d4-poem`, `nbs-supervisor-f7e8d9c0-live`. The random suffix ensures uniqueness across launches of the same role, preventing monitors from different launches killing each other's sessions. Use name-based lookup for all session discovery.
 
 ## Callers
 
