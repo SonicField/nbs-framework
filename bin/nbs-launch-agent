@@ -21,65 +21,9 @@ launch_agent() {
     local nbs_claude_path="$3"
     local initial_prompt="$4"
 
-    # Scrub all Claude Code and nesting-related env vars so the child
-    # does not detect nesting and exit. CLAUDECODE alone is not sufficient —
-    # Claude also checks CLAUDE_CODE_*, AGENT, TMUX, and OTEL vars.
-    unset CLAUDECODE TMUX TMUX_PANE AGENT 2>/dev/null || true
-    while IFS='=' read -r name _; do
-        [[ "$name" == CLAUDE_CODE_* ]] && unset "$name"
-        [[ "$name" == OTEL_* ]] && unset "$name"
-        [[ "$name" == META_CLAUDE_* ]] && unset "$name"
-        [[ "$name" == META_3PAI_* ]] && unset "$name"
-        [[ "$name" == CODING_AGENT_* ]] && unset "$name"
-        [[ "$name" == BUCK2_CLIENT_METADATA* ]] && unset "$name"
-        [[ "$name" == FAST_MUX_* ]] && unset "$name"
-        [[ "$name" == LINTTOOL_CALLER* ]] && unset "$name"
-        [[ "$name" == CODEX_* ]] && unset "$name"
-    done < <(env)
-
-    # ================================================================
-    # HERE BE DRAGONS — DO NOT MODIFY THE LAUNCH LINE BELOW
-    # ================================================================
-    #
-    # This single line is the result of DAYS of debugging. It looks
-    # simple. It is not. Every alternative has been tried and failed:
-    #
-    #   - C fork()+setsid()+execl()    → Claude dies after ~3 API calls.
-    #                                    Root cause UNKNOWN. Not solved.
-    #   - nbs-ts create "nbs-claude"   → Double session. nbs-claude
-    #                                    creates its own nbs-ts session
-    #                                    internally. Two sessions break
-    #                                    the sidecar loop.
-    #   - Pipes (stdin/stdout)         → SIGPIPE kills tail. exec tail
-    #                                    inherits pipe as stdout, parent
-    #                                    closes read end, write error.
-    #   - Without setsid               → Process group management fails.
-    #                                    Session lifecycle issues.
-    #   - Without >/dev/null 2>&1      → Output leaks to caller's
-    #                                    terminal or blocks $() captures
-    #                                    via pipe fd inheritance.
-    #   - ( ... ) & (double subshell)  → Changes the background job
-    #                                    ownership semantics. Untested
-    #                                    with chat terminal and sidecars.
-    #   - disown                       → Inconsistent across bash versions.
-    #   - nohup                        → Interferes with signal handling.
-    #   - Redirecting to log files     → Log files held open, fds leaked
-    #                                    to grandchildren.
-    #
-    # The ONLY pattern that works reliably for launching Claude agents
-    # is exactly: setsid <cmd> >/dev/null 2>&1 &
-    #
-    # If you change this line, the system will almost certainly break
-    # in strange, intermittent ways you will not be able to reason
-    # through. Agents will die after 30 seconds. Or after 3 API calls.
-    # Or never start. Or start but the sidecar won't attach. Or the
-    # chat terminal will hang. The failures will be non-deterministic
-    # and unreproducible in isolation.
-    #
-    # You have been warned.
-    #
-    # See also: bin/SPAWN_README.md for the full archaeology.
-    # ================================================================
+    # Unset CLAUDECODE and TMUX so the spawned Claude does not think
+    # it's nested inside another Claude Code or tmux session.
+    unset CLAUDECODE TMUX 2>/dev/null || true
 
     NBS_HANDLE="$handle" \
     NBS_TRANSPORT=ts \
