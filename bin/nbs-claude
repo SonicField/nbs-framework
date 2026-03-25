@@ -36,6 +36,25 @@
 
 set -euo pipefail
 
+# --- Debug mode ---
+# Set NBS_DEBUG=1 or pass --debug to log every lifecycle step to stderr.
+
+NBS_DEBUG="${NBS_DEBUG:-0}"
+for arg in "$@"; do
+    [[ "$arg" == "--debug" ]] && NBS_DEBUG=1
+done
+# Debug log goes to a file (not stderr) so it survives setsid >/dev/null 2>&1
+NBS_DEBUG_LOG=""
+if [[ "$NBS_DEBUG" == "1" ]]; then
+    NBS_DEBUG_LOG="/tmp/nbs-claude-debug-$$.log"
+fi
+dbg() {
+    if [[ "$NBS_DEBUG" == "1" && -n "$NBS_DEBUG_LOG" ]]; then
+        echo "[nbs-claude:$$] $(date +%H:%M:%S) $*" >> "$NBS_DEBUG_LOG" 2>/dev/null
+    fi
+    return 0
+}
+
 # --- Configuration ---
 
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
@@ -106,6 +125,7 @@ MODE=""
 
 cleanup() {
     local EXIT_CODE=$?
+    dbg "cleanup: exit_code=$EXIT_CODE mode=$MODE session=$SESSION_NAME sidecar_pid=$SIDECAR_PID"
 
     # V1.6: Fix TOCTOU — read unconditionally instead of check-then-read
     local pidfile="${NBS_ROOT}/.nbs/pids/${SIDECAR_HANDLE}.pid"
@@ -127,9 +147,11 @@ cleanup() {
 
     # Kill nbs-ts session if we created one
     if [[ "$MODE" == "ts" && -n "$SESSION_NAME" ]]; then
+        dbg "cleanup: killing nbs-ts session $SESSION_NAME"
         "$NBS_TS" kill "$SESSION_NAME" 2>/dev/null || true
     fi
 
+    dbg "cleanup: done, exiting with $EXIT_CODE"
     exit "$EXIT_CODE"
 }
 trap cleanup INT TERM EXIT
@@ -274,6 +296,8 @@ cat > "$SESSION_META" << EOF
 }
 EOF
 
+dbg "start: handle=$SIDECAR_HANDLE root=$NBS_ROOT model=$NBS_MODEL transport=$NBS_TRANSPORT"
+dbg "start: poll_disable=$POLL_DISABLE initial_prompt_len=${#INITIAL_PROMPT} tty=$(tty 2>/dev/null || echo none)"
 echo "Starting Claude Code with nbs-sidecar..."
 echo "  Handle: ${SIDECAR_HANDLE}"
 echo "  Session ID: ${SESSION_UUID}"
@@ -339,11 +363,14 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
         NBS_TS_NAME_FLAG="--name=nbs-${SIDECAR_HANDLE}-${NBS_TS_TAG}"
     fi
 
+    dbg "creating nbs-ts session: $NBS_TS create $NBS_TS_NAME_FLAG \"$CLAUDE_CMD\""
     SESSION_NAME=$("$NBS_TS" create $NBS_TS_NAME_FLAG "$CLAUDE_CMD") || {
         echo "Error: Failed to create nbs-ts session" >&2
+        dbg "nbs-ts create FAILED"
         exit 1
     }
     NBS_TS_HANDLE="$SESSION_NAME"
+    dbg "session created: $SESSION_NAME"
 
     echo "  Mode: nbs-ts ($SESSION_NAME)"
     echo ""
@@ -385,13 +412,16 @@ done
 rm -f "$SIDECAR_LOOP"
 SIDECAR_EOF
         chmod +x "$SIDECAR_LOOP"
+        dbg "starting sidecar loop: $SIDECAR_LOOP"
         setsid bash "$SIDECAR_LOOP" >/dev/null 2>&1 &
         SIDECAR_PID=$!
         sleep 0.5
         if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
             echo "Error: nbs-sidecar exited immediately. Check $NBS_LOG_FILE" >&2
+            dbg "sidecar died immediately"
             exit 1
         fi
+        dbg "sidecar running: pid=$SIDECAR_PID"
     fi
 
     # Attach or wait, depending on whether we have a terminal.
@@ -400,13 +430,22 @@ SIDECAR_EOF
     # the cleanup trap and kills the session before the sidecar can
     # inject the initial prompt. Instead, poll until the session dies.
     if [[ -t 1 ]]; then
-        # Interactive: show session output
+        dbg "interactive mode: attaching to $SESSION_NAME"
         "$NBS_TS" attach "$SESSION_NAME"
+        dbg "attach returned"
     else
-        # Background/worker: wait for session to finish
+        dbg "background mode: polling session $SESSION_NAME (NBS_TS=$NBS_TS)"
+        dbg "background mode: first status check..."
+        if "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; then
+            dbg "background mode: session alive on first check, entering loop"
+        else
+            dbg "background mode: session NOT alive on first check — skipping loop"
+        fi
         while "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; do
+            dbg "background mode: session alive, sleeping 5s"
             sleep 5
         done
+        dbg "session $SESSION_NAME no longer alive, exiting wait loop"
     fi
 fi
 

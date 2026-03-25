@@ -1172,9 +1172,6 @@ int cmd_spawn(const char *slug, const char *project_dir,
                    "cmd_spawn: log_file path too long");
     }
 
-    char session[NAME_MAX_LEN];
-    build_session_name(session, sizeof(session), name);
-
     /* Precondition: no name collision */
     if (file_exists(task_file)) {
         fprintf(stderr,
@@ -1317,184 +1314,10 @@ int cmd_spawn(const char *slug, const char *project_dir,
             "Read the task file and execute it.",
             NULL
         };
-        char handle_buf[64];
-        int rc = exec_capture(argv, handle_buf, sizeof(handle_buf));
+        int rc = exec_fire_and_forget(argv);
         if (rc != 0) {
             fprintf(stderr, "Error: nbs-spawn-worker failed\n");
             return EXIT_ERROR;
-        }
-        /* nbs-spawn-worker prints the nbs-ts handle */
-        char *nl = strchr(handle_buf, '\n');
-        if (nl) *nl = '\0';
-        snprintf(session, sizeof(session), "%s", handle_buf);
-    }
-
-    /* Allow claude to initialise before polling for completion. */
-    sleep(5);
-
-    /* Monitor for completion, then kill the session.
-     *
-     * Interactive Claude never exits on its own. The worker will post
-     * to chat and/or publish a bus event when done, then sit at its
-     * prompt forever. We poll for the completion signal (bus event
-     * with the worker name as source), then kill the nbs-ts session
-     * and clean the pidfile.
-     *
-     * Poll every 10s for up to 10 minutes. If no completion signal,
-     * kill anyway — the worker is stuck. */
-    {
-        char events_dir[PATH_BUF_SIZE];
-        int n = snprintf(events_dir, sizeof(events_dir),
-                         "%s/.nbs/events", abs_project_dir);
-        ASSERT_MSG(n > 0 && (size_t)n < sizeof(events_dir),
-                   "cmd_spawn: events_dir too long");
-
-        int completed = 0;
-        for (int poll = 0; poll < 60; poll++) {
-            /* Poll interval: 10s between checks.
-             * Rationale: balances responsiveness (detect completion
-             * within 10s) against overhead (nbs-ts status + nbs-chat
-             * search fork/exec per iteration). 60 iterations × 10s =
-             * 10 minute timeout. */
-            sleep(10);
-
-            /* Check if nbs-ts session still exists — if not, worker
-             * exited on its own (crashed or clean exit). Either way,
-             * nothing to kill.
-             * Uses nbs_ts_has_session (fork+exec) — never system(). */
-            if (!nbs_ts_has_session(session)) {
-                /* Session died — write death summary to log.
-                 * The session log has ANSI noise; append a clean
-                 * human-readable summary for easy diagnosis. */
-                FILE *death_log = fopen(log_file, "a");
-                if (death_log) {
-                    fprintf(death_log,
-                            "\n\n=== WORKER DEATH SUMMARY ===\n"
-                            "Worker %s exited after ~%d seconds.\n"
-                            "Session: %s\n"
-                            "Elapsed polls: %d (of 60 max)\n"
-                            "Cause: session exited unexpectedly "
-                            "(check above for API errors, crashes, "
-                            "or 'Terminated' messages)\n"
-                            "============================\n",
-                            name, (poll + 1) * 10, session, poll + 1);
-                    fclose(death_log);
-                }
-                completed = 1;
-                break;
-            }
-
-            /* Check if the worker marked itself complete in the task file.
-             * The task file has "State: running" initially. If the worker
-             * (or its Claude session) updates it to "completed", "failed",
-             * or "escalated", we know it's done. */
-            {
-                FILE *tf = fopen(task_file, "r");
-                if (tf) {
-                    char line[256];
-                    while (fgets(line, sizeof(line), tf)) {
-                        if (strncmp(line, "State:", 6) == 0) {
-                            char *val = line + 6;
-                            while (*val == ' ') val++;
-                            if (strncmp(val, "completed", 9) == 0 ||
-                                strncmp(val, "failed", 6) == 0 ||
-                                strncmp(val, "escalated", 9) == 0) {
-                                fclose(tf);
-                                sleep(5); /* Brief settle */
-                                completed = 1;
-                                break;
-                            }
-                        }
-                    }
-                    if (completed) break;
-                    fclose(tf);
-                }
-            }
-
-            /* Check if the worker posted to chat (any message from the
-             * slug handle in the last 2 minutes means it ran).
-             * Search ALL .chat files in the project, not just live.chat,
-             * because the worker may be on a different team's chat. */
-            {
-                char chat_dir[PATH_BUF_SIZE];
-                int cdn = snprintf(chat_dir, sizeof(chat_dir),
-                                   "%s/.nbs/chat", abs_project_dir);
-                ASSERT_MSG(cdn > 0 && (size_t)cdn < sizeof(chat_dir),
-                           "cmd_spawn: chat_dir too long");
-
-                char handle_arg[NAME_MAX_LEN + 16];
-                int han = snprintf(handle_arg, sizeof(handle_arg),
-                                   "--handle=%s", slug);
-                ASSERT_MSG(han > 0 && (size_t)han < sizeof(handle_arg),
-                           "cmd_spawn: handle_arg too long");
-
-                /* Try each .chat file in the directory */
-                DIR *cdir = opendir(chat_dir);
-                if (cdir) {
-                    struct dirent *ent;
-                    while ((ent = readdir(cdir)) != NULL) {
-                        size_t nlen = strlen(ent->d_name);
-                        if (nlen < 6 || strcmp(ent->d_name + nlen - 5, ".chat") != 0)
-                            continue;
-                        char chat_path[PATH_BUF_SIZE + 256];
-                        int cpn2 = snprintf(chat_path, sizeof(chat_path),
-                                 "%s/%s", chat_dir, ent->d_name);
-                        if (cpn2 < 0 || (size_t)cpn2 >= sizeof(chat_path))
-                            continue;
-                        const char *search_argv[] = {
-                            "nbs-chat", "search", chat_path, "",
-                            handle_arg, "--after=2m", NULL
-                        };
-                        char search_buf[64];
-                        int src = exec_capture(search_argv, search_buf,
-                                               sizeof(search_buf));
-                        if (src == 0) {
-                            closedir(cdir);
-                            /* Worker posted — brief settle then kill. */
-                            sleep(10);
-                            completed = 1;
-                            break;
-                        }
-                    }
-                    if (completed) break;
-                    closedir(cdir);
-                }
-            }
-        }
-
-        /* Kill the session and clean up.
-         * Uses nbs_ts_kill_session (fork+exec) — never system(). */
-        nbs_ts_kill_session(session);
-
-        /* Clean pidfile */
-        {
-            char pidfile[PATH_BUF_SIZE];
-            int pfn = snprintf(pidfile, sizeof(pidfile),
-                               "%s/.nbs/pids/%s.pid", abs_project_dir, slug);
-            ASSERT_MSG(pfn > 0 && (size_t)pfn < sizeof(pidfile),
-                       "cmd_spawn: pidfile path too long");
-            /* Brief delay after nbs-ts kill to let the shell
-             * process terminate and release the pidfile. 2s is
-             * conservative; the pidfile is unlinked regardless. */
-            sleep(2);
-            unlink(pidfile);
-        }
-
-        if (!completed) {
-            fprintf(stderr, "Warning: worker %s did not complete within "
-                    "10 minutes, killed\n", name);
-            FILE *timeout_log = fopen(log_file, "a");
-            if (timeout_log) {
-                fprintf(timeout_log,
-                        "\n\n=== WORKER TIMEOUT ===\n"
-                        "Worker %s killed after 10 minutes (600s).\n"
-                        "Session: %s\n"
-                        "The worker did not complete its task within "
-                        "the allowed time.\n"
-                        "======================\n",
-                        name, session);
-                fclose(timeout_log);
-            }
         }
     }
 
@@ -1513,7 +1336,6 @@ int cmd_spawn(const char *slug, const char *project_dir,
     fprintf(stderr, "  project:   %s\n", abs_project_dir);
     fprintf(stderr, "  task file:  %s\n", task_file);
     fprintf(stderr, "  log file:   %s\n", log_file);
-    fprintf(stderr, "  session:       %s\n", session);
     fprintf(stderr, "  note: run nbs-workers commands from %s\n",
             abs_project_dir);
 

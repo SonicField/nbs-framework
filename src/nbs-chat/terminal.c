@@ -1933,13 +1933,19 @@ int main(int argc, char **argv) {
                 snprintf(pause_path, sizeof(pause_path),
                          "%s/.nbs/control-pause", g_watchdog.project_root);
                 struct stat pst;
-                if (stat(pause_path, &pst) != 0) {
-                    printf("  %sTeam is not paused.%s\n", DIM, RESET);
-                } else {
+                int had_pause_file = (stat(pause_path, &pst) == 0);
+                if (had_pause_file)
                     unlink(pause_path);
+
+                /* Always re-enable the watchdog. /shutdown disables it
+                 * without creating a pause file, so checking only the
+                 * file would leave the watchdog permanently disabled. */
+                if (!watchdog_is_enabled(&g_watchdog) || had_pause_file) {
                     watchdog_enable(&g_watchdog);
                     do_send("@team SYSTEM: Team resumed. Continue where you left off.");
                     printf("  %sTeam resumed.%s\n", DIM, RESET);
+                } else {
+                    printf("  %sTeam is not paused.%s\n", DIM, RESET);
                 }
                 line_state_reset(&edit);
                 print_prompt(g_handle);
