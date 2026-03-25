@@ -43,6 +43,16 @@
 #   39. Status warns about stale events (ack-timeout)
 #   40. Status stale count is correct
 #   41. Dot path traversal rejected by read and ack
+#   49. Source with whitespace rejected (exit 4)
+#   50. Type with whitespace rejected (exit 4)
+#   51. Payload exceeding BUS_MAX_PAYLOAD rejected (exit 4)
+#   52. Read rejects event filename without .event suffix (exit 4)
+#   53. Ack rejects event filename without .event suffix (exit 4)
+#   54. Status on empty queue (exit 0, no crash)
+#   55. Ack-all on empty queue reports 0 acknowledged
+#   56. Unknown command rejected (exit 4)
+#   57. No arguments prints usage (exit 4)
+#   58. Prune deletes oldest processed files first
 
 set -euo pipefail
 
@@ -1544,6 +1554,221 @@ if [[ $(strings "$NBS_BUS" | grep -c "dedup_window_us" || true) -gt 0 ]]; then
     check "ASSERT_MSG for dedup_window_us precondition present (bus_publish_dedup)" "pass"
 else
     check "ASSERT_MSG for dedup_window_us precondition present (bus_publish_dedup)" "fail"
+fi
+
+echo ""
+
+# --- Test 49: Source with whitespace rejected ---
+echo "49. Source with whitespace rejected..."
+EVENTS="$TEST_DIR/events49"
+mkdir -p "$EVENTS/processed"
+if $NBS_BUS publish "$EVENTS" "bad source" task-complete high "payload" 2>/dev/null; then
+    check "Source with space rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Source with space rejected (exit 4)" "pass"
+    else
+        check "Source with space rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+# Tab in source
+if $NBS_BUS publish "$EVENTS" "bad$(printf '\t')src" task-complete high "payload" 2>/dev/null; then
+    check "Source with tab rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Source with tab rejected (exit 4)" "pass"
+    else
+        check "Source with tab rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 50: Type with whitespace rejected ---
+echo "50. Type with whitespace rejected..."
+EVENTS="$TEST_DIR/events50"
+mkdir -p "$EVENTS/processed"
+if $NBS_BUS publish "$EVENTS" worker1 "bad type" high "payload" 2>/dev/null; then
+    check "Type with space rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Type with space rejected (exit 4)" "pass"
+    else
+        check "Type with space rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 51: Payload exceeding BUS_MAX_PAYLOAD rejected ---
+echo "51. Payload exceeding BUS_MAX_PAYLOAD rejected..."
+EVENTS="$TEST_DIR/events51"
+mkdir -p "$EVENTS/processed"
+# BUS_MAX_PAYLOAD is 16384. Generate a payload of 16385 bytes.
+BIG_PAYLOAD=$(python3 -c "print('X' * 16385)")
+if $NBS_BUS publish "$EVENTS" worker1 task-complete high "$BIG_PAYLOAD" 2>/dev/null; then
+    check "Oversized payload rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Oversized payload rejected (exit 4)" "pass"
+    else
+        check "Oversized payload rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+# Just under the limit should succeed
+SMALL_PAYLOAD=$(python3 -c "print('X' * 16382)")
+if $NBS_BUS publish "$EVENTS" worker1 task-complete high "$SMALL_PAYLOAD" >/dev/null 2>&1; then
+    check "Payload just under limit accepted" "pass"
+else
+    check "Payload just under limit accepted" "fail"
+fi
+
+echo ""
+
+# --- Test 52: Read rejects event filename without .event suffix ---
+echo "52. Read rejects filename without .event suffix..."
+EVENTS="$TEST_DIR/events52"
+mkdir -p "$EVENTS/processed"
+# Publish a real event so the directory is valid
+$NBS_BUS publish "$EVENTS" worker1 task-complete high "payload" >/dev/null 2>&1
+if $NBS_BUS read "$EVENTS" "not-an-event.txt" 2>/dev/null; then
+    check "Read rejects non-.event suffix" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Read rejects non-.event suffix (exit 4)" "pass"
+    else
+        check "Read rejects non-.event suffix (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 53: Ack rejects event filename without .event suffix ---
+echo "53. Ack rejects filename without .event suffix..."
+EVENTS="$TEST_DIR/events53"
+mkdir -p "$EVENTS/processed"
+$NBS_BUS publish "$EVENTS" worker1 task-complete high "payload" >/dev/null 2>&1
+if $NBS_BUS ack "$EVENTS" "not-an-event.txt" 2>/dev/null; then
+    check "Ack rejects non-.event suffix" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Ack rejects non-.event suffix (exit 4)" "pass"
+    else
+        check "Ack rejects non-.event suffix (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 54: Status on empty queue ---
+echo "54. Status on empty queue (no crash, exit 0)..."
+EVENTS="$TEST_DIR/events54"
+mkdir -p "$EVENTS/processed"
+if $NBS_BUS status "$EVENTS" >/dev/null 2>&1; then
+    check "Status on empty queue exits 0" "pass"
+else
+    check "Status on empty queue exits 0" "fail"
+fi
+
+# Verify output mentions 0 pending
+STATUS_OUT=$($NBS_BUS status "$EVENTS" 2>/dev/null)
+if echo "$STATUS_OUT" | grep -q "0"; then
+    check "Status on empty queue reports 0 pending" "pass"
+else
+    check "Status on empty queue reports 0 pending" "fail"
+fi
+
+echo ""
+
+# --- Test 55: Ack-all on empty queue ---
+echo "55. Ack-all on empty queue reports 0 acknowledged..."
+EVENTS="$TEST_DIR/events55"
+mkdir -p "$EVENTS/processed"
+ACK_OUT=$($NBS_BUS ack-all "$EVENTS" 2>/dev/null)
+rc=$?
+if [[ $rc -eq 0 ]]; then
+    check "Ack-all on empty queue exits 0" "pass"
+else
+    check "Ack-all on empty queue exits 0 (got $rc)" "fail"
+fi
+
+if echo "$ACK_OUT" | grep -q "0"; then
+    check "Ack-all on empty queue reports 0 events" "pass"
+else
+    check "Ack-all on empty queue reports 0 events" "fail"
+fi
+
+echo ""
+
+# --- Test 56: Unknown command rejected ---
+echo "56. Unknown command rejected (exit 4)..."
+if $NBS_BUS nonexistent-command 2>/dev/null; then
+    check "Unknown command rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "Unknown command rejected (exit 4)" "pass"
+    else
+        check "Unknown command rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 57: No arguments prints usage ---
+echo "57. No arguments prints usage (exit 4)..."
+if $NBS_BUS 2>/dev/null; then
+    check "No arguments rejected" "fail"
+else
+    rc=$?
+    if [[ $rc -eq 4 ]]; then
+        check "No arguments rejected (exit 4)" "pass"
+    else
+        check "No arguments rejected (exit 4, got $rc)" "fail"
+    fi
+fi
+
+echo ""
+
+# --- Test 58: Prune deletes oldest processed files first ---
+echo "58. Prune deletes oldest processed files first..."
+EVENTS="$TEST_DIR/events58"
+mkdir -p "$EVENTS/processed"
+
+# Create three processed event files with known sizes and timestamps.
+# We control filenames to guarantee age ordering (lower timestamp = older).
+echo "old-event-content-aaa" > "$EVENTS/processed/1000000000000000-worker1-task-old-1.event"
+echo "mid-event-content-bbb" > "$EVENTS/processed/2000000000000000-worker1-task-mid-2.event"
+echo "new-event-content-ccc" > "$EVENTS/processed/3000000000000000-worker1-task-new-3.event"
+
+# Each file is ~22 bytes. Total ~66 bytes. Prune to 30 bytes — should delete
+# the two oldest files and keep only the newest.
+$NBS_BUS prune "$EVENTS" --max-bytes=30 >/dev/null 2>&1
+
+if [[ -f "$EVENTS/processed/1000000000000000-worker1-task-old-1.event" ]]; then
+    check "Oldest processed file deleted" "fail"
+else
+    check "Oldest processed file deleted" "pass"
+fi
+
+if [[ -f "$EVENTS/processed/2000000000000000-worker1-task-mid-2.event" ]]; then
+    check "Second-oldest processed file deleted" "fail"
+else
+    check "Second-oldest processed file deleted" "pass"
+fi
+
+if [[ -f "$EVENTS/processed/3000000000000000-worker1-task-new-3.event" ]]; then
+    check "Newest processed file preserved" "pass"
+else
+    check "Newest processed file preserved" "fail"
 fi
 
 echo ""
