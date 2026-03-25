@@ -43,6 +43,16 @@ For a custom install location:
 
 Restart Claude Code after installing so it picks up the new slash commands.
 
+## Start the Session Helper
+
+`nbs-ts-helper` is a lightweight daemon that allocates PTYs for agent sessions. It must be running before you launch a team. Start it in a terminal that stays open:
+
+```bash
+nbs-ts-helper
+```
+
+It logs to stdout. Leave it running — all agent sessions are created through it. If it dies, new agents cannot start (existing agents keep running).
+
 ## Verify the Install
 
 Run the self-tests:
