@@ -68,3 +68,11 @@ Running and operating agent teams.
 | [Fixup](team/nbs-fixup.md) | Team self-repair |
 | | |
 | [Help When Stuck](team/help-when-stuck.md) | Troubleshooting guide for stuck teams |
+
+## [Examples](../examples/)
+
+Complete worked sessions showing the framework in action.
+
+| Example | Description |
+|---------|-------------|
+| [TSP Session](../examples/tsp-session/README.md) | Team tackles an impossible problem — goal revision, five falsified hypotheses, useful deliverables |
