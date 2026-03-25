@@ -5,293 +5,133 @@ allowed-tools: Bash, Read, Write
 
 # NBS Teams: Fixup
 
-You are performing a **fixup** — diagnosing stalled agents and recovering them using a graduated escalation ladder. This is triggered by a supervisor, a peer agent during a standup health check, or manually when agents go quiet.
+You are performing a **fixup** — diagnosing stalled agents and recovering them using a graduated escalation ladder. This is triggered by a supervisor, a peer agent, or the automated fixup worker.
 
-**Core principle:** Try the least destructive recovery action first. Only escalate when the current level fails. Hard restart (Level 4) destroys accumulated context and should be a last resort.
+**Core principle:** Try the least destructive recovery action first. Only escalate when the current level fails.
 
-**CRITICAL — Context percentage is not a failure state.** Claude agents autocompact when context runs low. An agent at 3% context with a spinner is *working*, not dying. It will autocompact within a few turns and recover to ~60% context. **Do not escalate based on context percentage alone.** Only escalate if the agent is genuinely unresponsive (no output, no spinner, not processing) for 5+ minutes. Low context + active spinner = leave it alone.
+**CRITICAL — Context percentage is not a failure state.** Claude agents autocompact when context runs low. An agent at 3% context with a spinner is *working*, not dying. It will autocompact within a few turns and recover to ~60% context. **Do not escalate based on context percentage alone.**
+
+## Session Management
+
+All session management uses `nbs-ts`. There is no tmux.
+
+```bash
+# Check if agent is alive
+nbs-ts status <handle>
+
+# Read recent output (stripped of ANSI)
+nbs-ts read-new <handle> --strip
+
+# Send text to agent
+nbs-ts send <handle> "text"
+
+# Kill a session
+nbs-ts kill <handle>
+
+# List all sessions
+nbs-ts list
+```
+
+Agent sessions are tracked in `.nbs/sessions/<agent-handle>.json` which contains the `nbs_ts_handle`.
 
 ## Escalation Ladder
 
 | Level | Action | When to use | What it preserves |
 |-------|--------|-------------|-------------------|
-| 1 | **Ping** | Agent appears stalled, no spinner | Session + context |
-| 2 | **Compact** | Agent responsive but context low (10-25%) | Session (compacted) |
-| 3 | **Restart with --resume** | Agent unresponsive but session file intact and context was >15% before stalling | Conversation history (summarised) |
-| 4 | **Hard restart** | Process dead, frozen, or compact failed at any context level | Nothing — fresh session, briefed from chat log |
+| 1 | **Ping** | Agent appears stalled, no output | Session + context |
+| 2 | **Compact** | Agent responsive but context low | Session (compacted) |
+| 3 | **Restart with --resume** | Agent unresponsive but session file intact | Conversation history |
+| 4 | **Hard restart** | Process dead or frozen | Nothing — fresh session |
 
 ## Process
 
 ### Step 1: Inventory
 
-List all agent tmux sessions and their states:
+Use `nbs-ts list` with name filtering. Do NOT read `.nbs/sessions/*.json` — those files are stale and unreliable.
+
+Derive the chat tag from the chat filename, then list all sessions:
 
 ```bash
-tmux list-sessions
-tmux list-panes -a -F '#{session_name}:#{window_name}.#{pane_index} #{pane_pid} #{pane_current_command}'
+chat_file=$(grep '^chat:' .nbs/control-registry-supervisor 2>/dev/null | cut -d: -f2-)
+tag=$(basename "$chat_file" .chat | tr '.' '-')
+nbs-ts list --name="$tag"
 ```
-
-Agent sessions follow the naming convention `nbs-<handle>-<tag>` where `<tag>` is derived from the chat filename (e.g. `live` for `live.chat`, `nn-Module` for `nn.Module.chat`). Find YOUR team's tag first: read `.nbs/control-registry-*` to find the chat file, then `basename <chat> .chat | tr '.' '-'`. Only operate on sessions matching your tag.
 
 ### Step 2: Diagnose Each Agent
 
-For each agent session, capture the terminal output:
+For alive agents, read recent output:
 
 ```bash
-tmux capture-pane -t <session-name> -p -S -40
+nbs-ts read-new <ts-handle> --strip | tail -20
 ```
 
-Classify the state using these heuristics:
+Classify:
 
 | Indicator | State | Action |
 |-----------|-------|--------|
-| Spinner active (Waddling/Crunching/etc.) | **Working** | None — leave alone regardless of context % |
-| `bypass permissions on` at bottom, no spinner | **Stalled on modal** | Level 1 (Enter) |
-| Spinner active, context <10% | **About to autocompact** | None — autocompaction is automatic, not a failure |
-| No spinner, no output for 5+ minutes | **Unresponsive** | Level 2 (Compact), then Level 4 if no response |
-| Repeated empty `/nbs-poll` or `/nbs-notify` responses | **Poll-burning** | Level 2 (Compact) |
-| Process exited / bash prompt visible | **Dead** | Level 4 (Hard restart) |
-| Commands concatenated on prompt line, no processing | **Frozen** | Level 4 (Hard restart) |
+| Recent tool calls or thinking text | **Working** | None |
+| No new output for 5+ minutes | **Stalled** | Level 1, then 2 |
+| `nbs-ts status` reports dead | **Dead** | Level 4 |
 
-### State Classification
-
-**Autocompaction is normal.** Claude agents automatically compact their context when it runs low. An agent at 1% context is about to autocompact — it is not dying, crashing, or stuck. After autocompaction, context returns to ~60%. This is an automatic, built-in process that requires no intervention.
-
-The only states that require fixup action are:
-
-**(a) Unresponsive (no spinner, no output for 5+ minutes):** The agent is not processing. Try Level 2 (Ctrl-C + /compact). If no response in 30 seconds, escalate to Level 4.
-
-**(b) Dead (bash prompt, session exited):** The process has terminated. Level 4.
-
-**(c) Frozen (commands concatenated on prompt line):** The agent accepts input but does not process it. Level 4.
-
-**(d) Poll-burning (repeated empty poll/notify):** The agent is active but consuming context on empty polls. Level 2 (/compact) to reclaim context.
-
-**What is NOT a failure state:**
-- Low context percentage with an active spinner — the agent is working and will autocompact
-- Low context percentage with recent output — the agent is functioning normally
-- Context at 1-5% — autocompaction is imminent, not death
-
-**Decision tree:**
-
-```
-Is the process dead (bash prompt, session exited)?
-  YES → Level 4 (nothing to recover)
-  NO → Is there an active spinner or recent output (<5 min)?
-        YES → Leave alone (autocompaction will handle context)
-        NO → Try Level 2 (Ctrl-C + /compact)
-              Wait 30s. Did the agent respond?
-                NO → Level 4 (truly unresponsive)
-                YES → Agent recovered, monitor
-```
-
-### Step 3: Report
-
-Post a diagnostic summary to chat listing each agent's state, context level, and recommended action:
-
-```
-Agent audit:
-- @<handle>: <state> at <N%> context — <recommended level>
-- @<handle>: <state> at <N%> context — <recommended level>
-...
-```
-
-### Step 4: Level 1 — Ping
+### Step 3: Level 1 — Ping
 
 Send Enter to submit any queued prompt:
 
 ```bash
-tmux send-keys -t nbs-<handle>-live Enter
+nbs-ts send <ts-handle> ""
 ```
 
-Wait 15 seconds. Check if the agent responds:
+Wait 15 seconds, check for new output. If agent responds: done. If not: Level 2.
+
+### Step 4: Level 2 — Compact
+
+Send Escape to interrupt, then /compact:
 
 ```bash
-sleep 15 && tmux capture-pane -t nbs-<handle>-live -p | tail -10
-```
-
-If agent responds: recovery complete.
-If no response: escalate to Level 2.
-
-### Step 5: Level 2 — Compact
-
-First, clear any stuck request:
-
-```bash
-tmux send-keys -t nbs-<handle>-live C-c
+nbs-ts send <ts-handle> $'\x1b'
 sleep 3
+nbs-ts send <ts-handle> "/compact"
 ```
 
-Then inject `/compact`:
+Wait 60 seconds for compaction. Check output for prompt.
+
+### Step 5: Level 3 — Removed
+
+Level 3 (--resume) is no longer used. Go directly from Level 2 to Level 4.
+
+### Step 6: Level 4 — Hard Restart
+
+Kill the session, clean up, respawn using `launch_agent`:
 
 ```bash
-tmux send-keys -t nbs-<handle>-live '/compact' Enter
-```
-
-Wait up to 60 seconds for compaction to complete:
-
-```bash
-for i in $(seq 1 12); do
-    content=$(tmux capture-pane -t nbs-<handle>-live -p -S -5 2>/dev/null)
-    if echo "$content" | grep -qF '❯'; then
-        break
-    fi
-    sleep 5
-done
-```
-
-After compaction, check context level:
-
-```bash
-tmux capture-pane -t nbs-<handle>-live -p | grep 'Context left'
-```
-
-If context improved and agent responds to a test prompt: recovery complete.
-If context did not improve (compaction floor): escalate to Level 4 — **skip Level 3** because `--resume` will reload the same bloated session.
-If agent did not respond to `/compact`: escalate based on context level (Level 3 if >10%, Level 4 if <10%).
-
-### Step 6: Level 3 — Restart with --resume
-
-**Prerequisites:** Agent has a known session ID, and context was >15% before stalling (otherwise `--resume` will hit the same floor).
-
-**Preferred method — `nbs-workers continue`:**
-
-If the agent was started with `nbs-claude` (which writes session metadata to `.nbs/sessions/<handle>.json`), use:
-
-```bash
-nbs-workers continue <handle>
-```
-
-This reads the session ID and model from the metadata file, kills the old tmux session, and respawns with the correct `--resume`, `--model`, and `--dangerously-skip-permissions` flags. To override the model on continue:
-
-```bash
-nbs-workers continue <handle> --model=opus
-```
-
-To inspect the stored session metadata before continuing:
-
-```bash
-nbs-workers session <handle>
-```
-
-**Manual fallback** (if session metadata is missing — e.g., agent was started before the metadata infrastructure was added):
-
-Find the session ID (prefer cmdline check — tmux scrollback may have rotated on long-running sessions):
-
-```bash
-# Preferred: check process command line for --resume flag or session ID
-pane_pid=$(tmux list-panes -t nbs-<handle>-live -F '#{pane_pid}')
-pstree -p "$pane_pid" | head -3
-# Find the claude process PID, then:
-cat /proc/<claude-pid>/cmdline | tr '\0' ' '
-
-# Fallback: search tmux scrollback for UUID (may miss if session ran long)
-tmux capture-pane -t nbs-<handle>-live -p -S -5000 | grep -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -5
-```
-
-If no session ID is found (agent was started without `--resume`): escalate to Level 4.
-
-Kill and restart with the session ID:
-
-```bash
-tmux kill-session -t nbs-<handle>-live
-tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> claude --resume <session-id> --dangerously-skip-permissions"
-```
-
-Wait 30 seconds. If the agent comes up and context is healthy: recovery complete.
-If the agent hits the compaction floor again: escalate to Level 4.
-
-### Step 7: Level 4 — Hard Restart
-
-Kill the session:
-
-```bash
-tmux kill-session -t nbs-<handle>-live
-```
-
-Wait for the old process to die and clean up its PID file. This ensures the restart script does not see a stale PID:
-
-```bash
+# Find and kill the session
+handle=$(nbs-ts list --name="nbs-<agent>-<tag>" | grep alive | head -1 | cut -f1)
+nbs-ts kill "$handle" 2>/dev/null
 sleep 2
-rm -f .nbs/pids/<handle>.pid
+rm -f .nbs/pids/<agent>.pid
+
+# Respawn via launch_agent — the ONLY way that works
+source .nbs/bin/nbs-launch-agent
+launch_agent "<agent>" "$(pwd)" ".nbs/bin/nbs-claude" \
+    "Read .nbs/workers/<agent>-skill.md and follow the role instructions. Then read the chat history and begin work."
 ```
 
-**CRITICAL: Never invent a new handle name.** If a stale pidfile exists, delete it (`rm -f .nbs/pids/<handle>.pid`) and retry — do not append numbers (e.g. `generalist2`). The handle must match the original exactly.
+**CRITICAL:** Use `launch_agent` from `nbs-launch-agent`. Do NOT use `nbs-workers spawn`, `nbs-ts create "nbs-claude ..."`, or C fork+exec. See `bin/SPAWN_README.md` for why.
 
-Respawn with a fresh session. Use `NBS_INITIAL_PROMPT` to fold the role prompt into the sidecar's initial prompt when a custom role briefing is needed:
+**CRITICAL:** Never invent new handle names. Handles must match exactly: supervisor, generalist, theologian, testkeeper, gatekeeper, scribe.
 
-**Do NOT set NBS_MODEL on respawn.** The default in `nbs-claude` is `opus[1m]` (1M context window). If you read a model from session metadata and pass it, you propagate stale values through restarts. Let the default work.
+### Step 7: Verify and Report
+
+Post results to chat:
 
 ```bash
-NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" \
-    tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude"
+nbs-chat send <chat-file> <your-handle> "Recovery complete: @<handle> restored via Level <N>."
 ```
-
-If no custom prompt is needed (the sidecar's default handle prompt is sufficient):
-
-```bash
-tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> bin/nbs-claude"
-```
-
-Wait ~15 seconds for initialisation, then verify the agent is processing:
-
-```bash
-sleep 15 && tmux capture-pane -t nbs-<handle>-live -p | tail -10
-```
-
-The agent starts with 100% context. She will read chat history and self-brief from the conversation log — this is why institutional memory in chat is valuable.
-
-### Step 8: Verify
-
-After all recovery actions:
-
-1. Wait 30 seconds
-2. Read chat to confirm recovered agents are posting status messages
-3. Report results to chat with the recovery method used for each agent
-4. Post a recovery message to chat:
-
-```bash
-nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete: @<handle> restored via Level <N>. Context at <M%>."
-```
-
-## Known Failure Patterns
-
-**Context bleed from idle polling**
-**Symptom:** Idle agents gradually lose context overnight, hitting low-context state by morning.
-**Cause:** Each `/nbs-notify` or `/nbs-poll` cycle consumes context tokens even when there is nothing to do. Active agents survive because substantive work triggers compaction; idle agents accumulate non-compactable noise.
-**Prevention:** CSMA/CD standups replace bare polling. The sidecar should not inject `/nbs-notify` when there are no events and no unread messages.
-
-### Poll exhaustion
-**Symptom:** Agent runs 10+ consecutive `/nbs-poll` cycles returning nothing.
-**Cause:** Sidecar triggers `/nbs-notify` on timer, agent processes it, finds nothing, repeat.
-**Fix:** Level 2 (compact) to recover context, then address the trigger.
-
-### Notification race
-**Symptom:** Role prompt sits at `bypass permissions on` modal, never processed.
-**Cause:** Sidecar notification arrives before the role prompt. Agent processes the notification, then the role prompt is queued but not submitted.
-**Fix:** After sending the role prompt, check if it is queued and submit it with Enter (Level 1).
-
-### Stale cursor
-**Symptom:** Sidecar reports "N unread" but `--since=<handle>` returns nothing.
-**Cause:** Cursor mismatch between sidecar's peek and chat's actual cursor tracking.
-**Fix:** Restart the agent. The new sidecar starts with a fresh cursor.
-
-### Compaction floor trap
-**Symptom:** Agent at 10-15% context after `/compact`. Further compacts do not reduce it. `--resume` reloads the same percentage.
-**Cause:** The summarised session + loaded skills + system context fill the window. Nothing left to compact.
-**Fix:** Level 4 only. `--resume` reloads the same bloated state.
 
 ## Rules
 
-- **Never use AskUserQuestion.** This blocks the terminal. Post questions to chat instead.
-- **Escalate, do not skip.** Try Level 1 before Level 2 before Level 3 before Level 4, unless the state classification rules above indicate skipping is safe.
-- **Diagnose before acting.** Understand the state and context level before choosing a recovery action.
-- **Never kill a working agent.** Only recover agents that are genuinely stalled.
-- **Preserve the diagnosis.** Post root causes to chat so Scribe can log them.
-- **Warn new instances.** If a pattern caused the stall, tell the new instance to avoid it.
+- **Never use AskUserQuestion.** Post questions to chat instead.
+- **Escalate, do not skip.** Level 1 → 2 → 3 → 4 unless classification rules say otherwise.
+- **Never kill a working agent.** Only recover genuinely stalled or dead agents.
+- **Use nbs-ts, not tmux.** There is no tmux.
 - **One fixup at a time.** Do not run fixup while another fixup is in progress.
-- **Check context after compact.** If compact did not help, do not retry — escalate.
-- **`--resume` is only useful when the session has room.** If context is at the compaction floor, `--resume` will reload the same state and stall again.
