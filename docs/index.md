@@ -29,8 +29,13 @@ Reference documentation for infrastructure components.
 | Document | Description |
 |----------|-------------|
 | [Tool Reference](tools/tools.md) | Quick reference for all CLI tools |
-| [nbs-chat](tools/nbs-chat.md) | Chat system: terminal, file format, commands |
-| [nbs-claude](tools/nbs-claude.md) | Claude wrapper: session management, sidecar, debug mode |
+| [nbs-chat-terminal](tools/nbs-chat-terminal.md) | Interactive terminal: all commands, watchdog, oracles, line editing |
+| [nbs-chat-init](tools/nbs-chat-init.md) | Project initialisation: phases, scorched earth, setup |
+| [nbs-chat](tools/nbs-chat.md) | Chat file format, read/write/search commands |
+| [nbs-claude](tools/nbs-claude.md) | Claude wrapper: session management, debug mode |
+| [nbs-sidecar](tools/nbs-sidecar.md) | Background monitor: notifications, triggers, transport |
+| [nbs-ts](tools/nbs-ts.md) | Session management and nbs-ts-helper daemon |
+| [nbs-spawn-worker](tools/nbs-spawn-worker.md) | Worker spawn pipeline and nbs-launch-agent |
 | [nbs-bus](tools/nbs-bus.md) | Event bus: publish, subscribe, dedup |
 | [nbs-bus Recovery](tools/nbs-bus-recovery.md) | Bus failure modes and recovery |
 | [nbs-workers](tools/nbs-workers.md) | Worker lifecycle: spawn, status, dismiss |
