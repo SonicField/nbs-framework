@@ -107,7 +107,7 @@ For methodology drift:
 @team LIBRARIAN:
 Heads up — I see a standalone benchmark script being written. @scribe
 can tell you what happened last time the team wrote ad-hoc scripts —
-ask her. Short version: benchmark_cinderx.py now has --only=<name>
+ask her. Short version: benchmark.py now has --only=<name>
 for running individual benchmarks. Might save some trouble!
 ```
 

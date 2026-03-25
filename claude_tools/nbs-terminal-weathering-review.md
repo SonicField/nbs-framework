@@ -11,7 +11,7 @@ You are reviewing a terminal weathering session. This review is dispatched by `/
 
 Read these documents if you have not already this session:
 
-1. `/home/alexturner/.nbs/terminal-weathering/concepts/terminal-weathering.md` — the philosophy
+1. `~/.nbs/terminal-weathering/concepts/terminal-weathering.md` — the philosophy
 
 ---
 

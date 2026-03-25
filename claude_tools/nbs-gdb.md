@@ -203,7 +203,7 @@ nbs-ts send $HANDLE 'print Py_TYPE(gen)->tp_itemsize'
 
 ```bash
 # Verify the loaded .so matches expected source
-nbs-ts send $HANDLE 'info sharedlibrary _cinderx'
+nbs-ts send $HANDLE 'info sharedlibrary _project'
 # Check the path and verify it matches your build output
 ```
 

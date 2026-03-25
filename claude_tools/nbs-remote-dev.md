@@ -410,7 +410,7 @@ SSH is blocked from this pod. Use the nbs-ts fallback (Python str.replace script
 
 ### Build times out (nbs-remote-build exit code 3)
 
-Increase timeout: `--timeout=600` (10 minutes) or `--timeout=1200` (20 minutes). CinderX full rebuilds on aarch64 can take 10-20 minutes.
+Increase timeout: `--timeout=600` (10 minutes) or `--timeout=1200` (20 minutes). Full rebuilds on aarch64 can take 10-20 minutes.
 
 ### Prompt pattern not matching
 
