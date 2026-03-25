@@ -26,14 +26,20 @@ if [[ -x "$_NBS_TS_BIN" ]]; then
     "$_NBS_TS_BIN" list 2>/dev/null | cut -f1 > "$_NBS_TEST_SESSIONS_BEFORE" 2>/dev/null || true
 fi
 
+# Team agent sessions — NEVER kill these regardless of timing.
+# If a team agent restarts mid-test, its new session must survive cleanup.
+_NBS_TEAM_PATTERN="nbs-(supervisor|generalist|theologian|testkeeper|gatekeeper|scribe)-"
+
 # Cleanup function — kills leaked sessions and processes
 _nbs_test_cleanup() {
-    # Kill any nbs-ts sessions created during this test.
-    # Compare by handle (hex ID) — NOT by name, since name substring
-    # matching can kill live team agents (e.g. "test" matches "testkeeper").
+    # Kill any nbs-ts sessions created during this test, EXCEPT team agents.
     if [[ -x "$_NBS_TS_BIN" && -f "$_NBS_TEST_SESSIONS_BEFORE" ]]; then
         "$_NBS_TS_BIN" list 2>/dev/null | while IFS=$'\t' read -r handle status name cmd; do
             [[ -n "$handle" ]] || continue
+            # NEVER kill team agent sessions
+            if [[ -n "$name" ]] && echo "$name" | grep -qE "$_NBS_TEAM_PATTERN"; then
+                continue
+            fi
             grep -q "^${handle}$" "$_NBS_TEST_SESSIONS_BEFORE" 2>/dev/null || \
                 "$_NBS_TS_BIN" kill "$handle" 2>/dev/null || true
         done

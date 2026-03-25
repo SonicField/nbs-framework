@@ -394,8 +394,20 @@ SIDECAR_EOF
         fi
     fi
 
-    # Attach — read-only view of the session output
-    "$NBS_TS" attach "$SESSION_NAME"
+    # Attach or wait, depending on whether we have a terminal.
+    # When launched by nbs-spawn-worker (setsid ... >/dev/null),
+    # stdout is /dev/null and attach exits immediately, which triggers
+    # the cleanup trap and kills the session before the sidecar can
+    # inject the initial prompt. Instead, poll until the session dies.
+    if [[ -t 1 ]]; then
+        # Interactive: show session output
+        "$NBS_TS" attach "$SESSION_NAME"
+    else
+        # Background/worker: wait for session to finish
+        while "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; do
+            sleep 5
+        done
+    fi
 fi
 
 # When user exits, cleanup runs via trap

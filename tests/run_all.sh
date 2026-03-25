@@ -30,13 +30,20 @@ should_run() {
 # Session leak guard: record sessions before each test, kill any new
 # ones after. Prevents tests from leaking nbs-ts sessions and claude
 # processes that accumulate and exhaust PTYs or API connections.
+# SAFETY: Never kill team agent sessions — if a team agent restarts
+# mid-test, its new session must survive cleanup.
 NBS_TS_BIN="${PROJECT_DIR}/bin/nbs-ts"
+_TEAM_AGENT_PATTERN="nbs-(supervisor|generalist|theologian|testkeeper|gatekeeper|scribe)-"
 cleanup_leaked_sessions() {
     local before_file="$1"
     if [[ ! -x "$NBS_TS_BIN" || ! -f "$before_file" ]]; then return; fi
-    # Kill any sessions that didn't exist before the test
+    # Kill any sessions that didn't exist before the test, EXCEPT team agents
     "$NBS_TS_BIN" list 2>/dev/null | while IFS=$'\t' read -r handle status name cmd; do
         [[ -n "$handle" ]] || continue
+        # NEVER kill team agent sessions
+        if [[ -n "$name" ]] && echo "$name" | grep -qE "$_TEAM_AGENT_PATTERN"; then
+            continue
+        fi
         grep -q "^${handle}$" "$before_file" 2>/dev/null || \
             "$NBS_TS_BIN" kill "$handle" 2>/dev/null || true
     done
@@ -211,7 +218,6 @@ test_control_inbox_ai
 test_poll_registry_ai
 test_nbs_chat_ai_integration
 test_nbs_chat_search_ai
-test_worker_spawn_survival
 test_pythia_ai
 test_pythia_adversarial
 test_pythia_adv_no_chat
@@ -236,6 +242,7 @@ test_worker_log_tooling
 test_investigation_ask
 test_investigation_adv_no_silent
 test_restart_skill_injection
+test_worker_spawn_integration
 "
 
 is_ai_test() {
