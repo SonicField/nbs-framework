@@ -48,39 +48,39 @@ These define the principles you operate under. Do not skip any.
 All arguments are positional. No `--from=` or `--message=` flags exist.
 
 ```bash
-nbs-chat send .nbs/chat/live.chat <your-handle> "Your message here"
+nbs-chat send <chat-file> <your-handle> "Your message here"
 ```
 
 ### Reading
 
 ```bash
 # Read last 10 messages (for context)
-nbs-chat read .nbs/chat/live.chat --last=10
+nbs-chat read <chat-file> --last=10
 
 # Read messages you haven't seen yet
-nbs-chat read .nbs/chat/live.chat --unread=<your-handle>
+nbs-chat read <chat-file> --unread=<your-handle>
 
 # Search chat history
-nbs-chat search .nbs/chat/live.chat "pattern"
+nbs-chat search <chat-file> "pattern"
 ```
 
 ### @Mentions
 
 ```bash
 # Notify an agent (delivered on next idle cycle)
-nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle your test results are ready"
+nbs-chat send <chat-file> <your-handle> "@agent-handle your test results are ready"
 
 # Interrupt an agent (breaks into current work immediately)
-nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle! stop — critical bug found"
+nbs-chat send <chat-file> <your-handle> "@agent-handle! stop — critical bug found"
 
 # View an agent's current activity (non-intrusive)
-nbs-chat send .nbs/chat/live.chat <your-handle> "@agent-handle? what is she working on"
+nbs-chat send <chat-file> <your-handle> "@agent-handle? what is she working on"
 
 # Notify the whole team
-nbs-chat send .nbs/chat/live.chat <your-handle> "@team standup time"
+nbs-chat send <chat-file> <your-handle> "@team standup time"
 
 # Interrupt the whole team
-nbs-chat send .nbs/chat/live.chat <your-handle> "@team! all stop — broken build"
+nbs-chat send <chat-file> <your-handle> "@team! all stop — broken build"
 ```
 
 ### Waiting for replies
@@ -99,7 +99,7 @@ Do nothing. You will be notified when there are new messages. Do not poll, sleep
 
 ## Reading Your Task File
 
-Your task file is at `.nbs/workers/<name>.md` (created by `nbs-workers spawn`)
+Your task file is at `.nbs/workers/<name>.md`
 
 It contains:
 - **Task**: What you need to accomplish

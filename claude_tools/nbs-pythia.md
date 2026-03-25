@@ -31,18 +31,24 @@ You are spawned when a `pythia-checkpoint` event triggers, or when invoked manua
 
 ## Checkpoint Procedure
 
+### Step 0: Derive chat file
+
+```bash
+chat_file=$(grep '^chat:' .nbs/control-registry-supervisor 2>/dev/null | cut -d: -f2-)
+```
+
 ### Step 1: Read the decision log
 
-Find the decision log for the chat you are assessing. The log filename derives from the chat name: `live.chat` → `.nbs/scribe/live-log.md`.
+Find the decision log for the chat you are assessing. The log filename derives from the chat name (e.g. `live.chat` → `.nbs/scribe/live-log.md`).
 
 ```bash
 # Recent decisions (last 20) — do NOT cat the full log, it can be millions of lines
 tail -500 .nbs/scribe/live-log.md
 
 # Targeted queries via nbs-scribe-query
-nbs-scribe-query --chat=.nbs/chat/live.chat --last=10
-nbs-scribe-query --chat=.nbs/chat/live.chat --tag=perf-risk
-nbs-scribe-query --chat=.nbs/chat/live.chat --superseded
+nbs-scribe-query --chat="$chat_file" --last=10
+nbs-scribe-query --chat="$chat_file" --tag=perf-risk
+nbs-scribe-query --chat="$chat_file" --superseded
 ```
 
 Read the entire log. Pay attention to:
@@ -88,7 +94,7 @@ Cite decision entries by their `D-<timestamp>` identifier in all sections.
 Post to the primary chat channel using this exact format:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat pythia "PYTHIA CHECKPOINT — Assessment #N
+nbs-chat send "$chat_file" pythia "PYTHIA CHECKPOINT — Assessment #N
 
 **Hidden assumption:** <your assessment, citing D-timestamps>
 
@@ -111,7 +117,7 @@ Replace `#N` with the checkpoint number (count of previous Pythia checkpoints + 
 
 ```bash
 nbs-bus publish .nbs/events/ pythia assessment-posted normal \
-  "Pythia checkpoint posted to live.chat"
+  "Pythia checkpoint posted to $chat_file"
 ```
 
 ### Step 6: Exit

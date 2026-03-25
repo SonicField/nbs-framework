@@ -13,8 +13,6 @@ You are performing a **fixup** — diagnosing stalled agents and recovering them
 
 ## Session Management
 
-All session management uses `nbs-ts`. There is no tmux.
-
 ```bash
 # Check if agent is alive
 nbs-ts status <handle>
@@ -32,15 +30,12 @@ nbs-ts kill <handle>
 nbs-ts list
 ```
 
-Agent sessions are tracked in `.nbs/sessions/<agent-handle>.json` which contains the `nbs_ts_handle`.
-
 ## Escalation Ladder
 
 | Level | Action | When to use | What it preserves |
 |-------|--------|-------------|-------------------|
 | 1 | **Ping** | Agent appears stalled, no output | Session + context |
 | 2 | **Compact** | Agent responsive but context low | Session (compacted) |
-| 3 | **Restart with --resume** | Agent unresponsive but session file intact | Conversation history |
 | 4 | **Hard restart** | Process dead or frozen | Nothing — fresh session |
 
 ## Process
@@ -131,7 +126,7 @@ nbs-chat send <chat-file> <your-handle> "Recovery complete: @<handle> restored v
 ## Rules
 
 - **Never use AskUserQuestion.** Post questions to chat instead.
-- **Escalate, do not skip.** Level 1 → 2 → 3 → 4 unless classification rules say otherwise.
+- **Escalate, do not skip.** Level 1 → 2 → 4 unless classification rules say otherwise.
 - **Never kill a working agent.** Only recover genuinely stalled or dead agents.
-- **Use nbs-ts, not tmux.** There is no tmux.
+- **Use nbs-ts for all session management.**
 - **One fixup at a time.** Do not run fixup while another fixup is in progress.

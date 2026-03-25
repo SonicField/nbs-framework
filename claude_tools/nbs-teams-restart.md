@@ -28,12 +28,19 @@ Not all participants in chat are agents to be spawned. Distinguish:
 
 | Type | Examples | Spawning |
 |------|----------|----------|
-| **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `nbs-claude` / `nbs-workers continue` during restart |
+| **Team agents** | scribe, gatekeeper, testkeeper, supervisor, helper, generalist, theologian, hypergrep | Spawn via `launch_agent` during restart |
 | **Infrastructure** | sidecar, pythia, shepard | **Do NOT spawn during restart.** Sidecars are launched automatically by `nbs-claude` for each agent. Pythia is triggered by sidecar configuration (pythia-interval). Shepard is triggered by sidecar configuration (shepard-interval, every 100 chat messages). |
 
 The `participants` list in chat includes both types. When triaging, skip sidecar, pythia, and shepard — they are not independent agents.
 
 ## Process
+
+### Step 0: Find Your Chat File
+
+```bash
+chat_file=$(grep '^chat:' .nbs/control-registry-supervisor 2>/dev/null | cut -d: -f2-)
+tag=$(basename "$chat_file" .chat | tr '.' '-')
+```
 
 ### Step 1: Inventory and Triage
 
@@ -63,7 +70,7 @@ Classify into triage categories:
 Record the triage for each agent before taking any action:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat <your-handle> "Morning triage:
+nbs-chat send "$chat_file" <your-handle> "Morning triage:
 - @<handle1>: <category> at <N%> context
 - @<handle2>: <category> at <N%> context
 ..."
@@ -75,7 +82,7 @@ Before recovering agents, verify the underlying infrastructure is intact:
 
 ```bash
 # Chat file exists and is valid
-nbs-chat read .nbs/chat/live.chat --last=1
+nbs-chat read "$chat_file" --last=1
 
 # Bus directory exists and config is present
 ls .nbs/events/config.yaml
@@ -108,8 +115,7 @@ For each agent in recovery order, apply the /nbs-teams-fixup escalation ladder:
 ```
 Level 1 (Ping): nbs-ts send <handle> "", wait 15s
 Level 2 (Compact): nbs-ts send <handle> Escape, then /compact, wait 60s
-Level 3 (Continue): nbs-workers continue <handle>
-Level 4 (Hard restart): nbs-ts kill, respawn fresh
+Level 4 (Hard restart): nbs-ts kill, respawn fresh via launch_agent
 ```
 
 **Batch efficiency rules:**
@@ -122,8 +128,6 @@ Level 4 (Hard restart): nbs-ts kill, respawn fresh
 - Process dead (bash prompt, session exited): skip to Level 4
 - Low context (<10%): try Level 2 first (compact costs seconds), escalate to Level 4 if no response within 30s
 - Context at compaction floor (10-15% after compact, no improvement): escalate to Level 4
-- Session metadata available (`.nbs/sessions/<handle>.json`): use `nbs-workers continue <handle>` for Level 3
-- Session started without --resume and no session metadata: skip Level 3
 
 ### Step 5: Stale Pidfile Cleanup
 
@@ -172,7 +176,7 @@ done
 
 This ensures respawned agents do not see a backlog of hundreds of old messages on their first `--unread` check. The agent will read recent history via `--last=N` on startup instead.
 
-**Note:** Do NOT reset cursors for agents being recovered via Level 2 (compact) or Level 3 (--resume) — their cursors are still valid.
+**Note:** Do NOT reset cursors for agents being recovered via Level 2 (compact) — their cursors are still valid.
 
 **Cross-platform note:** The `sed -i` syntax above is GNU sed (Linux). On macOS (BSD sed), use `sed -i '' "s/..."` instead — BSD sed requires an explicit backup extension argument, even if empty.
 
@@ -191,47 +195,20 @@ When spawning agents with `NBS_INITIAL_PROMPT`, use the correct skill for each r
 | `theologian` | `/nbs-theologian` | `NBS_INITIAL_PROMPT="/nbs-theologian"` |
 | Named workers (e.g. `helper`, `generalist`, `hypergrep`) | `/nbs-worker` | `NBS_INITIAL_PROMPT="/nbs-worker"` |
 
-For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts.
-
-**If session metadata exists** (agent was started with `nbs-claude` which writes `.nbs/sessions/<handle>.json`), use `nbs-workers continue` to preserve session context:
+For each agent classified as dead or zombie in Step 1, respawn in the recovery order from Step 3. Use staggered starts and the shared launch function:
 
 ```bash
-# Continue with existing session ID and model from metadata
-nbs-workers continue <handle>
+source .nbs/bin/nbs-launch-agent
 
-# Or override the model on continue
-nbs-workers continue <handle> --model=opus
-
-# Inspect metadata before continuing
-nbs-workers session <handle>
-```
-
-**If no session metadata** (fresh respawn, Level 4):
-
-```bash
-# Wait 5 seconds between spawns to reduce lock contention
 # Replace <handles> with the dead/zombie agents from triage, in recovery order
 for handle in <handles from triage, recovery order>; do
-    NBS_HANDLE=${handle} NBS_TRANSPORT=ts \
-        setsid .nbs/bin/nbs-claude --root=<project-root> --dangerously-skip-permissions >/dev/null 2>&1 &
+    launch_agent "$handle" "$(pwd)" ".nbs/bin/nbs-claude" \
+        "Read .nbs/workers/${handle}-skill.md and follow the role instructions. Then read the chat history and begin work."
     sleep 5
 done
 ```
 
-To specify a model on fresh spawn:
-
-```bash
-NBS_HANDLE=<handle> NBS_MODEL=<model> NBS_TRANSPORT=ts \
-    setsid .nbs/bin/nbs-claude --root=<project-root> --model=<model> --dangerously-skip-permissions >/dev/null 2>&1 &
-```
-
-For agents with custom role prompts, use NBS_INITIAL_PROMPT:
-
-```bash
-NBS_HANDLE=<handle> NBS_TRANSPORT=ts \
-NBS_INITIAL_PROMPT="Read .nbs/workers/<handle>-skill.md and follow the role instructions." \
-    setsid .nbs/bin/nbs-claude --root=<project-root> --dangerously-skip-permissions >/dev/null 2>&1 &
-```
+**CRITICAL:** Use `launch_agent` from `nbs-launch-agent`. Do NOT use `nbs-ts create "nbs-claude ..."` or C fork+exec. See `bin/SPAWN_README.md` for why.
 
 ### Step 7: Verify Recovery
 
@@ -246,7 +223,7 @@ nbs-ts list | grep alive
 **7b. All agents posted to chat:**
 
 ```bash
-nbs-chat participants .nbs/chat/live.chat
+nbs-chat participants "$chat_file"
 ```
 
 Each recovered agent should appear with a fresh message (join announcement or standup response).
@@ -254,11 +231,12 @@ Each recovered agent should appear with a fresh message (join announcement or st
 **7c. Context levels are healthy:**
 
 ```bash
-for f in .nbs/sessions/*.json; do
-    handle=$(basename "$f" .json)
-    ts=$(grep -o '"nbs_ts_handle": "[^"]*"' "$f" | cut -d'"' -f4)
-    echo "=== $handle ==="
-    nbs-ts read-new "$ts" --strip 2>/dev/null | tail -5
+chat_file=$(grep '^chat:' .nbs/control-registry-supervisor 2>/dev/null | cut -d: -f2-)
+tag=$(basename "$chat_file" .chat | tr '.' '-')
+
+nbs-ts list --name="$tag" | grep alive | while IFS=$'\t' read -r ts_handle rest; do
+    echo "=== $ts_handle ==="
+    nbs-ts read-new "$ts_handle" --strip 2>/dev/null | tail -5
 done
 ```
 
@@ -267,7 +245,7 @@ Newly spawned agents should be at ~95% or higher. Compacted agents should be abo
 ### Step 8: Post Recovery Report
 
 ```bash
-nbs-chat send .nbs/chat/live.chat <your-handle> "Recovery complete:
+nbs-chat send "$chat_file" <your-handle> "Recovery complete:
 - @<handle1>: <recovery method> — now at <N%> context
 - @<handle2>: <recovery method> — now at <N%> context
 ...
@@ -279,7 +257,7 @@ Infrastructure: chat OK, bus OK, scribe log OK"
 **This step MUST complete before Step 8c (spawning agents).** Agents read the digest on startup. If it's not there, they miss it.
 
 ```bash
-nbs-digest-spawn .nbs/chat/live.chat --wait
+nbs-digest-spawn "$chat_file" --wait
 ```
 
 Wait for the digest worker to post its summary to chat. Then reset cursors again (the digest added messages):
@@ -287,16 +265,16 @@ Wait for the digest worker to post its summary to chat. Then reset cursors again
 ```bash
 # Reset cursors to current end so agents see the digest + banner
 HEADER_LINES=6
-total_lines=$(wc -l < .nbs/chat/live.chat)
+total_lines=$(wc -l < "$chat_file")
 cursor_value=$((total_lines - HEADER_LINES - 1))
 for handle in <all agent handles>; do
-    sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" .nbs/chat/live.chat.cursors
+    sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" "${chat_file}.cursors"
 done
 ```
 
 ### Step 8c: Spawn Agents
 
-Only after the digest is posted and cursors are reset, spawn agents in recovery order (Step 3). Stagger starts by 5 seconds.
+Only after the digest is posted and cursors are reset, spawn agents using `launch_agent` in recovery order (Step 3). Stagger starts by 5 seconds. See Step 6 for the spawn command.
 
 ### Step 9: Brief Recovered Agents (optional)
 
@@ -312,7 +290,7 @@ For the common case of morning recovery after overnight idle:
 
 ```
 1. nbs-ts list | grep alive           # Who's alive?
-2. For each session: capture-pane, check context %
+2. For each session: nbs-ts read-new <handle> --strip, check context %
 3. Triage: healthy / stressed / zombie / dead
 4. Post triage to chat
 5. Clean stale pidfiles and cursors for dead/zombie agents
@@ -320,7 +298,7 @@ For the common case of morning recovery after overnight idle:
 7. Hard-restart zombies and dead agents (Level 4)
 8. Wait 30s, verify chat participants
 9. Post recovery report
-10. nbs-digest-spawn .nbs/chat/live.chat --wait  # MUST complete before step 11
+10. nbs-digest-spawn "$chat_file" --wait  # MUST complete before step 11
 11. Reset cursors to current end of chat
 12. Spawn agents (staggered, recovery order)
 13. Brief recovered agents (only for info not in chat)

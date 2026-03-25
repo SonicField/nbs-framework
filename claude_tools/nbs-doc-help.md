@@ -133,9 +133,9 @@ If they select "Something else", ask:
 Then:
 1. Answer directly if you can
 2. Read relevant tool files if needed:
-   - `/home/alexturner/.nbs/claude_tools/nbs-doc-analyse.md`
-   - `/home/alexturner/.nbs/claude_tools/nbs-doc-plan.md`
-   - `/home/alexturner/.nbs/claude_tools/nbs-doc-describe.md`
+   - `~/.nbs/claude_tools/nbs-doc-analyse.md`
+   - `~/.nbs/claude_tools/nbs-doc-plan.md`
+   - `~/.nbs/claude_tools/nbs-doc-describe.md`
 3. Ask follow-up to ensure understanding
 
 ---

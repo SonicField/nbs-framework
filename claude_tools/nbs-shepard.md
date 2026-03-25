@@ -74,7 +74,7 @@ Read the last 120 messages from the primary chat channel using 4 parallel sub-ag
 
 ```bash
 # Get total message count
-nbs-chat read .nbs/chat/live.chat --last=120
+nbs-chat read "$CHAT_FILE" --last=120
 ```
 
 If there are fewer than 120 messages, read all of them and distribute proportionally across the sub-agents.
@@ -99,15 +99,15 @@ Synthesise the 4 summaries into a unified picture of the team's current state.
 **MANDATORY:** Read all NBS concept documents before assessing. Do not skip any.
 
 ```bash
-cat /home/alexturner/.nbs/concepts/goals.md
-cat /home/alexturner/.nbs/concepts/falsifiability.md
-cat /home/alexturner/.nbs/concepts/rhetoric.md
-cat /home/alexturner/.nbs/concepts/bullshit-detection.md
-cat /home/alexturner/.nbs/concepts/verification-cycle.md
-cat /home/alexturner/.nbs/concepts/zero-code-contract.md
-cat /home/alexturner/.nbs/concepts/engineering-standards.md
-cat /home/alexturner/.nbs/concepts/coordination.md
-cat /home/alexturner/.nbs/concepts/pte.md
+cat ~/.nbs/concepts/goals.md
+cat ~/.nbs/concepts/falsifiability.md
+cat ~/.nbs/concepts/rhetoric.md
+cat ~/.nbs/concepts/bullshit-detection.md
+cat ~/.nbs/concepts/verification-cycle.md
+cat ~/.nbs/concepts/zero-code-contract.md
+cat ~/.nbs/concepts/engineering-standards.md
+cat ~/.nbs/concepts/coordination.md
+cat ~/.nbs/concepts/pte.md
 ```
 
 Then apply the full NBS review framework (as defined in `/nbs`) to the team's recent work. Assess all dimensions:
@@ -138,7 +138,7 @@ Then apply the full NBS review framework (as defined in `/nbs`) to the team's re
 Post to the primary chat channel. The report must cover BOTH the NBS review dimensions (1–6) and the team-specific dimensions (7–10):
 
 ```bash
-nbs-chat send .nbs/chat/live.chat shepard "SHEPARD CHECKPOINT
+nbs-chat send "$CHAT_FILE" shepard "SHEPARD CHECKPOINT
 
 **AGENT STATUS:** [for EACH agent: name — healthy/stressed/zombie/dead at N% context]
 **ACTION REQUIRED:** [if any agent is dead/zombie: @supervisor run /nbs-teams-fixup for @agent — otherwise omit this line]
@@ -167,7 +167,7 @@ End of checkpoint. Shepard out."
 
 ```bash
 nbs-bus publish .nbs/events/ shepard assessment-posted normal \
-  "Shepard checkpoint posted to live.chat"
+  "Shepard checkpoint posted to $CHAT_FILE"
 ```
 
 Your checkpoint is posted. Your work is done. Exit the session.

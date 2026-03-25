@@ -21,7 +21,7 @@ Before asking what they need help with, quickly check if they have an active pro
 Glob: .nbs/**
 ```
 
-If `.nbs/` exists, read the chat history (`nbs-chat read .nbs/chat/live.chat`) to understand their current state. Reference their actual project in your explanations.
+If `.nbs/` exists, read the chat history (`nbs-chat read .nbs/chat/<chat-file>`) to understand their current state. Reference their actual project in your explanations.
 
 ### Step 2: Ask What They Need
 

@@ -92,7 +92,7 @@ Example:
 ```bash
 nbs-scribe-log .nbs/scribe/live-log.md \
   "Use file-based events, not sockets" \
-  --participants=alex,claude \
+  --participants=<handle1>,<handle2> \
   --rationale="Sockets add complexity without benefit at current scale. Files are debuggable and sufficient." \
   --chat-ref=<chat-file>:~L342 \
   --artefacts=docs/nbs-bus.md \
@@ -108,7 +108,7 @@ When a decision's status changes (superseded, reversed, risk mitigated), log a n
 ```bash
 nbs-scribe-log .nbs/scribe/live-log.md \
   "Switch from file events to Unix domain sockets" \
-  --participants=alex,claude \
+  --participants=<handle1>,<handle2> \
   --rationale="Scale now demands it. File polling latency unacceptable above 50 events/s." \
   --chat-ref=<chat-file>:~L500 \
   --status=superseded \

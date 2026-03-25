@@ -11,11 +11,11 @@ Configure the current project's CLAUDE.md to reference the NBS engineering stand
 
 ## Step 1: Verify NBS Installation
 
-Check that `/home/alexturner/.nbs/concepts/engineering-standards.md` exists and is readable. Read the file to confirm.
+Check that `~/.nbs/concepts/engineering-standards.md` exists and is readable. Read the file to confirm.
 
 If the file does not exist or is not readable, **abort** with this message:
 
-> NBS engineering standards not found at `/home/alexturner/.nbs/concepts/engineering-standards.md`.
+> NBS engineering standards not found at `~/.nbs/concepts/engineering-standards.md`.
 >
 > Install the NBS framework first. See: https://github.com/SonicField/nbs-framework
 
@@ -44,7 +44,7 @@ Create `CLAUDE.md` in the project root containing exactly:
 ## Engineering Standards
 
 **MANDATORY**: Always follow the engineering standards defined in:
-`/home/alexturner/.nbs/concepts/engineering-standards.md`
+`$HOME/.nbs/concepts/engineering-standards.md`
 
 Read this file at the start of any engineering work. The core principles are:
 - Safety through verbs, not nouns
@@ -89,7 +89,7 @@ Use the Edit tool or Write tool as appropriate.
 After writing, read back the CLAUDE.md and confirm:
 
 1. The `<!-- NBS:BEGIN -->` and `<!-- NBS:END -->` markers are present
-2. The engineering standards path (`/home/alexturner/.nbs/concepts/engineering-standards.md`) appears in the block
+2. The engineering standards path (`$HOME/.nbs/concepts/engineering-standards.md`) appears in the block
 3. The referenced file is readable (already confirmed in Step 1)
 
 Report what was done:

@@ -158,7 +158,7 @@ Spot-check at least 3 claims against the source chat. No sensitive data, no misa
 ## Arguments
 
 ```
-/nbs-chat-digest .nbs/chat/live.chat
+/nbs-chat-digest <chat-file>
 ```
 
 If no argument is given, prompt the user for which chat file to digest.

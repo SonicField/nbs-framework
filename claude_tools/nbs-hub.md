@@ -360,6 +360,6 @@ The hub wraps `nbs-worker` — you do not need to call `nbs-worker` directly whe
 
 ## Location
 
-The `nbs-hub` binary is at: `/home/alexturner/.nbs/bin/nbs-hub`
+The `nbs-hub` binary is at: `~/.nbs/bin/nbs-hub`
 
 Ensure it is in your PATH or use the full path.

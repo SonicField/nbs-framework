@@ -95,15 +95,14 @@ done
 
 ### Step 7: Spawn Agents
 
-Spawn agents one at a time with 5-second stagger:
+Spawn agents one at a time with 5-second stagger, using the shared launch function:
 
 ```bash
+source .nbs/bin/nbs-launch-agent
+
 for handle in scribe gatekeeper testkeeper theologian generalist supervisor; do
-    NBS_HANDLE="$handle" \
-    NBS_TRANSPORT=ts \
-    NBS_INITIAL_PROMPT="Read .nbs/workers/${handle}-skill.md and follow the role instructions. Then read the chat history and begin work." \
-    setsid .nbs/bin/nbs-claude --root="$(pwd)" --dangerously-skip-permissions \
-        >/dev/null 2>&1 &
+    launch_agent "$handle" "$(pwd)" ".nbs/bin/nbs-claude" \
+        "Read .nbs/workers/${handle}-skill.md and follow the role instructions. Then read the chat history and begin work."
     echo "Spawned $handle"
     sleep 5
 done

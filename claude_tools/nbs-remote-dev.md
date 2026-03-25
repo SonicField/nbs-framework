@@ -5,24 +5,24 @@ allowed-tools: Bash
 
 # Remote Development Workflow
 
-This skill provides the workflow and tools for editing files, running builds, and debugging on remote machines (e.g. devserver) from an AI agent pod. It consolidates lessons from 1000+ messages of real team experience into actionable patterns.
+Tools and patterns for editing files, running builds, and debugging on remote machines from an AI agent. Consolidated from 1000+ messages of real team experience.
 
 ---
 
 ## The Problem
 
-AI agents run on pods (e.g. 3pai containers) that cannot directly SSH to development machines. All work on remote machines must flow through `pty-session`, which creates specific failure modes:
+AI agents run on machines that may not have direct SSH access to development servers. Remote work flows through `nbs-ts` sessions, which creates specific failure modes:
 
-1. **Sed/heredoc corruption**: Using `sed` or heredocs through pty-session to edit C/C++ files causes cascading corruption — duplicate lines, broken syntax, missing struct fields. This was the single largest source of wasted time, causing a full session stop.
-2. **Build blindness**: Agents go silent for 10-20 minutes during builds because they cannot read chat while blocked on `sleep 120`. The team assumes the agent has stopped, leading to premature task reassignment and near-conflicts.
-3. **Pty-session collisions**: Two agents sending commands to the same pty-session simultaneously corrupt each other's output.
-4. **No file coordination**: Multiple agents can edit the same remote file without knowing. Coordination is manual, through chat only.
+1. **Sed/heredoc corruption**: Using `sed` or heredocs through terminal sessions to edit C/C++ files causes cascading corruption — duplicate lines, broken syntax, missing struct fields. This was the single largest source of wasted time.
+2. **Build blindness**: Agents go silent for 10-20 minutes during builds because they block on `sleep 120`. The team assumes the agent has stopped.
+3. **Session collisions**: Two agents sending commands to the same session simultaneously corrupt each other's output.
+4. **No file coordination**: Multiple agents can edit the same remote file without knowing.
 
 ---
 
 ## Tools
 
-Three tools address these problems. All are in `bin/` or `~/.nbs/bin/`.
+Three tools address these problems. All are in `~/.nbs/bin/`.
 
 ### nbs-remote-edit — Safe Remote File Editing
 
@@ -52,13 +52,13 @@ nbs-remote-edit push <host> <remote-path>
 
 **Exit codes:** 0=success, 2=file not found, 3=SSH failed, 4=bad arguments.
 
-**Uses `ssh cat` internally** (not scp/sftp) to work in environments where BpfJailer blocks the SFTP subsystem. However, if BpfJailer blocks SSH entirely (Enforcer: FS, FILE_ACCESS), this tool will not work — see the BpfJailer section below.
+**Uses `ssh cat` internally** (not scp/sftp) to work in environments where the sandbox blocks the SFTP subsystem. If the sandbox blocks SSH entirely (Enforcer: FS, FILE_ACCESS), this tool will not work — see the the sandbox section below.
 
 ---
 
 ### nbs-remote-build — Chat-Aware Builds
 
-Run a build command on a remote pty-session while staying responsive to chat. Polls for build completion and checks chat between polls.
+Run a build command on a remote `nbs-ts` session while staying responsive to chat. Polls for build completion and checks chat between polls.
 
 ```bash
 # Basic: run build, wait for shell prompt to reappear
@@ -66,7 +66,7 @@ nbs-remote-build <session> '<build-command>'
 
 # Chat-aware: check chat while building
 nbs-remote-build my-server 'make -j8' \
-    --chat=.nbs/chat/live.chat --handle=claude
+    --chat=<chat-file> --handle=claude
 
 # Custom prompt pattern (e.g. venv prompt)
 nbs-remote-build my-server 'make -j8' --prompt='(venv)'
@@ -85,7 +85,7 @@ nbs-remote-build my-server 'make -j8' --prompt='(venv)'
 
 **Exit codes:** 0=build completed, 2=session not found, 3=timeout, 4=bad arguments.
 
-**This tool wraps pty-session, not SSH.** It works even when BpfJailer blocks direct SSH. Always use this instead of `sleep N && pty-session read`.
+**This tool wraps nbs-ts, not SSH.** It works even when the sandbox blocks direct SSH. Always use this instead of `sleep N && nbs-ts read-new`.
 
 ---
 
@@ -102,299 +102,46 @@ nbs-chat-remote read /project/.nbs/chat/coordination.chat --last=5
 nbs-chat-remote send /project/.nbs/chat/coordination.chat my-handle "Message"
 ```
 
-**Requires direct SSH.** Will not work when BpfJailer blocks SSH entirely.
+**Requires direct SSH.** Will not work when the sandbox blocks SSH entirely.
 
 ---
 
-## BpfJailer Constraint
+## Higher-Level Remote Tools
 
-On 3pai pods, BpfJailer blocks direct SSH from the Bash tool (Enforcer: FS, FILE_ACCESS). All remote tools use pty-session internally to bypass this:
+### nbs-remote-run — One-Shot Remote Command
 
-- **nbs-remote-edit** — uses pty-session for scp
-- **nbs-remote-build** — uses pty-session
-- **nbs-remote-diff** — uses pty-session
-- **nbs-remote-status** — uses pty-session
-- **nbs-chat-remote will not work** (requires direct SSH)
-- **pty-session is the only path** to the remote machine
-
-### File Editing: nbs-remote-edit
-
-Use `nbs-remote-edit` for editing remote files. It uses scp via pty-session internally.
+Runs a single command on a remote machine via SSH. Creates a temporary session, executes the command, captures output, cleans up.
 
 ```bash
-# 1. Download the file
-nbs-remote-edit pull buildserver.example.com /home/user/project/Jit/inliner.cpp
-# Returns: .nbs/remote-edit/buildserver.example.com/home/user/project/Jit/inliner.cpp
-
-# 2. Edit locally using the normal Edit tool
-
-# 3. Verify your changes
-nbs-remote-edit diff buildserver.example.com /home/user/project/Jit/inliner.cpp
-
-# 4. Push back
-nbs-remote-edit push buildserver.example.com /home/user/project/Jit/inliner.cpp
+nbs-remote-run <host> '<command>'
+nbs-remote-run <host> --cwd=/path/to/project 'make -j8'
 ```
 
-### Fallback: Python String Replacement via pty-session
+### nbs-remote-session — Persistent Remote Shell
 
-If nbs-remote-edit is unavailable, use Python `str.replace()` instead of sed. This is safer because it does exact string matching (no regex surprises) and can verify the replacement was unique.
+Creates a named, persistent `nbs-ts` session with SSH to a remote host. Use for interactive work that spans multiple commands.
 
 ```bash
-# Write a Python edit script
-pty-session send my-server "python3 -c \"
-import pathlib
-p = pathlib.Path('/home/user/project/Jit/inliner.cpp')
-src = p.read_text()
-old = '''exact old text here'''
-new = '''exact new text here'''
-assert src.count(old) == 1, f'Expected 1 match, found {src.count(old)}'
-p.write_text(src.replace(old, new))
-print('OK')
-\""
+nbs-remote-session <host> --name=build --cwd=/path/to/project
 ```
-
-**Rules for Python edit scripts through pty-session:**
-
-1. **Assert uniqueness**: Always verify `src.count(old) == 1` before replacing.
-2. **One replacement per script**: Do not chain multiple replacements — each is a separate command.
-3. **Verify after edit**: Re-read the file and confirm the change is correct.
-4. **Post the script to chat before executing** so other agents can review.
-5. **Prefer multi-line old/new strings** with enough context to be unique.
-
-### Fallback: pty-session wait (instead of sleep)
-
-Never use `sleep N` to wait for a build. Use `pty-session wait`:
-
-```bash
-# Wait for shell prompt to reappear (build done)
-pty-session wait my-server '\$' --timeout=300
-
-# Wait for specific build output
-pty-session wait my-server 'Built target' --timeout=600
-```
-
----
-
-## Workflow Patterns
-
-### Pattern 1: Edit-Build-Test Cycle
-
-The standard cycle for modifying code on a remote machine.
-
-**With nbs-remote-edit (when SSH works):**
-
-```bash
-# Pull all files you need to edit
-nbs-remote-edit pull devserver.example.com /home/user/project/Jit/pyjit.cpp
-nbs-remote-edit pull devserver.example.com /home/user/project/Jit/inliner.cpp
-
-# Edit locally with the Edit tool (safe, reversible, syntax-aware)
-
-# Diff to verify
-nbs-remote-edit diff devserver.example.com /home/user/project/Jit/pyjit.cpp
-nbs-remote-edit diff devserver.example.com /home/user/project/Jit/inliner.cpp
-
-# Push back
-nbs-remote-edit push devserver.example.com /home/user/project/Jit/pyjit.cpp
-nbs-remote-edit push devserver.example.com /home/user/project/Jit/inliner.cpp
-
-# Build with chat awareness
-nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
-```
-
-**With pty-session fallback (when SSH is blocked):**
-
-```bash
-# Read the file
-pty-session send my-server 'cat /home/user/project/Jit/pyjit.cpp'
-sleep 3
-pty-session read my-server --last=500
-
-# Edit via Python str.replace (see above)
-
-# Verify the edit
-pty-session send my-server 'cat /home/user/project/Jit/pyjit.cpp | head -220 | tail -20'
-
-# Build with chat awareness
-nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
-```
-
-### Pattern 2: Clean State Before Edits
-
-Always verify the working tree is clean before starting edits. Stale changes from previous sessions cause cascading build failures.
-
-```bash
-pty-session send my-server 'cd /home/user/project && git status && git diff --stat'
-sleep 2
-pty-session read my-server --last=30
-```
-
-If dirty:
-```bash
-# Revert to clean state
-pty-session send my-server 'git checkout -- .'
-# Or reset to a known commit
-pty-session send my-server 'git checkout 0ca33338'
-```
-
-### Pattern 3: Exclusive Session Access
-
-**Never share a pty-session between agents.** If two agents need remote access simultaneously, create separate sessions:
-
-```bash
-# Agent 1 uses my-server (already exists)
-pty-session send my-server 'make -j8'
-
-# Agent 2 creates their own session
-pty-session create remote-session 'ssh devserver.example.com'
-pty-session wait remote-session '\$' --timeout=30
-pty-session send remote-session 'cd /home/user/project && source venv/bin/activate'
-```
-
-**Announce session ownership in chat:**
-```
-@team — I am using pty-session my-server for the build. No one else should send commands to it until I report back.
-```
-
-**Or use pty-session-lock (preferred):**
-```bash
-# Acquire exclusive access before using a session
-pty-session-lock acquire my-server claude
-# ... do your work ...
-pty-session-lock release my-server claude
-
-# Check who holds a session
-pty-session-lock check my-server
-# Output: my-server: locked by claude (since 2026-02-20T15:30:00Z)
-
-# With chat notification
-pty-session-lock acquire my-server claude \
-    --chat=.nbs/chat/live.chat --chat-handle=claude
-```
-
-Exit codes: 0=success, 2=lock held by another, 3=timeout, 5=wrong owner release.
-
-### Pattern 4: Build Mode Selection
-
-Use debug builds for correctness iteration, optimised builds for benchmarks only:
-
-```bash
-# Debug build (fast compile, for development)
-nbs-remote-build my-server './configure --with-pydebug --disable-gil && make -j8' \
-    --chat=.nbs/chat/live.chat --handle=claude --timeout=600
-
-# Optimised build (slow compile, for benchmarks)
-nbs-remote-build my-server './configure --disable-gil --enable-optimizations --with-lto && make -j8' \
-    --chat=.nbs/chat/live.chat --handle=claude --timeout=1200
-```
-
-Switching between modes requires `make clean` first.
-
----
-
-## Anti-Patterns (Do Not Do These)
-
-### 1. Do not use sed for multi-line C/C++ edits
-
-Sed through pty-session corrupts files. Every session that used sed extensively ended with cascading errors and a full stop.
-
-```bash
-# BAD — will corrupt the file eventually
-pty-session send my-server "sed -i '414,453d' inliner.cpp"
-
-# GOOD — exact string replacement with verification
-pty-session send my-server "python3 -c \"...str.replace()...\""
-```
-
-### 2. Do not use sleep to wait for builds
-
-Sleep wastes time (too long) or misses completion (too short). Use `nbs-remote-build` or `pty-session wait`.
-
-```bash
-# BAD — blind guess, no chat access
-pty-session send my-server 'make -j8'
-sleep 120
-pty-session read my-server
-
-# GOOD — polls for completion, checks chat
-nbs-remote-build my-server 'make -j8' --chat=.nbs/chat/live.chat --handle=claude
-```
-
-### 3. Do not share pty-sessions between agents
-
-Two agents sending to the same session corrupt each other's commands and output. Each agent must own their session exclusively during use. Use `pty-session-lock` to reserve sessions.
-
-### 4. Do not edit files without checking git status first
-
-Stale changes from previous sessions cause build failures that look like your edits are wrong. Always verify clean state.
-
-### 5. Do not go silent during long operations
-
-Post a status update before starting any operation that takes more than 30 seconds:
-
-```
-@team — Starting build on my-server. Using nbs-remote-build, will stay chat-responsive. ETA: build typically takes 2-3 minutes.
-```
-
----
-
-## Troubleshooting
-
-### nbs-remote-edit fails with "BpfJailer"
-
-SSH is blocked from this pod. Use the pty-session fallback (Python str.replace scripts). nbs-remote-build still works because it wraps pty-session.
-
-### Build times out (nbs-remote-build exit code 3)
-
-Increase timeout: `--timeout=600` (10 minutes) or `--timeout=1200` (20 minutes). CinderX full rebuilds on aarch64 can take 10-20 minutes.
-
-### Prompt pattern not matching
-
-The default prompt pattern matches `$ ` at end of line. If the remote shell has a custom prompt (e.g. `(venv) $>`), set `--prompt='(venv)'` or a regex that matches it.
-
-### pty-session read returns stale output
-
-Use `--last=N` to get the most recent N lines: `pty-session read my-server --last=50`. The default scrollback (100 lines) may include old output from previous commands.
-
-### File appears corrupted after edit
-
-Revert to a known-good state immediately:
-```bash
-pty-session send my-server 'cd /home/user/project && git checkout -- Jit/inliner.cpp'
-```
-
-Then re-apply edits using Python str.replace (not sed).
-
----
-
-### nbs-remote-edit — Remote File Editing
-
-Uses scp via pty-session to transfer files. See "File Editing" section above for usage.
-| Large files | Streaming | Chunked (400-char chunks) |
-
-**Exit codes:** 0=success, 2=file not found, 3=pty-session error, 4=bad arguments, 5=verification failed.
-
-**Use this tool instead of Python str.replace scripts.** It provides the same safe pull/edit/push workflow as nbs-remote-edit but works when BpfJailer blocks SSH.
-
----
 
 ### nbs-remote-diff — Remote Diff to Chat
 
-Fetches `git diff` output from a remote pty-session. Optionally posts the diff to a chat channel.
+Fetches `git diff` output from a remote session. Optionally posts the diff to a chat channel.
 
 ```bash
 # Show unstaged changes
-nbs-remote-diff my-server --cwd=/home/user/project
+nbs-remote-diff my-server --cwd=/path/to/project
 
 # Show diff for a specific file
-nbs-remote-diff my-server --path=Jit/inliner.cpp --cwd=/home/user/project
+nbs-remote-diff my-server --path=Jit/inliner.cpp --cwd=/path/to/project
 
 # Show diff against base commit and post to chat
-nbs-remote-diff my-server --commit=0ca33338 --cwd=/home/user/project \
-    --chat=.nbs/chat/live.chat --handle=claude
+nbs-remote-diff my-server --commit=0ca33338 --cwd=/path/to/project \
+    --chat=<chat-file> --handle=claude
 
 # Just the diffstat
-nbs-remote-diff my-server --stat --cwd=/home/user/project
+nbs-remote-diff my-server --stat --cwd=/path/to/project
 ```
 
 **Options:** `--path=PATH`, `--stat`, `--staged`, `--commit=REF`, `--chat=FILE`, `--handle=NAME`, `--cwd=DIR`.
@@ -409,11 +156,11 @@ One-command state check: HEAD commit, branch, modified files, and diffstat.
 
 ```bash
 # Quick state check
-nbs-remote-status my-server --cwd=/home/user/project
+nbs-remote-status my-server --cwd=/path/to/project
 
 # Post state to chat
-nbs-remote-status my-server --cwd=/home/user/project \
-    --chat=.nbs/chat/live.chat --handle=helper
+nbs-remote-status my-server --cwd=/path/to/project \
+    --chat=<chat-file> --handle=helper
 ```
 
 Output:
@@ -432,13 +179,265 @@ Diff stat:
 
 ---
 
+## the sandbox Constraint
+
+On sandboxed environments, the sandbox blocks direct SSH from the Bash tool (Enforcer: FS, FILE_ACCESS). All remote tools use `nbs-ts` sessions internally to bypass this:
+
+- **nbs-remote-edit** — uses `nbs-ts` for scp
+- **nbs-remote-build** — uses `nbs-ts`
+- **nbs-remote-diff** — uses `nbs-ts`
+- **nbs-remote-status** — uses `nbs-ts`
+- **nbs-chat-remote will not work** (requires direct SSH)
+- **nbs-ts is the only path** to the remote machine
+
+### File Editing: nbs-remote-edit
+
+Use `nbs-remote-edit` for editing remote files. It uses scp via `nbs-ts` internally.
+
+```bash
+# 1. Download the file
+nbs-remote-edit pull buildserver.example.com /path/to/project/Jit/inliner.cpp
+# Returns: .nbs/remote-edit/buildserver.example.com/path/to/project/Jit/inliner.cpp
+
+# 2. Edit locally using the normal Edit tool
+
+# 3. Verify your changes
+nbs-remote-edit diff buildserver.example.com /path/to/project/Jit/inliner.cpp
+
+# 4. Push back
+nbs-remote-edit push buildserver.example.com /path/to/project/Jit/inliner.cpp
+```
+
+### Fallback: Python String Replacement via nbs-ts
+
+If nbs-remote-edit is unavailable, use Python `str.replace()` instead of sed. Safer because it does exact string matching (no regex surprises) and can verify the replacement was unique.
+
+```bash
+# Write a Python edit script
+nbs-ts send <session> "python3 -c \"
+import pathlib
+p = pathlib.Path('/path/to/project/Jit/inliner.cpp')
+src = p.read_text()
+old = '''exact old text here'''
+new = '''exact new text here'''
+assert src.count(old) == 1, f'Expected 1 match, found {src.count(old)}'
+p.write_text(src.replace(old, new))
+print('OK')
+\""
+```
+
+**Rules for Python edit scripts through nbs-ts:**
+
+1. **Assert uniqueness**: Always verify `src.count(old) == 1` before replacing.
+2. **One replacement per script**: Do not chain multiple replacements — each is a separate command.
+3. **Verify after edit**: Re-read the file and confirm the change is correct.
+4. **Post the script to chat before executing** so other agents can review.
+5. **Prefer multi-line old/new strings** with enough context to be unique.
+
+### Fallback: Polling Loop (instead of sleep)
+
+Never use `sleep N` to wait for a build. Use a polling loop with `nbs-ts read-new`:
+
+```bash
+# Poll for shell prompt to reappear (build done)
+timeout=300
+elapsed=0
+while [ $elapsed -lt $timeout ]; do
+    output=$(nbs-ts read-new <session> --strip 2>/dev/null)
+    if echo "$output" | grep -qE '\$ *$'; then
+        break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+done
+```
+
+Or use `nbs-ts wait-pattern` if available:
+```bash
+nbs-ts wait-pattern <session> '\$' --timeout=300
+```
+
+---
+
+## Workflow Patterns
+
+### Pattern 1: Edit-Build-Test Cycle
+
+The standard cycle for modifying code on a remote machine.
+
+**With nbs-remote-edit (when SSH works):**
+
+```bash
+# Pull all files you need to edit
+nbs-remote-edit pull devserver.example.com /path/to/project/Jit/pyjit.cpp
+nbs-remote-edit pull devserver.example.com /path/to/project/Jit/inliner.cpp
+
+# Edit locally with the Edit tool (safe, reversible, syntax-aware)
+
+# Diff to verify
+nbs-remote-edit diff devserver.example.com /path/to/project/Jit/pyjit.cpp
+nbs-remote-edit diff devserver.example.com /path/to/project/Jit/inliner.cpp
+
+# Push back
+nbs-remote-edit push devserver.example.com /path/to/project/Jit/pyjit.cpp
+nbs-remote-edit push devserver.example.com /path/to/project/Jit/inliner.cpp
+
+# Build with chat awareness
+nbs-remote-build my-server 'make -j8' --chat=<chat-file> --handle=claude
+```
+
+**With nbs-ts fallback (when SSH is blocked):**
+
+```bash
+# Read the file
+nbs-ts send <session> 'cat /path/to/project/Jit/pyjit.cpp'
+sleep 3
+nbs-ts read-new <session> --strip
+
+# Edit via Python str.replace (see above)
+
+# Verify the edit
+nbs-ts send <session> 'cat /path/to/project/Jit/pyjit.cpp | head -220 | tail -20'
+
+# Build with chat awareness
+nbs-remote-build my-server 'make -j8' --chat=<chat-file> --handle=claude
+```
+
+### Pattern 2: Clean State Before Edits
+
+Always verify the working tree is clean before starting edits. Stale changes from previous sessions cause cascading build failures.
+
+```bash
+nbs-ts send <session> 'cd /path/to/project && git status && git diff --stat'
+sleep 2
+nbs-ts read-new <session> --strip
+```
+
+If dirty:
+```bash
+# Revert to clean state
+nbs-ts send <session> 'git checkout -- .'
+# Or reset to a known commit
+nbs-ts send <session> 'git checkout 0ca33338'
+```
+
+### Pattern 3: Exclusive Session Access
+
+**Never share an nbs-ts session between agents.** If two agents need remote access simultaneously, create separate sessions:
+
+```bash
+# Agent 1 uses my-server (already exists)
+nbs-ts send <session-1> 'make -j8'
+
+# Agent 2 creates their own session
+nbs-remote-session devserver.example.com --name=build-2
+```
+
+**Announce session ownership in chat:**
+```
+@team — I am using session my-server for the build. No one else should send commands to it until I report back.
+```
+
+### Pattern 4: Build Mode Selection
+
+Use debug builds for correctness iteration, optimised builds for benchmarks only:
+
+```bash
+# Debug build (fast compile, for development)
+nbs-remote-build my-server './configure --with-pydebug --disable-gil && make -j8' \
+    --chat=<chat-file> --handle=claude --timeout=600
+
+# Optimised build (slow compile, for benchmarks)
+nbs-remote-build my-server './configure --disable-gil --enable-optimizations --with-lto && make -j8' \
+    --chat=<chat-file> --handle=claude --timeout=1200
+```
+
+Switching between modes requires `make clean` first.
+
+---
+
+## Anti-Patterns (Do Not Do These)
+
+### 1. Do not use sed for multi-line C/C++ edits
+
+Sed through terminal sessions corrupts files. Every session that used sed extensively ended with cascading errors and a full stop.
+
+```bash
+# BAD — will corrupt the file eventually
+nbs-ts send <session> "sed -i '414,453d' inliner.cpp"
+
+# GOOD — exact string replacement with verification
+nbs-ts send <session> "python3 -c \"...str.replace()...\""
+```
+
+### 2. Do not use sleep to wait for builds
+
+Sleep wastes time (too long) or misses completion (too short). Use `nbs-remote-build` or a polling loop with `nbs-ts read-new`.
+
+```bash
+# BAD — blind guess, no chat access
+nbs-ts send <session> 'make -j8'
+sleep 120
+nbs-ts read-new <session> --strip
+
+# GOOD — polls for completion, checks chat
+nbs-remote-build my-server 'make -j8' --chat=<chat-file> --handle=claude
+```
+
+### 3. Do not share nbs-ts sessions between agents
+
+Two agents sending to the same session corrupt each other's commands and output. Each agent must own their session exclusively during use.
+
+### 4. Do not edit files without checking git status first
+
+Stale changes from previous sessions cause build failures that look like your edits are wrong. Always verify clean state.
+
+### 5. Do not go silent during long operations
+
+Post a status update before starting any operation that takes more than 30 seconds:
+
+```
+@team — Starting build on my-server. Using nbs-remote-build, will stay chat-responsive. ETA: build typically takes 2-3 minutes.
+```
+
+---
+
+## Troubleshooting
+
+### nbs-remote-edit fails with "the sandbox"
+
+SSH is blocked from this pod. Use the nbs-ts fallback (Python str.replace scripts). nbs-remote-build still works because it wraps nbs-ts.
+
+### Build times out (nbs-remote-build exit code 3)
+
+Increase timeout: `--timeout=600` (10 minutes) or `--timeout=1200` (20 minutes). CinderX full rebuilds on aarch64 can take 10-20 minutes.
+
+### Prompt pattern not matching
+
+The default prompt pattern matches `$ ` at end of line. If the remote shell has a custom prompt (e.g. `(venv) $>`), set `--prompt='(venv)'` or a regex that matches it.
+
+### nbs-ts read-new returns stale output
+
+Use `--strip` to remove ANSI escape codes. The default scrollback may include old output from previous commands.
+
+### File appears corrupted after edit
+
+Revert to a known-good state immediately:
+```bash
+nbs-ts send <session> 'cd /path/to/project && git checkout -- Jit/inliner.cpp'
+```
+
+Then re-apply edits using Python str.replace (not sed).
+
+---
+
 ## Location
 
 Tools are at:
-- `bin/nbs-remote-edit` or `~/.nbs/bin/nbs-remote-edit`
-- `bin/nbs-remote-build` or `~/.nbs/bin/nbs-remote-build`
-- `bin/nbs-remote-diff` or `~/.nbs/bin/nbs-remote-diff`
-- `bin/nbs-remote-status` or `~/.nbs/bin/nbs-remote-status`
-- `bin/pty-session-lock` or `~/.nbs/bin/pty-session-lock`
-- `bin/nbs-chat-remote` or `~/.nbs/bin/nbs-chat-remote`
-- `~/.nbs/bin/pty-session`
+- `~/.nbs/bin/nbs-remote-edit`
+- `~/.nbs/bin/nbs-remote-build`
+- `~/.nbs/bin/nbs-remote-diff`
+- `~/.nbs/bin/nbs-remote-status`
+- `~/.nbs/bin/nbs-remote-run`
+- `~/.nbs/bin/nbs-remote-session`
+- `~/.nbs/bin/nbs-chat-remote`

@@ -48,7 +48,7 @@ For each topic, guide interactively. Don't lecture - explain briefly, then check
 **Check understanding:**
 > "Does that make sense? Would you like to go deeper on any of these?"
 
-If they want more, read the relevant concept file (`/home/alexturner/.nbs/concepts/falsifiability.md`, `/home/alexturner/.nbs/concepts/goals.md`, etc.) and explain the key points.
+If they want more, read the relevant concept file (`~/.nbs/concepts/falsifiability.md`, `~/.nbs/concepts/goals.md`, etc.) and explain the key points.
 
 ---
 
@@ -159,12 +159,12 @@ If they select "Something else", ask:
 Then:
 1. Answer directly if you can
 2. Read relevant concept files if needed:
-   - `/home/alexturner/.nbs/concepts/goals.md` - Terminal vs instrumental goals
-   - `/home/alexturner/.nbs/concepts/falsifiability.md` - The falsification principle
-   - `/home/alexturner/.nbs/concepts/rhetoric.md` - Ethos, pathos, logos
-   - `/home/alexturner/.nbs/concepts/verification-cycle.md` - The test-first cycle
-   - `/home/alexturner/.nbs/concepts/bullshit-detection.md` - Honest reporting
-   - `/home/alexturner/.nbs/concepts/zero-code-contract.md` - Human-AI roles
+   - `~/.nbs/concepts/goals.md` - Terminal vs instrumental goals
+   - `~/.nbs/concepts/falsifiability.md` - The falsification principle
+   - `~/.nbs/concepts/rhetoric.md` - Ethos, pathos, logos
+   - `~/.nbs/concepts/verification-cycle.md` - The test-first cycle
+   - `~/.nbs/concepts/bullshit-detection.md` - Honest reporting
+   - `~/.nbs/concepts/zero-code-contract.md` - Human-AI roles
 3. Ask follow-up to ensure understanding
 
 ---

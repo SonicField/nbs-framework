@@ -5,6 +5,8 @@ allowed-tools: Bash, Read
 
 # NBS Poll
 
+> **Note:** Poll is currently disabled (NBS_POLL_INTERVAL=0). This skill is retained for reference.
+
 Check for messages you may have missed.
 
 ## Instructions
