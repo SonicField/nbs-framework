@@ -618,6 +618,8 @@ fi
 "$NBS_TS" kill "$SIDECAR_HANDLE" 2>/dev/null || true
 
 # E2: Sidecar handles SIGPIPE (should survive)
+# TODO: KNOWN FAIL — C sidecar does not ignore SIGPIPE. Fix: add
+# signal(SIGPIPE, SIG_IGN) to src/nbs-sidecar/main.c before sidecar_run().
 echo ""
 echo "E2. Sidecar survives SIGPIPE..."
 start_sidecar e2
@@ -638,6 +640,8 @@ fi
 "$NBS_TS" kill "$SIDECAR_HANDLE" 2>/dev/null || true
 
 # E3: Sidecar exits when session killed
+# TODO: KNOWN FLAKY — sidecar checks is_alive only at top of main loop
+# (3-8s between iterations). 20s wait may be marginal under load.
 echo ""
 echo "E3. Sidecar exits when nbs-ts session killed..."
 start_sidecar e3
@@ -792,6 +796,9 @@ wait "$SIDECAR_PID" 2>/dev/null || true
 
 # F3: Query for @team? → multiple events (one per participant)
 echo ""
+# TODO: KNOWN FAIL — @team? event fan-out may have changed in the C sidecar
+# migration. Investigate whether nbs-chat send still produces per-participant
+# chat-query events for @team? mentions.
 echo "F3. @team? produces per-participant events..."
 # Create chat with multiple participants
 TEAM_CHAT="$TEST_DIR/.nbs/chat/team.chat"
