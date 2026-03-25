@@ -210,11 +210,10 @@ for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
     # Avoids env var size limits from passing full skill content.
     SKILL_FILE="${PROJECT_ROOT}/.nbs/workers/${h}-skill.md"
     echo "$SKILL_CONTENT" > "$SKILL_FILE"
-    NBS_HANDLE="$h" \
-    NBS_TRANSPORT=ts \
-    NBS_INITIAL_PROMPT="Read ${SKILL_FILE} and follow the role instructions. Then read the chat history and begin work." \
-    setsid "${NBS_BIN}/nbs-claude" --root="$PROJECT_ROOT" --dangerously-skip-permissions \
-        >/dev/null 2>&1 &
+    # Launch via shared function — single source of truth for agent launch.
+    source "${NBS_BIN}/nbs-launch-agent"
+    launch_agent "$h" "$PROJECT_ROOT" "${NBS_BIN}/nbs-claude" \
+        "Read ${SKILL_FILE} and follow the role instructions. Then read the chat history and begin work."
     echo "[watchdog] Spawned $h (pid $!)"
     sleep 5
 done

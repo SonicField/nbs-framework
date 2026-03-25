@@ -1,0 +1,29 @@
+#!/bin/bash
+# nbs-launch-agent — Launch a single nbs-claude agent.
+#
+# Shared by nbs-chat-terminal-restart.sh and nbs-spawn-worker.
+# One function, one way to launch Claude. No duplication.
+#
+# Usage:
+#   source nbs-launch-agent
+#   launch_agent HANDLE PROJECT_ROOT NBS_CLAUDE_PATH INITIAL_PROMPT
+#
+# The function:
+#   1. Sets NBS_HANDLE, NBS_TRANSPORT, NBS_INITIAL_PROMPT
+#   2. Runs setsid nbs-claude --root=... --dangerously-skip-permissions
+#   3. Redirects stdout/stderr to /dev/null
+#   4. Backgrounds the process
+#   5. Returns immediately
+
+launch_agent() {
+    local handle="$1"
+    local project_root="$2"
+    local nbs_claude_path="$3"
+    local initial_prompt="$4"
+
+    NBS_HANDLE="$handle" \
+    NBS_TRANSPORT=ts \
+    NBS_INITIAL_PROMPT="$initial_prompt" \
+    setsid "$nbs_claude_path" --root="$project_root" --dangerously-skip-permissions \
+        >/dev/null 2>&1 &
+}
