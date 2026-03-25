@@ -11,7 +11,7 @@ This skill provides the workflow and tools for editing files, running builds, an
 
 ## The Problem
 
-AI agents run on pods (e.g. sandbox containers) that cannot directly SSH to development machines. All work on remote machines must flow through `pty-session`, which creates specific failure modes:
+AI agents run on pods (e.g. 3pai containers) that cannot directly SSH to development machines. All work on remote machines must flow through `pty-session`, which creates specific failure modes:
 
 1. **Sed/heredoc corruption**: Using `sed` or heredocs through pty-session to edit C/C++ files causes cascading corruption — duplicate lines, broken syntax, missing struct fields. This was the single largest source of wasted time, causing a full session stop.
 2. **Build blindness**: Agents go silent for 10-20 minutes during builds because they cannot read chat while blocked on `sleep 120`. The team assumes the agent has stopped, leading to premature task reassignment and near-conflicts.
@@ -52,7 +52,7 @@ nbs-remote-edit push <host> <remote-path>
 
 **Exit codes:** 0=success, 2=file not found, 3=SSH failed, 4=bad arguments.
 
-**Uses `ssh cat` internally** (not scp/sftp) to work in environments where sandbox blocks the SFTP subsystem. However, if sandbox blocks SSH entirely (Enforcer: FS, FILE_ACCESS), this tool will not work — see the sandbox section below.
+**Uses `ssh cat` internally** (not scp/sftp) to work in environments where BpfJailer blocks the SFTP subsystem. However, if BpfJailer blocks SSH entirely (Enforcer: FS, FILE_ACCESS), this tool will not work — see the BpfJailer section below.
 
 ---
 
@@ -85,7 +85,7 @@ nbs-remote-build my-server 'make -j8' --prompt='(venv)'
 
 **Exit codes:** 0=build completed, 2=session not found, 3=timeout, 4=bad arguments.
 
-**This tool wraps pty-session, not SSH.** It works even when sandbox blocks direct SSH. Always use this instead of `sleep N && pty-session read`.
+**This tool wraps pty-session, not SSH.** It works even when BpfJailer blocks direct SSH. Always use this instead of `sleep N && pty-session read`.
 
 ---
 
@@ -102,13 +102,13 @@ nbs-chat-remote read /project/.nbs/chat/coordination.chat --last=5
 nbs-chat-remote send /project/.nbs/chat/coordination.chat my-handle "Message"
 ```
 
-**Requires direct SSH.** Will not work when sandbox blocks SSH entirely.
+**Requires direct SSH.** Will not work when BpfJailer blocks SSH entirely.
 
 ---
 
-## sandbox Constraint
+## BpfJailer Constraint
 
-On sandbox pods, sandbox blocks direct SSH from the Bash tool (Enforcer: FS, FILE_ACCESS). All remote tools use pty-session internally to bypass this:
+On 3pai pods, BpfJailer blocks direct SSH from the Bash tool (Enforcer: FS, FILE_ACCESS). All remote tools use pty-session internally to bypass this:
 
 - **nbs-remote-edit** — uses pty-session for scp
 - **nbs-remote-build** — uses pty-session
@@ -340,7 +340,7 @@ Post a status update before starting any operation that takes more than 30 secon
 
 ## Troubleshooting
 
-### nbs-remote-edit fails with "sandbox"
+### nbs-remote-edit fails with "BpfJailer"
 
 SSH is blocked from this pod. Use the pty-session fallback (Python str.replace scripts). nbs-remote-build still works because it wraps pty-session.
 
@@ -374,7 +374,7 @@ Uses scp via pty-session to transfer files. See "File Editing" section above for
 
 **Exit codes:** 0=success, 2=file not found, 3=pty-session error, 4=bad arguments, 5=verification failed.
 
-**Use this tool instead of Python str.replace scripts.** It provides the same safe pull/edit/push workflow as nbs-remote-edit but works when sandbox blocks SSH.
+**Use this tool instead of Python str.replace scripts.** It provides the same safe pull/edit/push workflow as nbs-remote-edit but works when BpfJailer blocks SSH.
 
 ---
 

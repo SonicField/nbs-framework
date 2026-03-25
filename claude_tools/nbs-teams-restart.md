@@ -40,13 +40,13 @@ The `participants` list in chat includes both types. When triaging, skip sidecar
 List all agent sessions and classify each:
 
 ```bash
-tmux list-sessions | grep nbs-
+nbs-ts list | grep alive
 ```
 
 For each session, capture state and context:
 
 ```bash
-tmux capture-pane -t <session-name> -p -S -20
+nbs-ts read-new <handle> --strip | tail -20
 ```
 
 Classify into triage categories:
@@ -58,7 +58,7 @@ Classify into triage categories:
 | **Context stressed** | Context 15-25%, otherwise functional | Compact (Level 2) proactively |
 | **Zombie** | Context <15%, accepts input but no output | Follow /nbs-teams-fixup zombie classification |
 | **Dead** | Process exited, bash prompt visible | Hard restart (Level 4) |
-| **Missing** | No tmux session at all | Respawn from scratch |
+| **Missing** | No nbs-ts session at all | Respawn from scratch |
 
 Record the triage for each agent before taking any action:
 
@@ -106,10 +106,10 @@ Recover agents in this order — each role unblocks the next:
 For each agent in recovery order, apply the /nbs-teams-fixup escalation ladder:
 
 ```
-Level 1 (Ping): tmux send-keys Enter, wait 15s
-Level 2 (Compact): Ctrl-C + /compact, wait 60s, check context
-Level 3 (Continue): nbs-workers continue <handle> (or manual --resume if no metadata)
-Level 4 (Hard restart): kill, respawn fresh
+Level 1 (Ping): nbs-ts send <handle> "", wait 15s
+Level 2 (Compact): nbs-ts send <handle> Escape, then /compact, wait 60s
+Level 3 (Continue): nbs-workers continue <handle>
+Level 4 (Hard restart): nbs-ts kill, respawn fresh
 ```
 
 **Batch efficiency rules:**
@@ -212,8 +212,8 @@ nbs-workers session <handle>
 # Wait 5 seconds between spawns to reduce lock contention
 # Replace <handles> with the dead/zombie agents from triage, in recovery order
 for handle in <handles from triage, recovery order>; do
-    tmux new-session -d -s nbs-${handle}-live -c <project-root> \
-        "NBS_HANDLE=${handle} bin/nbs-claude --dangerously-skip-permissions"
+    NBS_HANDLE=${handle} NBS_TRANSPORT=ts \
+        setsid .nbs/bin/nbs-claude --root=<project-root> --dangerously-skip-permissions >/dev/null 2>&1 &
     sleep 5
 done
 ```
@@ -221,27 +221,26 @@ done
 To specify a model on fresh spawn:
 
 ```bash
-NBS_HANDLE=<handle> NBS_MODEL=<model> \
-    tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> NBS_MODEL=<model> bin/nbs-claude --model=<model> --dangerously-skip-permissions"
+NBS_HANDLE=<handle> NBS_MODEL=<model> NBS_TRANSPORT=ts \
+    setsid .nbs/bin/nbs-claude --root=<project-root> --model=<model> --dangerously-skip-permissions >/dev/null 2>&1 &
 ```
 
 For agents with custom role prompts, use NBS_INITIAL_PROMPT:
 
 ```bash
-NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" \
-    tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude --dangerously-skip-permissions"
+NBS_HANDLE=<handle> NBS_TRANSPORT=ts \
+NBS_INITIAL_PROMPT="Read .nbs/workers/<handle>-skill.md and follow the role instructions." \
+    setsid .nbs/bin/nbs-claude --root=<project-root> --dangerously-skip-permissions >/dev/null 2>&1 &
 ```
 
 ### Step 7: Verify Recovery
 
 Wait 30 seconds after the last respawn. Then verify all agents:
 
-**7a. All tmux sessions exist:**
+**7a. All nbs-ts sessions exist:**
 
 ```bash
-tmux list-sessions | grep nbs-
+nbs-ts list | grep alive
 ```
 
 **7b. All agents posted to chat:**
@@ -255,9 +254,11 @@ Each recovered agent should appear with a fresh message (join announcement or st
 **7c. Context levels are healthy:**
 
 ```bash
-for session in $(tmux list-sessions -F '#{session_name}' | grep nbs-); do
-    echo "=== $session ==="
-    tmux capture-pane -t "$session" -p | grep 'Context left' | tail -1
+for f in .nbs/sessions/*.json; do
+    handle=$(basename "$f" .json)
+    ts=$(grep -o '"nbs_ts_handle": "[^"]*"' "$f" | cut -d'"' -f4)
+    echo "=== $handle ==="
+    nbs-ts read-new "$ts" --strip 2>/dev/null | tail -5
 done
 ```
 
@@ -310,7 +311,7 @@ Only needed for information not in the chat:
 For the common case of morning recovery after overnight idle:
 
 ```
-1. tmux list-sessions | grep nbs-           # Who's alive?
+1. nbs-ts list | grep alive           # Who's alive?
 2. For each session: capture-pane, check context %
 3. Triage: healthy / stressed / zombie / dead
 4. Post triage to chat

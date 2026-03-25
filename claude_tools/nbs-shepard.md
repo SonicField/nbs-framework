@@ -43,12 +43,13 @@ CHAT_TAG=$(basename "$CHAT_FILE" .chat | tr '.' '-')
 echo "Team tag: $CHAT_TAG"
 
 # Step 0b: List THIS team's agent sessions only
-tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "nbs-.*-${CHAT_TAG}"
+nbs-ts list --name="nbs-.*-${CHAT_TAG}"
 
 # For each session, capture the last few lines to check for activity
-tmux capture-pane -t <session-name> -p -S -5 2>/dev/null
-# e.g. tmux capture-pane -t nbs-supervisor-live -p -S -5
-# (for nn.Module.chat: tmux capture-pane -t nbs-supervisor-nn-Module -p -S -5)
+# First find the handle: nbs-ts find <session-name>
+# Then read output: nbs-ts read-new <handle> --strip
+# e.g. nbs-ts find nbs-supervisor-live && nbs-ts read-new <handle> --strip
+# (for nn.Module.chat: nbs-ts find nbs-supervisor-nn-Module)
 #
 # IMPORTANT: Only check sessions matching YOUR tag. Do NOT touch other teams.
 #
@@ -56,14 +57,14 @@ tmux capture-pane -t <session-name> -p -S -5 2>/dev/null
 nbs-workers list
 ```
 
-Classify each live agent (from `tmux capture-pane` output):
+Classify each live agent (from `nbs-ts read-new` output):
 
 | Category | Indicators | Action to recommend |
 |----------|-----------|---------------------|
 | **Healthy** | Spinner active (Tomfoolering/Galloping/etc), or recent tool use output | None |
 | **Idle** | Shows `❯` prompt with no activity | May need a task — check if supervisor has assigned work |
 | **Context stressed** | Shows "Auto-compact" or context warning | Recommend `/compact` |
-| **Dead** | Shows "Terminated", bare `$>` bash prompt, or session missing from tmux list | Recommend restart via `/nbs-teams-fixup` immediately |
+| **Dead** | Shows "Terminated", bare `$>` bash prompt, or session missing from nbs-ts list | Recommend restart via `/nbs-teams-fixup` immediately |
 
 If ANY agent is dead or zombie, this MUST appear as the **first item** in the posted assessment, marked `ACTION REQUIRED`. Do not bury it under other findings. The supervisor and the human need to see it immediately.
 
@@ -98,15 +99,15 @@ Synthesise the 4 summaries into a unified picture of the team's current state.
 **MANDATORY:** Read all NBS concept documents before assessing. Do not skip any.
 
 ```bash
-cat {{NBS_ROOT}}/concepts/goals.md
-cat {{NBS_ROOT}}/concepts/falsifiability.md
-cat {{NBS_ROOT}}/concepts/rhetoric.md
-cat {{NBS_ROOT}}/concepts/bullshit-detection.md
-cat {{NBS_ROOT}}/concepts/verification-cycle.md
-cat {{NBS_ROOT}}/concepts/zero-code-contract.md
-cat {{NBS_ROOT}}/concepts/engineering-standards.md
-cat {{NBS_ROOT}}/concepts/coordination.md
-cat {{NBS_ROOT}}/concepts/pte.md
+cat /home/alexturner/.nbs/concepts/goals.md
+cat /home/alexturner/.nbs/concepts/falsifiability.md
+cat /home/alexturner/.nbs/concepts/rhetoric.md
+cat /home/alexturner/.nbs/concepts/bullshit-detection.md
+cat /home/alexturner/.nbs/concepts/verification-cycle.md
+cat /home/alexturner/.nbs/concepts/zero-code-contract.md
+cat /home/alexturner/.nbs/concepts/engineering-standards.md
+cat /home/alexturner/.nbs/concepts/coordination.md
+cat /home/alexturner/.nbs/concepts/pte.md
 ```
 
 Then apply the full NBS review framework (as defined in `/nbs`) to the team's recent work. Assess all dimensions:

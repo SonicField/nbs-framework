@@ -35,10 +35,10 @@ Wait for input. Do not proceed without material to analyse.
 
 Before analysis, read these to calibrate your detection:
 
-1. `{{NBS_ROOT}}/concepts/goals.md` - Terminal vs instrumental, stated vs actual
-2. `{{NBS_ROOT}}/concepts/rhetoric.md` - Ethos, Pathos, Logos and their failure modes
-3. `{{NBS_ROOT}}/concepts/bullshit-detection.md` - Performed confidence vs evidence
-4. `{{NBS_ROOT}}/concepts/falsifiability.md` - Claims without falsifiers
+1. `/home/alexturner/.nbs/concepts/goals.md` - Terminal vs instrumental, stated vs actual
+2. `/home/alexturner/.nbs/concepts/rhetoric.md` - Ethos, Pathos, Logos and their failure modes
+3. `/home/alexturner/.nbs/concepts/bullshit-detection.md` - Performed confidence vs evidence
+4. `/home/alexturner/.nbs/concepts/falsifiability.md` - Claims without falsifiers
 
 ### Step 3: Extract Stated Goals
 

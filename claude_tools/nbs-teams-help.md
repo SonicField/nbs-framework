@@ -68,7 +68,7 @@ If they need help with terminal goals, explain:
 ### Spawning workers
 
 **Brief answer:**
-> "Workers are separate Claude instances. Use `nbs-workers spawn` for persistent tmux workers, or the Task tool for synchronous sub-agents."
+> "Workers are separate Claude instances. Use `nbs-workers spawn` for persistent nbs-ts workers, or the Task tool for synchronous sub-agents."
 
 **Walk through with nbs-workers:**
 1. Spawn with a single command:

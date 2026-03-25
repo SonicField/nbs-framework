@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, AskUserQuestion, Bash(git:*), Bash
 
 Read this document before proceeding:
 
-1. `{{NBS_ROOT}}/terminal-weathering/concepts/terminal-weathering.md` — the philosophy
+1. `/home/alexturner/.nbs/terminal-weathering/concepts/terminal-weathering.md` — the philosophy
 
 This document defines what you DO.
 
@@ -214,7 +214,7 @@ If the first weathering cycle does not produce improvement in the range of [W], 
 ```
 
 8. **Read the C extension performance document** (if C is selected):
-   `{{NBS_ROOT}}/terminal-weathering/concepts/c-extension-performance.md`
+   `/home/alexturner/.nbs/terminal-weathering/concepts/c-extension-performance.md`
 
 9. **Update `status.md`**: Phase → Survey.
 

@@ -19,7 +19,7 @@ You do not:
 - Assign tasks
 - Make decisions for the team
 - Argue with anyone who disagrees with you
-- Send keys to agent tmux sessions (that is fixup's job, not yours)
+- Send keys to agent sessions (that is fixup's job, not yours)
 - Restart, kill, or modify any agent sessions
 - Act as any other role (shepard, fixup, librarian)
 
@@ -156,8 +156,8 @@ Your checkpoint is posted. Your work is done. Exit the session. Do not engage in
 The Pythia checkpoint interval is set in `.nbs/events/config.yaml`:
 
 ```yaml
-# Number of decisions between Pythia checkpoints (default: 20)
-pythia-interval: 20
+# Number of decisions between Pythia checkpoints (default: 10)
+pythia-interval: 10
 ```
 
 This is read by the Scribe, not by Pythia. Pythia does not maintain configuration — she responds to triggers.

@@ -11,15 +11,15 @@ You are a **worker** in an NBS teams hierarchy. Your role is to execute a specif
 
 Before starting any work, read all foundational concept documents:
 
-1. `{{NBS_ROOT}}/concepts/goals.md`
-2. `{{NBS_ROOT}}/concepts/falsifiability.md`
-3. `{{NBS_ROOT}}/concepts/rhetoric.md`
-4. `{{NBS_ROOT}}/concepts/bullshit-detection.md`
-5. `{{NBS_ROOT}}/concepts/verification-cycle.md`
-6. `{{NBS_ROOT}}/concepts/zero-code-contract.md`
-7. `{{NBS_ROOT}}/concepts/engineering-standards.md`
-8. `{{NBS_ROOT}}/concepts/coordination.md`
-9. `{{NBS_ROOT}}/concepts/pte.md`
+1. `/home/alexturner/.nbs/concepts/goals.md`
+2. `/home/alexturner/.nbs/concepts/falsifiability.md`
+3. `/home/alexturner/.nbs/concepts/rhetoric.md`
+4. `/home/alexturner/.nbs/concepts/bullshit-detection.md`
+5. `/home/alexturner/.nbs/concepts/verification-cycle.md`
+6. `/home/alexturner/.nbs/concepts/zero-code-contract.md`
+7. `/home/alexturner/.nbs/concepts/engineering-standards.md`
+8. `/home/alexturner/.nbs/concepts/coordination.md`
+9. `/home/alexturner/.nbs/concepts/pte.md`
 
 These define the principles you operate under. Do not skip any.
 

@@ -5,26 +5,22 @@ allowed-tools: Write, Bash, Read
 
 # NBS Teams: Start (Cold Start)
 
-You are performing a **cold start** — bootstrapping a project from nothing to a running multi-agent team. This creates the `.nbs/` structure, spawns agents with handles, verifies sidecars, and registers chat and bus.
+You are performing a **cold start** — bootstrapping a project from nothing to a running multi-agent team. Infrastructure is created by `nbs-chat-init`. Your job is to gather the user's intent, call `nbs-chat-init`, then spawn and verify agents.
 
 **This is a one-time setup command.** If `.nbs/` already exists, confirm before overwriting.
-
-**Core principle:** Verify after every step. A cold start that skips verification produces silent failures that compound.
 
 ## Process
 
 ### Step 1: Check for Existing Structure
-
-Before anything, check if `.nbs/` exists:
 
 ```bash
 ls -la .nbs/ 2>/dev/null
 ```
 
 **If it exists:**
-- Ask: "An `.nbs/` directory already exists. Would you like to add teams structure to it, or is this a fresh start?"
-- If fresh start: proceed. If adding: skip directory creation for existing directories.
-- **Warning:** Existing `.nbs/` directories contain valuable state (chat history, decision logs, cursor positions). Do not delete without explicit confirmation.
+- Ask: "An `.nbs/` directory already exists. Would you like to add teams to it, or is this a fresh start?"
+- If fresh start: proceed. If adding: skip to Step 4.
+- **Warning:** Existing `.nbs/` directories contain valuable state. Do not delete without explicit confirmation.
 
 **If it does not exist:** Proceed to Step 2.
 
@@ -34,265 +30,139 @@ Ask the user:
 
 > "What is the terminal goal for this project? (One sentence describing what you're trying to achieve)"
 
-Wait for their answer. This grounds all subsequent work.
+Wait for their answer. **Do not proceed without a terminal goal.**
 
-**Do not proceed without a terminal goal.** If the answer is vague, ask for clarification:
-- "Can you be more specific? What would success look like?"
-- "What problem are you solving?"
+### Step 3: Create Infrastructure with nbs-chat-init
 
-### Step 3: Plan Team Composition
+Choose a chat name based on the project (e.g. the directory name). Then run:
 
-Ask the user how many agents they want to run and what roles are needed. Present the standard roles:
+```bash
+nbs-chat-init --name=<chat-name>
+```
 
-| Role | Handle convention | Purpose |
-|------|-------------------|---------|
-| Supervisor | `supervisor` or user's handle | Goal-keeper, task delegation, 3Ws |
-| Worker | `worker-1`, `worker-2`, or task-specific names | Tactical work on delegated tasks |
+This creates everything: `.nbs/chat/`, `.nbs/events/`, `.nbs/scribe/`, `.nbs/workers/`, `.nbs/pids/`, bus config, chat file, and scribe log. **Do not manually create these directories or files — nbs-chat-init is the single source of truth.**
+
+If the user wants the `--root` flag to point at a different directory:
+
+```bash
+nbs-chat-init --name=<chat-name> --root=<project-root>
+```
+
+Verify it worked:
+
+```bash
+nbs-chat read .nbs/chat/<chat-name>.chat --last=1
+ls .nbs/events/config.yaml
+```
+
+### Step 4: Plan Team Composition
+
+Ask the user how many agents they want and what roles are needed:
+
+| Role | Handle | Purpose |
+|------|--------|---------|
+| Supervisor | `supervisor` | Goal-keeper, task delegation, 3Ws |
+| Generalist | `generalist` | Tactical work on delegated tasks |
 | Scribe | `scribe` | Decision logging, institutional memory |
-| Gatekeeper | `gatekeeper` | Code review, commit/push via pty-session |
+| Gatekeeper | `gatekeeper` | Code review, pre-push verification |
 | Testkeeper | `testkeeper` | Test suite ownership, verification |
 | Theologian | `theologian` | Architecture, invariant enforcement |
 
-**Minimum viable team:** 1 supervisor (the user's own Claude session) + 1 worker.
+**Minimum viable team:** supervisor + generalist.
 
-**Handle rules:**
-- Must match `^[a-zA-Z0-9_-]+$`
-- Must be unique across all agents (including remote agents)
-- Each agent's tmux session is named `nbs-<handle>-live`
+**Standard team:** All six roles above.
 
-Record the chosen handles. They are needed for Steps 8 and 9.
-
-### Step 4: Create Directory Structure
+### Step 5: Post Terminal Goal to Chat
 
 ```bash
-mkdir -p .nbs/chat .nbs/events/processed .nbs/scribe .nbs/workers .nbs/pids
+nbs-chat send .nbs/chat/<chat-name>.chat supervisor "Terminal goal: [user's goal verbatim]"
 ```
 
-The `pids/` directory stores pidfiles (simple PID storage, no locking). Used by the restart script to find and kill agents.
+### Step 6: Write Skill Files
 
-### Step 5: Create Chat Channel
+For each agent role, copy the skill content to a file the agent can read on startup:
 
 ```bash
-nbs-chat create .nbs/chat/live.chat
+mkdir -p .nbs/workers
+for role in scribe gatekeeper testkeeper theologian generalist supervisor; do
+    if [[ -f "$HOME/.nbs/commands/nbs-${role}.md" ]]; then
+        cp "$HOME/.nbs/commands/nbs-${role}.md" ".nbs/workers/${role}-skill.md"
+    elif [[ -f "$HOME/.nbs/commands/nbs-teams-chat.md" && "$role" == "generalist" ]]; then
+        cp "$HOME/.nbs/commands/nbs-teams-chat.md" ".nbs/workers/${role}-skill.md"
+    fi
+done
 ```
 
-This is the primary coordination channel. All agents read and write here. Additional topic-specific channels can be created later.
+### Step 7: Spawn Agents
 
-### Step 6: Create Bus Config
-
-Write `.nbs/events/config.yaml`:
-
-```yaml
-dedup-window: 300
-ack-timeout: 120
-pythia-interval: 20
-retention-max-bytes: 16777216
-```
-
-| Field | Meaning |
-|-------|---------|
-| `dedup-window` | Seconds to suppress duplicate events (300 = 5 min) |
-| `ack-timeout` | Seconds before unacknowledged events are re-delivered (120 = 2 min) |
-| `pythia-interval` | Decision-logged events between Pythia trajectory assessments |
-| `retention-max-bytes` | Max size of processed events directory before pruning |
-
-### Step 7: Post Terminal Goal to Chat
+Spawn agents one at a time with 5-second stagger:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat supervisor "Terminal goal: [user's goal verbatim]"
+for handle in scribe gatekeeper testkeeper theologian generalist supervisor; do
+    NBS_HANDLE="$handle" \
+    NBS_TRANSPORT=ts \
+    NBS_INITIAL_PROMPT="Read .nbs/workers/${handle}-skill.md and follow the role instructions. Then read the chat history and begin work." \
+    setsid .nbs/bin/nbs-claude --root="$(pwd)" --dangerously-skip-permissions \
+        >/dev/null 2>&1 &
+    echo "Spawned $handle"
+    sleep 5
+done
 ```
 
-This is the first message in the chat log. Every agent that spawns will read it and orient towards it.
+### Step 8: Verify Agents Are Alive
 
-### Step 8: Spawn Agents
+Wait 30 seconds. Then:
 
-For each agent in the team plan (Step 3), spawn a tmux session running `nbs-claude`:
+**8a. Sessions exist:**
 
 ```bash
-tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions"
+nbs-ts list | grep alive
 ```
 
-**With a custom role prompt** (for specialised roles like scribe, gatekeeper):
+**8b. Agents posted to chat:**
 
 ```bash
-NBS_HANDLE=<handle> NBS_INITIAL_PROMPT="<role prompt>" \
-    tmux new-session -d -s nbs-<handle>-live -c <project-root> \
-    "NBS_HANDLE=<handle> NBS_INITIAL_PROMPT='<role prompt>' bin/nbs-claude --dangerously-skip-permissions"
+nbs-chat participants .nbs/chat/<chat-name>.chat
 ```
 
-**Spawn order matters:**
-1. Spawn agents one at a time, waiting 5 seconds between each
-2. The sidecar needs 30 seconds of startup grace before injecting notifications
-3. Do not spawn all agents simultaneously — staggered starts reduce contention on the chat file lock
-
-**Sidecar environment variables** (all optional, with sensible defaults):
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `NBS_HANDLE` | `claude` | Agent's unique handle |
-| `NBS_STANDUP_INTERVAL` | `15` | Minutes between CSMA/CD standup check-ins (0 to disable) |
-| `NBS_NOTIFY_COOLDOWN` | `15` | Minimum seconds between `/nbs-notify` injections |
-| `NBS_STARTUP_GRACE` | `30` | Seconds after init before allowing notifications |
-| `NBS_INITIAL_PROMPT` | handle + chat skill | Custom initial prompt for specialised roles |
-
-**Standup architecture:** The sidecar posts periodic CSMA/CD standups to chat: `@all Check-in: what are you working on? What is blocked? What could we be doing? If idle, find useful work.` This replaces bare `/nbs-poll` injection. The benefit is replacing unconditional polling with conditional event notification — `/nbs-notify` only fires when events or unreads exist. Overnight with no work, standups may produce repetitive content. The real win is eliminating empty poll cycles that cause context rot.
-
-### Step 9: Verify Agents Are Alive
-
-Wait 30 seconds after the last agent is spawned. Then verify:
-
-**9a. Tmux sessions exist:**
-
-```bash
-tmux list-sessions | grep nbs-
-```
-
-Each agent should appear as `nbs-<handle>-live`. If a session is missing, spawning failed — check `<project-root>/.nbs/nbs-claude-*.log` for errors.
-
-**9b. Agents posted to chat:**
-
-```bash
-nbs-chat participants .nbs/chat/live.chat
-```
-
-Each agent should appear with at least 1 message (their initial "Hello" from loading `/nbs-teams-chat`).
-
-**Falsifier:** If an agent's handle appears in tmux but not in chat participants after 60 seconds, the sidecar failed to inject the initial prompt. Diagnose:
-
-```bash
-tmux capture-pane -t nbs-<handle>-live -p -S -20
-```
-
-Common causes:
-- Claude's prompt (`>`) did not appear within 60 seconds (slow startup)
-- Permissions modal blocked the initial prompt
-- Stale pidfile from a crashed agent (delete it and retry)
-
-**9c. Pidfiles exist:**
+**8c. Pidfiles exist:**
 
 ```bash
 ls .nbs/pids/
 ```
 
-Each agent should have a `<handle>.pid` file. If a pidfile exists but the PID inside it does not match a running process, the previous agent crashed without cleanup.
-
-### Step 10: Post Team Roster to Chat
-
-Once all agents are verified:
+If an agent is alive in nbs-ts but not in chat after 60 seconds, the sidecar failed to inject. Diagnose:
 
 ```bash
-nbs-chat send .nbs/chat/live.chat supervisor "Team online: @<handle1> @<handle2> @<handle3> ... Terminal goal: [goal]. First task: [if known]"
+nbs-ts read-new <handle> --strip | tail -20
 ```
 
-This anchors the team's starting state in the chat log.
+### Step 9: Post Team Roster
 
-### Step 11: Confirm and Explain
+```bash
+nbs-chat send .nbs/chat/<chat-name>.chat supervisor \
+    "Team online: @scribe @gatekeeper @testkeeper @theologian @generalist @supervisor. Terminal goal: [goal]."
+```
 
-Tell the user what was created:
+### Step 10: Confirm to User
+
+Tell the user what was created and what to do next:
 
 ```
-Created:
-- .nbs/chat/live.chat      (coordination channel)
-- .nbs/events/             (bus for event-driven coordination)
-- .nbs/scribe/             (Scribe writes decision logs here)
-- .nbs/workers/            (worker task files go here)
-- .nbs/pids/               (agent PID storage for restart script)
-
-Agents running:
-- nbs-<handle1>-live       (<role>)
-- nbs-<handle2>-live       (<role>)
-...
-
-Your terminal goal is posted to chat.
+Infrastructure: nbs-chat-init created chat, bus, scribe log, workers, pids.
+Agents running: [list handles]
 
 Next steps:
-1. Load /nbs-supervisor for planning guidance
-2. Decompose your goal into worker tasks
-3. Post 3Ws to chat after each worker completes
-
-Maintenance:
-- /nbs-teams-fixup    — diagnose and restart stalled agents
-- /nbs-teams-help     — interactive guidance
-
-Run /nbs-teams-help if you need guidance on any of these.
-```
-
-## Cross-Machine Agents (Optional)
-
-If the team includes agents on remote machines, additional setup is required after the local cold start:
-
-**Prerequisites:**
-- SSH access from remote machine to coordination host (see cross-machine plan, Section 9)
-- `nbs-chat-remote` and `nbs-bus-remote` installed on remote machine
-- Same OS user on both machines (chat file locking and cursor tracking require this)
-
-**Remote agent startup:**
-
-```bash
-# On the remote machine:
-export NBS_CHAT_HOST=<coordination-host>
-export NBS_CHAT_OPTS="-o ControlMaster=auto -o ControlPersist=300"
-
-NBS_HANDLE=<handle> bin/nbs-claude --dangerously-skip-permissions \
-    --remote-host=<coordination-host>
-```
-
-**Verification:** Remote agent should appear in `nbs-chat participants` on the coordination host within 60 seconds.
-
-**Handle namespacing:** For cross-machine deployments, consider using `handle:hostname` format (e.g. `claude:build-server-1`) to prevent collisions across machines.
-
-## Known Failure Patterns
-
-### Agent fails to start
-
-**Symptom:** Tmux session exists but shows a bash prompt (nbs-claude exited immediately).
-**Causes:**
-- `bin/nbs-claude` not found or not executable (`chmod +x bin/nbs-claude`)
-- `pty-session` not found (install from `~/.nbs/bin/` or project `bin/`)
-- Stale pidfile from a previous agent (delete `.nbs/pids/<handle>.pid` and retry)
-**Fix:** Check the log file at `.nbs/nbs-claude-*.log`. Fix the cause. Kill the dead tmux session and respawn.
-
-### Sidecar fails to inject initial prompt
-
-**Symptom:** Agent is running but never posted to chat. Tmux shows Claude's prompt with no input.
-**Cause:** The sidecar waits up to 60 seconds for Claude's prompt (`>`) to appear. If Claude takes longer to initialise (first run, loading model), the window expires.
-**Fix:** Manually send the initial prompt:
-```bash
-tmux send-keys -t nbs-<handle>-live "Your NBS handle is '<handle>'. Load /nbs-teams-chat. Use this handle for all nbs-chat send commands." Enter
-```
-
-### Context bleed from overloaded initial prompt
-
-**Symptom:** Agent starts with low context (80-85%) instead of ~95%.
-**Cause:** `NBS_INITIAL_PROMPT` is too long, or too many skills are loaded at startup.
-**Prevention:** Keep initial prompts under 500 characters. Load additional skills via chat instructions after startup, not via the initial prompt.
-
-### Stale pidfiles after crash
-
-**Symptom:** Pidfile exists but the PID inside is dead.
-**Cause:** Previous agent crashed without running its cleanup trap. Pidfile still contains the old PID.
-**Note:** Pidfiles are simple PID storage (no locking). They do not block new spawns. The restart script uses them to find and kill old agents before respawning.
-**Fix:** Delete the stale pidfile:
-```bash
-rm .nbs/pids/<handle>.pid
+1. Use nbs-chat-terminal .nbs/chat/<name>.chat <your-handle> to interact
+2. Post tasks and directions to chat — agents will respond
+3. /nbs-teams-fixup if agents stall
+4. /nbs-teams-help for guidance
 ```
 
 ## Rules
 
 - **Terminal goal is mandatory.** Do not create structure without it.
-- **Confirm before overwriting.** Existing `.nbs/` directories contain valuable state.
-- **Verify after spawning.** Do not assume agents are alive — check tmux, chat, and pidfiles.
-- **Stagger spawns.** Wait 5 seconds between agents to avoid startup contention.
-- **Explain what was created.** The user should understand the structure.
-- **One question, one action, confirmation.** This is not a wizard that asks 10 questions upfront.
-
-## What Happens Next
-
-The user is now the supervisor. They should:
-1. Load `/nbs-supervisor` for planning guidance
-2. Decompose work into worker tasks
-3. Use chat for all coordination — post tasks, read updates, capture 3Ws
-4. Run `/nbs-teams-fixup` if agents stall
-
-If they need help, they run `/nbs-teams-help`.
+- **Use nbs-chat-init for infrastructure.** Do not manually create directories or config files.
+- **Verify after spawning.** Check nbs-ts, chat participants, and pidfiles.
+- **Stagger spawns.** 5 seconds between agents.
+- **One question, one action, confirmation.** Not a wizard.

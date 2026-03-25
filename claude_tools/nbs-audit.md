@@ -48,10 +48,10 @@ Each agent receives the same prompt template with the file path substituted:
 ```
 You are auditing `{FILE_PATH}` against engineering standards.
 
-Read the engineering standards from `{{NBS_ROOT}}/concepts/engineering-standards.md`.
+Read the engineering standards from `/home/alexturner/.nbs/concepts/engineering-standards.md`.
 If a project-level CLAUDE.md references a different engineering-standards.md, read that too and apply the union of both.
 
-Read the engineering standards from `{{NBS_ROOT}}/concepts/engineering-standards.md`.
+Read the engineering standards from `/home/alexturner/.nbs/concepts/engineering-standards.md`.
 Apply every standard in that document to this audit. If the file cannot be read,
 abort with an error — do not fall back to hardcoded standards.
 
