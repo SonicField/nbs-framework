@@ -114,7 +114,12 @@ fi
 SCRIPT_DIR_LAUNCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR_LAUNCH}/nbs-launch-agent"
 
-launch_agent "${ROLE}" "${PROJECT_ROOT}" "${NBS_CLAUDE}" \
+# Use unique handle so session name is unique per launch.
+# e.g. nbs-pythia-a1b2c3d4-poem (not nbs-pythia-poem for every launch).
+# This prevents monitors from different launches killing each other's sessions.
+WORKER_HANDLE="${ROLE}-${SUFFIX}"
+
+launch_agent "${WORKER_HANDLE}" "${PROJECT_ROOT}" "${NBS_CLAUDE}" \
     "Read ${TASK_FILE} and execute the task. Update the Status and Log sections when complete."
 
 echo "pending"
@@ -122,43 +127,48 @@ echo "pending"
 # Monitor for completion, then kill the session.
 # Redirect stdout/stderr so background subshell doesn't hold the pipe
 # open (callers using $() would block until the monitor exits).
+MON_LOG="/tmp/nbs-spawn-worker-monitor-$$.log"
+
 (
+    mdbg() { echo "[monitor:$$] $(date +%H:%M:%S) $*" >> "$MON_LOG" 2>/dev/null; }
+    mdbg "start: handle=$WORKER_HANDLE task_file=$TASK_FILE"
     sleep 15  # let worker initialise
 
-    # Discover session handle via nbs-ts name lookup.
-    # DO NOT use .nbs/sessions/*.json — the JSON file is written by
-    # nbs-claude asynchronously and may not exist yet, may be stale from
-    # a previous run, or may be deleted by cleanup traps. Name-based
-    # lookup via nbs-ts list is deterministic and race-free.
+    # Discover by unique handle name — only matches THIS launch's session.
     TS_HANDLE=$("$NBS_TS" list 2>/dev/null \
-        | grep "nbs-${ROLE}" | grep "alive" | head -1 | cut -f1 || true)
+        | grep "nbs-${WORKER_HANDLE}" | grep "alive" | head -1 | cut -f1 || true)
+    mdbg "discovered handle='$TS_HANDLE'"
 
     if [[ -z "$TS_HANDLE" ]]; then
-        # Session not found — worker may have died during init. Exit silently.
+        mdbg "no session found, exiting"
         exit 0
     fi
 
     for i in $(seq 1 60); do
         sleep 10
 
-        # Session died on its own?
         if ! "$NBS_TS" status "$TS_HANDLE" 2>/dev/null | grep -q "alive"; then
-            break
+            mdbg "poll $i: session dead, exiting"
+            exit 0
         fi
 
-        # Check task file for completion
         if [[ -f "$TASK_FILE" ]]; then
             STATE=$(grep -m1 '^State:' "$TASK_FILE" 2>/dev/null | awk '{print tolower($2)}')
+            mdbg "poll $i: alive, state='$STATE'"
             case "$STATE" in
                 completed|done|failed|escalated)
+                    mdbg "poll $i: completed, killing $TS_HANDLE"
                     sleep 5
                     "$NBS_TS" kill "$TS_HANDLE" 2>/dev/null || true
-                    break
+                    exit 0
                     ;;
             esac
+        else
+            mdbg "poll $i: alive, task file missing"
         fi
     done
 
-    # Timeout — kill anyway
+    mdbg "timeout, killing $TS_HANDLE"
     "$NBS_TS" kill "$TS_HANDLE" 2>/dev/null || true
+    mdbg "exit"
 ) >/dev/null 2>&1 &

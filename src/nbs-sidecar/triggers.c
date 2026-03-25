@@ -310,32 +310,6 @@ int trigger_periodic_spawn(const char *nbs_root,
     };
     int rc = exec_fire_and_forget(argv);
 
-    /* Register oracle with the reaper for lifecycle management.
-     * The reaper detects when the oracle posts to chat and kills
-     * the session. Without this, oracles accumulate as zombies. */
-    {
-        char reaper_path[WORKERS_PATH_LEN];
-        char self[WORKERS_PATH_LEN];
-        ssize_t rlen = readlink("/proc/self/exe", self, sizeof(self) - 1);
-        if (rlen > 0) {
-            self[rlen] = '\0';
-            char *rslash = strrchr(self, '/');
-            if (rslash) {
-                size_t rdir_len = (size_t)(rslash - self);
-                if (rdir_len + sizeof("/nbs-oracle-reaper") <= sizeof(reaper_path)) {
-                    memcpy(reaper_path, self, rdir_len);
-                    memcpy(reaper_path + rdir_len, "/nbs-oracle-reaper",
-                           sizeof("/nbs-oracle-reaper"));
-                    const char *reaper_argv[] = {
-                        reaper_path, "register", trigger->role,
-                        nbs_root, NULL
-                    };
-                    exec_fire_and_forget(reaper_argv);
-                }
-            }
-        }
-    }
-
     /* Release lock */
     struct flock unlock = {
         .l_type = F_UNLCK,

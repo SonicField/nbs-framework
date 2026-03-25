@@ -95,10 +95,21 @@ static int send_fd(int sock, int fd) {
 }
 
 static void reap_children(void) {
-    /* Non-blocking wait for any exited children */
+    /* Non-blocking wait for any exited children — log how they died */
     int status;
-    while (waitpid(-1, &status, WNOHANG) > 0)
-        ;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status)) {
+            log_msg("child exited: pid %d exit_code=%d",
+                    (int)pid, WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            log_msg("child killed: pid %d signal=%d (%s)",
+                    (int)pid, WTERMSIG(status), strsignal(WTERMSIG(status)));
+        } else {
+            log_msg("child reaped: pid %d raw_status=%d",
+                    (int)pid, status);
+        }
+    }
 }
 
 static void handle_client(int client_fd) {

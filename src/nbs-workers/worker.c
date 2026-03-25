@@ -167,48 +167,6 @@ static int exec_fire_and_forget(const char *const argv[])
     return -1;
 }
 
-/*
- * exec_spawn_detached — Fork+exec a command, wait for the client process
- * to exit. Used for commands that detach (e.g. session creation).
- *
- * Returns 0 on success, -1 on failure.
- */
-__attribute__((unused))
-static int exec_spawn_detached(const char *const argv[])
-{
-    ASSERT_MSG(argv != NULL && argv[0] != NULL,
-               "exec_spawn_detached: argv or argv[0] is NULL");
-
-    pid_t pid = fork();
-    if (pid < 0)
-        return -1;
-
-    if (pid == 0) {
-        redirect_stderr_to_devnull();
-        int fd = open("/dev/null", O_WRONLY);
-        if (fd >= 0) {
-            if (dup2(fd, STDOUT_FILENO) < 0)
-                _exit(126);
-            if (fd != STDOUT_FILENO)
-                close(fd);
-        }
-        execvp(argv[0], (char *const *)argv);
-        _exit(127);
-    }
-
-    int status;
-    pid_t wpid;
-    do {
-        wpid = waitpid(pid, &status, 0);
-    } while (wpid < 0 && errno == EINTR);
-
-    if (wpid < 0)
-        return -1;
-    if (WIFEXITED(status))
-        return WEXITSTATUS(status) == 0 ? 0 : -1;
-    return -1;
-}
-
 /* ------------------------------------------------------------------ */
 /* Path construction helpers                                           */
 /* ------------------------------------------------------------------ */
@@ -502,23 +460,6 @@ static int nbs_ts_kill_session(const char *handle)
     ASSERT_MSG(handle != NULL, "nbs_ts_kill_session: handle is NULL");
     const char *argv[] = {"nbs-ts", "kill", handle, NULL};
     return exec_fire_and_forget(argv);
-}
-
-__attribute__((unused))
-static int nbs_ts_send(const char *handle, const char *text)
-{
-    ASSERT_MSG(handle != NULL, "nbs_ts_send: handle is NULL");
-    ASSERT_MSG(text != NULL, "nbs_ts_send: text is NULL");
-    const char *argv[] = {"nbs-ts", "send", handle, text, NULL};
-    return exec_fire_and_forget(argv);
-}
-
-__attribute__((unused))
-static int nbs_ts_read_new(const char *handle, char *buf, size_t bufsz)
-{
-    ASSERT_MSG(handle != NULL, "nbs_ts_read_new: handle is NULL");
-    const char *argv[] = {"nbs-ts", "read-new", handle, "--strip", NULL};
-    return exec_capture(argv, buf, bufsz);
 }
 
 /*

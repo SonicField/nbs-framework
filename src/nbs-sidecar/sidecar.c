@@ -30,11 +30,35 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Sidecar debug log — always on, temporary for debugging oracle death */
+static FILE *g_sc_debug_fp = NULL;
+static void sc_dbg(const char *fmt, ...) {
+    if (!g_sc_debug_fp) {
+        char path[256];
+        snprintf(path, sizeof(path), "/tmp/nbs-sidecar-main-debug-%d.log",
+                 (int)getpid());
+        g_sc_debug_fp = fopen(path, "a");
+        if (!g_sc_debug_fp) return;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    fprintf(g_sc_debug_fp, "[sidecar:%d] %02d:%02d:%02d ",
+            (int)getpid(), tm.tm_hour, tm.tm_min, tm.tm_sec);
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(g_sc_debug_fp, fmt, ap);
+    va_end(ap);
+    fprintf(g_sc_debug_fp, "\n");
+    fflush(g_sc_debug_fp);
+}
 
 /* Path buffer with room for prefix + handle suffix */
 #define SIDECAR_EXT_PATH (SIDECAR_MAX_PATH + SIDECAR_MAX_HANDLE + 32)
@@ -519,6 +543,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     ASSERT_MSG(tp->send_text != NULL, "sidecar_run: transport send_text not initialised");
     ASSERT_MSG(tp->is_alive != NULL, "sidecar_run: transport is_alive not initialised");
 
+    sc_dbg("sidecar_run: start handle=%s root=%s", cfg->handle, cfg->nbs_root);
+
     /* Build paths */
     char registry_path[SIDECAR_EXT_PATH];
     char inbox_path[SIDECAR_EXT_PATH];
@@ -555,6 +581,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     /* Heartbeat interval: log self-health every 300 seconds (5 minutes) */
     time_t last_heartbeat_time = state.sidecar_start_time;
     time_t last_oracle_reaper_check = state.sidecar_start_time;
+
+    sc_dbg("entering main loop");
 
     /* Main loop */
     while (1) {
@@ -747,6 +775,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
         /* Check transport alive */
         if (!tp->is_alive(tp)) {
+            sc_dbg("transport NOT ALIVE — exiting");
             fprintf(stderr, "sidecar_run: transport not alive for '%s', exiting\n",
                     cfg->handle);
             break;
@@ -982,6 +1011,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         free(content);
     }
 
+    sc_dbg("main loop exited for %s", cfg->handle);
     fprintf(stderr, "sidecar_run: main loop exited for '%s'\n", cfg->handle);
     return SIDECAR_EXIT_OK;
 }

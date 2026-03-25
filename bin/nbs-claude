@@ -43,6 +43,7 @@ NBS_DEBUG="${NBS_DEBUG:-0}"
 for arg in "$@"; do
     [[ "$arg" == "--debug" ]] && NBS_DEBUG=1
 done
+export NBS_DEBUG
 # Debug log goes to a file (not stderr) so it survives setsid >/dev/null 2>&1
 NBS_DEBUG_LOG=""
 if [[ "$NBS_DEBUG" == "1" ]]; then
@@ -400,6 +401,7 @@ EOF
         SIDECAR_LOOP=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
         cat > "$SIDECAR_LOOP" << SIDECAR_EOF
 #!/bin/bash
+export NBS_DEBUG="${NBS_DEBUG}"
 while true; do
     $(printf '%q ' "${SIDECAR_ARGS[@]}")
     rc=\$?
@@ -412,8 +414,8 @@ done
 rm -f "$SIDECAR_LOOP"
 SIDECAR_EOF
         chmod +x "$SIDECAR_LOOP"
-        dbg "starting sidecar loop: $SIDECAR_LOOP"
-        setsid bash "$SIDECAR_LOOP" >/dev/null 2>&1 &
+        dbg "starting sidecar loop: $SIDECAR_LOOP (NBS_DEBUG=$NBS_DEBUG)"
+        NBS_DEBUG="$NBS_DEBUG" setsid bash "$SIDECAR_LOOP" >/dev/null 2>&1 &
         SIDECAR_PID=$!
         sleep 0.5
         if ! kill -0 "$SIDECAR_PID" 2>/dev/null; then

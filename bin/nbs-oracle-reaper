@@ -5,132 +5,93 @@
 # do their assessment, post to chat, and should exit. This script detects
 # when an oracle has posted and kills its session.
 #
-# Usage:
-#   nbs-oracle-reaper register <role> <project-root>
-#   nbs-oracle-reaper check <project-root>
+# STATELESS — no state files. All information comes from nbs-ts sessions:
+#   - Session name identifies the oracle role (nbs-pythia-XXXX-poem)
+#   - Session meta file has the start timestamp
+#   - nbs-chat search finds posts after that timestamp
 #
-# State file: <project-root>/.nbs/oracle-active.txt
-# Format: <role> <spawn_epoch>   (one line per active oracle)
+# Usage:
+#   nbs-oracle-reaper check <project-root>
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+ORACLE_ROLES="pythia shepard librarian fixup"
 ORACLE_TIMEOUT=600   # 10 minutes
 ORACLE_GRACE=30      # don't check before this
 ORACLE_SETTLE=10     # wait after detecting post before kill
 
-cmd_register() {
-    local role="$1"
-    local root="$2"
-    local state_file="${root}/.nbs/oracle-active.txt"
-    local now
-    now=$(date +%s)
-
-    mkdir -p "${root}/.nbs"
-    echo "${role} ${now}" >> "$state_file"
-}
-
 cmd_check() {
     local root="$1"
-    local state_file="${root}/.nbs/oracle-active.txt"
-
-    [[ -f "$state_file" ]] || exit 0
 
     # Find the chat file
     local chat_file
     chat_file=$(grep '^chat:' "${root}/.nbs/control-registry-supervisor" 2>/dev/null | cut -d: -f2-)
     [[ -n "$chat_file" ]] || exit 0
 
-    local tag
-    tag=$(basename "$chat_file" .chat | tr '.' '-')
-
     local now
     now=$(date +%s)
 
-    # Process each active oracle
-    local new_lines=""
-    while IFS=' ' read -r role spawn_epoch rest; do
-        [[ -n "$role" ]] || continue
+    for role in $ORACLE_ROLES; do
+        # Find alive sessions for this role.
+        # Session names are unique: nbs-pythia-XXXX-poem
+        # grep "nbs-${role}-" matches the role prefix with the unique suffix.
+        local sessions
+        sessions=$("${SCRIPT_DIR}/nbs-ts" list --name="nbs-${role}-" 2>/dev/null \
+            | grep alive || true)
+        [[ -n "$sessions" ]] || continue
 
-        local elapsed=$(( now - spawn_epoch ))
+        while IFS=$'\t' read -r handle status name cmd; do
+            [[ -n "$handle" ]] || continue
 
-        # Timeout
-        if [[ $elapsed -gt $ORACLE_TIMEOUT ]]; then
-            kill_oracle "$role" "$tag"
-            continue
-        fi
+            # Get session start time from meta file
+            local meta_file
+            meta_file="${HOME}/.nbs-ts/sessions/${handle}/meta"
+            local start_epoch
+            start_epoch=$(grep '^start:' "$meta_file" 2>/dev/null | awk '{print $2}')
+            [[ -n "$start_epoch" ]] || continue
 
-        # Grace period
-        if [[ $elapsed -lt $ORACLE_GRACE ]]; then
-            new_lines="${new_lines}${role} ${spawn_epoch}\n"
-            continue
-        fi
+            local elapsed=$(( now - start_epoch ))
 
-        # Session alive?
-        local handle
-        handle=$("${SCRIPT_DIR}/nbs-ts" list --name="nbs-${role}" 2>/dev/null \
-            | grep alive | head -1 | cut -f1 || true)
-        if [[ -z "$handle" ]]; then
-            # Natural death — remove from tracking
-            continue
-        fi
+            # Timeout — kill if running too long
+            if [[ $elapsed -gt $ORACLE_TIMEOUT ]]; then
+                "${SCRIPT_DIR}/nbs-ts" kill "$handle" 2>/dev/null || true
+                continue
+            fi
 
-        # Chat post found?
-        local found
-        found=$("${SCRIPT_DIR}/nbs-chat" search "$chat_file" "" \
-            --handle="$role" --after="$spawn_epoch" 2>/dev/null | head -1 || true)
-        if [[ -n "$found" ]]; then
-            # Oracle posted — settle then kill
-            sleep $ORACLE_SETTLE
-            kill_oracle "$role" "$tag"
-            continue
-        fi
+            # Grace period — don't check too early
+            if [[ $elapsed -lt $ORACLE_GRACE ]]; then
+                continue
+            fi
 
-        # Still active
-        new_lines="${new_lines}${role} ${spawn_epoch}\n"
-    done < "$state_file"
-
-    # Rewrite state file
-    if [[ -n "$new_lines" ]]; then
-        printf "%b" "$new_lines" > "$state_file"
-    else
-        rm -f "$state_file"
-    fi
-}
-
-kill_oracle() {
-    local role="$1"
-    local tag="$2"
-
-    local handle
-    handle=$("${SCRIPT_DIR}/nbs-ts" list --name="nbs-${role}" 2>/dev/null \
-        | head -1 | cut -f1 || true)
-    if [[ -n "$handle" ]]; then
-        "${SCRIPT_DIR}/nbs-ts" kill "$handle" 2>/dev/null || true
-    fi
-    # Also kill any nbs-claude/sidecar for this role
-    pkill -9 -f "NBS_HANDLE=${role}.*dangerously" 2>/dev/null || true
-    pkill -9 -f "nbs-sidecar.*--handle=${role}" 2>/dev/null || true
+            # Chat post found after session start?
+            local found
+            found=$("${SCRIPT_DIR}/nbs-chat" search "$chat_file" "" \
+                --handle="$role" --after="$start_epoch" 2>/dev/null \
+                | grep -v "^No matches" | head -1 || true)
+            if [[ -n "$found" ]]; then
+                sleep $ORACLE_SETTLE
+                "${SCRIPT_DIR}/nbs-ts" kill "$handle" 2>/dev/null || true
+            fi
+        done <<< "$sessions"
+    done
 }
 
 # --- Main ---
 
 if [[ $# -lt 2 ]]; then
-    echo "Usage: nbs-oracle-reaper register|check <args>" >&2
+    echo "Usage: nbs-oracle-reaper check <project-root>" >&2
     exit 4
 fi
 
 case "$1" in
-    register)
-        [[ $# -eq 3 ]] || { echo "Usage: nbs-oracle-reaper register <role> <project-root>" >&2; exit 4; }
-        cmd_register "$2" "$3"
-        ;;
     check)
         cmd_check "$2"
         ;;
     *)
         echo "Unknown command: $1" >&2
+        echo "Usage: nbs-oracle-reaper check <project-root>" >&2
         exit 4
         ;;
 esac

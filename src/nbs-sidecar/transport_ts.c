@@ -24,10 +24,42 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define TS_CAPTURE_BUF_SIZE 32768
 #define TS_MAX_PATH 4096
+
+/* Debug logging — writes to /tmp/nbs-sidecar-debug-<pid>.log when
+ * NBS_DEBUG=1 is set. Survives >/dev/null 2>&1 because it writes
+ * to a file, not stderr. */
+static FILE *g_ts_debug_fp = NULL;
+static int g_ts_debug_checked = 0;
+
+static void ts_dbg(const char *fmt, ...) {
+    if (!g_ts_debug_checked) {
+        g_ts_debug_checked = 1;
+        /* Always log — temporary, for debugging oracle death */
+        char path[256];
+        snprintf(path, sizeof(path), "/tmp/nbs-sidecar-debug-%d.log",
+                 (int)getpid());
+        g_ts_debug_fp = fopen(path, "a");
+    }
+    if (!g_ts_debug_fp) return;
+
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    fprintf(g_ts_debug_fp, "[sidecar:%d] %02d:%02d:%02d ",
+            (int)getpid(), tm.tm_hour, tm.tm_min, tm.tm_sec);
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(g_ts_debug_fp, fmt, ap);
+    va_end(ap);
+    fprintf(g_ts_debug_fp, "\n");
+    fflush(g_ts_debug_fp);
+}
 
 /* Context for nbs-ts transport */
 typedef struct {
@@ -182,10 +214,21 @@ static int ts_send_text(const transport_t *self, const char *text)
     ASSERT_MSG(text != NULL, "ts_send_text: text is NULL");
     const ts_ctx_t *ctx = self->ctx;
 
+    /* Log first 80 chars of text being sent */
+    {
+        char preview[81];
+        size_t plen = strlen(text);
+        if (plen > 80) plen = 80;
+        memcpy(preview, text, plen);
+        preview[plen] = '\0';
+        ts_dbg("send_text: len=%zu preview=\"%.80s\"", strlen(text), preview);
+    }
+
     int fd = open(ctx->input_fifo, O_WRONLY | O_NONBLOCK);
     if (fd < 0) {
         fprintf(stderr, "ts_send_text: cannot open FIFO '%s': %s\n",
                 ctx->input_fifo, strerror(errno));
+        ts_dbg("send_text: FIFO open FAILED: %s", strerror(errno));
         return -1;
     }
 
@@ -258,6 +301,8 @@ static int ts_send_key(const transport_t *self, const char *key)
     const char *data;
     size_t len;
 
+    ts_dbg("send_key: \"%s\"", key);
+
     if (strcmp(key, "Enter") == 0) {
         data = "\r";  /* CR, not LF — raw terminal mode expects 0x0d */
         len = 1;
@@ -314,10 +359,17 @@ static int ts_is_alive(const transport_t *self)
     const ts_ctx_t *ctx = self->ctx;
 
     pid_t pid = read_pid(ctx);
-    if (pid <= 0) return -1;
+    if (pid <= 0) {
+        ts_dbg("is_alive: cannot read pid");
+        return -1;
+    }
 
     if (kill(pid, 0) == 0) return 1;
-    if (errno == ESRCH) return 0;
+    if (errno == ESRCH) {
+        ts_dbg("is_alive: pid %d DEAD (ESRCH)", (int)pid);
+        return 0;
+    }
+    ts_dbg("is_alive: pid %d kill(0) error: %s", (int)pid, strerror(errno));
     return -1;
 }
 
