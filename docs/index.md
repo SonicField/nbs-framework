@@ -12,7 +12,6 @@ The epistemic methodology behind NBS — why it exists and how it thinks.
 |----------|-------------|
 | [Why NBS](framework/Why-NBS.md) | Motivation and core principles |
 | [Overview](framework/overview.md) | System architecture at a glance |
-| [Tripod Architecture](framework/tripod-architecture.md) | Scribe, Pythia, and the decision-logging triangle |
 | [Document Tools](framework/nbs-doc.md) | Writing tools: analyse, plan, describe |
 | [Style Guide](framework/STYLE.md) | Writing conventions |
 | [Wiki Style](framework/WIKI_STYLE.md) | Wiki-specific formatting |
@@ -39,6 +38,7 @@ Running and operating agent teams.
 | Document | Description |
 |----------|-------------|
 | [Teams Overview](team/nbs-teams.md) | Team structure, roles, operations |
+| [Tripod Architecture](team/tripod-architecture.md) | Scribe, Pythia, and the decision-logging triangle |
 | [Pythia](team/nbs-pythia.md) | Trajectory and risk assessment oracle |
 | [Scribe](team/nbs-scribe.md) | Decision logging and institutional memory |
 | [Help When Stuck](team/help-when-stuck.md) | Troubleshooting guide for stuck teams |
