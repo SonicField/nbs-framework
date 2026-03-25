@@ -403,7 +403,7 @@ if [[ "$SPAWN_ONLY" != "true" ]]; then
 # V5.2: Use absolute path for .nbs directory check
 if [[ -d "$PROJECT_ROOT/.nbs" ]]; then
     warn "Existing .nbs/ directory found."
-    if ! confirm "Re-initialise? (existing data will be preserved)"; then
+    if ! confirm "Re-initialise? (ALL previous state will be destroyed)"; then
         info "Cancelled."
         exit 0
     fi
