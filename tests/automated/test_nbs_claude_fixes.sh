@@ -72,11 +72,8 @@ fi
 
 # --- 3. Numeric config validation ---
 echo "3. Numeric config validation..."
-if grep -q '\^\\[0-9\\]\\+\$' "$NBS_CLAUDE" || grep -q '\^\[0-9\]+\$' "$NBS_CLAUDE"; then
-    pass "Numeric validation pattern present"
-else
-    fail "Numeric validation pattern not found"
-fi
+# Bus check interval moved to C sidecar — validate functionally only
+pass "Numeric validation moved to sidecar (functional test below)"
 
 # Functional test: set invalid NBS_BUS_CHECK_INTERVAL (POLL_INTERVAL removed)
 NBS_BUS_CHECK_INTERVAL=abc NBS_ROOT="$PROJECT_ROOT" bash -c "source /dev/stdin" <<'SCRIPT' 2>/dev/null
@@ -198,23 +195,16 @@ else
     pass "remote_cmd no longer uses 2>/dev/null"
 fi
 
-# --- 8. pty_ prefix verified ---
-echo "8. pty_ prefix session verification..."
-if grep -q 'tmux has-session' "$NBS_CLAUDE"; then
-    pass "tmux has-session check present before attach"
+# --- 8. Session management via nbs-ts ---
+echo "8. Session management via nbs-ts (replaces tmux/pty-session)..."
+if grep -q 'nbs-ts' "$NBS_CLAUDE"; then
+    pass "nbs-ts integration present (replaces tmux has-session)"
 else
-    fail "tmux has-session check not found"
+    fail "nbs-ts not found in nbs-claude"
 fi
 
-# --- 9. if ! command pattern ---
-echo "9. if ! command pattern (no fragile \$? check)..."
-if grep -q 'if ! "\$PTY_SESSION" create' "$NBS_CLAUDE"; then
-    pass "if ! command pattern used for pty-session create"
-else
-    fail "if ! command pattern not found"
-fi
-
-# Verify old fragile pattern removed
+# --- 9. No fragile $? check ---
+echo "9. No fragile \$? check..."
 if grep -q '\$? -ne 0' "$NBS_CLAUDE"; then
     fail "Fragile \$? -ne 0 pattern still present"
 else

@@ -81,7 +81,7 @@ echo ""
 echo "Test 5: help text content"
 output=$("$REMOTE_SESSION" --help 2>&1)
 echo "$output" | grep -q 'Usage:'; check "help contains Usage:" $?
-echo "$output" | grep -q 'pty-session'; check "help mentions pty-session" $?
+echo "$output" | grep -q 'nbs-ts'; check "help mentions nbs-ts" $?
 echo "$output" | grep -q -- '--name='; check "help mentions --name" $?
 echo "$output" | grep -q -- '--cwd='; check "help mentions --cwd" $?
 

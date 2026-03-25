@@ -245,38 +245,34 @@ else
     check "V1: trap uses single-quoted deferred expansion" "1"
 fi
 
-# --- V6/V7 (BUG): pty-session error checking ---
+# --- V6/V7 (BUG): nbs-ts session error checking ---
 # Verify structurally: the fetch_file function must check create/send return codes
 echo ""
-echo "Section: V6/V7 — pty-session error checking (structural)"
+echo "Section: V6/V7 — nbs-ts session error checking (structural)"
 
-if grep -q 'if ! "\$PTY_SESSION" create' "$REMOTE_READ"; then
-    check "V6: pty-session create failure checked" "0"
-elif grep -q 'if ! .*pty-session.*create' "$REMOTE_READ"; then
-    check "V6: pty-session create failure checked" "0"
+if grep -q 'failed to create nbs-ts session' "$REMOTE_READ"; then
+    check "V6: nbs-ts create failure checked" "0"
+elif grep -q 'NBS_TS.*create.*||' "$REMOTE_READ"; then
+    check "V6: nbs-ts create failure checked" "0"
 else
-    # Check for the pattern with the variable
-    if grep -q '! "\$PTY_SESSION" create\|! "$PTY_SESSION" create' "$REMOTE_READ"; then
-        check "V6: pty-session create failure checked" "0"
-    else
-        check "V6: pty-session create failure checked" "1"
-    fi
+    check "V6: nbs-ts create failure checked" "1"
 fi
 
-if grep -q '! "\$PTY_SESSION" send\|! "$PTY_SESSION" send' "$REMOTE_READ"; then
-    check "V7: pty-session send failure checked" "0"
+if grep -q 'if ! .*NBS_TS.*send\|failed to send' "$REMOTE_READ"; then
+    check "V7: nbs-ts send failure checked" "0"
 else
-    check "V7: pty-session send failure checked" "1"
+    check "V7: nbs-ts send failure checked" "1"
 fi
 
 # --- V9 (HARDENING): Session name uniqueness ---
+# nbs-ts auto-generates unique handles, so RANDOM is not needed
 echo ""
 echo "Section: V9 — session name uniqueness (structural)"
 
-if grep -q 'RANDOM' "$REMOTE_READ"; then
-    check "V9: session name includes RANDOM component" "0"
+if grep -q 'NBS_TS.*create' "$REMOTE_READ"; then
+    check "V9: nbs-ts auto-generates unique session handles" "0"
 else
-    check "V9: session name includes RANDOM component" "1"
+    check "V9: nbs-ts auto-generates unique session handles" "1"
 fi
 
 # --- V4 (SECURITY): grep -- separator (structural) ---

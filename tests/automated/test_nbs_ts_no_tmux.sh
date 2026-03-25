@@ -35,27 +35,16 @@ else
     fi
 fi
 
-# NT1b: Also check for pty-session binary and lock script
-echo "NT1b. pty-session artifacts removed..."
+# NT1b: Check tmux-specific artifacts are removed
+# Note: pty-session is a standalone PTY multiplexer (NOT tmux) — it stays.
+echo "NT1b. tmux artifacts removed..."
 ARTIFACTS_FOUND=0
-if [[ -d "$PROJECT_ROOT/src/nbs-pty-session" ]]; then
-    fail "src/nbs-pty-session/ directory still exists"
-    ARTIFACTS_FOUND=1
-fi
-if [[ -f "$PROJECT_ROOT/bin/pty-session" ]]; then
-    fail "bin/pty-session binary still exists"
-    ARTIFACTS_FOUND=1
-fi
-if [[ -f "$PROJECT_ROOT/bin/pty-session-lock" ]]; then
-    fail "bin/pty-session-lock still exists"
-    ARTIFACTS_FOUND=1
-fi
 if [[ -f "$PROJECT_ROOT/src/nbs-sidecar/transport_tmux.c" ]]; then
     fail "src/nbs-sidecar/transport_tmux.c still exists"
     ARTIFACTS_FOUND=1
 fi
 if [[ $ARTIFACTS_FOUND -eq 0 ]]; then
-    pass "All pty-session and tmux artifacts removed"
+    pass "All tmux-specific artifacts removed"
 fi
 
 # NT2 removed — it recursively ran all test_nbs_ts_*.sh tests, each of

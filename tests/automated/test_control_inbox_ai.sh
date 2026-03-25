@@ -73,7 +73,7 @@ Your task:
 
 Do these three steps in order. Output only the commands and their results."
 
-echo "$PROMPT_AI" | claude -p - --output-format text --allowedTools "Bash" > "$AI_OUTPUT" 2>&1 || true
+timeout 120 bash -c 'echo "$1" | claude -p - --output-format text --allowedTools "Bash"' _ "$PROMPT_AI" > "$AI_OUTPUT" 2>&1 || true
 
 echo "  AI output captured ($(wc -l < "$AI_OUTPUT") lines)"
 echo ""
@@ -185,7 +185,7 @@ Respond with ONLY valid JSON:
 }"
 
 EVAL_TEMP=$(mktemp)
-EVAL_RESULT=$(echo "$EVAL_PROMPT" | claude -p - --output-format text 2>&1)
+EVAL_RESULT=$(timeout 60 bash -c 'echo "$1" | claude -p - --output-format text' _ "$EVAL_PROMPT" 2>&1)
 echo "$EVAL_RESULT" > "$EVAL_TEMP"
 
 JSON_VERDICT=$("$EXTRACT_JSON" "$EVAL_TEMP")

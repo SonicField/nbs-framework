@@ -18,9 +18,14 @@ ORIGINAL_DIR=$(pwd)
 
 ERRORS=0
 
+NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
+HANDLES=()
+
 cleanup() {
     cd "$ORIGINAL_DIR"
-    tmux kill-session -t "pty_ansi-test" 2>/dev/null || true
+    for h in "${HANDLES[@]}"; do
+        "$NBS_TS" kill "$h" 2>/dev/null || true
+    done
     rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
@@ -36,7 +41,7 @@ cd "$TEST_DIR"
 # --- Test 1: Search with context lines (deterministic — write log directly) ---
 echo "1. Search with context lines..."
 
-WORKER_NAME="context-test"
+WORKER_NAME="context-a1b2"
 TASK_FILE=".nbs/workers/${WORKER_NAME}.md"
 LOG_FILE=".nbs/workers/${WORKER_NAME}.log"
 
@@ -99,7 +104,7 @@ fi
 # --- Test 2: ANSI stripping (write ANSI codes directly to log) ---
 echo "2. ANSI escape code stripping..."
 
-ANSI_WORKER="ansistrip-test"
+ANSI_WORKER="ansistrip-c3d4"
 ANSI_TASK=".nbs/workers/${ANSI_WORKER}.md"
 ANSI_LOG=".nbs/workers/${ANSI_WORKER}.log"
 
@@ -157,11 +162,10 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# --- Test 3: ANSI stripping via actual tmux pipe-pane ---
-echo "3. ANSI via live tmux session..."
+# --- Test 3: ANSI stripping via live nbs-ts session ---
+echo "3. ANSI via live nbs-ts session..."
 
-LIVE_WORKER="ansi-test"
-LIVE_SESSION="pty_${LIVE_WORKER}"
+LIVE_WORKER="ansi-a7b8"
 LIVE_TASK=".nbs/workers/${LIVE_WORKER}.md"
 LIVE_LOG=".nbs/workers/${LIVE_WORKER}.log"
 
@@ -183,38 +187,40 @@ Completed:
 [Worker appends findings here]
 EOF
 
-tmux new-session -d -s "$LIVE_SESSION" 'bash'
-sleep 0.5
-tmux pipe-pane -t "$LIVE_SESSION" -o "cat >> '$TEST_DIR/$LIVE_LOG'"
-sleep 0.3
+LIVE_HANDLE=$("$NBS_TS" create --name="nbs-${LIVE_WORKER}" bash 2>&1 | tail -1)
+HANDLES+=("$LIVE_HANDLE")
+sleep 1
 
 LIVE_MARKER="LIVE_ANSI_$(date +%s)"
-tmux send-keys -t "$LIVE_SESSION" "printf '\\033[31m${LIVE_MARKER}\\033[0m\\n'" Enter
-sleep 1
+"$NBS_TS" send "$LIVE_HANDLE" "printf '\\033[31m${LIVE_MARKER}\\033[0m\\n'" 2>/dev/null
+sleep 2
+
+# Read output and write to log for search
+"$NBS_TS" read-new "$LIVE_HANDLE" --strip 2>/dev/null > "$LIVE_LOG"
 
 LIVE_SEARCH=$("$NBS_WORKER" search "$LIVE_WORKER" "$LIVE_MARKER" --context=1 2>&1)
 if echo "$LIVE_SEARCH" | grep -q "$LIVE_MARKER"; then
-    echo "   PASS: Found marker through live tmux ANSI output"
+    echo "   PASS: Found marker through live nbs-ts ANSI output"
 else
-    echo "   FAIL: Could not find marker in live tmux output"
+    echo "   FAIL: Could not find marker in live nbs-ts output"
     if [[ -f "$LIVE_LOG" ]]; then
         echo "   Log size: $(wc -c < "$LIVE_LOG")"
     fi
     ERRORS=$((ERRORS + 1))
 fi
 
-tmux kill-session -t "$LIVE_SESSION" 2>/dev/null || true
+"$NBS_TS" kill "$LIVE_HANDLE" 2>/dev/null || true
 
 # --- Test 4: Regex patterns ---
 echo "4. Regex pattern matching..."
 
 # Use the context-test worker's log — append some pattern lines
-echo 'ERROR: connection refused at port 8080' >> ".nbs/workers/context-test.log"
-echo 'WARNING: timeout at port 9090' >> ".nbs/workers/context-test.log"
-echo 'INFO: all clear' >> ".nbs/workers/context-test.log"
+echo 'ERROR: connection refused at port 8080' >> ".nbs/workers/context-a1b2.log"
+echo 'WARNING: timeout at port 9090' >> ".nbs/workers/context-a1b2.log"
+echo 'INFO: all clear' >> ".nbs/workers/context-a1b2.log"
 
 # Search with regex
-REGEX_OUT=$("$NBS_WORKER" search "context-test" "ERROR.*port [0-9]+" --context=1 2>&1)
+REGEX_OUT=$("$NBS_WORKER" search "context-a1b2" "ERROR.*port [0-9]+" --context=1 2>&1)
 if echo "$REGEX_OUT" | grep -q "ERROR.*connection refused"; then
     echo "   PASS: Regex pattern matched"
 else
@@ -224,7 +230,7 @@ else
 fi
 
 # Search for alternation
-ALT_OUT=$("$NBS_WORKER" search "context-test" "(ERROR|WARNING).*port" --context=0 2>&1)
+ALT_OUT=$("$NBS_WORKER" search "context-a1b2" "(ERROR|WARNING).*port" --context=0 2>&1)
 ERROR_COUNT=$(echo "$ALT_OUT" | grep -c "port" || true)
 if [[ "$ERROR_COUNT" -ge 2 ]]; then
     echo "   PASS: Alternation pattern found both ERROR and WARNING lines"
@@ -235,7 +241,7 @@ fi
 
 # --- Test 5: Search with no matches ---
 echo "5. Search with no matches..."
-NO_MATCH=$("$NBS_WORKER" search "context-test" "DEFINITELY_NOT_IN_OUTPUT_xyz123" 2>&1) || true
+NO_MATCH=$("$NBS_WORKER" search "context-a1b2" "DEFINITELY_NOT_IN_OUTPUT_xyz123" 2>&1) || true
 if echo "$NO_MATCH" | grep -q "No matches found"; then
     echo "   PASS: No-match reported correctly"
 else
@@ -246,7 +252,7 @@ fi
 
 # --- Test 6: Search nonexistent worker ---
 echo "6. Search nonexistent worker..."
-NONEXIST=$("$NBS_WORKER" search "nonexistent-worker" "pattern" 2>&1) || true
+NONEXIST=$("$NBS_WORKER" search "nonexist-0000" "pattern" 2>&1) || true
 if echo "$NONEXIST" | grep -q "No log file found"; then
     echo "   PASS: Nonexistent worker reported correctly"
 else
@@ -258,7 +264,7 @@ fi
 # --- Test 7: Default context size (50 lines) ---
 echo "7. Default context size (50 lines)..."
 
-BIGCTX_WORKER="bigctx-test"
+BIGCTX_WORKER="bigctx-e5f6"
 BIGCTX_TASK=".nbs/workers/${BIGCTX_WORKER}.md"
 BIGCTX_LOG=".nbs/workers/${BIGCTX_WORKER}.log"
 

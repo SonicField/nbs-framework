@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 REMOTE_BUILD="${PROJECT_ROOT}/bin/nbs-remote-build"
-PTY_SESSION="${HOME}/.nbs/bin/pty-session"
+NBS_TS="${PROJECT_ROOT}/bin/nbs-ts"
 
 PASS=0
 FAIL=0
@@ -26,11 +26,13 @@ check() {
     fi
 }
 
-TEST_SESSION="test-build-$$"
-TEST_SESSION_2="test-build-2-$$"
+TEST_SESSION=""
+TEST_SESSION_2=""
+HANDLES=()
 cleanup() {
-    "$PTY_SESSION" kill "$TEST_SESSION" 2>/dev/null || true
-    "$PTY_SESSION" kill "$TEST_SESSION_2" 2>/dev/null || true
+    for h in "${HANDLES[@]}"; do
+        [[ -n "$h" ]] && "$NBS_TS" kill "$h" 2>/dev/null || true
+    done
 }
 trap cleanup EXIT
 
@@ -85,7 +87,8 @@ fi
 # Test 6: functional test — run a quick command and detect completion
 echo ""
 echo "Test 6: functional test"
-"$PTY_SESSION" create "$TEST_SESSION" 'bash'
+TEST_SESSION=$("$NBS_TS" create bash | tr -d '[:space:]')
+HANDLES+=("$TEST_SESSION")
 sleep 1
 
 output=$("$REMOTE_BUILD" "$TEST_SESSION" 'echo BUILD_DONE_12345' \
@@ -110,25 +113,21 @@ else
 fi
 
 # ============================================================
-# Section 2: Fix #1 (HARDENING) — Improved pty-session assertion message
+# Section 2: Fix #1 (HARDENING) — Improved nbs-ts assertion message
 # ============================================================
 echo ""
-echo "Test 8: pty-session assertion message includes install URL"
-# Temporarily set PTY_SESSION to a nonexistent path via env override
-# We test this by examining the source rather than actually breaking the binary
-err_msg=$("$REMOTE_BUILD" --help 2>&1 | head -1) || true
-# The real test: if pty-session is missing, does the message contain actionable info?
-# We can't uninstall pty-session, so we verify the source contains the right pattern
-if grep -q "Install from https://github.com/SonicField/nbs-framework" "$REMOTE_BUILD"; then
-    check "pty-session assertion includes install URL" "0"
+echo "Test 8: nbs-ts assertion message"
+# Verify the source checks for nbs-ts availability
+if grep -q "nbs-ts not found" "$REMOTE_BUILD"; then
+    check "nbs-ts assertion present" "0"
 else
-    check "pty-session assertion includes install URL" "1"
+    check "nbs-ts assertion present" "1"
 fi
 
-if grep -q "ASSERTION FAILED.*pty-session.*not found or not executable" "$REMOTE_BUILD"; then
-    check "pty-session assertion explains what/why" "0"
+if grep -q 'NBS_TS' "$REMOTE_BUILD"; then
+    check "uses NBS_TS variable" "0"
 else
-    check "pty-session assertion explains what/why" "1"
+    check "uses NBS_TS variable" "1"
 fi
 
 # ============================================================
@@ -261,9 +260,9 @@ echo ""
 echo "Test 14: timeout path warns on read failure"
 # Verify the timeout path checks the read exit code
 if grep -A1 'Print whatever output we have' "$REMOTE_BUILD" | grep -q 'if !'; then
-    check "timeout path checks pty-session read exit code" "0"
+    check "timeout path checks nbs-ts read exit code" "0"
 else
-    check "timeout path checks pty-session read exit code" "1"
+    check "timeout path checks nbs-ts read exit code" "1"
 fi
 
 if grep -q 'could not read final output' "$REMOTE_BUILD"; then
@@ -289,12 +288,11 @@ else
     check "sentinel uses random values" "1"
 fi
 
-# Verify that a false prompt match triggers continue (skip to next poll)
-# The comment and the 'continue' statement are on separate lines, so check both exist
-if grep -q 'false positive' "$REMOTE_BUILD" && grep -A1 'false positive' "$REMOTE_BUILD" | grep -q 'continue'; then
-    check "false positive causes continue" "0"
+# Verify that sentinel mismatch causes continue (skip to next poll)
+if grep -q 'sentinel' "$REMOTE_BUILD" && grep -A5 'sentinel_output' "$REMOTE_BUILD" | grep -q 'continue'; then
+    check "sentinel mismatch causes continue" "0"
 else
-    check "false positive causes continue" "1"
+    check "sentinel mismatch causes continue" "1"
 fi
 
 # ============================================================
@@ -304,9 +302,10 @@ fi
 echo ""
 echo "Test 16: false-positive prompt detection (integration)"
 # Kill old session, create fresh one
-"$PTY_SESSION" kill "$TEST_SESSION" 2>/dev/null || true
+"$NBS_TS" kill "$TEST_SESSION" 2>/dev/null || true
 sleep 1
-"$PTY_SESSION" create "$TEST_SESSION" 'bash'
+TEST_SESSION=$("$NBS_TS" create bash | tr -d '[:space:]')
+HANDLES+=("$TEST_SESSION")
 sleep 1
 
 # The build command echoes text matching the prompt pattern, then sleeps.
@@ -379,9 +378,10 @@ fi
 # ============================================================
 echo ""
 echo "Test 19: wall-clock timing accuracy (integration)"
-"$PTY_SESSION" kill "$TEST_SESSION" 2>/dev/null || true
+"$NBS_TS" kill "$TEST_SESSION" 2>/dev/null || true
 sleep 1
-"$PTY_SESSION" create "$TEST_SESSION" 'bash'
+TEST_SESSION=$("$NBS_TS" create bash | tr -d '[:space:]')
+HANDLES+=("$TEST_SESSION")
 sleep 1
 
 # Timeout of 4s with poll of 1s. The build command sleeps for 10s.

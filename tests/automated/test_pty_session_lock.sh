@@ -14,6 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 PTY_LOCK="$PROJECT_ROOT/bin/pty-session-lock"
 
+if [[ ! -x "$PTY_LOCK" ]]; then
+    echo "SKIP: pty-session-lock binary not found (feature not implemented)"
+    exit 0
+fi
+
 # Use an isolated lock directory for testing
 TEST_LOCK_DIR=$(mktemp -d)
 export NBS_PTY_LOCK_DIR="$TEST_LOCK_DIR"

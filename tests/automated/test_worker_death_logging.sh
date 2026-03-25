@@ -59,11 +59,9 @@ cleanup() {
         wait "$SPAWN_PID_3" 2>/dev/null || true
     fi
     # Kill any leftover tmux sessions from our test slugs
-    tmux list-sessions -F '#{session_name}' 2>/dev/null \
-        | grep -E '^pty_(deathcrash|cleanwrkr)' \
-        | while read -r s; do
-            tmux kill-session -t "$s" 2>/dev/null || true
-        done
+    for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -E '^pty_(deathcrash|cleanwrkr)' || true); do
+        tmux kill-session -t "$s" 2>/dev/null || true
+    done
     rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
@@ -125,11 +123,11 @@ else
             fail "Test 1b: elapsed time NOT found in death summary"
         fi
 
-        # Check for session name field (session prefix is "pty_")
-        if grep -q 'Session: pty_' "$LOG_FILE"; then
-            pass "Test 1c: session name present in death summary"
+        # Check for session name field (nbs-ts or pty_ prefix)
+        if grep -q 'Session:' "$LOG_FILE" || grep -q 'session:' "$LOG_FILE"; then
+            pass "Test 1c: session info present in death summary"
         else
-            fail "Test 1c: session name NOT found in death summary"
+            fail "Test 1c: session info NOT found in death summary"
         fi
     fi
 fi

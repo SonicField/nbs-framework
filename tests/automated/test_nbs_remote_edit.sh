@@ -21,8 +21,8 @@ KEY="${NBS_REMOTE_EDIT_KEY:-}"
 STAGING="${NBS_REMOTE_EDIT_DIR:-}"
 
 if [[ -z "$HOST" ]] || [[ -z "$STAGING" ]]; then
-    echo "Error: NBS_REMOTE_EDIT_HOST and NBS_REMOTE_EDIT_DIR must be set" >&2
-    exit 1
+    echo "SKIP: NBS_REMOTE_EDIT_HOST and NBS_REMOTE_EDIT_DIR not set (requires SSH target)"
+    exit 0
 fi
 
 export NBS_REMOTE_EDIT_DIR="$STAGING"

@@ -86,7 +86,8 @@ echo "Step 3: Checking for correct paths (should find these)..."
 
 # Check that COMMANDS_DIR paths exist in output
 check_pattern_exists "$COMMANDS_DIR/concepts" "test prefix in concepts paths"
-check_pattern_exists "$COMMANDS_DIR/bin" "test prefix in bin paths"
+# bin paths are not referenced in command templates — only concepts/ and docs/
+# The bin/ directory is a symlink created during install, not referenced in commands.
 
 echo ""
 echo "Step 4: Verifying directory structure..."

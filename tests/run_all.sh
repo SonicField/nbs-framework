@@ -109,7 +109,9 @@ run_ai_test() {
         "$NBS_TS" create "$session" bash 2>/dev/null
         # Unset TMUX so tests that use nbs-ts internally can create
         # their own sessions without tmux refusing to nest.
-        "$NBS_TS" send "$session" "unset TMUX; $test_script; echo \$? > $rc_file; exit" 2>/dev/null
+        # Unset CLAUDECODE so tests that invoke claude -p can run
+        # without hitting the nested session restriction.
+        "$NBS_TS" send "$session" "unset TMUX CLAUDECODE; $test_script; echo \$? > $rc_file; exit" 2>/dev/null
         # Wait for session to exit (read --wait blocks until process dies)
         "$NBS_TS" read "$session" --wait --timeout=300 2>/dev/null || true
         "$NBS_TS" kill "$session" 2>/dev/null || true
@@ -215,6 +217,22 @@ test_pythia_adversarial
 test_pythia_adv_no_chat
 test_scribe_ai
 test_scribe_log_ai
+test_dispatch_adversarial
+test_ephemeral_worker_exit
+test_evaluator_catches_bad
+test_help_nbs_worker
+test_investigation_adversarial
+test_investigation_adv_no_normal
+test_investigation_branch
+test_investigation_dispatch
+test_investigation_file
+test_nbs_dispatch
+test_scribe_adversarial
+test_scribe_adv_no_noise
+test_supervisor_adv_no_old_pattern
+test_supervisor_nbs_worker
+test_worker_adv_no_raw_log
+test_worker_log_tooling
 "
 
 is_ai_test() {
