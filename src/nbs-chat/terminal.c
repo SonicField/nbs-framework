@@ -448,7 +448,7 @@ static void print_help(void) {
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
     printf("  %s/pause%s      Pause team — agents keep context, stop receiving work\n", DIM, RESET);
     printf("  %s/resume%s     Resume paused team\n", DIM, RESET);
-    printf("  %s/shutdown%s   Send wrap-up message and disable auto-restart\n", DIM, RESET);
+    printf("  %s/shutdown%s   Announce shutdown, wait 10s, kill all agents\n", DIM, RESET);
     printf("  %s/restart%s    Manually restart the agent team\n", DIM, RESET);
     printf("  %s/pythia%s     Spawn pythia (trajectory & risk assessment)\n", DIM, RESET);
     printf("  %s/shepard%s    Spawn shepard (team effectiveness check)\n", DIM, RESET);
@@ -1784,18 +1784,66 @@ int main(int argc, char **argv) {
                 continue;
             }
 
-            /* /shutdown — send wrap-up message, disable watchdog */
+            /* /shutdown — announce, wait 10s, kill all agents */
             if (strcmp(edit.buf, "/shutdown") == 0) {
-                if (watchdog_is_enabled(&g_watchdog)) {
-                    do_send("@team Good work — time to wrap up. "
-                            "Please commit any uncommitted changes, "
-                            "post a final session summary, and shut down cleanly.");
-                    watchdog_disable(&g_watchdog);
-                    printf("  %sWatchdog disabled. Team will not be auto-restarted.%s\n",
+                if (g_watchdog.project_root[0] == '\0') {
+                    printf("  %sNo project root — nothing to shut down.%s\n",
                            DIM, RESET);
-                } else {
-                    printf("  %sWatchdog already disabled.%s\n", DIM, RESET);
+                    line_state_reset(&edit);
+                    print_prompt(g_handle);
+                    continue;
                 }
+                do_send("@team SYSTEM: Shutting down in 10 seconds. "
+                        "Finish your current action and save state.");
+                watchdog_disable(&g_watchdog);
+                printf("  %sShutting down in 10 seconds...%s\n", DIM, RESET);
+                fflush(stdout);
+                sleep(10);
+
+                /* Kill all sessions for this project */
+                {
+                    char tag[4096];
+                    const char *chat_base = strrchr(g_watchdog.chat_path, '/');
+                    if (chat_base) chat_base++; else chat_base = g_watchdog.chat_path;
+                    snprintf(tag, sizeof(tag), "%s", chat_base);
+                    /* Strip .chat suffix */
+                    char *dot = strstr(tag, ".chat");
+                    if (dot) *dot = '\0';
+                    /* Replace dots with dashes */
+                    for (char *p = tag; *p; p++) if (*p == '.') *p = '-';
+
+                    char list_cmd[8192];
+                    snprintf(list_cmd, sizeof(list_cmd),
+                             "nbs-ts list --name=%s 2>/dev/null | cut -f1 | "
+                             "while read h; do nbs-ts kill \"$h\" 2>/dev/null; done",
+                             tag);
+                    int sys_rc = system(list_cmd);
+                    (void)sys_rc;
+                }
+                /* Kill sidecars and nbs-claude for this project */
+                {
+                    char pat[4200];
+                    pid_t kpid;
+
+                    snprintf(pat, sizeof(pat),
+                             "nbs-sidecar.*--root=%s", g_watchdog.project_root);
+                    kpid = fork();
+                    if (kpid == 0) {
+                        execlp("pkill", "pkill", "-9", "-f", pat, (char *)NULL);
+                        _exit(0);
+                    }
+                    if (kpid > 0) waitpid(kpid, NULL, 0);
+
+                    snprintf(pat, sizeof(pat),
+                             "nbs-claude.*%s.*dangerously", g_watchdog.project_root);
+                    kpid = fork();
+                    if (kpid == 0) {
+                        execlp("pkill", "pkill", "-9", "-f", pat, (char *)NULL);
+                        _exit(0);
+                    }
+                    if (kpid > 0) waitpid(kpid, NULL, 0);
+                }
+                printf("  %sTeam stopped.%s\n", DIM, RESET);
                 line_state_reset(&edit);
                 print_prompt(g_handle);
                 continue;
