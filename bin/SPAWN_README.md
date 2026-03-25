@@ -28,9 +28,11 @@ A bash function. Four arguments, one job:
 launch_agent HANDLE PROJECT_ROOT NBS_CLAUDE_PATH INITIAL_PROMPT
 ```
 
-It sets three environment variables as bash prefix vars on the command line, calls `setsid`, and backgrounds:
+It unsets inherited env vars that would confuse Claude, sets three environment variables as bash prefix vars on the command line, calls `setsid`, and backgrounds:
 
 ```bash
+unset CLAUDECODE TMUX
+
 NBS_HANDLE="$handle" \
 NBS_TRANSPORT=ts \
 NBS_INITIAL_PROMPT="$initial_prompt" \
@@ -38,7 +40,9 @@ setsid "$nbs_claude_path" --root="$project_root" --dangerously-skip-permissions 
     >/dev/null 2>&1 &
 ```
 
-That is the entire function. It is shared by the restart script and `nbs-spawn-worker`. Both source the same file. One code path.
+The `unset` is critical. When workers are spawned from within a running Claude Code session (e.g. `/pythia`), the parent's `CLAUDECODE=1` leaks into the child. Claude Code detects this variable on startup and treats it as a nested session — causing the child to exit after ~30 seconds. See "The CLAUDECODE Bug" below.
+
+The function is shared by the restart script and `nbs-spawn-worker`. Both source the same file. One code path.
 
 ## What Does Not Work
 
@@ -54,17 +58,50 @@ Every alternative has been tried. None survived.
 | `flock` on pid files | File descriptor 9 inherited by child processes (sidecar, tail). Lock held indefinitely. Blocked subsequent spawns of the same handle. Testkeeper was permanently blocked. |
 | Timing-based coordination (`sleep N` then check) | Race conditions. The system must work without any timing assumptions. |
 
-## Why Bash Works and C Does Not
+## The CLAUDECODE Bug (solved 2026-03-25)
 
-We do not know the exact mechanism. What we know empirically:
+Claude Code sets `CLAUDECODE=1` in its own environment. Any child process inherits this. When a new Claude Code instance starts and sees `CLAUDECODE=1`, it treats itself as a nested session and exits after ~30 seconds.
 
-- `setsid nbs-claude` from a bash script works every time.
-- `fork()` + `setsid()` + `execl()` from C does not work, even with identical environment variables and arguments.
-- The difference is not in the environment (verified by dumping `env` from both paths).
-- The difference is not in the command-line arguments (verified by comparing `/proc/PID/cmdline`).
-- The difference is somewhere in the process setup that C's fork+exec produces versus bash's setsid command.
+This was the root cause of the intermittent 30-second worker death that plagued oracle spawns (`/pythia`, `/librarian`, `/shepard`, `/fixup`). These are triggered from within an active Claude Code session, so the child inherits `CLAUDECODE=1`. Team agent restarts via the watchdog daemon (`nbs-chat-terminal-restart.sh`) were unaffected because the watchdog is not a Claude Code child — no `CLAUDECODE` in its environment.
 
-Rather than debug something we cannot observe, we use what works. The bash function is the contract. Do not replace it with C.
+The fix: `unset CLAUDECODE TMUX` in `launch_agent` before `setsid`. This gives every spawned agent a clean environment regardless of the caller.
+
+## Two Separate Bugs
+
+There are two distinct problems. Do not confuse them.
+
+**Bug 1: CLAUDECODE inheritance (solved).** When oracles are spawned from within a Claude Code session (e.g. `/pythia` from the chat terminal, or sidecar triggers), `CLAUDECODE=1` leaks into the child. Claude detects this and exits. Fix: `unset CLAUDECODE TMUX` in `launch_agent`.
+
+**Bug 2: C fork+exec kills Claude (unsolved).** Launching Claude via C `fork()` + `setsid()` + `execl()` fails even when CLAUDECODE is NOT set. Tested from the chat terminal (no Claude Code parent, no CLAUDECODE in environment). Claude starts, processes a few API calls, then exits with "Resume this session". The bash `setsid` command does not have this problem. The root cause is unknown. The C path is not used.
+
+These are independent. Bug 1 affects bash callers running inside Claude Code. Bug 2 affects C callers regardless of context. The `launch_agent` bash function fixes Bug 1 and avoids Bug 2 by never using C fork+exec.
+
+## Session Discovery: Names Not JSON
+
+After spawning an agent, the monitor needs to find its nbs-ts session handle to check liveness and kill it when done. Two approaches exist. One works. One doesn't.
+
+**Use: `nbs-ts list --name=<role>` (name-based lookup)**
+
+nbs-claude creates named sessions (`nbs-pythia-poem`, `nbs-supervisor-poem`). The name is written atomically by `nbs-ts create --name=`. The monitor greps `nbs-ts list` output for the role name and extracts the hex handle. This is deterministic — if the session exists, the name exists.
+
+```bash
+TS_HANDLE=$("$NBS_TS" list 2>/dev/null \
+    | grep "nbs-${ROLE}" | grep "alive" | head -1 | cut -f1 || true)
+```
+
+**Do not use: `.nbs/sessions/<handle>.json` (JSON metadata)**
+
+nbs-claude writes a JSON metadata file with the session handle inside it. This file is:
+- Written asynchronously — may not exist when the monitor checks
+- Stale from a previous run — contains a dead session's handle
+- Deleted by cleanup traps — disappears when the agent exits
+- A race target — multiple restarts overwrite it
+
+Parsing JSON in bash (`grep -o '"nbs_ts_handle"...' | sed ...`) is fragile. The file is a convenience for humans reading session state, not a reliable IPC mechanism.
+
+**Why names work:** nbs-ts sessions have unique names assigned at creation time. The name lives in the session directory as a simple file. `nbs-ts list` reads it atomically. No parsing, no race, no stale data. If the session is alive, the name is there. If it's dead, `nbs-ts list` says dead. Simple.
+
+**Naming convention:** `nbs-<handle>-<tag>` where tag comes from the chat filename. Examples: `nbs-pythia-poem`, `nbs-supervisor-live`, `nbs-librarian-poem`. These names are unique across teams (different tags) and roles (different handles). Use them for all session discovery.
 
 ## Callers
 
@@ -81,4 +118,5 @@ Rather than debug something we cannot observe, we use what works. The bash funct
 - **Do not redirect stdin.** Claude needs it open.
 - **Do not use flock on pid files.** The lock gets inherited by children and blocks future spawns.
 - **Do not add sleeps or timing.** The system works without them. Timing introduces race conditions.
+- **Do not inherit CLAUDECODE or TMUX from the parent.** These cause nesting detection and early exit. `launch_agent` unsets them — do not remove the unset.
 - **Do not change the launch_agent function** without testing that all oracles (pythia, librarian, shepard, fixup) survive for at least 60 seconds after spawn.

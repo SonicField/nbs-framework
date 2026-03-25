@@ -124,6 +124,20 @@ echo "pending"
 # open (callers using $() would block until the monitor exits).
 (
     sleep 15  # let worker initialise
+
+    # Discover session handle via nbs-ts name lookup.
+    # DO NOT use .nbs/sessions/*.json — the JSON file is written by
+    # nbs-claude asynchronously and may not exist yet, may be stale from
+    # a previous run, or may be deleted by cleanup traps. Name-based
+    # lookup via nbs-ts list is deterministic and race-free.
+    TS_HANDLE=$("$NBS_TS" list 2>/dev/null \
+        | grep "nbs-${ROLE}" | grep "alive" | head -1 | cut -f1 || true)
+
+    if [[ -z "$TS_HANDLE" ]]; then
+        # Session not found — worker may have died during init. Exit silently.
+        exit 0
+    fi
+
     for i in $(seq 1 60); do
         sleep 10
 

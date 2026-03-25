@@ -21,6 +21,10 @@ launch_agent() {
     local nbs_claude_path="$3"
     local initial_prompt="$4"
 
+    # Unset CLAUDECODE and TMUX so the spawned Claude does not think
+    # it's nested inside another Claude Code or tmux session.
+    unset CLAUDECODE TMUX 2>/dev/null || true
+
     NBS_HANDLE="$handle" \
     NBS_TRANSPORT=ts \
     NBS_INITIAL_PROMPT="$initial_prompt" \
