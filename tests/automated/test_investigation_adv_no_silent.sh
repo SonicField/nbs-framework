@@ -11,16 +11,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-PTY_SESSION="$PROJECT_ROOT/bin/pty-session"
+NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
 VERDICT_FILE="$SCRIPT_DIR/verdicts/investigation_adv_no_silent_verdict.json"
 
 # Create isolated test environment
 TEST_REPO=$(mktemp -d)
-SESSION_NAME="test_adv_silent_$$"
+SESSION_HANDLE=""
 CAPTURE_FILE=$(mktemp)
 
 cleanup() {
-    "$PTY_SESSION" kill "$SESSION_NAME" 2>/dev/null || true
+    [[ -n "$SESSION_HANDLE" ]] && "$NBS_TS" kill "$SESSION_HANDLE" 2>/dev/null || true
     rm -rf "$TEST_REPO"
     rm -f "$CAPTURE_FILE"
 }
@@ -72,21 +72,21 @@ echo "Created repo with INVESTIGATION-STATUS.md in old_investigations/"
 echo "NO file at root, NOT on investigation branch"
 echo ""
 
-# Start claude via pty-session
+# Start claude via nbs-ts
 echo "Starting claude in isolated repo..."
-"$PTY_SESSION" create "$SESSION_NAME" "cd '$TEST_REPO' && claude"
+SESSION_HANDLE=$("$NBS_TS" create "cd '$TEST_REPO' && claude" 2>&1 | tail -1)
 
 # Handle trust prompt
 echo "Waiting for trust prompt..."
-if "$PTY_SESSION" wait "$SESSION_NAME" 'trust' --timeout=30; then
+if "$NBS_TS" wait-pattern "$SESSION_HANDLE" 'trust' --timeout=30 2>/dev/null; then
     echo "Trust prompt detected, accepting..."
-    "$PTY_SESSION" send "$SESSION_NAME" ''
+    "$NBS_TS" send "$SESSION_HANDLE" '' 2>/dev/null
     sleep 2
 fi
 
 # Wait for main prompt
 echo "Waiting for main prompt..."
-if ! "$PTY_SESSION" wait "$SESSION_NAME" 'Welcome' --timeout=30; then
+if ! "$NBS_TS" wait-pattern "$SESSION_HANDLE" 'Welcome' --timeout=30 2>/dev/null; then
     echo "FAIL: Claude did not show welcome screen"
     exit 1
 fi
@@ -96,9 +96,9 @@ echo ""
 
 # Send /nbs
 echo "Sending /nbs command..."
-"$PTY_SESSION" send "$SESSION_NAME" '/nbs'
+"$NBS_TS" send "$SESSION_HANDLE" '/nbs' 2>/dev/null
 sleep 1
-"$PTY_SESSION" send "$SESSION_NAME" ''
+"$NBS_TS" send "$SESSION_HANDLE" '' 2>/dev/null
 
 # Wait for response
 echo "Waiting for response..."
@@ -106,7 +106,7 @@ sleep 60
 
 # Capture output
 echo "Capturing output..."
-"$PTY_SESSION" read "$SESSION_NAME" > "$CAPTURE_FILE"
+"$NBS_TS" read "$SESSION_HANDLE" 2>/dev/null > "$CAPTURE_FILE"
 
 NBS_OUTPUT=$(cat "$CAPTURE_FILE")
 

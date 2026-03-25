@@ -233,6 +233,8 @@ test_supervisor_adv_no_old_pattern
 test_supervisor_nbs_worker
 test_worker_adv_no_raw_log
 test_worker_log_tooling
+test_investigation_ask
+test_investigation_adv_no_silent
 "
 
 is_ai_test() {
