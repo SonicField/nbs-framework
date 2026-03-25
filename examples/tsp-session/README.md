@@ -27,15 +27,16 @@ Three oracles supported the team: **pythia** (strategy guidance), **shepard** (m
 
 | File | Contents |
 |------|----------|
-| `goal.md` | The original goal as given to the team — deliberately impossible |
-| `SESSION-REPORT.md` | Final deliverables, falsification results, commit log, key learnings |
-| `src/tsp.c` | The heuristic solver (NN + 2-opt + or-opt) |
-| `src/tsp_test.c` | 7-test verification harness |
-| `src/tsp_delaunay.c` | Angle 1: Delaunay containment hypothesis (falsified) |
-| `src/tsp_hull.c` | Angle 2: Convex hull layering (falsified) |
-| `src/tsp_heldkarp.c` | Angle 3: Held-Karp lower bound (best result) |
-| `src/tsp_topo.c` | Angle 4: Topological boundary cycle (falsified) |
-| `test_inputs/` | Adversarial test fixtures: circular, clustered, near-collinear |
+| [goal.md](goal.md) | The original goal as given to the team — deliberately impossible |
+| [chat-log.txt](chat-log.txt) | Full team chat (2072 lines) — the most valuable artefact |
+| [SESSION-REPORT.md](SESSION-REPORT.md) | Final deliverables, falsification results, commit log, key learnings |
+| [src/tsp.c](src/tsp.c) | The heuristic solver (NN + 2-opt + or-opt) |
+| [src/tsp_test.c](src/tsp_test.c) | 7-test verification harness |
+| [src/tsp_delaunay.c](src/tsp_delaunay.c) | Angle 1: Delaunay containment hypothesis (falsified) |
+| [src/tsp_hull.c](src/tsp_hull.c) | Angle 2: Convex hull layering (falsified) |
+| [src/tsp_heldkarp.c](src/tsp_heldkarp.c) | Angle 3: Held-Karp lower bound (best result) |
+| [src/tsp_topo.c](src/tsp_topo.c) | Angle 4: Topological boundary cycle (falsified) |
+| [test_inputs/](test_inputs/) | Adversarial test fixtures: circular, clustered, near-collinear |
 
 ## Build and Run
 
