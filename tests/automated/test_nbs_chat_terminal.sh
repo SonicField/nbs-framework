@@ -602,11 +602,10 @@ check "@mention generates chat-mention event" "$( [[ $MENTION_EVENTS -ge 1 ]] &&
 echo ""
 
 # ============================================================
-# Auto-archive recovery tests (pty-session driven)
+# Auto-archive recovery tests (nbs-ts driven)
 # ============================================================
 
-PTY_SESSION="${PTY_SESSION_BIN:-$PROJECT_ROOT/bin/pty-session}"
-export NBS_PTY_QUIET=1
+NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
 
 # Helper: create a chat file and populate it with N messages from varying senders
 create_populated_chat() {
@@ -637,31 +636,30 @@ simulate_archive() {
 # --- Test 38: Archive recovery — terminal resumes after message count drops ---
 echo "38. Archive recovery — terminal resumes after message count drops..."
 CHAT="$TEST_DIR/test38.chat"
-SESSION_NAME="test38-archive-$$"
 create_populated_chat "$CHAT" 10
 
-# Start terminal in a pty-session
-"$PTY_SESSION" create "$SESSION_NAME" "$NBS_TERMINAL $CHAT viewer" >/dev/null 2>&1
-"$PTY_SESSION" wait "$SESSION_NAME" 'viewer>' --timeout=10 >/dev/null 2>&1
+# Start terminal in an nbs-ts session
+T38_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer" 2>&1 | tail -1)
+"$NBS_TS" wait-pattern "$T38_HANDLE" 'viewer>' --timeout=10 >/dev/null 2>&1
 
 # Simulate auto-archive: rewrite with only last 5 messages
 simulate_archive "$CHAT" 10 5
 
 # Wait for the terminal to detect the archive
-"$PTY_SESSION" wait "$SESSION_NAME" 'archived' --timeout=10 >/dev/null 2>&1
+"$NBS_TS" wait-pattern "$T38_HANDLE" 'archived' --timeout=10 >/dev/null 2>&1
 
 # Now send a new message from another process
 "$NBS_CHAT" send "$CHAT" "newcomer" "Post-archive hello"
 
 # Wait for the terminal to display the new message
 set +e
-"$PTY_SESSION" wait "$SESSION_NAME" 'Post-archive hello' --timeout=10 >/dev/null 2>&1
+"$NBS_TS" wait-pattern "$T38_HANDLE" 'Post-archive hello' --timeout=10 >/dev/null 2>&1
 WAIT_RC=$?
 set -e
 
-# Read the terminal pane to verify
-OUTPUT=$("$PTY_SESSION" read "$SESSION_NAME" 2>/dev/null)
-"$PTY_SESSION" kill "$SESSION_NAME" >/dev/null 2>&1 || true
+# Read the terminal output to verify
+OUTPUT=$("$NBS_TS" read "$T38_HANDLE" 2>/dev/null)
+"$NBS_TS" kill "$T38_HANDLE" >/dev/null 2>&1 || true
 
 check "Terminal shows post-archive message" "$( echo "$OUTPUT" | grep -qF 'Post-archive hello' && echo pass || echo fail )"
 check "Wait for post-archive message succeeded" "$( [[ $WAIT_RC -eq 0 ]] && echo pass || echo fail )"
@@ -671,24 +669,23 @@ echo ""
 # --- Test 39: Archive recovery — notification banner appears ---
 echo "39. Archive recovery — notification banner appears..."
 CHAT="$TEST_DIR/test39.chat"
-SESSION_NAME="test39-banner-$$"
 create_populated_chat "$CHAT" 10
 
 # Start terminal
-"$PTY_SESSION" create "$SESSION_NAME" "$NBS_TERMINAL $CHAT viewer" >/dev/null 2>&1
-"$PTY_SESSION" wait "$SESSION_NAME" 'viewer>' --timeout=10 >/dev/null 2>&1
+T39_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer" 2>&1 | tail -1)
+"$NBS_TS" wait-pattern "$T39_HANDLE" 'viewer>' --timeout=10 >/dev/null 2>&1
 
 # Simulate archive
 simulate_archive "$CHAT" 10 5
 
 # Wait for banner to appear
 set +e
-"$PTY_SESSION" wait "$SESSION_NAME" 'archived' --timeout=10 >/dev/null 2>&1
+"$NBS_TS" wait-pattern "$T39_HANDLE" 'archived' --timeout=10 >/dev/null 2>&1
 WAIT_RC=$?
 set -e
 
-OUTPUT=$("$PTY_SESSION" read "$SESSION_NAME" 2>/dev/null)
-"$PTY_SESSION" kill "$SESSION_NAME" >/dev/null 2>&1 || true
+OUTPUT=$("$NBS_TS" read "$T39_HANDLE" 2>/dev/null)
+"$NBS_TS" kill "$T39_HANDLE" >/dev/null 2>&1 || true
 
 check "Archive banner contains 'archived'" "$( echo "$OUTPUT" | grep -qi 'archived' && echo pass || echo fail )"
 check "Archive banner shows remaining count" "$( echo "$OUTPUT" | grep -qF '5 messages remaining' && echo pass || echo fail )"
@@ -699,25 +696,24 @@ echo ""
 # --- Test 40: Normal polling — new messages appear ---
 echo "40. Normal polling — new messages appear..."
 CHAT="$TEST_DIR/test40.chat"
-SESSION_NAME="test40-poll-$$"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 "$NBS_CHAT" send "$CHAT" "setup" "Initial message"
 
 # Start terminal
-"$PTY_SESSION" create "$SESSION_NAME" "$NBS_TERMINAL $CHAT viewer" >/dev/null 2>&1
-"$PTY_SESSION" wait "$SESSION_NAME" 'viewer>' --timeout=10 >/dev/null 2>&1
+T40_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer" 2>&1 | tail -1)
+"$NBS_TS" wait-pattern "$T40_HANDLE" 'viewer>' --timeout=10 >/dev/null 2>&1
 
 # Send a message from another process after terminal is running
 "$NBS_CHAT" send "$CHAT" "external" "Polled message arrives"
 
 # Wait for the message to appear in the terminal
 set +e
-"$PTY_SESSION" wait "$SESSION_NAME" 'Polled message arrives' --timeout=10 >/dev/null 2>&1
+"$NBS_TS" wait-pattern "$T40_HANDLE" 'Polled message arrives' --timeout=10 >/dev/null 2>&1
 WAIT_RC=$?
 set -e
 
-OUTPUT=$("$PTY_SESSION" read "$SESSION_NAME" 2>/dev/null)
-"$PTY_SESSION" kill "$SESSION_NAME" >/dev/null 2>&1 || true
+OUTPUT=$("$NBS_TS" read "$T40_HANDLE" 2>/dev/null)
+"$NBS_TS" kill "$T40_HANDLE" >/dev/null 2>&1 || true
 
 check "Polled message appears in terminal" "$( echo "$OUTPUT" | grep -qF 'Polled message arrives' && echo pass || echo fail )"
 check "Polled message attributed to sender" "$( echo "$OUTPUT" | grep -qF 'external' && echo pass || echo fail )"
