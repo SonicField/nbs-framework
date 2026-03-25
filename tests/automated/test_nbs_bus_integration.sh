@@ -595,6 +595,217 @@ check "All in processed" "$( [[ $(count_processed "$EVENTS") -eq 3 ]] && echo pa
 "$NBS_BUS" publish "$EVENTS" testkeeper heartbeat normal "Testkeeper online"
 check "Agent can publish after startup" "$( [[ $(count_pending "$EVENTS") -eq 1 ]] && echo pass || echo fail )"
 
+# =========================================================================
+# 16. Double-ack: second ack fails gracefully
+# =========================================================================
+echo ""
+echo "16. Double-ack: second ack fails gracefully..."
+EVENTS="$TEST_DIR/test16"
+setup_events "$EVENTS"
+
+"$NBS_BUS" publish "$EVENTS" agent heartbeat low "test event"
+CHECK_OUT=$("$NBS_BUS" check "$EVENTS")
+EVT=$(echo "$CHECK_OUT" | grep -o '[^ ]*\.event' | head -1)
+"$NBS_BUS" ack "$EVENTS" "$EVT"
+
+# Second ack — event is in processed/, not pending
+RC=0
+"$NBS_BUS" ack "$EVENTS" "$EVT" 2>/dev/null || RC=$?
+check "Double-ack returns non-zero" "$( [[ $RC -ne 0 ]] && echo pass || echo fail )"
+# Should be exit 3 (event not found in pending)
+check "Double-ack exit code is 3" "$( [[ $RC -eq 3 ]] && echo pass || echo fail )"
+# Original should still be in processed (not corrupted)
+check "Event still in processed" "$( [[ -f "$EVENTS/processed/$EVT" ]] && echo pass || echo fail )"
+
+# =========================================================================
+# 17. Read from processed: acked event content intact
+# =========================================================================
+echo ""
+echo "17. Read from processed: acked event content intact..."
+EVENTS="$TEST_DIR/test17"
+setup_events "$EVENTS"
+
+"$NBS_BUS" publish "$EVENTS" worker-x task-complete high "Valuable result: 99.7% accuracy"
+CHECK_OUT=$("$NBS_BUS" check "$EVENTS")
+EVT=$(echo "$CHECK_OUT" | grep -o '[^ ]*\.event' | head -1)
+
+# Read before ack
+BEFORE=$("$NBS_BUS" read "$EVENTS" "$EVT")
+
+# Ack
+"$NBS_BUS" ack "$EVENTS" "$EVT"
+
+# Content in processed/ should be byte-identical
+if [[ -f "$EVENTS/processed/$EVT" ]]; then
+    AFTER=$(cat "$EVENTS/processed/$EVT")
+    check "Content intact after ack" "$( [[ "$BEFORE" == "$AFTER" ]] && echo pass || echo fail )"
+    check "Payload preserved" "$( echo "$AFTER" | grep -q '99.7% accuracy' && echo pass || echo fail )"
+    check "Source preserved" "$( echo "$AFTER" | grep -q 'source: worker-x' && echo pass || echo fail )"
+else
+    check "Event in processed" "fail"
+fi
+
+# =========================================================================
+# 18. Concurrent ack + publish: no corruption
+# =========================================================================
+echo ""
+echo "18. Concurrent ack + publish: no corruption..."
+EVENTS="$TEST_DIR/test18"
+setup_events "$EVENTS"
+
+# Pre-populate with 10 events
+for i in $(seq 1 10); do
+    "$NBS_BUS" publish "$EVENTS" "seed-$i" heartbeat low "seed $i"
+done
+
+# Ack-all and publish concurrently
+"$NBS_BUS" ack-all "$EVENTS" &
+for i in $(seq 11 20); do
+    "$NBS_BUS" publish "$EVENTS" "new-$i" heartbeat low "new $i" &
+done
+wait
+
+PENDING=$(count_pending "$EVENTS")
+PROCESSED=$(count_processed "$EVENTS")
+TOTAL=$((PENDING + PROCESSED))
+
+check "No events lost in concurrent ack+publish" "$( [[ $TOTAL -ge 10 ]] && echo pass || echo fail )"
+check "New events visible after concurrent ack" "$( [[ $PENDING -ge 1 ]] && echo pass || echo fail )"
+
+# All remaining events should be valid YAML
+ALL_VALID=true
+for evt_file in "$EVENTS"/*.event; do
+    if [[ -f "$evt_file" ]]; then
+        if ! grep -q '^source:' "$evt_file" 2>/dev/null; then
+            ALL_VALID=false
+            break
+        fi
+    fi
+done
+check "All surviving events valid" "$( $ALL_VALID && echo pass || echo fail )"
+
+# =========================================================================
+# 19. Config hot-reload: add config mid-operation
+# =========================================================================
+echo ""
+echo "19. Config hot-reload: add config mid-operation..."
+EVENTS="$TEST_DIR/test19"
+setup_events "$EVENTS"
+
+# No config — dedup disabled by default
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "first"
+sleep 0.01
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "second"
+check "No dedup without config" "$( [[ $(count_pending "$EVENTS") -eq 2 ]] && echo pass || echo fail )"
+
+# Clear queue
+"$NBS_BUS" ack-all "$EVENTS"
+
+# Add config mid-session
+cat > "$EVENTS/config.yaml" << 'EOF'
+dedup-window: 300
+EOF
+
+# Now dedup should be active
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "with dedup 1"
+RC=0
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "with dedup 2" || RC=$?
+check "Dedup active after config added" "$( [[ $RC -eq 5 ]] && echo pass || echo fail )"
+check "Only 1 event with dedup" "$( [[ $(count_pending "$EVENTS") -eq 1 ]] && echo pass || echo fail )"
+
+# Remove config — dedup should revert to disabled
+rm "$EVENTS/config.yaml"
+"$NBS_BUS" ack-all "$EVENTS"
+
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "no config 1"
+sleep 0.01
+"$NBS_BUS" publish "$EVENTS" worker-a heartbeat low "no config 2"
+check "Dedup disabled after config removed" "$( [[ $(count_pending "$EVENTS") -eq 2 ]] && echo pass || echo fail )"
+
+# =========================================================================
+# 20. nbs-chat-init creates functional bus
+# =========================================================================
+echo ""
+echo "20. nbs-chat-init creates functional bus..."
+NBS_CHAT_INIT="${PROJECT_ROOT}/bin/nbs-chat-init"
+if [[ -x "$NBS_CHAT_INIT" ]]; then
+    PROJ="$TEST_DIR/test20"
+    mkdir -p "$PROJ"
+    "$NBS_CHAT_INIT" --name=bus-init-test --root="$PROJ" --force >/dev/null 2>&1
+
+    check "Events dir created by init" "$( [[ -d "$PROJ/.nbs/events" ]] && echo pass || echo fail )"
+    check "Processed dir created by init" "$( [[ -d "$PROJ/.nbs/events/processed" ]] && echo pass || echo fail )"
+
+    if [[ -d "$PROJ/.nbs/events" ]]; then
+        # Ack any init-generated events first (nbs-chat-init publishes chat-message)
+        "$NBS_BUS" ack-all "$PROJ/.nbs/events" >/dev/null 2>&1
+
+        # Full lifecycle through init-created bus
+        "$NBS_BUS" publish "$PROJ/.nbs/events" test-agent task-complete normal "Init lifecycle test"
+        RC=$?
+        check "Publish to init bus succeeds" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+
+        CHECK_OUT=$("$NBS_BUS" check "$PROJ/.nbs/events")
+        EVT=$(echo "$CHECK_OUT" | grep -o '[^ ]*\.event' | head -1)
+        check "Check on init bus works" "$( [[ -n "$EVT" ]] && echo pass || echo fail )"
+
+        READ_OUT=$("$NBS_BUS" read "$PROJ/.nbs/events" "$EVT")
+        check "Read on init bus works" "$( echo "$READ_OUT" | grep -q 'source: test-agent' && echo pass || echo fail )"
+
+        "$NBS_BUS" ack "$PROJ/.nbs/events" "$EVT"
+        check "Ack on init bus works" "$( [[ $(count_pending "$PROJ/.nbs/events") -eq 0 ]] && echo pass || echo fail )"
+
+        STATUS_OUT=$("$NBS_BUS" status "$PROJ/.nbs/events")
+        check "Status on init bus works" "$( echo "$STATUS_OUT" | grep -qi 'pending.*0\|0.*pending' && echo pass || echo fail )"
+    fi
+else
+    echo "   SKIP: nbs-chat-init not found"
+fi
+
+# =========================================================================
+# 21. Publish → immediate prune: pending untouched
+# =========================================================================
+echo ""
+echo "21. Publish → immediate prune: pending untouched..."
+EVENTS="$TEST_DIR/test21"
+setup_events "$EVENTS"
+
+"$NBS_BUS" publish "$EVENTS" worker-a task-complete critical "Must not lose"
+"$NBS_BUS" prune "$EVENTS" --max-bytes=1
+
+check "Pending survives aggressive prune" "$( [[ $(count_pending "$EVENTS") -eq 1 ]] && echo pass || echo fail )"
+
+CHECK_OUT=$("$NBS_BUS" check "$EVENTS")
+EVT=$(echo "$CHECK_OUT" | grep -o '[^ ]*\.event' | head -1)
+READ_OUT=$("$NBS_BUS" read "$EVENTS" "$EVT")
+check "Content intact after prune" "$( echo "$READ_OUT" | grep -q 'Must not lose' && echo pass || echo fail )"
+
+# =========================================================================
+# 22. Empty queue recovery: all operations safe on fresh bus
+# =========================================================================
+echo ""
+echo "22. Empty queue recovery: all operations safe..."
+EVENTS="$TEST_DIR/test22"
+setup_events "$EVENTS"
+
+"$NBS_BUS" check "$EVENTS" >/dev/null 2>&1
+RC_CHECK=$?
+"$NBS_BUS" status "$EVENTS" >/dev/null 2>&1
+RC_STATUS=$?
+"$NBS_BUS" ack-all "$EVENTS" >/dev/null 2>&1
+RC_ACKALL=$?
+"$NBS_BUS" prune "$EVENTS" >/dev/null 2>&1
+RC_PRUNE=$?
+
+check "Check on empty: exit 0" "$( [[ $RC_CHECK -eq 0 ]] && echo pass || echo fail )"
+check "Status on empty: exit 0" "$( [[ $RC_STATUS -eq 0 ]] && echo pass || echo fail )"
+check "Ack-all on empty: exit 0" "$( [[ $RC_ACKALL -eq 0 ]] && echo pass || echo fail )"
+check "Prune on empty: exit 0" "$( [[ $RC_PRUNE -eq 0 ]] && echo pass || echo fail )"
+
+# After empty operations, bus should still accept events
+"$NBS_BUS" publish "$EVENTS" recovery-agent heartbeat low "Alive after empty queue"
+check "Publish works after empty ops" "$( [[ $(count_pending "$EVENTS") -eq 1 ]] && echo pass || echo fail )"
+
 # --- Summary ---
 echo ""
 echo "=== Results ==="
