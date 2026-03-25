@@ -12,6 +12,12 @@ The epistemic methodology behind NBS — why it exists and how it thinks.
 |----------|-------------|
 | [Why NBS](framework/Why-NBS.md) | Motivation and core principles |
 | [Overview](framework/overview.md) | System architecture at a glance |
+| [Pillars](framework/pillars.md) | The seven concept files: goals, falsifiability, rhetoric, bullshit detection, verification, zero-code contract, engineering standards |
+| [Skill System](framework/skill-system.md) | How skills work: slash commands, installation, creation |
+| [/nbs Review](framework/nbs-review.md) | The review skill and its dynamic dispatch system |
+| [/nbs-audit](framework/nbs-audit.md) | Codebase audit against engineering standards |
+| [Investigation Mode](framework/investigation.md) | Hypothesis-driven side quests for debugging |
+| [Discovery & Recovery](framework/discovery.md) | Collaborative exploration and restructuring of unstructured projects |
 | [Document Tools](framework/nbs-doc.md) | Writing tools: analyse, plan, describe |
 | [Style Guide](framework/STYLE.md) | Writing conventions |
 | [Wiki Style](framework/WIKI_STYLE.md) | Wiki-specific formatting |
