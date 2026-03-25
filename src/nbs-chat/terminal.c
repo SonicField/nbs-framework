@@ -1921,8 +1921,11 @@ int main(int argc, char **argv) {
                     skill = TRIGGER_SKILL_FIXUP;
                 }
 
-                if (!watchdog_is_enabled(&g_watchdog)) {
-                    printf("  %sWatchdog not initialised — no project root.%s\n",
+                if (g_watchdog.project_root[0] == '\0') {
+                    printf("  %sNo project root — watchdog not initialised.%s\n",
+                           DIM, RESET);
+                } else if (!watchdog_is_enabled(&g_watchdog)) {
+                    printf("  %sTeam is paused. Use /resume before spawning oracles.%s\n",
                            DIM, RESET);
                 } else if (desc && skill) {
                     printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
