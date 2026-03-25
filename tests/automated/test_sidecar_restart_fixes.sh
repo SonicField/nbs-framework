@@ -182,7 +182,7 @@ cp "$RESTART_SCRIPT" "$MOCK_DIR/nbs-sidecar-restart"
 chmod +x "$MOCK_DIR/nbs-sidecar-restart"
 
 # Start a mock sidecar with the same command pattern the restart script looks for
-"$MOCK_DIR/nbs-sidecar" --handle=test-mock --transport=tmux --pane-id=%999 &
+"$MOCK_DIR/nbs-sidecar" --handle=test-mock --transport=ts --session=fakesession &
 MOCK_PID=$!
 echo "$MOCK_PID" > "$TEST_DIR/mock.pid"
 sleep 0.5

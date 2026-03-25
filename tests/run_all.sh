@@ -235,6 +235,7 @@ test_worker_adv_no_raw_log
 test_worker_log_tooling
 test_investigation_ask
 test_investigation_adv_no_silent
+test_restart_skill_injection
 "
 
 is_ai_test() {
