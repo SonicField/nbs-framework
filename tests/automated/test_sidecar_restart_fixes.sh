@@ -145,9 +145,10 @@ fi
 
 # --- Test 12: --respawn with no sessions ---
 echo "12. --respawn with no nbs sessions..."
-# Kill any existing nbs sessions (we'll be careful)
-# Only run this if there are no real nbs sessions
-NBS_SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^nbs-' || true)
+# Only run this if there are no real nbs sessions (check both tmux and nbs-ts)
+NBS_SESSIONS_TMUX=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^nbs-' || true)
+NBS_SESSIONS_TS=$("$PROJECT_ROOT/bin/nbs-ts" list 2>/dev/null | grep -c 'nbs-' || true)
+NBS_SESSIONS=$((NBS_SESSIONS_TMUX + NBS_SESSIONS_TS))
 if [[ $NBS_SESSIONS -eq 0 ]]; then
     OUTPUT=$("$RESTART_SCRIPT" --respawn 2>&1) || true
     if echo "$OUTPUT" | grep -qF "No nbs agent sessions found" ||
