@@ -54,14 +54,20 @@ SKILL_FILE=$(mktemp /tmp/nbs-ts-test-skill.XXXXXX.md)
 echo "# Test Skill" > "$SKILL_FILE"
 echo "You are a test worker. Update Status to completed immediately." >> "$SKILL_FILE"
 
-# Spawn worker with NBS_TRANSPORT=ts
-WORKER_OUTPUT=$(NBS_TRANSPORT=ts "$SPAWN_WORKER" testworker "$PROJECT_ROOT" "$SKILL_FILE" "Echo done and set State: completed" 2>&1) || true
-rm -f "$SKILL_FILE"
+# Spawn worker — write to temp file instead of $() capture.
+# $() waits for ALL background jobs to close the pipe fd, and
+# launch_agent backgrounds setsid which inherits the pipe.
+# Temp file avoids the pipe entirely.
+SPAWN_OUT=$(mktemp /tmp/nbs-ts-test-spawn.XXXXXX)
+NBS_TRANSPORT=ts "$SPAWN_WORKER" testworker "$PROJECT_ROOT" "$SKILL_FILE" \
+    "Echo done and set State: completed" > "$SPAWN_OUT" 2>/dev/null || true
+WORKER_OUTPUT=$(cat "$SPAWN_OUT")
+rm -f "$SPAWN_OUT" "$SKILL_FILE"
 
 # The output should be an nbs-ts handle (8 hex chars) or a session name
 if [[ -n "$WORKER_OUTPUT" ]]; then
     # Extract handle — might be embedded in session name or be the raw handle
-    WORKER_HANDLE=$(echo "$WORKER_OUTPUT" | grep -oE '[0-9a-f]{8}' | head -1)
+    WORKER_HANDLE=$(echo "$WORKER_OUTPUT" | grep -oE '[0-9a-f]{8}' | head -1 || true)
     if [[ -n "$WORKER_HANDLE" ]]; then
         HANDLES+=("$WORKER_HANDLE")
         pass "Worker spawned, got handle: $WORKER_HANDLE"

@@ -1527,6 +1527,8 @@ int main(int argc, char **argv) {
                         "— watchdog disabled\n", g_chat_file);
     }
 
+    time_t last_reaper_check_t = time(NULL);
+
     /* --- Event loop --- */
     while (!g_quit) {
         struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
@@ -1540,6 +1542,41 @@ int main(int argc, char **argv) {
         /* Timeout: poll for new messages */
         if (ready == 0) {
             poll_and_display(&edit, g_handle);
+
+            /* Oracle reaper check — every 10s, kill oracles that posted */
+            if (g_watchdog.project_root[0] != '\0' &&
+                watchdog_is_enabled(&g_watchdog)) {
+                time_t reaper_now = time(NULL);
+                if ((reaper_now - last_reaper_check_t) >= 10) {
+                    last_reaper_check_t = reaper_now;
+                    char reaper_bin[4096];
+                    int rn = snprintf(reaper_bin, sizeof(reaper_bin),
+                                     "%s/.nbs/bin/nbs-oracle-reaper",
+                                     g_watchdog.project_root);
+                    if (rn > 0 && (size_t)rn < sizeof(reaper_bin) &&
+                        access(reaper_bin, X_OK) != 0) {
+                        rn = snprintf(reaper_bin, sizeof(reaper_bin),
+                                     "%s/bin/nbs-oracle-reaper",
+                                     g_watchdog.project_root);
+                    }
+                    if (rn > 0 && (size_t)rn < sizeof(reaper_bin) &&
+                        access(reaper_bin, X_OK) == 0) {
+                        pid_t rpid = fork();
+                        if (rpid == 0) {
+                            pid_t rpid2 = fork();
+                            if (rpid2 == 0) {
+                                execl(reaper_bin, "nbs-oracle-reaper",
+                                      "check", g_watchdog.project_root,
+                                      (char *)NULL);
+                                _exit(127);
+                            }
+                            _exit(rpid2 < 0 ? 127 : 0);
+                        }
+                        if (rpid > 0) waitpid(rpid, NULL, 0);
+                    }
+                }
+            }
+
             continue;
         }
 
@@ -1981,6 +2018,30 @@ int main(int argc, char **argv) {
                                               g_watchdog.project_root) == 0) {
                         printf("  %s%s spawned (will post to chat when done).%s\n",
                                DIM, role, RESET);
+                        /* Register with oracle reaper for lifecycle management */
+                        {
+                            char reaper_bin[4096];
+                            int rn = snprintf(reaper_bin, sizeof(reaper_bin),
+                                             "%s/.nbs/bin/nbs-oracle-reaper",
+                                             g_watchdog.project_root);
+                            if (rn > 0 && (size_t)rn < sizeof(reaper_bin) &&
+                                access(reaper_bin, X_OK) != 0) {
+                                rn = snprintf(reaper_bin, sizeof(reaper_bin),
+                                             "%s/bin/nbs-oracle-reaper",
+                                             g_watchdog.project_root);
+                            }
+                            if (rn > 0 && (size_t)rn < sizeof(reaper_bin) &&
+                                access(reaper_bin, X_OK) == 0) {
+                                pid_t rpid = fork();
+                                if (rpid == 0) {
+                                    execl(reaper_bin, "nbs-oracle-reaper",
+                                          "register", role,
+                                          g_watchdog.project_root, (char *)NULL);
+                                    _exit(127);
+                                }
+                                if (rpid > 0) waitpid(rpid, NULL, 0);
+                            }
+                        }
                     } else {
                         printf("  %sFailed to spawn %s.%s\n", DIM, role, RESET);
                     }

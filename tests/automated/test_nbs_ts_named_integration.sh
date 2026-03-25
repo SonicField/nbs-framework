@@ -223,7 +223,7 @@ else
 
     # Symlink tools
     for tool in nbs-claude nbs-ts nbs-sidecar nbs-bus nbs-workers \
-                nbs-spawn-worker nbs-claude-build-args; do
+                nbs-spawn-worker nbs-launch-agent nbs-claude-build-args; do
         [[ -e "$PROJECT_ROOT/bin/$tool" ]] && \
             ln -sf "$PROJECT_ROOT/bin/$tool" "$I3_TMPDIR/.nbs/bin/$tool"
     done
@@ -243,25 +243,23 @@ else
     # Wait for session to appear
     sleep 3
 
-    # Verify nbs-ts list shows a session with name containing "worker"
+    # Verify nbs-ts list shows a session with name containing the worker.
+    # Session name is nbs-<handle>-<tag> where tag comes from the chat file.
+    # test.chat → tag "test" → session "nbs-testworker-test"
     LIST_I3=$("$NBS_TS" list 2>/dev/null || true)
-    if echo "$LIST_I3" | grep -q "nbs-testworker-worker"; then
-        pass "nbs-spawn-worker created session with name containing 'nbs-testworker-worker'"
+    if echo "$LIST_I3" | grep -q "nbs-testworker-test"; then
+        pass "nbs-spawn-worker created session named 'nbs-testworker-test'"
 
-        # Also verify via nbs-ts find (partial name won't work, but list confirms presence)
-        WORKER_NAME=$(echo "$LIST_I3" | grep -o 'nbs-testworker-worker-[a-f0-9]*' | head -1)
-        if [[ -n "$WORKER_NAME" ]]; then
-            FOUND_HANDLE=$("$NBS_TS" find "$WORKER_NAME" 2>/dev/null) && RC=$? || RC=$?
-            FOUND_HANDLE=$(echo "$FOUND_HANDLE" | tr -d '[:space:]')
-            if [[ $RC -eq 0 ]] && [[ -n "$FOUND_HANDLE" ]]; then
-                pass "nbs-ts find $WORKER_NAME returned handle: $FOUND_HANDLE"
-                EXTRA_HANDLES+=("$FOUND_HANDLE")
-            else
-                fail "nbs-ts find $WORKER_NAME failed (rc=$RC)"
-            fi
+        FOUND_HANDLE=$("$NBS_TS" find "nbs-testworker-test" 2>/dev/null) && RC=$? || RC=$?
+        FOUND_HANDLE=$(echo "$FOUND_HANDLE" | tr -d '[:space:]')
+        if [[ $RC -eq 0 ]] && [[ -n "$FOUND_HANDLE" ]]; then
+            pass "nbs-ts find nbs-testworker-test returned handle: $FOUND_HANDLE"
+            EXTRA_HANDLES+=("$FOUND_HANDLE")
+        else
+            fail "nbs-ts find nbs-testworker-test failed (rc=$RC)"
         fi
     else
-        fail "No session with name containing 'nbs-testworker-worker' in nbs-ts list"
+        fail "No session named 'nbs-testworker-test' in nbs-ts list"
         echo "   Worker output: $WORKER_OUT"
         echo "   List output:"
         echo "$LIST_I3" | sed 's/^/      /'

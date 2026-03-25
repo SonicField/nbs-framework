@@ -1,77 +1,72 @@
-# Plan: Oracle Lifecycle Module
+# Plan: Oracle Lifecycle
 
 ## Context
 
-Oracle workers (pythia, librarian, shepard, fixup) are ephemeral. They spawn, assess, post to chat, and should exit. Currently they don't — the sidecar keeps injecting notifications so they never go idle, and the monitor subshell in nbs-spawn-worker can't find the session handle. Oracles accumulate as zombies.
+Oracle workers (pythia, librarian, shepard, fixup) are ephemeral. They spawn, assess, post to chat, and should exit. Currently they don't — the sidecar keeps injecting notifications so they never go idle. Oracles accumulate as zombies.
 
-The detection method: the oracle posted to chat. That's how a human knows it's done. The module does the same.
+Detection: the oracle posted to chat. That's how a human knows it's done.
 
-## Design
+## Design: bash reaper script
 
-### New module: `src/nbs-common/oracle_lifecycle.{h,c}`
+A standalone bash script `bin/nbs-oracle-reaper` that checks active oracles and kills completed ones. Called via `system()` or `fork+exec` from both the sidecar (C) and the chat terminal (C). No C lifecycle module — bash is the contract for all process management.
 
-```c
-int oracle_register(const char *role, const char *chat_dir, const char *project_root);
-void oracle_tick(void);
-int oracle_active_count(void);
+### `bin/nbs-oracle-reaper`
+
+```
+nbs-oracle-reaper check <project-root>
+nbs-oracle-reaper register <role> <project-root>
 ```
 
-Internal: array of up to 8 entries. Each tracks role, chat_dir, project_root, spawn_time, state (ACTIVE → DRAINING → reaped).
+**State file:** `.nbs/oracle-active.txt` — one line per active oracle:
+```
+pythia 1774436207
+librarian 1774436300
+```
+Format: `<role> <spawn_epoch>`. Simple, no JSON.
 
-**`oracle_tick()` per entry:**
+**`register`:** Appends a line to the state file.
 
-| Condition | Action |
-|-----------|--------|
-| Elapsed > 600s | Kill session, remove (timeout) |
-| Elapsed < 30s | Skip (grace period) |
-| State DRAINING and 10s elapsed | Kill session, remove |
-| Session not alive (`nbs-ts list --name=<role>`) | Remove (natural death) |
-| Chat post found (`nbs-chat search <file> "" --handle=<role> --after=<epoch>`) | Set DRAINING |
+**`check`:** For each line in the state file:
+1. Timeout (>600s elapsed) → kill session, remove line
+2. Grace (<30s elapsed) → skip
+3. Session not alive (`nbs-ts list --name=<role> | grep alive`) → remove line
+4. Chat post found (`nbs-chat search <chat-file> "" --handle=<role> --after=<epoch>`) → kill session after 10s settle, remove line
+5. Otherwise → keep
 
-Session kill: `nbs-ts list --name=<role>` → parse handle → `nbs-ts kill <handle>`.
+Session kill: `nbs-ts list --name=<role> | grep alive | head -1 | cut -f1` → `nbs-ts kill <handle>`.
 
-### Prerequisite: exec_util shared
+### Callers
 
-Move `src/nbs-sidecar/exec_util.{h,c}` → `src/nbs-common/`. Both sidecar, workers, and terminal compile it as local .o (existing pattern).
+**sidecar (triggers.c):** After `exec_fire_and_forget(nbs-workers spawn ...)`, call `exec_fire_and_forget("nbs-oracle-reaper", "register", role, nbs_root)`. Then in the wall-clock section, every 10s: `exec_fire_and_forget("nbs-oracle-reaper", "check", nbs_root)`.
 
-### --no-monitor for nbs-workers spawn
+**terminal.c:** After `spawn_trigger_worker()`, call `system("nbs-oracle-reaper register <role> <root>")`. In the main loop, every 10s: `system("nbs-oracle-reaper check <root>")`.
 
-New flag. `nbs-workers spawn --no-monitor` creates task file, launches worker, prints name, returns immediately. Callers pass this and let oracle_lifecycle handle reaping.
+### nbs-spawn-worker
+
+Delete the monitor subshell. The reaper handles lifecycle.
 
 ## Files to modify
 
-| Phase | File | Change |
-|-------|------|--------|
-| 1 | `src/nbs-sidecar/exec_util.{h,c}` | Move to `src/nbs-common/` |
-| 1 | Sidecar, workers, chat Makefiles | Update paths |
-| 1 | `src/nbs-workers/worker.c` | Delete duplicate exec functions, use shared |
-| 2 | `src/nbs-workers/main.c` + `worker.c` | --no-monitor flag |
-| 3 | `src/nbs-common/oracle_lifecycle.{h,c}` | New module |
-| 4 | `src/nbs-sidecar/triggers.c` | exec_capture + oracle_register (not fire_and_forget) |
-| 4 | `src/nbs-sidecar/sidecar.c` | oracle_tick every 10s in wall-clock section |
-| 4 | `src/nbs-chat/terminal.c` | exec_capture in spawn_trigger_worker, oracle_tick in main loop |
-| 5 | `bin/nbs-spawn-worker` | Delete monitor subshell |
-
-## Sequencing
-
-```
-Phase 1 (exec_util) → Phase 2 (--no-monitor) ─┐
-                                                ├→ Phase 4 (integration) → Phase 5 (cleanup)
-                      Phase 3 (oracle_lifecycle) ┘
-```
+| File | Change |
+|------|--------|
+| `bin/nbs-oracle-reaper` | New bash script |
+| `src/nbs-sidecar/triggers.c` | Add register call after spawn |
+| `src/nbs-sidecar/sidecar.c` | Add check call every 10s |
+| `src/nbs-chat/terminal.c` | Add register after /pythia etc, check in main loop |
+| `bin/nbs-spawn-worker` | Delete monitor subshell |
 
 ## What does NOT change
 
 - `bin/nbs-launch-agent` — untouched
-- `bin/nbs-spawn-worker` launch logic — untouched (only monitor deleted)
-- The setsid/bash launch pattern — untouched
+- `bin/nbs-spawn-worker` launch logic — untouched
 - Trigger lock/dedup — untouched
+- No C lifecycle module — all bash
 
 ## Verification
 
-1. `/pythia` → pythia posts to chat → session killed within 30s of posting
-2. Sidecar trigger fires → same
-3. `oracle_active_count()` returns 0 after reaping
+1. `/pythia` → pythia posts to chat → session killed within 30s
+2. Sidecar trigger → same
+3. `.nbs/oracle-active.txt` empty after all oracles reaped
 4. No orphan oracles after 15 minutes
-5. `make clean && make` in all src/ directories
+5. `make clean && make` succeeds
 6. Existing tests pass

@@ -554,6 +554,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
     /* Heartbeat interval: log self-health every 300 seconds (5 minutes) */
     time_t last_heartbeat_time = state.sidecar_start_time;
+    time_t last_oracle_reaper_check = state.sidecar_start_time;
 
     /* Main loop */
     while (1) {
@@ -827,6 +828,35 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 state.last_shepard_check = now_wc;
                 trigger_periodic_check(cfg->nbs_root, cfg->shepard_interval,
                                        &TRIGGER_SHEPARD);
+            }
+
+            /* Oracle reaper — check every 10s for oracles that posted
+             * to chat and should be killed. Runs as fire-and-forget. */
+            if ((now_wc - last_oracle_reaper_check) >= 10) {
+                last_oracle_reaper_check = now_wc;
+                char reaper_path[4096];
+                char self_path[4096];
+                ssize_t rlen = readlink("/proc/self/exe", self_path,
+                                         sizeof(self_path) - 1);
+                if (rlen > 0) {
+                    self_path[rlen] = '\0';
+                    char *rslash = strrchr(self_path, '/');
+                    if (rslash) {
+                        size_t rdir_len = (size_t)(rslash - self_path);
+                        if (rdir_len + sizeof("/nbs-oracle-reaper") <=
+                            sizeof(reaper_path)) {
+                            memcpy(reaper_path, self_path, rdir_len);
+                            memcpy(reaper_path + rdir_len,
+                                   "/nbs-oracle-reaper",
+                                   sizeof("/nbs-oracle-reaper"));
+                            const char *reaper_argv[] = {
+                                reaper_path, "check",
+                                cfg->nbs_root, NULL
+                            };
+                            exec_fire_and_forget(reaper_argv);
+                        }
+                    }
+                }
             }
         }
 

@@ -90,3 +90,10 @@ src/nbs-scribe-log/*.o
 src/nbs-hub/nbs-hub
 src/nbs-hub/*.o
 bin/nbs-hub
+# Build artefacts for nbs-ts
+src/nbs-ts/*.o
+src/nbs-ts/nbs-ts
+src/nbs-ts/nbs-ts-helper
+src/nbs-ts/assert_check
+src/nbs-ts/test_nbs_ts
+bin/nbs-ts-helper
