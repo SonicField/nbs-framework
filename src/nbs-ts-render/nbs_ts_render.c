@@ -555,7 +555,13 @@ static void process_ground(ts_render_t *t, unsigned char ch) {
     if (ch < 0x20) {
         /* C0 control characters */
         switch (ch) {
-        case '\n': /* LF */
+        case '\n': /* LF — also do CR (newline mode).
+                    * Real terminals have a "newline mode" (LNM) where LF
+                    * implies CR. PTY output from nbs-chat export and most
+                    * Unix tools sends bare \n without \r. Without this,
+                    * the cursor staircase-steps across the screen. */
+            t->cursor_col = 0;
+            t->pending_wrap = 0;
             do_linefeed(t);
             break;
 

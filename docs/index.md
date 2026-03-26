@@ -37,6 +37,7 @@ Reference documentation for infrastructure components.
 | [nbs-sidecar](tools/nbs-sidecar.md) | Background monitor: notifications, triggers, transport |
 | [nbs-ts](tools/nbs-ts.md) | Session management and nbs-ts-helper daemon |
 | [nbs-ts-grep](tools/nbs-ts-grep.md) | Search across active session output |
+| [nbs-ts-render](tools/nbs-ts-render.md) | Virtual terminal renderer — PTY output to plain text |
 | [nbs-spawn-worker](tools/nbs-spawn-worker.md) | Worker spawn pipeline and nbs-launch-agent |
 | [nbs-bus](tools/nbs-bus.md) | Event bus: publish, subscribe, dedup |
 | [nbs-bus Recovery](tools/nbs-bus-recovery.md) | Bus failure modes and recovery |

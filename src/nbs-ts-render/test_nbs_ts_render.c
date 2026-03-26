@@ -103,6 +103,26 @@ TEST(test_cr_lf) {
     ts_render_destroy(t);
 }
 
+TEST(test_bare_lf) {
+    /* Bare \n (no preceding \r) should still reset cursor to column 0.
+     * This is newline mode (LNM) — without it, lines staircase across
+     * the screen when processing Unix text (which uses bare \n). */
+    ts_render_t *t = ts_render_create(5, 20);
+    feed_str(t, "Line 1\nLine 2\nLine 3");
+    assert_snapshot(t, "Line 1\nLine 2\nLine 3\n", "bare_lf");
+    ts_render_destroy(t);
+}
+
+TEST(test_bare_lf_after_cursor_move) {
+    /* If cursor is mid-line and bare \n arrives, it should reset to col 0
+     * AND move down — not just move down from the current column. */
+    ts_render_t *t = ts_render_create(5, 20);
+    feed_str(t, "AAAAAAAAAA");  /* cursor at col 10 */
+    feed_str(t, "\nBBBBB");     /* should be on next line, col 0 */
+    assert_snapshot(t, "AAAAAAAAAA\nBBBBB\n", "bare_lf_mid_line");
+    ts_render_destroy(t);
+}
+
 TEST(test_backspace) {
     ts_render_t *t = ts_render_create(3, 20);
     feed_str(t, "ABC\b\bXY");
@@ -960,6 +980,8 @@ int main(void) {
     RUN_TEST(test_text_with_newline);
     RUN_TEST(test_carriage_return);
     RUN_TEST(test_cr_lf);
+    RUN_TEST(test_bare_lf);
+    RUN_TEST(test_bare_lf_after_cursor_move);
     RUN_TEST(test_backspace);
     RUN_TEST(test_backspace_at_col0);
 
