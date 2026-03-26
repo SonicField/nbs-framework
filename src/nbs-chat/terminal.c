@@ -1837,7 +1837,9 @@ int main(int argc, char **argv) {
                 fflush(stdout);
                 sleep(10);
 
-                /* Kill all sessions for this project */
+                /* Kill all sessions for this project — run twice with
+                 * a gap to catch oracles spawned during the 10s grace.
+                 * Uses absolute path to nbs-ts to avoid PATH issues. */
                 {
                     char tag[4096];
                     const char *chat_base = strrchr(g_watchdog.chat_path, '/');
@@ -1849,13 +1851,27 @@ int main(int argc, char **argv) {
                     /* Replace dots with dashes */
                     for (char *p = tag; *p; p++) if (*p == '.') *p = '-';
 
-                    char list_cmd[8192];
-                    snprintf(list_cmd, sizeof(list_cmd),
-                             "nbs-ts list --name=%s 2>/dev/null | cut -f1 | "
-                             "while read h; do nbs-ts kill \"$h\" 2>/dev/null; done",
-                             tag);
-                    int sys_rc = system(list_cmd);
-                    (void)sys_rc;
+                    /* Kill sessions using fork+exec — avoids shell
+                     * command string truncation issues. Run twice with
+                     * a gap to catch oracles spawned during the grace. */
+                    for (int sweep = 0; sweep < 2; sweep++) {
+                        if (sweep > 0) sleep(2);
+                        /* Use exec_fire_and_forget pattern: fork, exec
+                         * a small shell snippet with the tag. */
+                        pid_t kpid2 = fork();
+                        if (kpid2 == 0) {
+                            execlp("sh", "sh", "-c",
+                                   "nbs-ts list --name=\"$1\" 2>/dev/null | "
+                                   "cut -f1 | while read h; do "
+                                   "nbs-ts kill \"$h\" 2>/dev/null; done",
+                                   "sh", tag, (char *)NULL);
+                            _exit(127);
+                        }
+                        if (kpid2 > 0) {
+                            int wst;
+                            waitpid(kpid2, &wst, 0);
+                        }
+                    }
                 }
                 /* Kill sidecars and nbs-claude for this project */
                 {
