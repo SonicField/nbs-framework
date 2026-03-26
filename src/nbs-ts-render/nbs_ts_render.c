@@ -7,6 +7,7 @@
  */
 
 #include "nbs_ts_render.h"
+#include "nbs_ts_wcwidth.h"
 #include "../nbs-common/nbs_assert.h"
 
 #include <stdlib.h>
@@ -123,11 +124,74 @@ static void do_reverse_linefeed(ts_render_t *t) {
     }
 }
 
+/* ── Wide/combining character helpers ─────────────────────────────── */
+
+/* Continuation cell marker: len = -1 means second half of a wide char */
+#define CELL_IS_CONTINUATION(c) ((c)->len == -1)
+
+static void set_continuation(ts_render_cell_t *c) {
+    memset(c->ch, 0, NBS_TS_RENDER_CELL_BYTES);
+    c->len = -1;
+}
+
+/* Clear a cell and its paired wide-char cell if applicable */
+static void clear_wide_cell(ts_render_t *t, int row, int col) {
+    ts_render_cell_t *c = cell_at(t, row, col);
+    if (CELL_IS_CONTINUATION(c)) {
+        /* This is the right half — also clear the left (primary) */
+        if (col > 0) clear_cell(cell_at(t, row, col - 1));
+        clear_cell(c);
+    } else if (c->len > 0 && col + 1 < t->cols) {
+        /* Check if next cell is continuation (this is a wide char primary) */
+        ts_render_cell_t *next = cell_at(t, row, col + 1);
+        if (CELL_IS_CONTINUATION(next)) clear_cell(next);
+        clear_cell(c);
+    } else {
+        clear_cell(c);
+    }
+}
+
+/* Decode UTF-8 bytes to a Unicode codepoint */
+static uint32_t utf8_to_codepoint(const char *ch, int len) {
+    const unsigned char *u = (const unsigned char *)ch;
+    if (len == 1) return u[0];
+    if (len == 2) return ((uint32_t)(u[0] & 0x1F) << 6) | (u[1] & 0x3F);
+    if (len == 3) return ((uint32_t)(u[0] & 0x0F) << 12) | ((uint32_t)(u[1] & 0x3F) << 6) | (u[2] & 0x3F);
+    if (len == 4) return ((uint32_t)(u[0] & 0x07) << 18) | ((uint32_t)(u[1] & 0x3F) << 12) | ((uint32_t)(u[2] & 0x3F) << 6) | (u[3] & 0x3F);
+    return 0xFFFD; /* replacement character */
+}
+
 /* ── Put a printable character at cursor ──────────────────────────── */
 
 static void put_char(ts_render_t *t, const char *ch, int len) {
     ASSERT_MSG(len > 0 && len <= NBS_TS_RENDER_CELL_BYTES,
                "put_char: invalid char length %d", len);
+
+    uint32_t cp = utf8_to_codepoint(ch, len);
+    int width = nbs_ts_wcwidth(cp);
+
+    /* Width 0: combining mark — append to previous cell */
+    if (width == 0) {
+        int prev_col = t->cursor_col;
+        if (t->pending_wrap) prev_col = t->cols - 1;
+        else if (prev_col > 0) prev_col--;
+        else return; /* no previous cell to attach to */
+
+        /* Skip continuation cells to find the primary */
+        ts_render_cell_t *prev = cell_at(t, t->cursor_row, prev_col);
+        if (CELL_IS_CONTINUATION(prev) && prev_col > 0) {
+            prev_col--;
+            prev = cell_at(t, t->cursor_row, prev_col);
+        }
+
+        /* Append if there's room in the cell */
+        if (prev->len > 0 && prev->len + len <= NBS_TS_RENDER_CELL_BYTES) {
+            memcpy(prev->ch + prev->len, ch, (size_t)len);
+            prev->len += len;
+        }
+        /* else: drop the combining mark (cell full) */
+        return;
+    }
 
     /* Handle pending wrap (auto-wrap mode) */
     if (t->pending_wrap) {
@@ -135,6 +199,45 @@ static void put_char(ts_render_t *t, const char *ch, int len) {
         do_linefeed(t);
         t->pending_wrap = 0;
     }
+
+    /* Width 2: wide character — needs special handling */
+    if (width == 2) {
+        /* If at last column, wide char doesn't fit — wrap first */
+        if (t->cursor_col >= t->cols - 1) {
+            /* Leave last column empty, wrap to next line */
+            clear_cell(cell_at(t, t->cursor_row, t->cursor_col));
+            t->cursor_col = 0;
+            do_linefeed(t);
+        }
+
+        /* Clear any existing wide char at target cells */
+        clear_wide_cell(t, t->cursor_row, t->cursor_col);
+        clear_wide_cell(t, t->cursor_row, t->cursor_col + 1);
+
+        /* Place the character in primary cell */
+        ts_render_cell_t *c = cell_at(t, t->cursor_row, t->cursor_col);
+        memcpy(c->ch, ch, (size_t)len);
+        if (len < NBS_TS_RENDER_CELL_BYTES) {
+            memset(c->ch + len, 0, (size_t)(NBS_TS_RENDER_CELL_BYTES - len));
+        }
+        c->len = len;
+
+        /* Mark next cell as continuation */
+        set_continuation(cell_at(t, t->cursor_row, t->cursor_col + 1));
+
+        /* Advance cursor by 2 */
+        if (t->cursor_col + 2 >= t->cols) {
+            t->cursor_col = t->cols - 1;
+            t->pending_wrap = 1;
+        } else {
+            t->cursor_col += 2;
+        }
+        return;
+    }
+
+    /* Width 1: normal character */
+    /* Clear any existing wide char at target cell */
+    clear_wide_cell(t, t->cursor_row, t->cursor_col);
 
     ts_render_cell_t *c = cell_at(t, t->cursor_row, t->cursor_col);
     memcpy(c->ch, ch, (size_t)len);
@@ -145,7 +248,6 @@ static void put_char(ts_render_t *t, const char *ch, int len) {
 
     /* Advance cursor */
     if (t->cursor_col >= t->cols - 1) {
-        /* At last column — set pending wrap */
         t->pending_wrap = 1;
     } else {
         t->cursor_col++;
@@ -240,7 +342,7 @@ static void dispatch_csi(ts_render_t *t, char final_byte) {
         if (n == 0) {
             /* Erase from cursor to end of screen */
             for (int col = t->cursor_col; col < t->cols; col++)
-                clear_cell(cell_at(t, t->cursor_row, col));
+                clear_wide_cell(t, t->cursor_row, col);
             for (int row = t->cursor_row + 1; row < t->rows; row++)
                 clear_row(t, row);
         } else if (n == 1) {
@@ -248,7 +350,7 @@ static void dispatch_csi(ts_render_t *t, char final_byte) {
             for (int row = 0; row < t->cursor_row; row++)
                 clear_row(t, row);
             for (int col = 0; col <= t->cursor_col; col++)
-                clear_cell(cell_at(t, t->cursor_row, col));
+                clear_wide_cell(t, t->cursor_row, col);
         } else if (n == 2 || n == 3) {
             /* Erase entire screen */
             for (int row = 0; row < t->rows; row++)
@@ -261,11 +363,11 @@ static void dispatch_csi(ts_render_t *t, char final_byte) {
         if (n == 0) {
             /* Erase from cursor to end of line */
             for (int col = t->cursor_col; col < t->cols; col++)
-                clear_cell(cell_at(t, t->cursor_row, col));
+                clear_wide_cell(t, t->cursor_row, col);
         } else if (n == 1) {
             /* Erase from start of line to cursor */
             for (int col = 0; col <= t->cursor_col; col++)
-                clear_cell(cell_at(t, t->cursor_row, col));
+                clear_wide_cell(t, t->cursor_row, col);
         } else if (n == 2) {
             /* Erase entire line */
             clear_row(t, t->cursor_row);
@@ -335,7 +437,7 @@ static void dispatch_csi(ts_render_t *t, char final_byte) {
     {
         n = csi_param(t, 0, 1);
         for (int c = t->cursor_col; c < t->cursor_col + n && c < t->cols; c++) {
-            clear_cell(cell_at(t, t->cursor_row, c));
+            clear_wide_cell(t, t->cursor_row, c);
         }
         break;
     }
@@ -738,6 +840,7 @@ char *ts_render_snapshot(const ts_render_t *t) {
         int last_col = -1;
         for (int col = t->cols - 1; col >= 0; col--) {
             const ts_render_cell_t *c = cell_at_const(t, row, col);
+            if (CELL_IS_CONTINUATION(c)) { last_col = col; break; }
             if (c->len > 0) {
                 /* Check if it's a space */
                 if (c->len == 1 && c->ch[0] == ' ') continue;
@@ -749,7 +852,10 @@ char *ts_render_snapshot(const ts_render_t *t) {
         /* Write cells up to and including last_col */
         for (int col = 0; col <= last_col; col++) {
             const ts_render_cell_t *c = cell_at_const(t, row, col);
-            if (c->len > 0) {
+            if (CELL_IS_CONTINUATION(c)) {
+                /* Skip continuation cells — primary cell already emitted the char */
+                continue;
+            } else if (c->len > 0) {
                 ASSERT_MSG(pos + (size_t)c->len < buf_size,
                            "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
                 memcpy(buf + pos, c->ch, (size_t)c->len);

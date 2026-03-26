@@ -6,7 +6,7 @@ BIN_DIR = ../../bin
 TARGET = nbs-ts-render
 TEST = test_nbs_ts_render
 
-SRCS = main.c nbs_ts_render.c
+SRCS = main.c nbs_ts_render.c nbs_ts_wcwidth.c
 OBJS = $(SRCS:.c=.o)
 
 .PHONY: all clean install test debug asan
@@ -16,8 +16,8 @@ all: $(TARGET) $(TEST)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST): test_nbs_ts_render.c nbs_ts_render.c
-	$(CC) $(CFLAGS) -I../nbs-common -o $@ test_nbs_ts_render.c nbs_ts_render.c
+$(TEST): test_nbs_ts_render.c nbs_ts_render.c nbs_ts_wcwidth.c
+	$(CC) $(CFLAGS) -I../nbs-common -o $@ test_nbs_ts_render.c nbs_ts_render.c nbs_ts_wcwidth.c
 
 %.o: %.c
 	$(CC) $(CFLAGS) -I../nbs-common -c -o $@ $<

@@ -18,8 +18,8 @@
 #define NBS_TS_RENDER_DEFAULT_COLS 80
 #define NBS_TS_RENDER_DEFAULT_ROWS 24
 
-/* Maximum UTF-8 bytes per cell */
-#define NBS_TS_RENDER_CELL_BYTES 4
+/* Maximum UTF-8 bytes per cell (8 to fit base char + combining marks) */
+#define NBS_TS_RENDER_CELL_BYTES 8
 
 /* Maximum CSI parameters */
 #define NBS_TS_RENDER_MAX_PARAMS 16

@@ -100,3 +100,8 @@ bin/nbs-ts-helper
 # Build artefacts for nbs-ts-tools
 src/nbs-ts-tools/nbs-ts-grep
 src/nbs-ts-tools/nbs-ts-query
+# Build artefacts for nbs-ts-render
+src/nbs-ts-render/nbs-ts-render
+src/nbs-ts-render/test_nbs_ts_render
+src/nbs-ts-render/*.o
+bin/nbs-ts-render

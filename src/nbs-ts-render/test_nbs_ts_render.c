@@ -759,6 +759,120 @@ TEST(test_malformed_utf8_in_csi) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
+/*  WIDE CHARACTER (wcwidth) SUPPORT                                 */
+/* ══════════════════════════════════════════════════════════════════ */
+
+/* CJK characters: U+4E2D (中) = 3 UTF-8 bytes (E4 B8 AD), 2 columns
+ *                 U+6587 (文) = 3 UTF-8 bytes (E6 96 87), 2 columns
+ * Emoji:          U+1F600 (😀) = 4 UTF-8 bytes (F0 9F 98 80), 2 columns
+ * Hebrew:         U+05E9 (ש) = 2 UTF-8 bytes (D7 A9), 1 column
+ * Combining:      U+05B4 (ִ hiriq) = 2 UTF-8 bytes (D6 B4), 0 columns
+ */
+
+TEST(test_cjk_two_columns) {
+    ts_render_t *t = ts_render_create(3, 10);
+    /* '中文' = 2 chars, 4 columns */
+    feed_str(t, "\xe4\xb8\xad\xe6\x96\x87X");
+    /* 中 at cols 0-1, 文 at cols 2-3, X at col 4 */
+    assert_snapshot(t, "\xe4\xb8\xad\xe6\x96\x87X\n", "cjk_two_columns");
+    ts_render_destroy(t);
+}
+
+TEST(test_emoji_two_columns) {
+    ts_render_t *t = ts_render_create(3, 10);
+    /* 😀 = 2 columns */
+    feed_str(t, "\xf0\x9f\x98\x80X");
+    /* 😀 at cols 0-1, X at col 2 */
+    assert_snapshot(t, "\xf0\x9f\x98\x80X\n", "emoji_two_columns");
+    ts_render_destroy(t);
+}
+
+TEST(test_cjk_cursor_backward_over_wide) {
+    ts_render_t *t = ts_render_create(3, 20);
+    /* Write '中文AB', then CUB 3 to land on continuation of 文 */
+    feed_str(t, "\xe4\xb8\xad\xe6\x96\x87""AB");
+    /* Cursor at col 6. CUB 3 → col 3 (continuation of 文).
+     * Writing X here destroys 文 (primary at col 2 cleared), X at col 3. */
+    feed_str(t, "\x1b[3DX");
+    /* 中(0-1), space(2 — cleared primary), X(3), A(4), B(5) */
+    assert_snapshot(t, "\xe4\xb8\xad XAB\n", "cjk_cursor_backward_over_wide");
+    ts_render_destroy(t);
+}
+
+TEST(test_cjk_wrap_boundary) {
+    ts_render_t *t = ts_render_create(3, 5);
+    /* Fill 4 of 5 cols, then a wide char that needs 2 — doesn't fit */
+    feed_str(t, "1234\xe4\xb8\xad");
+    /* 中 needs 2 cols but only 1 left. Wraps to next line. */
+    assert_snapshot(t, "1234\n\xe4\xb8\xad\n", "cjk_wrap_boundary");
+    ts_render_destroy(t);
+}
+
+TEST(test_cjk_exact_fit) {
+    ts_render_t *t = ts_render_create(3, 6);
+    /* 3 CJK chars = 6 cols, exactly fills a 6-col line */
+    feed_str(t, "\xe4\xb8\xad\xe6\x96\x87\xe4\xb8\xad");
+    assert_snapshot(t, "\xe4\xb8\xad\xe6\x96\x87\xe4\xb8\xad\n", "cjk_exact_fit");
+    ts_render_destroy(t);
+}
+
+TEST(test_overwrite_wide_with_narrow) {
+    ts_render_t *t = ts_render_create(3, 10);
+    /* Write 中X, then move back to col 0 and write 'AB' */
+    feed_str(t, "\xe4\xb8\xad X\rAB");
+    /* AB overwrites cols 0-1 (中's primary + continuation), clearing the wide char */
+    assert_snapshot(t, "AB X\n", "overwrite_wide_with_narrow");
+    ts_render_destroy(t);
+}
+
+TEST(test_overwrite_narrow_with_wide) {
+    ts_render_t *t = ts_render_create(3, 10);
+    /* Write ABCDE, then CR, write 中 which occupies 2 cols */
+    feed_str(t, "ABCDE\r\xe4\xb8\xad");
+    /* 中 overwrites A(col 0) and B(col 1) */
+    assert_snapshot(t, "\xe4\xb8\xad""CDE\n", "overwrite_narrow_with_wide");
+    ts_render_destroy(t);
+}
+
+TEST(test_erase_wide_char) {
+    ts_render_t *t = ts_render_create(3, 10);
+    /* Write 中A, erase 1 char at col 0 (primary of 中) */
+    feed_str(t, "\xe4\xb8\xad""A");
+    feed_str(t, "\x1b[1G\x1b[1X"); /* CHA 1 (col 0), ECH 1 */
+    /* Erasing primary of wide char must clear continuation too */
+    assert_snapshot(t, "  A\n", "erase_wide_char");
+    ts_render_destroy(t);
+}
+
+TEST(test_cjk_with_sgr) {
+    ts_render_t *t = ts_render_create(3, 20);
+    /* Bold CJK with 256-color — all SGR stripped, wide chars respected */
+    feed_str(t, "\x1b[1;38;5;196m\xe4\xb8\xad\xe6\x96\x87\x1b[0mOK");
+    assert_snapshot(t, "\xe4\xb8\xad\xe6\x96\x87OK\n", "cjk_with_sgr");
+    ts_render_destroy(t);
+}
+
+TEST(test_combining_character) {
+    ts_render_t *t = ts_render_create(3, 20);
+    /* Hebrew shin (ש, 1 col) + hiriq (ִ, combining, 0 col) + space + A */
+    /* Combining mark appends to previous cell, no cursor advance */
+    feed_str(t, "\xd7\xa9\xd6\xb4 A");
+    /* שִ at col 0 (base + combining in same cell), space at col 1, A at col 2 */
+    assert_snapshot(t, "\xd7\xa9\xd6\xb4 A\n", "combining_character");
+    ts_render_destroy(t);
+}
+
+TEST(test_mixed_wide_narrow_combining) {
+    ts_render_t *t = ts_render_create(3, 20);
+    /* Mix: 中(2col) + A(1col) + ש(1col) + ִ(0col combining) + 😀(2col) */
+    feed_str(t, "\xe4\xb8\xad""A\xd7\xa9\xd6\xb4\xf0\x9f\x98\x80");
+    /* 中(0-1), A(2), שִ(3), 😀(4-5) — total 6 columns */
+    assert_snapshot(t, "\xe4\xb8\xad""A\xd7\xa9\xd6\xb4\xf0\x9f\x98\x80\n",
+                   "mixed_wide_narrow_combining");
+    ts_render_destroy(t);
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
 /*  TEST RUNNER                                                      */
 /* ══════════════════════════════════════════════════════════════════ */
 
@@ -872,6 +986,19 @@ int main(void) {
     RUN_TEST(test_utf8_wrap_then_continue);
     RUN_TEST(test_esc_interrupts_utf8);
     RUN_TEST(test_malformed_utf8_in_csi);
+
+    printf("\nWide character (wcwidth) support:\n");
+    RUN_TEST(test_cjk_two_columns);
+    RUN_TEST(test_emoji_two_columns);
+    RUN_TEST(test_cjk_cursor_backward_over_wide);
+    RUN_TEST(test_cjk_wrap_boundary);
+    RUN_TEST(test_cjk_exact_fit);
+    RUN_TEST(test_overwrite_wide_with_narrow);
+    RUN_TEST(test_overwrite_narrow_with_wide);
+    RUN_TEST(test_erase_wide_char);
+    RUN_TEST(test_cjk_with_sgr);
+    RUN_TEST(test_combining_character);
+    RUN_TEST(test_mixed_wide_narrow_combining);
 
     printf("\nAPI:\n");
     RUN_TEST(test_reset_clears_all);
