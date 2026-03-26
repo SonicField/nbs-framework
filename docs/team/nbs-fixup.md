@@ -8,11 +8,12 @@ Fixup is an **ephemeral oracle**. One invocation, one job, gone. It receives wor
 
 ## The Standard Team
 
-Fixup checks six permanent agents:
+Fixup checks seven permanent agents:
 
 | Agent | Role |
 |-------|------|
 | scribe | Decision log maintenance |
+| medic | Hallucination monitor |
 | supervisor | Task assignment and coordination |
 | gatekeeper | Code review (reads, does not write) |
 | theologian | Methodology and design advice |

@@ -1,0 +1,1 @@
+../nbs-sidecar/strip_ansi.h

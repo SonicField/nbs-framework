@@ -1,6 +1,6 @@
 # Chapter 6: Oracles
 
-Oracles are ephemeral workers that periodically assess the team's state. They spawn, do their job, post results to chat, and exit. Four oracles exist, each addressing a different failure mode.
+Oracles are ephemeral workers that periodically assess the team's state. They spawn, do their job, post results to chat, and exit. Four oracles exist, each addressing a different failure mode. The Medic — the team's hallucination monitor — is not an oracle; she is a permanent agent, like the Scribe.
 
 **Why ephemeral?** Oracles are deliberately not persistent team members. They do not participate in the conversation, negotiate with workers, or accumulate context across runs. This is the point. A persistent observer would develop the same blind spots as the team it observes -- it would get caught up in the same assumptions, drift toward the same goals, and lose its ability to see what the team cannot. By spawning fresh each time, an oracle sees the project state with no prior commitment to any decision. This makes oracles the team's primary defence against goal drift and groupthink.
 

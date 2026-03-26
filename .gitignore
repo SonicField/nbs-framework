@@ -97,3 +97,6 @@ src/nbs-ts/nbs-ts-helper
 src/nbs-ts/assert_check
 src/nbs-ts/test_nbs_ts
 bin/nbs-ts-helper
+# Build artefacts for nbs-ts-tools
+src/nbs-ts-tools/nbs-ts-grep
+src/nbs-ts-tools/nbs-ts-query

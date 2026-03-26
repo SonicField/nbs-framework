@@ -28,7 +28,7 @@ fi
 
 # Team agent sessions — NEVER kill these regardless of timing.
 # If a team agent restarts mid-test, its new session must survive cleanup.
-_NBS_TEAM_PATTERN="nbs-(supervisor|generalist|theologian|testkeeper|gatekeeper|scribe)-"
+_NBS_TEAM_PATTERN="nbs-(supervisor|generalist|theologian|testkeeper|gatekeeper|scribe|medic)-"
 
 # Cleanup function — kills leaked sessions and processes
 _nbs_test_cleanup() {

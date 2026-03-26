@@ -127,6 +127,7 @@ Then apply the full NBS review framework (as defined in `/nbs`) to the team's re
 10. **Missing roles** — is there work nobody is doing?
 11. **Role compliance** — are specialists staying in role? Check:
     - Scribe: using `nbs-scribe-log` (not prose notes)? Every message a tool call?
+    - Medic: communicating ONLY via `nbs-chat warn`? If medic has posted ANY message using `nbs-chat send` (i.e. any message with handle `medic` rather than `[MEDIC-WARNING]`), this is a role violation. Medic must never be a chat participant — she is a monitor. Call it out explicitly.
     - Gatekeeper: reviewing only, not writing code?
     - Testkeeper: owning tests, not doing architecture?
     - Theologian: advising, not implementing?

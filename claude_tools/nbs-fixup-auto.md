@@ -81,11 +81,12 @@ The tag identifies your team. Sessions are named `nbs-<agent>-<tag>`. Multiple t
 
 ## Expected agents
 
-The standard team has six permanent members:
+The standard team has seven permanent members:
 
 | Agent | Role |
 |-------|------|
 | scribe | Decision log maintenance via `nbs-scribe-log` |
+| medic | Hallucination monitor — reads session logs, posts warnings |
 | supervisor | Task assignment and coordination |
 | gatekeeper | Code review — reads, does not write |
 | theologian | Methodology and design advice |
@@ -262,7 +263,7 @@ This shows every session (alive and dead) associated with this team. Record whic
 
 ### Step 4: Classify and act on each expected agent
 
-For each of the six expected agents (scribe, supervisor, gatekeeper, theologian, testkeeper, generalist):
+For each of the seven expected agents (scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist):
 
 1. Search for an alive session named `nbs-<agent>-<tag>`.
 2. If no alive session exists → classify as dead/missing → Level 4.
@@ -279,7 +280,7 @@ Track the result for each agent: state observed, action taken, outcome.
 ```bash
 nbs-chat send "$chat_file" fixup "FIXUP CHECKPOINT
 
-Agents checked: 6
+Agents checked: 7
 - @scribe: alive — healthy
 - @supervisor: alive — healthy
 - @gatekeeper: dead — restarted
@@ -305,7 +306,7 @@ Team health classification:
 
 ```bash
 nbs-bus publish .nbs/events/ fixup maintenance-complete normal \
-    "Fixup complete. 6 agents checked, N actions taken."
+    "Fixup complete. 7 agents checked, N actions taken."
 ```
 
 ### Step 7: Mark complete and exit
@@ -324,7 +325,7 @@ These are not guidelines. They are rules.
 
 3. **Skip ephemeral agents.** Do not check, diagnose, or restart: pythia, shepard, librarian, fixup, chatdigest. They are spawned on demand by the sidecar. They are not team members.
 
-4. **Always hard-restart scribe.** Scribe's state lives in the scribe log file, not in her session. A fresh scribe re-loads the skill and prevents role drift (prose commentary instead of tool usage). Kill and respawn her every fixup cycle regardless of health.
+4. **Always hard-restart scribe and medic.** Their state lives in external logs, not in their sessions. A fresh restart re-loads the skill and prevents role drift. Kill and respawn both every fixup cycle regardless of health.
 
 5. **Do not kill other working agents.** If `nbs-ts read-new` shows recent tool calls or active output, the agent is working. Leave it alone. Killing a working agent destroys its context and any in-progress work.
 
@@ -378,7 +379,7 @@ chat_file=$(grep '^chat:' .nbs/control-registry-supervisor 2>/dev/null | cut -d:
 tag=$(basename "$chat_file" .chat | tr '.' '-')
 
 # Step 3: Check each agent
-agents="scribe supervisor gatekeeper theologian testkeeper generalist"
+agents="scribe medic supervisor gatekeeper theologian testkeeper generalist"
 results=""
 
 for agent in $agents; do
@@ -429,7 +430,7 @@ done
 # Step 5: Post summary
 nbs-chat send "$chat_file" fixup "FIXUP CHECKPOINT
 
-Agents checked: 6
+Agents checked: 7
 $(echo -e "$results")
 
 ---
@@ -437,7 +438,7 @@ End of fixup."
 
 # Step 6: Bus event
 nbs-bus publish .nbs/events/ fixup maintenance-complete normal \
-    "Fixup complete. 6 agents checked."
+    "Fixup complete. 7 agents checked."
 ```
 
 This is illustrative. In practice you execute each step as individual Bash tool calls, reading output and making decisions between them. Do not run this as a single script — you need to observe results at each step to classify correctly.

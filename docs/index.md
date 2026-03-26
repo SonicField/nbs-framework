@@ -35,6 +35,7 @@ Reference documentation for infrastructure components.
 | [nbs-claude](tools/nbs-claude.md) | Claude wrapper: session management, debug mode |
 | [nbs-sidecar](tools/nbs-sidecar.md) | Background monitor: notifications, triggers, transport |
 | [nbs-ts](tools/nbs-ts.md) | Session management and nbs-ts-helper daemon |
+| [nbs-ts-grep](tools/nbs-ts-grep.md) | Search across active session output |
 | [nbs-spawn-worker](tools/nbs-spawn-worker.md) | Worker spawn pipeline and nbs-launch-agent |
 | [nbs-bus](tools/nbs-bus.md) | Event bus: publish, subscribe, dedup |
 | [nbs-bus Recovery](tools/nbs-bus-recovery.md) | Bus failure modes and recovery |
@@ -61,6 +62,7 @@ Running and operating agent teams.
 | [Theologian](team/nbs-theologian.md) | Architecture and design guidance |
 | [Testkeeper](team/nbs-testkeeper.md) | Test ownership and falsification |
 | [Scribe](team/nbs-scribe.md) | Decision logging and institutional memory |
+| [Medic](team/nbs-medic.md) | Continuous hallucination monitor |
 | **Ephemeral oracles** | |
 | [Pythia](team/nbs-pythia.md) | Trajectory and risk assessment |
 | [Shepard](team/nbs-shepard.md) | Team effectiveness assessment |

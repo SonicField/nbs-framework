@@ -64,6 +64,10 @@ The Scribe records decisions -- moments where the team chose a direction:
 
 The Scribe does not record status updates, greetings, or discussions that did not result in a decision. The decision log survives context compaction, session restarts, and agent rotation. Decisions made at hour two are still accessible at hour twenty.
 
+### Medic
+
+The Medic is a continuous hallucination monitor. She watches agent output for claims that lack evidence, fabricated references, and assertions that contradict the codebase. When she finds one, she flags it in chat.
+
 ## The 3Ws
 
 After every worker completes, the supervisor captures three things:

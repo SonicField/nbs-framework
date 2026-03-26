@@ -63,7 +63,7 @@ echo "[watchdog] Restarting team for ${CHAT_TAG}..."
 # sessions). Wait for them to exit so their traps complete before we
 # spawn new agents — otherwise the old traps race with the new agents
 # and can destroy freshly-created sessions.
-for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
+for h in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     # Kill nbs-claude wrapper (reads PID from pidfile)
     pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
     if [[ -f "$pidfile" ]]; then
@@ -82,7 +82,7 @@ while IFS=$'\t' read -r handle status name cmd; do
 done < <("$NBS_TS" list --name="$CHAT_TAG" 2>/dev/null || true)
 
 # Wait for old nbs-claude processes to finish their cleanup traps
-for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
+for h in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     pidfile="${PROJECT_ROOT}/.nbs/pids/${h}.pid"
     if [[ -f "$pidfile" ]]; then
         oldpid=$(cat "$pidfile" 2>/dev/null)
@@ -148,7 +148,7 @@ fi
 CHAT_ABS=$(cd "$(dirname "$CHAT_FILE")" && pwd)/$(basename "$CHAT_FILE")
 EVENTS_DIR="${PROJECT_ROOT}/.nbs/events"
 mkdir -p "${EVENTS_DIR}/processed"
-for handle in scribe supervisor gatekeeper theologian testkeeper generalist; do
+for handle in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     REG="${PROJECT_ROOT}/.nbs/control-registry-${handle}"
     # Ensure chat entry
     if ! grep -qF "chat:${CHAT_ABS}" "$REG" 2>/dev/null; then
@@ -163,7 +163,7 @@ done
 # 3. Reset cursors to current end
 HEADER_LINES=6
 MESSAGE_COUNT=$(( $(wc -l < "$CHAT_FILE") - HEADER_LINES ))
-for handle in scribe supervisor gatekeeper theologian testkeeper generalist; do
+for handle in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     if [ -f "${CHAT_FILE}.cursors" ]; then
         if grep -q "^${handle}=" "${CHAT_FILE}.cursors" 2>/dev/null; then
             sed -i "s/^${handle}=.*/${handle}=${MESSAGE_COUNT}/" "${CHAT_FILE}.cursors"
@@ -183,6 +183,7 @@ done
 # input — no slash command expansion needed.
 declare -A AGENT_SKILL_FILES
 AGENT_SKILL_FILES[scribe]="nbs-scribe.md"
+AGENT_SKILL_FILES[medic]="nbs-medic.md"
 AGENT_SKILL_FILES[gatekeeper]="nbs-gatekeeper.md"
 AGENT_SKILL_FILES[testkeeper]="nbs-testkeeper.md"
 AGENT_SKILL_FILES[theologian]="nbs-theologian.md"
@@ -197,7 +198,7 @@ elif [[ -d "${HOME}/.nbs/commands" ]]; then
     COMMANDS_DIR="${HOME}/.nbs/commands"
 fi
 
-for h in scribe supervisor gatekeeper theologian testkeeper generalist; do
+for h in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     SKILL_CONTENT=""
     if [[ -n "$COMMANDS_DIR" && -f "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}" ]]; then
         SKILL_CONTENT=$(cat "${COMMANDS_DIR}/${AGENT_SKILL_FILES[$h]}")

@@ -294,6 +294,54 @@ int main(void) {
               (unsigned char)buf[2] == 0x98 && (unsigned char)buf[3] == 0x80);
     }
 
+    /* --- Tests for cursor-right expansion (CSI n C → spaces) --- */
+
+    /* 27. Small cursor-right: CSI 3 C → 3 spaces.
+     * Sequence is ESC [ 3 C = 4 bytes. Gap is large. Should produce 3 spaces. */
+    {
+        char buf[] = "ab\x1b[3Cde";
+        size_t len = strip_ansi(buf);
+        CHECK("cursor right 3 spaces", strcmp(buf, "ab   de") == 0);
+        CHECK("cursor right 3 length", len == 7);
+    }
+
+    /* 28. Cursor-right with no param: CSI C → 1 space.
+     * ESC [ C = 3 bytes. Should produce 1 space. */
+    {
+        char buf[] = "x\x1b[Cy";
+        size_t len = strip_ansi(buf);
+        CHECK("cursor right default 1 space", strcmp(buf, "x y") == 0);
+        CHECK("cursor right default length", len == 3);
+    }
+
+    /* 29. Large cursor-right capped to 8: CSI 20 C → 8 spaces max.
+     * ESC [ 2 0 C = 5 bytes. Cap is 8 but gap also limits. */
+    {
+        char buf[] = "\x1b[20Cend";
+        size_t len = strip_ansi(buf);
+        /* Gap between wr (start) and rd (after 'C') is 5 bytes.
+         * 20 spaces requested, capped to gap (5), then capped to 8.
+         * So 5 spaces + "end" */
+        CHECK("cursor right capped to gap", len == 8);
+        CHECK("cursor right capped content ends with 'end'",
+              strcmp(buf + len - 3, "end") == 0);
+    }
+
+    /* 30. Cursor-right invariant: wr never overtakes rd.
+     * This was the original bug — CSI 8 C at start of string
+     * would write 8 spaces from 4 bytes of input. */
+    {
+        char buf[] = "\x1b[8Cx";
+        size_t len = strip_ansi(buf);
+        /* ESC [ 8 C = 4 bytes, then 'x'. Gap at start is 4.
+         * 8 spaces requested, capped to 4 (gap). Then 'x' copied. */
+        CHECK("cursor right 8 at start: no overflow", len == 5);
+        CHECK("cursor right 8 at start: ends with x",
+              buf[len - 1] == 'x');
+        /* Verify no assertion fired (test reaching here = pass) */
+        CHECK("cursor right 8 at start: invariant held", 1);
+    }
+
     printf("%d/%d passed\n", tests - fails, tests);
     return fails;
 }

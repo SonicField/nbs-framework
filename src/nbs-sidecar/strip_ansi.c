@@ -47,9 +47,16 @@ size_t strip_ansi(char *text) {
                     rd++;
                 }
                 if (*rd == 'C' && (has_param || rd == param_start)) {
-                    /* Cursor right: CSI C (1 space) or CSI <n> C */
+                    /* Cursor right: CSI C (1 space) or CSI <n> C.
+                     * Replace with actual spaces. Cap to the available
+                     * gap between write and read pointers — expanding
+                     * beyond this would violate the wr <= rd invariant
+                     * (the output would overwrite unread input). */
                     int spaces = has_param ? param : 1;
-                    if (spaces > 8) spaces = 8; /* cap to prevent abuse */
+                    int gap = (int)(rd + 1 - wr);  /* +1 for final byte */
+                    if (spaces > gap) spaces = gap;
+                    if (spaces > 8) spaces = 8;
+                    if (spaces < 0) spaces = 0;
                     for (int i = 0; i < spaces; i++) *wr++ = ' ';
                 }
                 /* else: strip the sequence */

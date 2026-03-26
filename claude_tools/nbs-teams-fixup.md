@@ -113,7 +113,7 @@ launch_agent "<agent>" "$(pwd)" ".nbs/bin/nbs-claude" \
 
 **CRITICAL:** Use `launch_agent` from `nbs-launch-agent`. Do NOT use `nbs-workers spawn`, `nbs-ts create "nbs-claude ..."`, or C fork+exec. See `bin/SPAWN_README.md` for why.
 
-**CRITICAL:** Never invent new handle names. Handles must match exactly: supervisor, generalist, theologian, testkeeper, gatekeeper, scribe.
+**CRITICAL:** Never invent new handle names. Handles must match exactly: supervisor, generalist, theologian, testkeeper, gatekeeper, scribe, medic.
 
 ### Step 7: Verify and Report
 
