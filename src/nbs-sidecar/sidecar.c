@@ -206,12 +206,12 @@ done:
 }
 
 /*
- * handle_query — Capture pane snapshot and post to chat.
+ * handle_query — Render agent terminal screen and post to chat.
  *
- * Triggered by @handle? in chat. Posts the bottom 8 lines of the
- * agent's terminal after stripping ANSI escapes and truncating
- * each line to 80 characters. This keeps the output compact even
- * when tool calls wrap across multiple terminal columns.
+ * Triggered by @handle? in chat. Pipes the tail of the session's
+ * output.log through nbs-ts-render to produce what the terminal
+ * screen actually looks like — cursor movement, scrolling, erase
+ * all resolved. No junk filtering needed.
  *
  * Returns 0 on success, -1 on any failure.
  */
@@ -221,71 +221,67 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
-    /* Read the full capture buffer (up to 32KB from tail of output.log).
-     * Claude's terminal output has ~5:1 junk-to-content ratio (cursor
-     * movements, thinking animations, blank lines).  128 lines only
-     * covers a few seconds of animation.  Reading the full buffer then
-     * filtering gives us actual content to work with. */
-    char *content = tp->capture(tp, 0);
-    if (!content) {
-        fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
+    /* Pipe the tail of output.log through nbs-ts-render.
+     * The renderer processes all escape sequences and outputs
+     * the final screen state as plain text. */
+    char render_cmd[4096];
+    snprintf(render_cmd, sizeof(render_cmd),
+             "tail -c 65536 %s/output.log 2>/dev/null | "
+             "nbs-ts-render --width=80 --height=24 2>/dev/null",
+             tp->ctx ? ((const char *)tp->ctx) : ".");
+
+    /* ctx is a ts_ctx_t* whose first field is session_dir */
+    /* Get session dir from transport context */
+    const char *session_dir = NULL;
+    if (tp->ctx) {
+        /* ts_ctx_t has session_dir as first field */
+        session_dir = (const char *)tp->ctx;
+    }
+    if (!session_dir || session_dir[0] == '\0') {
+        fprintf(stderr, "handle_query: no session dir for '%s'\n", cfg->handle);
         return -1;
     }
 
-    strip_ansi(content);
+    snprintf(render_cmd, sizeof(render_cmd),
+             "tail -c 65536 '%s/output.log' 2>/dev/null | "
+             "nbs-ts-render --width=80 --height=24 2>/dev/null",
+             session_dir);
 
-    /* Collect non-blank lines, truncate each to 80 chars, keep last 32 */
     char truncated[SIDECAR_MAX_CONTENT];
     truncated[0] = '\0';
 
-    /* First pass: collect pointers to non-blank lines */
-    char *lines[512];
-    size_t line_lens[512];
-    int nlines = 0;
-
-    char *line = content;
-    while (line && *line && nlines < 512) {
-        char *nl = strchr(line, '\n');
-        size_t llen = nl ? (size_t)(nl - line) : strlen(line);
-
-        /* Skip junk lines: blank, or too few alphanumeric chars.
-         * Claude's thinking animation (stars, dots, Unicode decorations)
-         * leaves 1-2 char lines after ANSI stripping. Require >= 4
-         * alphanumeric chars for a line to be meaningful. */
-        int alnum_count = 0;
-        for (size_t i = 0; i < llen && alnum_count < 4; i++) {
-            unsigned char c = (unsigned char)line[i];
-            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                (c >= '0' && c <= '9'))
-                alnum_count++;
-        }
-        if (alnum_count >= 4) {
-            lines[nlines] = line;
-            line_lens[nlines] = llen > 80 ? 80 : llen;
-            nlines++;
-        }
-        if (!nl) break;
-        line = nl + 1;
+    FILE *pipe = popen(render_cmd, "r");
+    if (!pipe) {
+        fprintf(stderr, "handle_query: popen failed for '%s'\n", cfg->handle);
+        return -1;
     }
 
-    /* Take last 16 non-blank lines */
-    int start = nlines > 16 ? nlines - 16 : 0;
-    size_t toff = 0;
-    for (int i = start; i < nlines; i++) {
-        if (toff + 2 >= sizeof(truncated)) break;
-        size_t space = sizeof(truncated) - toff - 2;
-        size_t capped = line_lens[i];
-        if (capped > space) break;
-        memcpy(truncated + toff, lines[i], capped);
-        toff += capped;
-        truncated[toff++] = '\n';
+    size_t total = 0;
+    size_t n;
+    while ((n = fread(truncated + total, 1,
+                      sizeof(truncated) - total - 1, pipe)) > 0) {
+        total += n;
+        if (total >= sizeof(truncated) - 1) break;
     }
-    truncated[toff] = '\0';
+    truncated[total] = '\0';
+    pclose(pipe);
 
-    /* Escape @ signs to prevent mention feedback loops.
-     * sanitise_at_signs replaces all '@' with '#' in-place — after this,
-     * escape_mentions would be a no-op (no '@' chars remain to escape).
-     * B2/B3 fix: removed dead escape_mentions call and its NULL check. */
+    if (total == 0) {
+        /* Fallback: if render fails, try raw capture */
+        char *content = tp->capture(tp, 30);
+        if (!content) {
+            fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
+            return -1;
+        }
+        strip_ansi(content);
+        size_t clen = strlen(content);
+        if (clen >= sizeof(truncated)) clen = sizeof(truncated) - 1;
+        memcpy(truncated, content, clen);
+        truncated[clen] = '\0';
+        free(content);
+    }
+
+    /* Escape @ signs to prevent mention feedback loops. */
     sanitise_at_signs(truncated);
 
     /* Find first registered chat and send */
@@ -294,7 +290,6 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
                              chat_path, sizeof(chat_path)) != 0) {
         fprintf(stderr, "handle_query: no chat registered for '%s'\n",
                 cfg->handle);
-        free(content);
         return -1;
     }
 
@@ -307,7 +302,6 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
                 cfg->handle);
     }
 
-    free(content);
     return rc;
 }
 
