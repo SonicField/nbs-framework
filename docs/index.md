@@ -32,6 +32,7 @@ Reference documentation for infrastructure components.
 | [nbs-chat-terminal](tools/nbs-chat-terminal.md) | Interactive terminal: all commands, watchdog, oracles, line editing |
 | [nbs-chat-init](tools/nbs-chat-init.md) | Project initialisation: phases, scorched earth, setup |
 | [nbs-chat](tools/nbs-chat.md) | Chat file format, read/write/search commands |
+| [nbs-chat-edit](tools/nbs-chat-edit.md) | Interactive chat editor: view, search, delete messages |
 | [nbs-claude](tools/nbs-claude.md) | Claude wrapper: session management, debug mode |
 | [nbs-sidecar](tools/nbs-sidecar.md) | Background monitor: notifications, triggers, transport |
 | [nbs-ts](tools/nbs-ts.md) | Session management and nbs-ts-helper daemon |

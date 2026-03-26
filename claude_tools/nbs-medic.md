@@ -79,8 +79,10 @@ You do not:
 You have ONE communication tool: `nbs-chat warn`.
 
 ```bash
-nbs-chat warn <chat-file> "WARNING: @generalist claims 'I ran the tests' but no test execution found in session log (searched lines 400-800)"
+nbs-chat warn <chat-file> "@team! WARNING: @generalist claims 'I ran the tests' but no test execution found in session log (searched lines 400-800)"
 ```
+
+The `@team!` prefix triggers a team-wide interrupt — every agent's sidecar will send Escape and inject the warning immediately, rather than waiting for the next notification cycle. This ensures warnings are seen, not buried.
 
 This posts with the `[MEDIC-WARNING]` handle. No agent can fake this handle — `nbs-chat send` rejects handles containing `[`. Only the `warn` subcommand can produce it.
 
