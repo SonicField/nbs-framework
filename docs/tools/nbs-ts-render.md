@@ -41,6 +41,14 @@ The defaults match the PTY size used by `nbs-ts-helper`.
 
 SGR (colour/style), OSC, and DCS sequences are silently consumed.
 
+## Terminology: VT100 vs ANSI vs xterm
+
+The DEC VT100 (1978) defined the original escape sequences for cursor movement, erase, and styling. ANSI (ECMA-48/ISO 6429) standardised and extended them. Modern terminal emulators (xterm, iTerm, GNOME Terminal) implement a superset of both, adding UTF-8, 256-colour, true-colour, bracketed paste, and more.
+
+`nbs-ts-render` implements the subset that Claude Code actually produces: ANSI/ECMA-48 CSI sequences for cursor and erase, DEC private extensions (DECSTBM scroll regions, DECSC/DECRC cursor save), and full UTF-8 including wide characters and RTL text. It does not implement mouse tracking, bracketed paste, or other interactive features — it is a renderer, not an interactive terminal.
+
+Calling it a "VT100 renderer" is a convenient shorthand. More precisely, it is an xterm-subset renderer covering the escape sequences found in real Claude Code session output.
+
 ## Newline Mode
 
 Bare `\n` (LF without preceding CR) resets the cursor to column 0 before moving down. This matches terminal newline mode (LNM) and ensures Unix text (which uses bare `\n`) renders correctly without staircase-stepping across the screen.
