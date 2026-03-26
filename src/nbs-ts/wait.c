@@ -152,6 +152,7 @@ int nbs_ts_wait_pattern(nbs_ts_session_t *s, const char *pattern,
     long long deadline = pat_now_ms + timeout_ms;
     int found = 0;
     size_t search_offset = 0;
+    size_t pat_len = strlen(pattern);
 
     for (;;) {
         int fd = open(s->output_log_path, O_RDONLY);
@@ -167,7 +168,13 @@ int nbs_ts_wait_pattern(nbs_ts_session_t *s, const char *pattern,
                     if (n > 0) {
                         buf[n] = '\0';
                         if (strstr(buf, pattern)) found = 1;
-                        search_offset += (size_t)n;
+                        /* Rewind by pattern length - 1 so that a pattern
+                         * split across two reads is not missed. The tail
+                         * of this chunk is re-read as the head of the next. */
+                        if ((size_t)n >= pat_len)
+                            search_offset += (size_t)n - (pat_len - 1);
+                        else
+                            search_offset += (size_t)n;
                     }
                     free(buf);
                 }
