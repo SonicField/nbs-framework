@@ -773,12 +773,30 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
         /* Query check moved to top of loop (before interrupts/mentions) */
 
-        /* Check transport alive */
-        if (!tp->is_alive(tp)) {
-            sc_dbg("transport NOT ALIVE — exiting");
-            fprintf(stderr, "sidecar_run: transport not alive for '%s', exiting\n",
-                    cfg->handle);
-            break;
+        /* Check transport alive.
+         * is_alive returns: 1 = alive, 0 = dead, -1 = error (e.g. session
+         * directory deleted). Errors are transient (filesystem glitch) or
+         * permanent (session cleaned up). Track consecutive errors — if
+         * they persist for 60 ticks (~1 minute), the session is gone. */
+        {
+            static int alive_error_count = 0;
+            int alive_rc = tp->is_alive(tp);
+            if (alive_rc == 0) {
+                sc_dbg("transport NOT ALIVE — exiting");
+                fprintf(stderr, "sidecar_run: transport not alive for '%s', exiting\n",
+                        cfg->handle);
+                break;
+            } else if (alive_rc < 0) {
+                alive_error_count++;
+                if (alive_error_count >= 60) {
+                    sc_dbg("transport error for 60 consecutive ticks — exiting");
+                    fprintf(stderr, "sidecar_run: transport error persisted 60s "
+                            "for '%s', assuming session gone\n", cfg->handle);
+                    break;
+                }
+            } else {
+                alive_error_count = 0;
+            }
         }
 
         /* Capture content and hash. 30 lines to reliably include
