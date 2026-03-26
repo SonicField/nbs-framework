@@ -107,3 +107,4 @@ src/nbs-ts-render/*.o
 bin/nbs-ts-render
 # Build artefacts for nbs-chat-edit
 src/nbs-chat-edit/nbs-chat-edit
+bin/nbs-chat-edit
