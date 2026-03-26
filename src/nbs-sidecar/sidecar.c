@@ -29,6 +29,8 @@
 #include "../nbs-common/nbs_assert.h"
 
 #include <ctype.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -221,16 +223,6 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
-    /* Pipe the tail of output.log through nbs-ts-render.
-     * The renderer processes all escape sequences and outputs
-     * the final screen state as plain text. */
-    char render_cmd[4096];
-    snprintf(render_cmd, sizeof(render_cmd),
-             "tail -c 65536 %s/output.log 2>/dev/null | "
-             "nbs-ts-render --width=80 --height=24 2>/dev/null",
-             tp->ctx ? ((const char *)tp->ctx) : ".");
-
-    /* ctx is a ts_ctx_t* whose first field is session_dir */
     /* Get session dir from transport context */
     const char *session_dir = NULL;
     if (tp->ctx) {
@@ -242,10 +234,59 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         return -1;
     }
 
+    /* Find the last screen-clear sequence in output.log by scanning
+     * backwards from the end. This gives the renderer the last "fresh
+     * screen" state, avoiding the problem where long thinking spinners
+     * push real content out of a fixed-size tail window.
+     *
+     * Screen clears: ESC[2J (erase display) or ESC[H (cursor home,
+     * often followed by ESC[2J). We search for ESC[2J as the primary
+     * marker. Give up after 1MB of backwards scan. */
+    char log_path[4096];
+    snprintf(log_path, sizeof(log_path), "%s/output.log", session_dir);
+
+    int log_fd = open(log_path, O_RDONLY);
+    if (log_fd < 0) {
+        fprintf(stderr, "handle_query: cannot open %s\n", log_path);
+        return -1;
+    }
+
+    off_t file_end = lseek(log_fd, 0, SEEK_END);
+    off_t render_start = 0;
+    if (file_end > 0) {
+        /* Scan backwards in 64KB chunks, up to 1MB */
+        off_t max_scan = 1024 * 1024;
+        if (max_scan > file_end) max_scan = file_end;
+        off_t scan_pos = file_end - max_scan;
+        char *scan_buf = malloc((size_t)max_scan);
+        if (scan_buf) {
+            ssize_t nr = pread(log_fd, scan_buf, (size_t)max_scan, scan_pos);
+            if (nr > 2) {
+                /* Search backwards for ESC[2J */
+                for (ssize_t i = nr - 3; i >= 0; i--) {
+                    if (scan_buf[i] == '\x1b' && scan_buf[i+1] == '[' &&
+                        scan_buf[i+2] == '2' &&
+                        (i + 3 < nr && scan_buf[i+3] == 'J')) {
+                        render_start = scan_pos + i;
+                        break;
+                    }
+                }
+            }
+            free(scan_buf);
+        }
+        /* If no screen clear found, fall back to last 64KB */
+        if (render_start == 0 && file_end > 65536)
+            render_start = file_end - 65536;
+    }
+    close(log_fd);
+
+    /* Pipe from render_start through nbs-ts-render */
+    char render_cmd[8192];
     snprintf(render_cmd, sizeof(render_cmd),
-             "tail -c 65536 '%s/output.log' 2>/dev/null | "
+             "tail -c +%" PRId64 " '%s' 2>/dev/null | "
              "nbs-ts-render --width=80 --height=24 2>/dev/null",
-             session_dir);
+             (int64_t)(render_start + 1), /* tail -c +N is 1-based */
+             log_path);
 
     char truncated[SIDECAR_MAX_CONTENT];
     truncated[0] = '\0';
