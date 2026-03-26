@@ -324,9 +324,11 @@ These are not guidelines. They are rules.
 
 3. **Skip ephemeral agents.** Do not check, diagnose, or restart: pythia, shepard, librarian, fixup, chatdigest. They are spawned on demand by the sidecar. They are not team members.
 
-4. **Do not kill working agents.** If `nbs-ts read-new` shows recent tool calls or active output, the agent is working. Leave it alone. Killing a working agent destroys its context and any in-progress work.
+4. **Always hard-restart scribe.** Scribe's state lives in the scribe log file, not in her session. A fresh scribe re-loads the skill and prevents role drift (prose commentary instead of tool usage). Kill and respawn her every fixup cycle regardless of health.
 
-5. **Escalate, do not guess.** Follow the escalation sequence: Level 1 → Level 2 → Level 4. Do not skip to Level 4 for a stalled agent without trying Level 1 first. The exception is agents that are dead or missing — those go straight to Level 4.
+5. **Do not kill other working agents.** If `nbs-ts read-new` shows recent tool calls or active output, the agent is working. Leave it alone. Killing a working agent destroys its context and any in-progress work.
+
+6. **Escalate, do not guess.** Follow the escalation sequence: Level 1 → Level 2 → Level 4. Do not skip to Level 4 for a stalled agent without trying Level 1 first. The exception is agents that are dead or missing — those go straight to Level 4.
 
 6. **Be brief in the summary.** One line per agent. State, action, outcome. The summary is for the supervisor and the human. They need facts, not narrative.
 
