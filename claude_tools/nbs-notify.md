@@ -11,16 +11,13 @@ $ARGUMENTS
 
 ## Instructions
 
-1. **Bus events**: Run `nbs-bus ack-all .nbs/events/` to acknowledge all
-   pending events. If you need to inspect specific events first, use
-   `nbs-bus check .nbs/events/` then `nbs-bus read .nbs/events/ <file>`.
-2. **Unread chats**: Run `nbs-chat read <file> --unread=<your-handle>`
-   for each chat with unread messages. Respond via `nbs-chat send`
-   if the message requires a response.
-3. Process events and messages first. If useful work emerges from what
-   you find, start it and announce what you are doing in chat so others
-   can coordinate.
-4. Do not post zero-information messages to chat (no "acknowledged", "noted", etc.).
+1. **Read unread chats**: Run `nbs-chat read <file> --unread=<your-handle>`
+   to see new messages. Respond via `nbs-chat send` if needed.
+2. Process messages. If useful work emerges, start it and announce
+   what you are doing in chat so others can coordinate.
+3. Do not post zero-information messages to chat (no "acknowledged", "noted", etc.).
+4. **Do NOT run `nbs-bus ack-all`** — the sidecar handles bus event
+   acknowledgement automatically after delivering the notification.
 5. **Be proactive, not passive.** After processing events and messages,
    read the last 10 messages with `--last=10` for conversational context.
    If there is active discussion, contribute: answer questions, pick up

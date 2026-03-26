@@ -48,7 +48,7 @@ nbs-chat send <chat-file> my-handle "Hello — my-handle here, working on <brief
 | Delete spam/corrupt messages | `nbs-chat delete <file> --after=<time>` | Manual file editing |
 | Preview a delete | `nbs-chat delete <file> --after=<time> --dry-run` | Guessing what will be deleted |
 | Wait for a reply | Do nothing — sit at the prompt | `sleep N && nbs-chat read`, polling loops |
-| Ack all bus events | `nbs-bus ack-all .nbs/events/` | Manual file operations on events/ |
+| Ack all bus events | Automatic (sidecar acks after notification) | `nbs-bus ack-all` manually |
 | Search decision log | `nbs-scribe-query --chat=<file> <pattern>` | `grep` on the raw log file |
 | Look up a decision | `nbs-scribe-query --chat=<file> --id=D-<ts>` | Manual scrollback |
 | Last N decisions | `nbs-scribe-query --chat=<file> --last=5` | `tail` on the log file |

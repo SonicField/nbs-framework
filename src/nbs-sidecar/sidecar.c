@@ -94,29 +94,27 @@ static void build_inbox_path(const sidecar_config_t *cfg,
 /*
  * build_notify_prompt — Construct a plain text notification prompt.
  *
- * Replaces the /nbs-notify slash command injection. Slash commands
- * fail in terminal contexts because the Enter key doesn't reliably
- * register. Plain text prompts work every time.
+ * Deliberately contains NO chat content — only the instruction to
+ * read the chat. Including summaries of chat messages caused agents
+ * to misinterpret content as human instructions (e.g. a summary
+ * mentioning "session end" was read as a command to shut down).
  *
- * The content matches the nbs-notify.md skill file but is embedded
- * directly so no file read or slash command is needed.
+ * The agent reads the actual messages via nbs-chat read --unread.
+ * The sidecar acks bus events — agents do not need to ack manually.
  */
 static void build_notify_prompt(const sidecar_config_t *cfg,
-                                 const char *notify_message,
+                                 const char *chat_path,
                                  char *out, size_t out_size) {
     ASSERT_MSG(cfg != NULL, "build_notify_prompt: cfg is NULL");
-    ASSERT_MSG(notify_message != NULL, "build_notify_prompt: notify_message is NULL");
     ASSERT_MSG(out != NULL, "build_notify_prompt: out is NULL");
     ASSERT_MSG(out_size > 0, "build_notify_prompt: out_size is 0");
 
     int sn = snprintf(out, out_size,
-        "[NBS-CHAT-NOTIFICATION] %s — ack events with nbs-bus ack-all .nbs/events/ then "
-        "read unread chats with nbs-chat read <file> --unread=%s and respond if needed. "
+        "[NBS-CHAT-NOTIFICATION] You have unread messages. "
+        "Read them with nbs-chat read %s --unread=%s and respond if needed. "
         "Return to prompt when done. [THIS MESSAGE WAS MACHINE GENERATED]",
-        notify_message, cfg->handle);
+        chat_path ? chat_path : "<chat-file>", cfg->handle);
 
-    /* Truncation is acceptable — the message may be long but the
-     * instructions are the important part. */
     (void)sn;
 
     ASSERT_MSG(out[0] != '\0',
@@ -158,8 +156,12 @@ static int handle_interrupt(transport_t *tp, const sidecar_config_t *cfg,
 
             if (detect_prompt_ready(content)) {
                 /* Inject interrupt as plain text */
+                char int_chat_path[SIDECAR_MAX_PATH];
+                if (registry_find_first(registry_path, "chat",
+                                         int_chat_path, sizeof(int_chat_path)) != 0)
+                    int_chat_path[0] = '\0';
                 char interrupt_prompt[SIDECAR_MAX_PROMPT];
-                build_notify_prompt(cfg, "INTERRUPT — you were @mentioned with ! priority",
+                build_notify_prompt(cfg, int_chat_path[0] ? int_chat_path : NULL,
                                      interrupt_prompt, sizeof(interrupt_prompt));
                 if (tp->send_text(tp, interrupt_prompt) != 0) {
                     fprintf(stderr, "handle_interrupt: send_text failed\n");
@@ -978,11 +980,14 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     }
 
                     /* Inject notification as plain text prompt.
-                     * Previous approach used /nbs-notify slash command,
-                     * which failed because Enter doesn't reliably register
-                     * in terminal contexts. Plain text works every time. */
+                     * Contains NO chat content — only the instruction to
+                     * read the chat. The sidecar acks bus events. */
+                    char nfy_chat_path[SIDECAR_MAX_PATH];
+                    if (registry_find_first(registry_path, "chat",
+                                             nfy_chat_path, sizeof(nfy_chat_path)) != 0)
+                        nfy_chat_path[0] = '\0';
                     char notify_prompt[SIDECAR_MAX_PROMPT];
-                    build_notify_prompt(cfg, state.notify_message,
+                    build_notify_prompt(cfg, nfy_chat_path[0] ? nfy_chat_path : NULL,
                                         notify_prompt, sizeof(notify_prompt));
                     if (tp->send_text(tp, notify_prompt) != 0) {
                         fprintf(stderr, "sidecar_run: notify send_text failed\n");
@@ -1013,6 +1018,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
                     if (injection_consumed) {
                         state.notify_fail_count = 0;
+                        /* Ack bus events — the agent no longer needs to
+                         * do this manually. The notification was delivered,
+                         * so the events have been communicated. */
+                        {
+                            char ack_bus_dir[SIDECAR_MAX_PATH];
+                            if (registry_find_first(registry_path, "bus",
+                                                     ack_bus_dir,
+                                                     sizeof(ack_bus_dir)) == 0) {
+                                const char *ack_argv[] = {
+                                    "nbs-bus", "ack-all", ack_bus_dir, NULL
+                                };
+                                exec_fire_and_forget(ack_argv);
+                            }
+                        }
                     } else {
                         state.notify_fail_count++;
                     }
