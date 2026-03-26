@@ -564,7 +564,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     time_t init_prompt_deadline = time(NULL) + 60;
 
     state.sidecar_start_time = time(NULL);
-    state.last_flush_time = state.sidecar_start_time;
+    state.last_flush_time = state.sidecar_start_time; /* unused — flush removed */
     state.last_poll_time = state.sidecar_start_time;
     state.last_fixup_check = state.sidecar_start_time;
     state.last_librarian_check = state.sidecar_start_time;
@@ -804,22 +804,14 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         size_t content_len = strlen(content);
         uint64_t current_hash = fnv1a_hash(content, content_len);
 
-        /* Wall-clock Enter flush — fires regardless of idle state.
-         * Ensures the UI is flushed periodically even when the content
-         * hash is changing (agent appears busy). Only suppressed during
-         * blocking dialogues where Enter would select an option. */
+        /* Enter flush REMOVED. The periodic Enter was submitting Claude
+         * Code's "suggested next step" prompts as if the human typed them,
+         * causing agents to hallucinate human instructions. The original
+         * purpose (unsticking idle prompts) is now handled by the
+         * notification injection system which sends text + Enter when
+         * there is actual work to do. */
         {
             time_t now_wc = time(NULL);
-            if (cfg->flush_interval > 0 &&
-                (now_wc - state.last_flush_time) >= cfg->flush_interval) {
-                dialogue_response_t flush_resp = {0, 0};
-                if (detect_blocking_dialogue(content, &flush_resp) == DIALOGUE_NONE) {
-                    if (tp->send_key(tp, "Enter") != 0) {
-                        fprintf(stderr, "sidecar_run: flush send_key Enter failed\n");
-                    }
-                    state.last_flush_time = now_wc;
-                }
-            }
 
             /* Wall-clock /nbs-poll injection — safety net for missed events.
              * Fires every poll_interval seconds regardless of idle counters.
