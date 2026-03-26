@@ -8,6 +8,7 @@
 
 #include "nbs_ts_render.h"
 #include "nbs_ts_wcwidth.h"
+#include "nbs_ts_bidi.h"
 #include "../nbs-common/nbs_assert.h"
 
 #include <stdlib.h>
@@ -849,17 +850,71 @@ char *ts_render_snapshot(const ts_render_t *t) {
             }
         }
 
-        /* Write cells up to and including last_col */
+        /* Collect logical characters for bidi reordering */
+        int char_count = 0;
+        int col_map[t->cols]; /* col_map[char_idx] = column of that char */
+        uint32_t codepoints[t->cols];
+
         for (int col = 0; col <= last_col; col++) {
             const ts_render_cell_t *c = cell_at_const(t, row, col);
-            if (CELL_IS_CONTINUATION(c)) {
-                /* Skip continuation cells — primary cell already emitted the char */
-                continue;
-            } else if (c->len > 0) {
-                ASSERT_MSG(pos + (size_t)c->len < buf_size,
-                           "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
-                memcpy(buf + pos, c->ch, (size_t)c->len);
-                pos += (size_t)c->len;
+            if (CELL_IS_CONTINUATION(c)) continue;
+            col_map[char_count] = col;
+            if (c->len > 0) {
+                codepoints[char_count] = utf8_to_codepoint(c->ch, c->len > 4 ? 4 : c->len);
+            } else {
+                codepoints[char_count] = 0x0020; /* empty cell = space */
+            }
+            char_count++;
+        }
+
+        /* Apply bidi reordering with levels for mirroring */
+        int visual_map[t->cols];
+        int bidi_levels[t->cols];
+        if (char_count > 0) {
+            nbs_ts_bidi_reorder_with_levels(codepoints, char_count,
+                                            visual_map, bidi_levels, 0);
+        }
+
+        /* Write cells in visual order, with bracket mirroring */
+        for (int vi = 0; vi < char_count; vi++) {
+            int li = visual_map[vi]; /* logical index */
+            int col = col_map[li];
+            const ts_render_cell_t *c = cell_at_const(t, row, col);
+            if (c->len > 0) {
+                /* Check if this char needs mirroring (odd bidi level) */
+                if (bidi_levels[li] & 1) {
+                    uint32_t cp = codepoints[li];
+                    uint32_t mirrored = nbs_ts_bidi_mirror(cp);
+                    if (mirrored != cp && cp < 0x80) {
+                        /* ASCII mirror — single byte replacement */
+                        ASSERT_MSG(pos + 1 < buf_size,
+                                   "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
+                        buf[pos++] = (char)mirrored;
+                    } else if (mirrored != cp) {
+                        /* Non-ASCII mirror — encode as UTF-8 */
+                        char mirror_buf[4];
+                        int mlen = 0;
+                        if (mirrored < 0x80) { mirror_buf[0] = (char)mirrored; mlen = 1; }
+                        else if (mirrored < 0x800) { mirror_buf[0] = (char)(0xC0 | (mirrored >> 6)); mirror_buf[1] = (char)(0x80 | (mirrored & 0x3F)); mlen = 2; }
+                        else if (mirrored < 0x10000) { mirror_buf[0] = (char)(0xE0 | (mirrored >> 12)); mirror_buf[1] = (char)(0x80 | ((mirrored >> 6) & 0x3F)); mirror_buf[2] = (char)(0x80 | (mirrored & 0x3F)); mlen = 3; }
+                        else { mirror_buf[0] = (char)(0xF0 | (mirrored >> 18)); mirror_buf[1] = (char)(0x80 | ((mirrored >> 12) & 0x3F)); mirror_buf[2] = (char)(0x80 | ((mirrored >> 6) & 0x3F)); mirror_buf[3] = (char)(0x80 | (mirrored & 0x3F)); mlen = 4; }
+                        ASSERT_MSG(pos + (size_t)mlen < buf_size,
+                                   "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
+                        memcpy(buf + pos, mirror_buf, (size_t)mlen);
+                        pos += (size_t)mlen;
+                    } else {
+                        /* No mirror — output as-is */
+                        ASSERT_MSG(pos + (size_t)c->len < buf_size,
+                                   "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
+                        memcpy(buf + pos, c->ch, (size_t)c->len);
+                        pos += (size_t)c->len;
+                    }
+                } else {
+                    ASSERT_MSG(pos + (size_t)c->len < buf_size,
+                               "ts_render_snapshot: buffer overflow at row=%d col=%d", row, col);
+                    memcpy(buf + pos, c->ch, (size_t)c->len);
+                    pos += (size_t)c->len;
+                }
             } else {
                 /* Empty cell rendered as space */
                 ASSERT_MSG(pos + 1 < buf_size,

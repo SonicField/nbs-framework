@@ -873,6 +873,80 @@ TEST(test_mixed_wide_narrow_combining) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
+/*  BIDI (RTL) SUPPORT                                               */
+/* ══════════════════════════════════════════════════════════════════ */
+
+TEST(test_bidi_pure_hebrew) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* שלום עולם (shalom olam) → reversed to םלוע םולש */
+    feed_str(t, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d \xd7\xa2\xd7\x95\xd7\x9c\xd7\x9d");
+    assert_snapshot(t,
+        "\xd7\x9d\xd7\x9c\xd7\x95\xd7\xa2 \xd7\x9d\xd7\x95\xd7\x9c\xd7\xa9\n",
+        "bidi_pure_hebrew");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_mixed_english_hebrew) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* "Hello שלום World" → "Hello םולש World" */
+    feed_str(t, "Hello \xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d World");
+    assert_snapshot(t,
+        "Hello \xd7\x9d\xd7\x95\xd7\x9c\xd7\xa9 World\n",
+        "bidi_mixed_english_hebrew");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_hebrew_with_number) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* "מחיר: 42 שקל" → "לקש 42 :ריחמ" (number stays LTR within RTL) */
+    feed_str(t, "\xd7\x9e\xd7\x97\xd7\x99\xd7\xa8: 42 \xd7\xa9\xd7\xa7\xd7\x9c");
+    assert_snapshot(t,
+        "\xd7\x9c\xd7\xa7\xd7\xa9 42 :\xd7\xa8\xd7\x99\xd7\x97\xd7\x9e\n",
+        "bidi_hebrew_with_number");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_ltr_unchanged) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* Pure LTR text is unchanged by bidi */
+    feed_str(t, "Hello World 123");
+    assert_snapshot(t, "Hello World 123\n", "bidi_ltr_unchanged");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_hebrew_with_sgr) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* Colored Hebrew — SGR stripped, bidi applied */
+    feed_str(t, "\x1b[31m\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\x1b[0m");
+    assert_snapshot(t,
+        "\xd7\x9d\xd7\x95\xd7\x9c\xd7\xa9\n",
+        "bidi_hebrew_with_sgr");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_hebrew_multiline) {
+    ts_render_t *t = ts_render_create(5, 40);
+    /* Each line gets independent bidi */
+    feed_str(t, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\r\nHello\r\n\xd7\xa2\xd7\x95\xd7\x9c\xd7\x9d");
+    assert_snapshot(t,
+        "\xd7\x9d\xd7\x95\xd7\x9c\xd7\xa9\n"
+        "Hello\n"
+        "\xd7\x9d\xd7\x9c\xd7\x95\xd7\xa2\n",
+        "bidi_hebrew_multiline");
+    ts_render_destroy(t);
+}
+
+TEST(test_bidi_bracket_mirroring) {
+    ts_render_t *t = ts_render_create(3, 40);
+    /* "(שלום)" → brackets mirrored in RTL context: "(םולש)" */
+    feed_str(t, "(\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d)");
+    assert_snapshot(t,
+        "(\xd7\x9d\xd7\x95\xd7\x9c\xd7\xa9)\n",
+        "bidi_bracket_mirroring");
+    ts_render_destroy(t);
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
 /*  TEST RUNNER                                                      */
 /* ══════════════════════════════════════════════════════════════════ */
 
@@ -999,6 +1073,15 @@ int main(void) {
     RUN_TEST(test_cjk_with_sgr);
     RUN_TEST(test_combining_character);
     RUN_TEST(test_mixed_wide_narrow_combining);
+
+    printf("\nBidi (RTL) support:\n");
+    RUN_TEST(test_bidi_pure_hebrew);
+    RUN_TEST(test_bidi_mixed_english_hebrew);
+    RUN_TEST(test_bidi_hebrew_with_number);
+    RUN_TEST(test_bidi_ltr_unchanged);
+    RUN_TEST(test_bidi_hebrew_with_sgr);
+    RUN_TEST(test_bidi_hebrew_multiline);
+    RUN_TEST(test_bidi_bracket_mirroring);
 
     printf("\nAPI:\n");
     RUN_TEST(test_reset_clears_all);
