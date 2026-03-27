@@ -240,7 +240,16 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     if (pid == 0) {
         pid_t pid2 = fork();
         if (pid2 == 0) {
-            /* Grandchild: exec nbs-workers spawn */
+            /* Grandchild: exec nbs-workers spawn.
+             * Redirect stdout/stderr to /dev/null — oracle output
+             * goes to chat, not the terminal. Without this, nbs-workers
+             * prints diagnostics that stomp on the user's input area. */
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
             execl(workers_bin, "nbs-workers", "spawn", role,
                   project_root, skill_flag, task_desc, (char *)NULL);
             _exit(127);
