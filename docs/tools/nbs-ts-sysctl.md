@@ -99,6 +99,7 @@ Description=NBS Terminal Session Helper
 ExecStart=/bin/bash --login -c 'exec ~/.nbs/bin/nbs-ts-helper'
 Restart=on-failure
 RestartSec=2
+TimeoutStartSec=30
 StandardOutput=append:~/.nbs-ts/helper.log
 StandardError=append:~/.nbs-ts/helper.log
 
@@ -111,6 +112,7 @@ Key design choices:
 - **`bash --login -c 'exec ...'`** — The helper inherits the user's full login environment (PATH, proxy, SSH agent). Child processes must behave identically to processes launched from a login shell. The `exec` replaces bash so systemd tracks the correct PID.
 - **`Restart=on-failure`** — Automatic restart on crash, but not on clean exit (stop command).
 - **`RestartSec=2`** — Short delay to avoid tight crash loops.
+- **`TimeoutStartSec=30`** — Allows time for login profile to load before systemd considers startup failed.
 - **`WantedBy=default.target`** — Starts on user login.
 
 ## Exit Codes

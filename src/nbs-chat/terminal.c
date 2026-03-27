@@ -1598,11 +1598,8 @@ int main(int argc, char **argv) {
     }
 
     /* Check nbs-ts-helper — warn if not running */
-    if (!helper_is_running()) {
-        printf("%s", BOLD);
-        helper_warn_if_not_running(stdout, 1);
-        printf("%s\n", RESET);
-    }
+    if (helper_warn_if_not_running(stdout, 1))
+        printf("\n");
 
     /* Put terminal in raw-ish mode (disable echo and canonical mode,
      * but keep signal generation for Ctrl-C) */
