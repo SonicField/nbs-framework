@@ -23,6 +23,15 @@ const nbs_style_t NBS_STYLE_WARNING = { 226, NBS_COLOUR_NONE, 0 };  /* yellow */
 const nbs_style_t NBS_STYLE_INFO    = {  87, NBS_COLOUR_NONE, 0 };  /* cyan */
 const nbs_style_t NBS_STYLE_SUCCESS = {  41, NBS_COLOUR_NONE, 0 };  /* green */
 
+/* Human message styles — dark grey (236) background strip */
+const nbs_style_t NBS_STYLE_HUMAN_HANDLE    = { 223, 236, NBS_ATTR_BOLD };
+const nbs_style_t NBS_STYLE_HUMAN_CONTENT   = { 253, 236, 0 };
+const nbs_style_t NBS_STYLE_HUMAN_TIMESTAMP = { 245, 236, NBS_ATTR_DIM };
+const nbs_style_t NBS_STYLE_HUMAN_PROMPT    = { 223, 236, NBS_ATTR_BOLD };
+
+/* Medic warning — terracotta bold */
+const nbs_style_t NBS_STYLE_MEDIC_WARNING   = { 173, NBS_COLOUR_NONE, NBS_ATTR_BOLD };
+
 /* --- Escape sequence generation --- */
 
 int nbs_style_start(const nbs_style_t *style, char *buf, size_t bufsize) {
@@ -114,14 +123,22 @@ void nbs_style_freset(FILE *out) {
 /* --- Handle-to-colour palette --- */
 
 static const nbs_style_t PALETTE[] = {
-    { 39,  NBS_COLOUR_NONE, 0 },  /* Blue */
-    { 208, NBS_COLOUR_NONE, 0 },  /* Orange */
-    { 41,  NBS_COLOUR_NONE, 0 },  /* Green */
-    { 213, NBS_COLOUR_NONE, 0 },  /* Pink */
-    { 226, NBS_COLOUR_NONE, 0 },  /* Yellow */
-    { 87,  NBS_COLOUR_NONE, 0 },  /* Cyan */
-    { 196, NBS_COLOUR_NONE, 0 },  /* Red */
-    { 147, NBS_COLOUR_NONE, 0 },  /* Lavender */
+    {  73, NBS_COLOUR_NONE, 0 },  /*  0: Soft teal     #5fafaf */
+    { 180, NBS_COLOUR_NONE, 0 },  /*  1: Warm sand     #d7af87 */
+    { 174, NBS_COLOUR_NONE, 0 },  /*  2: Muted rose    #d78787 */
+    { 108, NBS_COLOUR_NONE, 0 },  /*  3: Pale sage     #87af87 */
+    { 183, NBS_COLOUR_NONE, 0 },  /*  4: Soft lavender #d7afff */
+    { 215, NBS_COLOUR_NONE, 0 },  /*  5: Warm amber    #ffaf5f */
+    { 110, NBS_COLOUR_NONE, 0 },  /*  6: Steel blue    #87afd7 */
+    { 209, NBS_COLOUR_NONE, 0 },  /*  7: Dusty coral   #ff875f */
+    { 115, NBS_COLOUR_NONE, 0 },  /*  8: Soft mint     #87d7af */
+    { 186, NBS_COLOUR_NONE, 0 },  /*  9: Pale gold     #d7d787 */
+    { 182, NBS_COLOUR_NONE, 0 },  /* 10: Mauve         #d7afd7 */
+    { 152, NBS_COLOUR_NONE, 0 },  /* 11: Powder blue   #afd7d7 */
+    { 216, NBS_COLOUR_NONE, 0 },  /* 12: Peach         #ffaf87 */
+    { 114, NBS_COLOUR_NONE, 0 },  /* 13: Spring green  #87d787 */
+    { 146, NBS_COLOUR_NONE, 0 },  /* 14: Wisteria      #afafd7 */
+    { 223, NBS_COLOUR_NONE, 0 },  /* 15: Cream         #ffd7af */
 };
 #define PALETTE_SIZE ((int)(sizeof(PALETTE) / sizeof(PALETTE[0])))
 

@@ -86,8 +86,38 @@ void render_message_own(const char *handle, const char *content,
     char ts_prefix[32];
     format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
 
-    const char *colour = render_get_colour(handle);
-    fprintf(out, "  %s%s\033[%sm%s%s%s: %s%s\n",
-            RENDER_DIM, ts_prefix, colour, handle,
-            RENDER_RESET, RENDER_DIM, content, RENDER_RESET);
+    /* Timestamp — dim on dark grey background */
+    nbs_style_fstart(&NBS_STYLE_HUMAN_TIMESTAMP, out);
+    fprintf(out, "  %s", ts_prefix);
+
+    /* Handle — cream bold on dark grey background */
+    nbs_style_freset(out);
+    nbs_style_fstart(&NBS_STYLE_HUMAN_HANDLE, out);
+    fprintf(out, "%s", handle);
+
+    /* Content — light grey on dark grey background */
+    nbs_style_freset(out);
+    nbs_style_fstart(&NBS_STYLE_HUMAN_CONTENT, out);
+    fprintf(out, ": %s", content);
+
+    /* Fill rest of line with background, then reset */
+    fputs("\033[K", out);
+    nbs_style_freset(out);
+    fputc('\n', out);
+}
+
+void render_message_medic(const char *handle, const char *content,
+                          time_t timestamp, FILE *out) {
+    ASSERT_MSG(handle != NULL, "render_message_medic: handle is NULL");
+    ASSERT_MSG(content != NULL, "render_message_medic: content is NULL");
+    ASSERT_MSG(out != NULL, "render_message_medic: out is NULL");
+
+    char ts_prefix[32];
+    format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
+
+    fprintf(out, "  %s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
+    nbs_style_fstart(&NBS_STYLE_MEDIC_WARNING, out);
+    fprintf(out, "%s", handle);
+    nbs_style_freset(out);
+    fprintf(out, ": %s\n", content);
 }

@@ -70,10 +70,10 @@ void render_message(const char *handle, const char *content,
                     time_t timestamp, FILE *out);
 
 /*
- * render_message_own — Render own message (dimmer variant).
+ * render_message_own — Render own message with background highlight.
  *
- * Same layout but handle and content are dimmed, for distinguishing
- * the user's own messages in interactive mode.
+ * Dark grey background strip with warm cream handle and light grey content.
+ * Full-width background via \033[K (erase to end of line with current bg).
  *
  * Preconditions:
  *   - handle != NULL
@@ -82,5 +82,18 @@ void render_message(const char *handle, const char *content,
  */
 void render_message_own(const char *handle, const char *content,
                         time_t timestamp, FILE *out);
+
+/*
+ * render_message_medic — Render a [MEDIC-WARNING] message.
+ *
+ * Terracotta bold handle, normal content.
+ *
+ * Preconditions:
+ *   - handle != NULL
+ *   - content != NULL
+ *   - out != NULL
+ */
+void render_message_medic(const char *handle, const char *content,
+                          time_t timestamp, FILE *out);
 
 #endif /* NBS_CHAT_RENDER_H */

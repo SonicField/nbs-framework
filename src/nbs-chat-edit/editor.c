@@ -168,7 +168,16 @@ static void render(const editor_t *ed) {
         const chat_message_t *msg = &ed->state.messages[idx];
         int is_cursor = (idx == ed->cursor);
         int is_deleted = ed->deleted[idx];
-        const char *hcol = handle_colour_str(msg->handle);
+        const char *hcol;
+        /* Medic warnings get terracotta instead of palette colour */
+        static char medic_buf[NBS_STYLE_BUFSIZE];
+        if (strncmp(msg->handle, "[MEDIC-", 7) == 0) {
+            nbs_style_start(&NBS_STYLE_MEDIC_WARNING, medic_buf,
+                            sizeof(medic_buf));
+            hcol = medic_buf;
+        } else {
+            hcol = handle_colour_str(msg->handle);
+        }
 
         /* Format timestamp */
         char ts[32] = "";

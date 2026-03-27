@@ -67,6 +67,15 @@ extern const nbs_style_t NBS_STYLE_WARNING;   /* yellow fg (226) */
 extern const nbs_style_t NBS_STYLE_INFO;      /* cyan fg (87) */
 extern const nbs_style_t NBS_STYLE_SUCCESS;   /* green fg (41) */
 
+/* Human message styles — dark grey background strip for visibility */
+extern const nbs_style_t NBS_STYLE_HUMAN_HANDLE;    /* fg:223 (cream), bg:236, bold */
+extern const nbs_style_t NBS_STYLE_HUMAN_CONTENT;   /* fg:253 (light grey), bg:236 */
+extern const nbs_style_t NBS_STYLE_HUMAN_TIMESTAMP;  /* fg:245 (mid grey), bg:236, dim */
+extern const nbs_style_t NBS_STYLE_HUMAN_PROMPT;     /* fg:223 (cream), bg:236, bold */
+
+/* Medic warning style — terracotta, bold */
+extern const nbs_style_t NBS_STYLE_MEDIC_WARNING;   /* fg:173 (terracotta), bold */
+
 /* --- Escape sequence generation --- */
 
 /*
