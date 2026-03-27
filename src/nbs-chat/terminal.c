@@ -1139,6 +1139,11 @@ static void send_and_display(line_state_t *ls) {
 
     if (do_send(ls->buf) != 0) {
         printf("  %s(send failed)%s\n", DIM, RESET);
+    } else {
+        /* Render the sent message with proper styling.
+         * poll_and_display skips own messages, so without this
+         * the sent text stays on screen as unformatted input. */
+        format_message(g_handle, ls->buf, g_handle, time(NULL));
     }
 }
 
