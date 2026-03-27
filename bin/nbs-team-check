@@ -51,9 +51,10 @@ alive_count=0
 dead_agents=()
 if command -v nbs-ts >/dev/null 2>&1; then
     for agent in "${EXPECTED_AGENTS[@]}"; do
-        session_name="${CHAT_TAG}-${agent}"
+        session_name="nbs-${agent}-${CHAT_TAG}"
         # Check if session exists and is alive
-        if nbs-ts list --name="$CHAT_TAG" 2>/dev/null | grep -q "${session_name}.*alive"; then
+        # Format: handle\tstatus\tname\tcmd — status is before name
+        if nbs-ts list --name="$CHAT_TAG" 2>/dev/null | grep -q "alive.*${session_name}"; then
             alive_count=$((alive_count + 1))
         else
             dead_agents+=("$agent")

@@ -145,6 +145,17 @@ check "lists generalist" "$( echo "$OUTPUT" | grep -qF 'generalist' && echo pass
 
 echo ""
 
+# --- Test 11: Session name format is nbs-<role>-<tag> ---
+echo "11. Session name format..."
+# Verify the script greps for the correct pattern by inspecting source
+GREP_PATTERN=$(grep 'session_name=' "$NBS_TEAM_CHECK" | head -1)
+check "uses nbs-role-tag format" "$( echo "$GREP_PATTERN" | grep -qF 'nbs-${agent}-${CHAT_TAG}' && echo pass || echo fail )"
+# Verify grep matches status before name (alive comes before session name in nbs-ts output)
+GREP_LINE=$(grep 'alive.*session_name\|session_name.*alive' "$NBS_TEAM_CHECK" | head -1)
+check "greps alive before name" "$( echo "$GREP_LINE" | grep -qF 'alive.*${session_name}' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Results: $PASS_COUNT passed, $ERRORS failed ==="
 if [[ $ERRORS -eq 0 ]]; then
