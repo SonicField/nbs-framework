@@ -61,6 +61,12 @@ Every command you need. No others are required.
 | `source .nbs/bin/nbs-launch-agent` | Load the `launch_agent` bash function. |
 | `launch_agent HANDLE PROJECT_ROOT NBS_CLAUDE_PATH INITIAL_PROMPT` | Spawn a Claude agent. The only reliable method. |
 
+### Post-restart verification
+
+| Command | Purpose |
+|---------|---------|
+| `nbs-team-check <tag> <project-root>` | Verify agent sessions and sidecars are alive. Exit 0 = healthy, exit 1 = problems. |
+
 ### Deriving the chat file and tag
 
 ```bash
@@ -220,6 +226,31 @@ launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
     "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
 ```
 
+**After every Level 4 restart, verify the agent actually started:**
+
+```bash
+# Wait for the agent to initialise
+sleep 30
+
+# Check that the session appeared and is alive
+handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
+    | grep alive | head -1 | cut -f1)
+
+if [ -z "$handle" ]; then
+    # Agent failed to start — report honestly, do NOT claim success
+    results="${results}\n- @${agent}: RESTART FAILED — launch_agent returned but no alive session after 30s"
+else
+    # Verify sidecar is also running
+    if pgrep -f "nbs-sidecar.*--handle=${agent}.*$(pwd)" >/dev/null 2>&1; then
+        results="${results}\n- @${agent}: restarted and verified"
+    else
+        results="${results}\n- @${agent}: restarted but sidecar missing — agent will not receive notifications"
+    fi
+fi
+```
+
+**This verification is mandatory.** Without it, `launch_agent` can return success while the spawned process dies within seconds. Previous fixup runs reported "alive — restarted" for agents that were actually dead, because they checked liveness immediately after spawn instead of waiting for initialisation.
+
 **CRITICAL:** Use `launch_agent` from `nbs-launch-agent`. This is the only way to spawn Claude that works reliably. The function handles environment scrubbing (`unset CLAUDECODE TMUX` and others), `setsid`, and backgrounding. See `bin/SPAWN_README.md` for the full history of what does not work and why.
 
 **Do NOT use any of these alternatives:**
@@ -325,7 +356,7 @@ These are not guidelines. They are rules.
 
 3. **Skip ephemeral agents.** Do not check, diagnose, or restart: pythia, shepard, librarian, fixup, chatdigest. They are spawned on demand by the sidecar. They are not team members.
 
-4. **Always hard-restart scribe and medic.** Their state lives in external logs, not in their sessions. A fresh restart re-loads the skill and prevents role drift. Kill and respawn both every fixup cycle regardless of health.
+4. **Always hard-restart scribe and medic.** Their state lives in external logs, not in their sessions. A fresh restart re-loads the skill and prevents role drift. Kill and respawn both every fixup cycle regardless of health. **Verify each restart** — wait 30 seconds then check for an alive session. Report `RESTART FAILED` if verification fails.
 
 5. **Do not kill other working agents.** If `nbs-ts read-new` shows recent tool calls or active output, the agent is working. Leave it alone. Killing a working agent destroys its context and any in-progress work.
 
@@ -358,6 +389,14 @@ Previous fixup runs or crashes may leave dead sessions with the same name patter
 ### launch_agent appears to succeed but agent dies within 30 seconds
 
 Check whether `CLAUDECODE` or `TMUX` leaked into the environment. `launch_agent` unsets these, but if something re-exports them between the source and the call, the child will detect nesting and exit. This was the root cause of intermittent 30-second worker deaths. The fix is already in `launch_agent` — do not modify the unset logic.
+
+### launch_agent returns but agent dies silently
+
+This is the most dangerous failure. `launch_agent` forks, the fork returns success, but the Claude process inside the session exits within seconds. Common causes: model quota exhaustion, API authentication failure, environment contamination. The session may briefly appear alive before going dead.
+
+**This is why post-restart verification is mandatory.** Without the 30-second wait and liveness check, fixup reports "alive — restarted" for dead agents. This happened in production: fixup claimed medic was "alive — hard-restarted" four consecutive times while medic was actually dead the entire time. The team ran for 3.5 hours without hallucination monitoring.
+
+If verification fails, report `RESTART FAILED` honestly. Do not retry — the next fixup cycle will try again. Retrying immediately risks spawning duplicate sessions.
 
 ### Chat file not found
 
@@ -392,7 +431,15 @@ for agent in $agents; do
         source .nbs/bin/nbs-launch-agent
         launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
             "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
-        results="${results}\n- @${agent}: missing — restarted"
+        # Verify the restart actually worked
+        sleep 30
+        verify_handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
+            | grep alive | head -1 | cut -f1)
+        if [ -z "$verify_handle" ]; then
+            results="${results}\n- @${agent}: RESTART FAILED — no alive session after 30s"
+        else
+            results="${results}\n- @${agent}: missing — restarted and verified"
+        fi
     else
         output=$(nbs-ts read-new "$handle" --strip 2>/dev/null)
         if [ -n "$output" ]; then
@@ -420,7 +467,15 @@ for agent in $agents; do
                     source .nbs/bin/nbs-launch-agent
                     launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
                         "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
-                    results="${results}\n- @${agent}: unresponsive — killed and restarted"
+                    # Verify restart
+                    sleep 30
+                    verify_handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
+                        | grep alive | head -1 | cut -f1)
+                    if [ -z "$verify_handle" ]; then
+                        results="${results}\n- @${agent}: RESTART FAILED — killed but no alive session after 30s"
+                    else
+                        results="${results}\n- @${agent}: unresponsive — killed, restarted, verified"
+                    fi
                 fi
             fi
         fi
