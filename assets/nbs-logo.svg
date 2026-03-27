@@ -3,12 +3,16 @@
     NBS Framework Logo — The Ant on NBS
 
     Side-view geometric ant standing on the letters NBS.
-    Three overlapping body segments. Soft teal ant, dark navy letters.
+    Soft teal ant (#5fafaf), dark navy letters (#1a1a2e),
+    midnight blue background (#0a0a2a).
   -->
 
-  <!-- Letters NBS — bold, centred horizontally -->
+  <!-- Background — midnight blue, rounded corners -->
+  <rect x="0" y="0" width="240" height="200" rx="16" ry="16" fill="#0a0a2a"/>
+
+  <!-- Letters NBS — shifted half a letter left of centre -->
   <g fill="#1a1a2e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="60" text-anchor="middle">
-    <text x="120" y="180">NBS</text>
+    <text x="105" y="180">NBS</text>
   </g>
 
   <!-- Ant — side view, centred above letters -->
@@ -24,7 +28,7 @@
     <ellipse cx="138" cy="74" rx="14" ry="12" fill="#5fafaf" stroke="none"/>
 
     <!-- Eye -->
-    <circle cx="145" cy="70" r="2.5" fill="#1a1a2e"/>
+    <circle cx="145" cy="70" r="2.5" fill="#0a0a2a"/>
 
     <!-- Antennae — swept forward and up -->
     <path d="M 148,66 Q 164,46 172,38" stroke-width="3"/>
@@ -37,17 +41,17 @@
     <path d="M 151,79 L 160,85" stroke-width="2.5"/>
     <path d="M 150,82 L 157,90" stroke-width="2.5"/>
 
-    <!-- Legs — three pairs, side view, reaching down to baseline y=128 -->
+    <!-- Legs — three pairs, side view -->
 
-    <!-- Front legs (from thorax front) -->
+    <!-- Front legs -->
     <path d="M 122,80 L 132,104 L 142,126" stroke-width="3"/>
     <path d="M 118,80 L 126,104 L 134,126" stroke-width="2.5" opacity="0.55"/>
 
-    <!-- Middle legs (from thorax centre) -->
+    <!-- Middle legs -->
     <path d="M 108,80 L 106,104 L 112,126" stroke-width="3"/>
     <path d="M 104,80 L 100,104 L 104,126" stroke-width="2.5" opacity="0.55"/>
 
-    <!-- Rear legs (from thorax rear) -->
+    <!-- Rear legs -->
     <path d="M 94,80 L 84,102 L 78,126" stroke-width="3"/>
     <path d="M 90,80 L 78,102 L 70,126" stroke-width="2.5" opacity="0.55"/>
 
