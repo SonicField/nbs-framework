@@ -721,6 +721,65 @@ check "Wait for polled message succeeded" "$( [[ $WAIT_RC -eq 0 ]] && echo pass 
 
 echo ""
 
+# --- Test 41: Sent message rendered with human bg styling ---
+echo "41. Sent message rendered with human bg styling..."
+CHAT="$TEST_DIR/test41.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+# Send a message as the human and capture terminal output
+OUTPUT=$(printf 'Hello from human\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+# The sent message should be re-rendered with bg colour 236 (dark grey)
+# 48;5;236 is the background SGR parameter
+check "Sent message has bg colour (48;5;236)" "$( echo "$OUTPUT" | grep -qP '48;5;236' && echo pass || echo fail )"
+# And should have the cream fg for the handle (38;5;223)
+check "Sent message has human handle colour (38;5;223)" "$( echo "$OUTPUT" | grep -qP '38;5;223' && echo pass || echo fail )"
+# And the erase-to-end-of-line for full-width bg
+check "Sent message has erase-to-EOL" "$( echo "$OUTPUT" | grep -qP '\x1b\[K' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 42: History human messages show bg at startup ---
+echo "42. History human messages show bg at startup..."
+CHAT="$TEST_DIR/test42.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+# Pre-populate with a human message
+"$NBS_CHAT" send "$CHAT" "alex" "History message from human"
+# Launch terminal and immediately exit — the history render should have bg
+OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "History human msg has bg (48;5;236)" "$( echo "$OUTPUT" | grep -qP '48;5;236' && echo pass || echo fail )"
+check "History human msg has handle colour (38;5;223)" "$( echo "$OUTPUT" | grep -qP '38;5;223' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 43: Agent messages do NOT have human bg ---
+echo "43. Agent messages do not have human bg..."
+CHAT="$TEST_DIR/test43.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "scribe" "Agent message only"
+# View as a different handle so scribe's message goes through render_message (not own)
+OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+# Agent message should NOT have bg 236
+# Extract just the line containing "Agent message only"
+AGENT_LINE=$(echo "$OUTPUT" | grep 'Agent message only' || true)
+check "Agent msg does NOT have bg 236" "$( echo "$AGENT_LINE" | grep -qP '48;5;236' && echo fail || echo pass )"
+
+echo ""
+
+# --- Test 44: Medic warning rendered with terracotta ---
+echo "44. Medic warning rendered with terracotta..."
+CHAT="$TEST_DIR/test44.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+# Medic warnings use the warn subcommand which produces [MEDIC-WARNING] handle
+# Simulate by sending with nbs-chat warn if available, otherwise skip
+if "$NBS_CHAT" warn "$CHAT" "Test medic warning" 2>/dev/null; then
+    OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+    # Terracotta is colour 173
+    check "Medic warning has terracotta (38;5;173)" "$( echo "$OUTPUT" | grep -qP '38;5;173' && echo pass || echo fail )"
+else
+    echo "   SKIP: nbs-chat warn not available"
+fi
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then
