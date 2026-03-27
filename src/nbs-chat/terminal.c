@@ -459,9 +459,7 @@ static void format_message(const char *handle, const char *content,
 
 static void print_prompt(const char *handle) {
     ASSERT_MSG(handle != NULL, "print_prompt: handle is NULL");
-    nbs_style_fstart(&NBS_STYLE_HUMAN_PROMPT, stdout);
-    printf("%s> ", handle);
-    nbs_style_freset(stdout);
+    printf("%s%s>%s ", BOLD, handle, RESET);
     fflush(stdout);
 }
 
@@ -537,13 +535,12 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
     /* Go to column 0 and clear from here to end of screen */
     printf("\r\033[J");
 
-    /* Print prompt (sets its own style with human bg) */
+    /* Print prompt */
     print_prompt(handle);
 
-    /* Print buffer content with human background.
-     * Loop on short writes — rare but possible on signal interruption. */
-    nbs_style_fstart(&NBS_STYLE_HUMAN_CONTENT, stdout);
-    fflush(stdout);
+    /* Print buffer content — loop on short writes.
+     * Short writes to a terminal are rare but possible (e.g. signal
+     * interruption).  We loop to ensure all content is written. */
     if (ls->len > 0) {
         size_t written = 0;
         while (written < ls->len) {
@@ -560,9 +557,6 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
             written += (size_t)wr;
         }
     }
-    /* Fill rest of line with background, then reset */
-    printf("\033[K");
-    nbs_style_freset(stdout);
 
     /* Calculate where the cursor needs to be vs where it is now.
      * After printing, the cursor is at the end of the content.
