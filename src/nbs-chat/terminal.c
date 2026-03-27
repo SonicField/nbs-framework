@@ -1671,21 +1671,44 @@ int main(int argc, char **argv) {
     char wd_project_root[4096];
     if (resolve_project_root(g_chat_file, wd_project_root,
                               sizeof(wd_project_root)) == 0) {
-        /* --restart: run restart script immediately, no cooldown */
+        /* --restart: run restart script immediately, no cooldown.
+         * Uses spawn_with_capture + synchronous drain so output
+         * renders as INFO lines, matching the /restart command. */
         if (restart_immediately) {
             char script[4096 + 64];
             if (resolve_restart_script(wd_project_root,
                                         script, sizeof(script)) == 0) {
-                printf("%sRestarting team...%s\n", DIM, RESET);
-                pid_t rpid = fork();
-                if (rpid == 0) {
-                    execlp("bash", "bash", script,
-                           wd_project_root, g_chat_file, (char *)NULL);
-                    _exit(127);
-                } else if (rpid > 0) {
+                info_line_emit(&edit, g_handle, "restart",
+                               "Restarting team...");
+                const char *restart_argv[] = {
+                    "bash", script,
+                    wd_project_root, g_chat_file, NULL
+                };
+                pid_t rpid = spawn_with_capture("restart", restart_argv);
+                if (rpid > 0) {
+                    /* Drain pipe synchronously — we're blocking anyway */
                     int wstatus;
-                    waitpid(rpid, &wstatus, 0);
-                    printf("%sTeam restart complete.%s\n", DIM, RESET);
+                    while (waitpid(rpid, &wstatus, WNOHANG) == 0) {
+                        /* Drain any available child pipe data */
+                        for (int i = 0; i < g_child_pipe_count; i++) {
+                            if (g_child_pipes[i].fd >= 0) {
+                                child_pipe_drain(&g_child_pipes[i],
+                                                 &edit, g_handle);
+                            }
+                        }
+                        child_pipe_compact();
+                        usleep(100000); /* 100ms between polls */
+                    }
+                    /* Final drain after child exits */
+                    for (int i = 0; i < g_child_pipe_count; i++) {
+                        if (g_child_pipes[i].fd >= 0) {
+                            child_pipe_drain(&g_child_pipes[i],
+                                             &edit, g_handle);
+                        }
+                    }
+                    child_pipe_compact();
+                    info_line_emit(&edit, g_handle, "restart",
+                                   "Team restart complete.");
                 }
             }
         }
