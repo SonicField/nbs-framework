@@ -4,8 +4,10 @@ CFLAGS ?= $(COMMON_CFLAGS) -O2
 LDFLAGS = -lpthread -lutil
 BIN_DIR = ../../bin
 
+COMMON_DIR = ../nbs-common
 SRCS = main.c session.c io.c wait.c helper_client.c
 OBJS = $(SRCS:.c=.o)
+COMMON_OBJS = nbs_helper_check.o
 TARGET = nbs-ts
 HELPER = nbs-ts-helper
 
@@ -18,13 +20,16 @@ all: $(TARGET) $(HELPER) $(ASSERT_CHECK)
 $(HELPER): helper.o
 	$(CC) $(CFLAGS) -o $@ $^ -lutil
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(ASSERT_CHECK): assert_check.c
 	$(CC) $(CFLAGS) -I../nbs-common -o $@ $<
 
 %.o: %.c
+	$(CC) $(CFLAGS) -I../nbs-common -c -o $@ $<
+
+nbs_helper_check.o: $(COMMON_DIR)/nbs_helper_check.c $(COMMON_DIR)/nbs_helper_check.h
 	$(CC) $(CFLAGS) -I../nbs-common -c -o $@ $<
 
 install: all
@@ -37,7 +42,7 @@ test: all install
 	./$(ASSERT_CHECK)
 
 clean:
-	rm -f $(OBJS) helper.o $(TARGET) $(HELPER) $(ASSERT_CHECK)
+	rm -f $(OBJS) $(COMMON_OBJS) helper.o $(TARGET) $(HELPER) $(ASSERT_CHECK)
 
 debug: CFLAGS = $(COMMON_CFLAGS) -O0 -g
 debug: clean all

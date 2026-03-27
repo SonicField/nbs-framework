@@ -29,6 +29,7 @@
 #include "bus_bridge.h"
 #include "render.h"
 #include "../nbs-common/trigger_defs.h"
+#include "../nbs-common/nbs_helper_check.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -1597,20 +1598,10 @@ int main(int argc, char **argv) {
     }
 
     /* Check nbs-ts-helper — warn if not running */
-    {
-        const char *home = getenv("HOME");
-        if (home) {
-            char helper_sock[256];
-            snprintf(helper_sock, sizeof(helper_sock),
-                     "%s/.nbs-ts/helper.sock", home);
-            struct stat hst;
-            if (stat(helper_sock, &hst) != 0) {
-                printf("%s" "Warning: nbs-ts-helper is not running.\n"
-                       "  SSH, proxy access, and git push will not work.\n"
-                       "  Start it in another terminal: nbs-ts-helper"
-                       "%s\n\n", BOLD, RESET);
-            }
-        }
+    if (!helper_is_running()) {
+        printf("%s", BOLD);
+        helper_warn_if_not_running(stdout, 1);
+        printf("%s\n", RESET);
     }
 
     /* Put terminal in raw-ish mode (disable echo and canonical mode,

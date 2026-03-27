@@ -1,0 +1,485 @@
+#!/bin/bash
+# nbs-ts-sysctl — Service management for nbs-ts-helper
+#
+# Wraps systemd user services to provide install, lifecycle management,
+# diagnostics, and removal for the nbs-ts-helper daemon.
+#
+# Exit codes:
+#   0 — Success
+#   1 — Operation failed
+#   4 — Invalid arguments / unknown subcommand
+
+set -euo pipefail
+
+readonly SERVICE_NAME="nbs-ts-helper"
+readonly UNIT_FILE="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+readonly SOCKET_PATH="$HOME/.nbs-ts/helper.sock"
+readonly LOG_PATH="$HOME/.nbs-ts/helper.log"
+readonly NBS_TS_DIR="$HOME/.nbs-ts"
+
+# Find the helper binary: env override, then ~/.nbs/bin, then framework's bin/
+find_helper_binary() {
+    # Allow explicit override (useful for testing and custom installs)
+    if [[ -n "${NBS_TS_HELPER_BIN:-}" ]]; then
+        if [[ -x "$NBS_TS_HELPER_BIN" ]]; then
+            echo "$NBS_TS_HELPER_BIN"
+            return 0
+        fi
+        return 1
+    fi
+    local installed="$HOME/.nbs/bin/nbs-ts-helper"
+    if [[ -x "$installed" ]]; then
+        echo "$installed"
+        return 0
+    fi
+    # Try the framework's bin/ relative to this script
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local framework_bin="$script_dir/nbs-ts-helper"
+    if [[ -x "$framework_bin" ]]; then
+        echo "$framework_bin"
+        return 0
+    fi
+    return 1
+}
+
+# Check if systemd user session is available
+check_systemd() {
+    if ! systemctl --user status >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
+}
+
+# Check if the unit file is installed
+is_installed() {
+    [[ -f "$UNIT_FILE" ]]
+}
+
+# Wait for the socket to appear, up to a timeout
+wait_for_socket() {
+    local timeout="${1:-15}"
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        if [[ -S "$SOCKET_PATH" ]]; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
+# Wait for the socket to disappear, up to a timeout
+wait_for_socket_gone() {
+    local timeout="${1:-5}"
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        if [[ ! -S "$SOCKET_PATH" ]]; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
+# Test socket connectivity by attempting a connection
+test_socket() {
+    if [[ ! -S "$SOCKET_PATH" ]]; then
+        return 1
+    fi
+    # Try to connect and immediately close
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('$SOCKET_PATH')
+    s.close()
+except:
+    sys.exit(1)
+" 2>/dev/null
+        return $?
+    fi
+    # Fallback: socket exists, assume connectable
+    return 0
+}
+
+# Write the systemd unit file
+write_unit_file() {
+    local helper_path="$1"
+    mkdir -p "$(dirname "$UNIT_FILE")"
+    cat > "$UNIT_FILE" << EOF
+[Unit]
+Description=NBS Terminal Session Helper
+
+[Service]
+ExecStart=/bin/bash --login -c 'exec $helper_path'
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=30
+StandardOutput=append:$LOG_PATH
+StandardError=append:$LOG_PATH
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+# Remove unit file and reload daemon
+cleanup_unit() {
+    systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$UNIT_FILE"
+    systemctl --user daemon-reload 2>/dev/null || true
+}
+
+# ---- Subcommands ----
+
+cmd_install() {
+    # Check systemd
+    if ! check_systemd; then
+        echo "Error: systemd user session is not available."
+        echo "  This environment may not support user services (containers, chroots)."
+        exit 1
+    fi
+
+    # Check if already installed
+    if is_installed; then
+        echo "nbs-ts-helper service is already installed."
+        echo "  To reinstall: nbs-ts-sysctl remove && nbs-ts-sysctl install"
+        exit 1
+    fi
+
+    # Find the binary
+    local helper_path
+    if ! helper_path="$(find_helper_binary)"; then
+        echo "Error: nbs-ts-helper binary not found."
+        echo "  Expected at: $HOME/.nbs/bin/nbs-ts-helper"
+        echo "  Run 'make install' in the nbs-framework directory first."
+        exit 1
+    fi
+
+    # Ensure ~/.nbs-ts/ exists
+    mkdir -p "$NBS_TS_DIR"
+
+    # Enable linger (warn if it fails)
+    if ! loginctl enable-linger "$USER" 2>/dev/null; then
+        echo "Warning: loginctl enable-linger failed."
+        echo "  The helper will stop when you log out."
+        echo "  Ask your sysadmin to enable linger for your account."
+    fi
+
+    # Write the unit file
+    write_unit_file "$helper_path"
+
+    # Reload, enable, start
+    systemctl --user daemon-reload
+    if ! systemctl --user enable "$SERVICE_NAME" 2>/dev/null; then
+        echo "Error: failed to enable service."
+        cleanup_unit
+        exit 1
+    fi
+
+    if ! systemctl --user start "$SERVICE_NAME" 2>/dev/null; then
+        echo "Error: failed to start service."
+        echo "  Last log lines:"
+        tail -10 "$LOG_PATH" 2>/dev/null || echo "  (no log file)"
+        cleanup_unit
+        exit 1
+    fi
+
+    # Wait for socket
+    if ! wait_for_socket 15; then
+        echo "Error: service started but socket did not appear within 15 seconds."
+        echo "  Socket expected at: $SOCKET_PATH"
+        echo "  Last log lines:"
+        tail -10 "$LOG_PATH" 2>/dev/null || echo "  (no log file)"
+        cleanup_unit
+        exit 1
+    fi
+
+    # Verify socket is connectable
+    if ! test_socket; then
+        echo "Error: socket exists but is not connectable."
+        echo "  Last log lines:"
+        tail -10 "$LOG_PATH" 2>/dev/null || echo "  (no log file)"
+        cleanup_unit
+        exit 1
+    fi
+
+    echo "nbs-ts-helper service installed and running."
+    echo "  Socket: $SOCKET_PATH"
+    echo "  Logs:   $LOG_PATH"
+    echo "  The helper will start automatically on login."
+}
+
+cmd_remove() {
+    if ! is_installed; then
+        echo "nbs-ts-helper service is not installed."
+        exit 0
+    fi
+
+    systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$UNIT_FILE"
+    systemctl --user daemon-reload
+
+    echo "nbs-ts-helper service removed."
+}
+
+cmd_start() {
+    if ! is_installed; then
+        echo "Error: nbs-ts-helper service is not installed."
+        echo "  Run: nbs-ts-sysctl install"
+        exit 1
+    fi
+
+    systemctl --user start "$SERVICE_NAME"
+
+    if wait_for_socket 15; then
+        echo "nbs-ts-helper started. Socket: $SOCKET_PATH"
+    else
+        echo "Error: service started but socket did not appear within 15 seconds."
+        echo "  Check: nbs-ts-sysctl status"
+        exit 1
+    fi
+}
+
+cmd_stop() {
+    if ! is_installed; then
+        echo "Error: nbs-ts-helper service is not installed."
+        exit 1
+    fi
+
+    systemctl --user stop "$SERVICE_NAME"
+
+    if wait_for_socket_gone 5; then
+        echo "nbs-ts-helper stopped."
+    else
+        echo "nbs-ts-helper stop requested. Socket may take a moment to clean up."
+    fi
+}
+
+cmd_restart() {
+    if ! is_installed; then
+        echo "Error: nbs-ts-helper service is not installed."
+        echo "  Run: nbs-ts-sysctl install"
+        exit 1
+    fi
+
+    systemctl --user restart "$SERVICE_NAME"
+
+    if wait_for_socket 15; then
+        echo "nbs-ts-helper restarted. Socket: $SOCKET_PATH"
+    else
+        echo "Error: service restarted but socket did not appear within 15 seconds."
+        echo "  Check: nbs-ts-sysctl status"
+        exit 1
+    fi
+}
+
+cmd_status() {
+    local state pid uptime
+
+    state="$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null)" || true
+    [[ -z "$state" ]] && state="unknown"
+
+    echo "nbs-ts-helper status"
+    echo "  State:   $state"
+
+    if [[ "$state" == "active" ]]; then
+        pid="$(systemctl --user show -p MainPID --value "$SERVICE_NAME" 2>/dev/null || echo "?")"
+        uptime="$(systemctl --user show -p ActiveEnterTimestamp --value "$SERVICE_NAME" 2>/dev/null || echo "?")"
+        echo "  PID:     $pid"
+        echo "  Since:   $uptime"
+    fi
+
+    echo "  Socket:  $SOCKET_PATH"
+    if [[ -S "$SOCKET_PATH" ]]; then
+        echo "           (exists)"
+    else
+        echo "           (missing)"
+    fi
+
+    # Binary path from unit file
+    if [[ -f "$UNIT_FILE" ]]; then
+        local exec_line
+        exec_line="$(grep '^ExecStart=' "$UNIT_FILE" | head -1)"
+        local binary_path="${exec_line#*exec }"
+        binary_path="${binary_path%\'*}"
+        echo "  Binary:  $binary_path"
+        echo "  Unit:    $UNIT_FILE"
+    else
+        echo "  Unit:    not installed"
+    fi
+
+    echo "  Log:     $LOG_PATH"
+    if [[ -f "$LOG_PATH" ]]; then
+        echo ""
+        echo "  Last 5 log lines:"
+        tail -5 "$LOG_PATH" | sed 's/^/    /'
+    fi
+}
+
+cmd_doctor() {
+    local checks=0
+    local passed=0
+
+    run_check() {
+        local label="$1"
+        local result="$2"
+        checks=$((checks + 1))
+        if [[ "$result" == "pass" ]]; then
+            echo "  PASS  $label"
+            passed=$((passed + 1))
+        else
+            echo "  FAIL  $label"
+            shift 2
+            # Remaining args are fix instructions
+            for fix in "$@"; do
+                echo "        Fix: $fix"
+            done
+        fi
+    }
+
+    echo "nbs-ts-helper health checks"
+    echo ""
+
+    # 1. systemd user session
+    if check_systemd; then
+        run_check "systemd user session available" "pass"
+    else
+        run_check "systemd user session available" "fail" \
+            "This environment does not support systemd user services."
+    fi
+
+    # 2. Unit file installed
+    if [[ -f "$UNIT_FILE" ]]; then
+        run_check "unit file installed" "pass"
+    else
+        run_check "unit file installed" "fail" \
+            "Run: nbs-ts-sysctl install"
+    fi
+
+    # 3. Unit enabled
+    if systemctl --user is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
+        run_check "service enabled" "pass"
+    else
+        run_check "service enabled" "fail" \
+            "Run: systemctl --user enable $SERVICE_NAME"
+    fi
+
+    # 4. Service running
+    if [[ "$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null)" == "active" ]]; then
+        run_check "service running" "pass"
+    else
+        run_check "service running" "fail" \
+            "Run: nbs-ts-sysctl start"
+    fi
+
+    # 5. Socket exists
+    if [[ -S "$SOCKET_PATH" ]]; then
+        run_check "socket exists" "pass"
+    else
+        run_check "socket exists" "fail" \
+            "Socket not found at $SOCKET_PATH" \
+            "Run: nbs-ts-sysctl restart"
+    fi
+
+    # 6. Socket connectable
+    if test_socket; then
+        run_check "socket connectable" "pass"
+    else
+        run_check "socket connectable" "fail" \
+            "Socket exists but cannot connect." \
+            "Run: nbs-ts-sysctl restart"
+    fi
+
+    # 7. Binary exists
+    local helper_path
+    if helper_path="$(find_helper_binary)" && [[ -x "$helper_path" ]]; then
+        run_check "helper binary exists" "pass"
+    else
+        run_check "helper binary exists" "fail" \
+            "nbs-ts-helper not found at $HOME/.nbs/bin/nbs-ts-helper" \
+            "Run: make install"
+    fi
+
+    # 8. Linger enabled
+    local linger
+    linger="$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || echo "no")"
+    if [[ "$linger" == "yes" ]]; then
+        run_check "linger enabled" "pass"
+    else
+        run_check "linger enabled" "fail" \
+            "Run: loginctl enable-linger $USER" \
+            "Without linger, the helper stops when you log out."
+    fi
+
+    # 9. Log file exists and writable
+    if [[ -f "$LOG_PATH" && -w "$LOG_PATH" ]]; then
+        run_check "log file writable" "pass"
+    elif [[ -f "$LOG_PATH" ]]; then
+        run_check "log file writable" "fail" \
+            "Log exists at $LOG_PATH but is not writable."
+    else
+        run_check "log file writable" "fail" \
+            "No log file at $LOG_PATH" \
+            "This is normal if the service has never been started."
+    fi
+
+    echo ""
+    echo "  $passed/$checks checks passed."
+
+    if [[ $passed -lt $checks ]]; then
+        exit 1
+    fi
+}
+
+cmd_help() {
+    cat << 'EOF'
+Usage: nbs-ts-sysctl <command>
+
+Service management for nbs-ts-helper.
+
+Commands:
+  install    Install and start the systemd user service
+  remove     Stop and remove the systemd user service
+  start      Start the service
+  stop       Stop the service
+  restart    Restart the service (use after rebuilding the binary)
+  status     Show service status, PID, socket, and recent logs
+  doctor     Run health checks with pass/fail reporting
+  help       Show this help message
+
+Exit codes:
+  0  Success
+  1  Operation failed
+  4  Invalid arguments
+EOF
+}
+
+# ---- Main ----
+
+if [[ $# -eq 0 ]]; then
+    cmd_help
+    exit 4
+fi
+
+case "$1" in
+    install) cmd_install ;;
+    remove)  cmd_remove ;;
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    restart) cmd_restart ;;
+    status)  cmd_status ;;
+    doctor)  cmd_doctor ;;
+    help)    cmd_help ;;
+    *)
+        echo "Error: unknown subcommand '$1'"
+        echo "Run 'nbs-ts-sysctl help' for usage."
+        exit 4
+        ;;
+esac

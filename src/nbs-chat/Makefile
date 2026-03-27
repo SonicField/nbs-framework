@@ -19,8 +19,8 @@ LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c render.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
 
 # nbs-common objects
-COMMON_SRCS = $(COMMON_DIR)/nbs_term_attr.c
-COMMON_OBJS = nbs_term_attr.o
+COMMON_SRCS = $(COMMON_DIR)/nbs_term_attr.c $(COMMON_DIR)/nbs_helper_check.c
+COMMON_OBJS = nbs_term_attr.o nbs_helper_check.o
 
 # nbs-chat CLI
 CLI_SRCS = main.c
@@ -73,6 +73,9 @@ $(ASSERT_CHECK): assert_check.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 nbs_term_attr.o: $(COMMON_DIR)/nbs_term_attr.c $(COMMON_DIR)/nbs_term_attr.h $(COMMON_DIR)/nbs_assert.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+nbs_helper_check.o: $(COMMON_DIR)/nbs_helper_check.c $(COMMON_DIR)/nbs_helper_check.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 install: all

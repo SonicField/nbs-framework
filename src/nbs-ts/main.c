@@ -14,6 +14,7 @@
 #include "session_internal.h"
 #include "helper_client.h"
 #include "nbs_assert.h"
+#include "nbs_helper_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -575,8 +576,7 @@ static int cmd_create(const char *command, const char *name)
     if (!used_helper) {
         static int helper_warned = 0;
         if (!helper_warned) {
-            fprintf(stderr, "nbs-ts: helper not running — using direct fork "
-                    "(start nbs-ts-helper for full capabilities)\n");
+            helper_warn_if_not_running(stderr, 0);
             helper_warned = 1;
         }
 

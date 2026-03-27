@@ -33,6 +33,7 @@
 #include "session_internal.h"
 #include "helper_client.h"
 #include "nbs_assert.h"
+#include "nbs_helper_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -290,8 +291,7 @@ nbs_ts_session_t *nbs_ts_create(const char *command, const nbs_ts_opts_t *opts)
         /* Fallback: direct openpty + fork + exec */
         static int warned_once = 0;
         if (!warned_once) {
-            fprintf(stderr, "nbs-ts: helper not running — using direct fork "
-                    "(some operations may be restricted)\n");
+            helper_warn_if_not_running(stderr, 0);
             warned_once = 1;
         }
 
