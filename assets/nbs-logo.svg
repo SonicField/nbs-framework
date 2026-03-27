@@ -3,59 +3,53 @@
     NBS Framework Logo — The Ant on NBS
 
     Side-view geometric ant standing on the letters NBS.
-    Soft teal ant, black letters.
+    Three overlapping body segments. Soft teal ant, dark navy letters.
   -->
 
-  <!-- Letters NBS — bold, monospace feel -->
-  <g fill="#1a1a2e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="64" letter-spacing="2">
-    <text x="22" y="175">NBS</text>
+  <!-- Letters NBS — bold, centred horizontally -->
+  <g fill="#1a1a2e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="60" text-anchor="middle">
+    <text x="120" y="180">NBS</text>
   </g>
 
-  <!-- Ant — side view, standing on the letters -->
+  <!-- Ant — side view, centred above letters -->
   <g fill="none" stroke="#5fafaf" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
 
-    <!-- Abdomen (rear, largest, slightly elevated) -->
-    <ellipse cx="62" cy="82" rx="26" ry="18" fill="#5fafaf" stroke="none"/>
+    <!-- Abdomen (rear, largest) -->
+    <ellipse cx="72" cy="72" rx="28" ry="20" fill="#5fafaf" stroke="none"/>
 
-    <!-- Petiole (narrow waist) -->
-    <ellipse cx="92" cy="86" rx="6" ry="5" fill="#5fafaf" stroke="none"/>
+    <!-- Thorax (middle, overlaps abdomen and head) -->
+    <ellipse cx="108" cy="68" rx="20" ry="15" fill="#5fafaf" stroke="none"/>
 
-    <!-- Thorax (middle segment, higher) -->
-    <ellipse cx="116" cy="78" rx="18" ry="14" fill="#5fafaf" stroke="none"/>
-
-    <!-- Head (front, angled slightly down) -->
-    <ellipse cx="148" cy="84" rx="14" ry="12" fill="#5fafaf" stroke="none"/>
+    <!-- Head (front, overlaps thorax) -->
+    <ellipse cx="138" cy="74" rx="14" ry="12" fill="#5fafaf" stroke="none"/>
 
     <!-- Eye -->
-    <circle cx="155" cy="80" r="2.5" fill="#1a1a2e"/>
+    <circle cx="145" cy="70" r="2.5" fill="#1a1a2e"/>
 
-    <!-- Antennae — swept forward and up from the head -->
-    <path d="M 158,76 Q 172,56 180,48" stroke-width="3"/>
-    <path d="M 160,79 Q 176,64 186,58" stroke-width="3"/>
+    <!-- Antennae — swept forward and up -->
+    <path d="M 148,66 Q 164,46 172,38" stroke-width="3"/>
+    <path d="M 150,70 Q 168,54 178,48" stroke-width="3"/>
     <!-- Antenna tips -->
-    <circle cx="180" cy="48" r="2.5" fill="#5fafaf"/>
-    <circle cx="186" cy="58" r="2.5" fill="#5fafaf"/>
+    <circle cx="172" cy="38" r="2.5" fill="#5fafaf"/>
+    <circle cx="178" cy="48" r="2.5" fill="#5fafaf"/>
 
-    <!-- Mandibles — short, angled down from front of head -->
-    <path d="M 161,88 L 170,94" stroke-width="2.5"/>
-    <path d="M 160,91 L 167,98" stroke-width="2.5"/>
+    <!-- Mandibles -->
+    <path d="M 151,79 L 160,85" stroke-width="2.5"/>
+    <path d="M 150,82 L 157,90" stroke-width="2.5"/>
 
-    <!-- Legs — three pairs, side view, angled down to the baseline (top of letters ~y=128) -->
+    <!-- Legs — three pairs, side view, reaching down to baseline y=128 -->
 
     <!-- Front legs (from thorax front) -->
-    <path d="M 128,88 L 138,108 L 148,120" stroke-width="3"/>
-    <!-- Front leg, far side (slightly behind) -->
-    <path d="M 124,89 L 132,110 L 140,120" stroke-width="2.5" opacity="0.6"/>
+    <path d="M 122,80 L 132,104 L 142,126" stroke-width="3"/>
+    <path d="M 118,80 L 126,104 L 134,126" stroke-width="2.5" opacity="0.55"/>
 
     <!-- Middle legs (from thorax centre) -->
-    <path d="M 114,90 L 110,108 L 116,120" stroke-width="3"/>
-    <!-- Middle leg, far side -->
-    <path d="M 110,90 L 104,108 L 108,120" stroke-width="2.5" opacity="0.6"/>
+    <path d="M 108,80 L 106,104 L 112,126" stroke-width="3"/>
+    <path d="M 104,80 L 100,104 L 104,126" stroke-width="2.5" opacity="0.55"/>
 
-    <!-- Rear legs (from thorax/petiole junction) -->
-    <path d="M 98,90 L 88,106 L 82,120" stroke-width="3"/>
-    <!-- Rear leg, far side -->
-    <path d="M 94,90 L 82,106 L 74,120" stroke-width="2.5" opacity="0.6"/>
+    <!-- Rear legs (from thorax rear) -->
+    <path d="M 94,80 L 84,102 L 78,126" stroke-width="3"/>
+    <path d="M 90,80 L 78,102 L 70,126" stroke-width="2.5" opacity="0.55"/>
 
   </g>
 </svg>
