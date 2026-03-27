@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!--
+    NBS Framework Logo — The Ant
+
+    A geometric ant facing right. Simple, structural, works at any size.
+    The ant is the individual agent; the anthill is the framework you never see.
+
+    Three body segments (head, thorax, abdomen) represent the tripod:
+    supervisor, generalist, theologian.
+
+    Six legs represent the team (scribe, medic, gatekeeper, testkeeper,
+    plus the two implicit in the body). Or they're just legs.
+
+    Colour: single colour, works on light and dark backgrounds.
+  -->
+  <g transform="translate(100,105)" fill="none" stroke="#5fafaf" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Abdomen (largest, rear) -->
+    <ellipse cx="-38" cy="0" rx="28" ry="22" fill="#5fafaf"/>
+
+    <!-- Thorax (middle, smaller) -->
+    <ellipse cx="2" cy="-2" rx="16" ry="14" fill="#5fafaf"/>
+
+    <!-- Head (front, smallest) -->
+    <ellipse cx="32" cy="-6" rx="13" ry="11" fill="#5fafaf"/>
+
+    <!-- Antennae — two lines from the head, swept forward and up -->
+    <path d="M 40,-14 Q 56,-38 68,-44" stroke-width="3.5"/>
+    <path d="M 42,-10 Q 60,-28 74,-30" stroke-width="3.5"/>
+
+    <!-- Antenna tips — small dots -->
+    <circle cx="68" cy="-44" r="3" fill="#5fafaf"/>
+    <circle cx="74" cy="-30" r="3" fill="#5fafaf"/>
+
+    <!-- Legs — three pairs from the thorax, angular and geometric -->
+    <!-- Front legs -->
+    <path d="M 12,-10 L 28,-32 L 38,-36" stroke-width="3"/>
+    <path d="M 12,6 L 28,28 L 38,32" stroke-width="3"/>
+
+    <!-- Middle legs -->
+    <path d="M 0,-12 L -4,-38 L 4,-46" stroke-width="3"/>
+    <path d="M 0,10 L -4,36 L 4,44" stroke-width="3"/>
+
+    <!-- Rear legs -->
+    <path d="M -16,-10 L -28,-36 L -22,-46" stroke-width="3"/>
+    <path d="M -16,8 L -28,34 L -22,44" stroke-width="3"/>
+
+    <!-- Eye — a small bright point on the head -->
+    <circle cx="38" cy="-9" r="2.5" fill="#1a1a2e" stroke="none"/>
+
+    <!-- Mandibles — two short lines from the front of the head -->
+    <path d="M 44,-4 L 54,0" stroke-width="2.5"/>
+    <path d="M 44,-1 L 52,6" stroke-width="2.5"/>
+
+  </g>
+</svg>
