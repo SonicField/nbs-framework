@@ -1,0 +1,106 @@
+#!/bin/bash
+# nbs-team-check — Verify NBS agent team health after launch
+#
+# Checks:
+#   - nbs-ts-helper running (socket exists)
+#   - Expected agent sessions alive (nbs-ts list)
+#   - Sidecars running (pgrep)
+#
+# Usage:
+#   nbs-team-check <chat-tag> <project-root>
+#
+# Exit codes:
+#   0 - All healthy
+#   1 - Problems detected
+#   4 - Invalid arguments
+
+set -uo pipefail
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: nbs-team-check <chat-tag> <project-root>" >&2
+    exit 4
+fi
+
+CHAT_TAG="$1"
+PROJECT_ROOT="$2"
+
+if [[ -z "$CHAT_TAG" ]]; then
+    echo "Error: chat-tag must not be empty" >&2
+    exit 4
+fi
+
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "Error: project root not found: $PROJECT_ROOT" >&2
+    exit 4
+fi
+
+EXPECTED_AGENTS=(scribe medic supervisor gatekeeper theologian testkeeper generalist)
+EXPECTED_COUNT=${#EXPECTED_AGENTS[@]}
+
+problems=0
+
+# 1. Check nbs-ts-helper
+helper_sock="${HOME}/.nbs-ts/helper.sock"
+if [[ ! -S "$helper_sock" ]]; then
+    echo "WARN: nbs-ts-helper not running (no socket at $helper_sock)"
+    problems=1
+fi
+
+# 2. Check agent sessions via nbs-ts list
+alive_count=0
+dead_agents=()
+if command -v nbs-ts >/dev/null 2>&1; then
+    for agent in "${EXPECTED_AGENTS[@]}"; do
+        session_name="${CHAT_TAG}-${agent}"
+        # Check if session exists and is alive
+        if nbs-ts list --name="$CHAT_TAG" 2>/dev/null | grep -q "${session_name}.*alive"; then
+            alive_count=$((alive_count + 1))
+        else
+            dead_agents+=("$agent")
+        fi
+    done
+else
+    echo "WARN: nbs-ts not found in PATH"
+    problems=1
+fi
+
+# 3. Check sidecars
+sidecar_count=0
+dead_sidecars=()
+for agent in "${EXPECTED_AGENTS[@]}"; do
+    if pgrep -f "nbs-sidecar.*--handle=${agent}.*${PROJECT_ROOT}" >/dev/null 2>&1; then
+        sidecar_count=$((sidecar_count + 1))
+    else
+        dead_sidecars+=("$agent")
+    fi
+done
+
+# Report
+if [[ $alive_count -eq $EXPECTED_COUNT && $sidecar_count -eq $EXPECTED_COUNT && $problems -eq 0 ]]; then
+    echo "All ${EXPECTED_COUNT} agents alive, ${EXPECTED_COUNT} sidecars running"
+    exit 0
+fi
+
+# Partial or total failure
+if [[ $alive_count -gt 0 ]]; then
+    echo "Agents: ${alive_count}/${EXPECTED_COUNT} alive"
+    if [[ ${#dead_agents[@]} -gt 0 ]]; then
+        echo "  Dead agents: ${dead_agents[*]}"
+    fi
+else
+    echo "Agents: 0/${EXPECTED_COUNT} alive"
+    echo "  Check nbs-ts-helper is running and agents were launched"
+fi
+
+if [[ $sidecar_count -lt $EXPECTED_COUNT ]]; then
+    echo "Sidecars: ${sidecar_count}/${EXPECTED_COUNT} running"
+    if [[ ${#dead_sidecars[@]} -gt 0 ]]; then
+        echo "  Missing sidecars: ${dead_sidecars[*]}"
+    fi
+fi
+
+if [[ $alive_count -lt $EXPECTED_COUNT || $sidecar_count -lt $EXPECTED_COUNT ]]; then
+    echo "Suggest: /fixup to diagnose and restart stalled agents"
+fi
+
+exit 1

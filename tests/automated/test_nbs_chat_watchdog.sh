@@ -243,6 +243,77 @@ check "no --restart: no restart attempted" "$( echo "$TERM_OUTPUT" | grep -qF 'R
 
 echo ""
 
+# --- Test 16: /pythia without project root shows INFO line ---
+echo "16. /pythia without project root shows INFO line..."
+CHAT="$TEST_DIR/test16.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+TERM_OUTPUT=$(printf '/pythia\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/pythia shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+check "/pythia shows [pythia] label" "$( echo "$TERM_OUTPUT" | grep -qF '[pythia]' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 17: /shutdown without project root shows INFO line ---
+echo "17. /shutdown without project root shows INFO line..."
+CHAT="$TEST_DIR/test17.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+TERM_OUTPUT=$(printf '/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/shutdown shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+check "/shutdown shows [shutdown] label" "$( echo "$TERM_OUTPUT" | grep -qF '[shutdown]' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 18: /restart with project root shows INFO line ---
+echo "18. /restart shows INFO line..."
+PROJ_DIR="$TEST_DIR/test18_proj"
+mkdir -p "$PROJ_DIR/.nbs/chat" "$PROJ_DIR/.nbs/events/processed" "$PROJ_DIR/bin"
+CHAT="$PROJ_DIR/.nbs/chat/test.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+# Stub restart script that outputs a test message
+cat > "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh" << 'STUB'
+#!/bin/bash
+echo "test restart output"
+exit 0
+STUB
+chmod +x "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh"
+TERM_OUTPUT=$(printf '/restart\n/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/restart shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+check "/restart shows [restart] label" "$( echo "$TERM_OUTPUT" | grep -qF '[restart]' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 19: /restart captures child script output as INFO lines ---
+echo "19. /restart streams script output..."
+# Re-use test18 project with a more verbose stub
+cat > "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh" << 'STUB'
+#!/bin/bash
+echo "step 1 done"
+echo "step 2 done"
+exit 0
+STUB
+chmod +x "$PROJ_DIR/bin/nbs-chat-terminal-restart.sh"
+CHAT19="$PROJ_DIR/.nbs/chat/test19.chat"
+"$NBS_CHAT" create "$CHAT19" >/dev/null
+# Use sleep between /restart and /exit so the poll loop has time to
+# drain the child pipe before the terminal exits.
+{ printf '/restart\n'; sleep 3; printf '/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT19" "alex" >/tmp/test19_out.txt 2>/dev/null || true
+TERM_OUTPUT=$(cat /tmp/test19_out.txt)
+rm -f /tmp/test19_out.txt
+check "restart captures 'step 1 done'" "$( echo "$TERM_OUTPUT" | grep -qF 'step 1 done' && echo pass || echo fail )"
+check "restart captures 'step 2 done'" "$( echo "$TERM_OUTPUT" | grep -qF 'step 2 done' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 20: /fixup without project root shows INFO line ---
+echo "20. /fixup without project root shows INFO line..."
+CHAT="$TEST_DIR/test20.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+TERM_OUTPUT=$(printf '/fixup\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/fixup shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+check "/fixup shows [fixup] label" "$( echo "$TERM_OUTPUT" | grep -qF '[fixup]' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Results: $PASS_COUNT passed, $ERRORS failed ==="
 if [[ $ERRORS -eq 0 ]]; then

@@ -55,6 +55,7 @@
 /* --- Configuration --- */
 
 #define POLL_INTERVAL_MS 1500  /* Background message poll interval */
+#define MAX_CHILD_PIPES  8     /* Max concurrent captured child processes */
 
 /* --- ANSI colour aliases (from render.h) --- */
 
@@ -72,6 +73,18 @@ static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-emp
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
+
+/* --- Child pipe capture (INFO lines) --- */
+
+typedef struct {
+    int fd;              /* pipe read end, -1 = unused */
+    char label[32];      /* e.g. "restart", "team-check" */
+    char line_buf[512];  /* partial line accumulator */
+    size_t line_len;
+} child_pipe_t;
+
+static child_pipe_t g_child_pipes[MAX_CHILD_PIPES];
+static int g_child_pipe_count = 0;
 
 /* --- Input history (bash-style) --- */
 
@@ -578,6 +591,162 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
 
     /* Update tracking state */
     g_cursor_row = target_row;
+}
+
+/* --- INFO line rendering --- */
+
+/*
+ * info_line_emit — Render an INFO line above the prompt without disrupting input.
+ *
+ * Same pattern as poll_and_display: clear input area, print content, redraw.
+ */
+static void info_line_emit(line_state_t *ls, const char *handle,
+                           const char *label, const char *text) {
+    /* Move cursor up to the first row of the input area */
+    if (g_cursor_row > 0) {
+        printf("\033[%dA", g_cursor_row);
+    }
+    printf("\r\033[J");
+
+    /* Print INFO line in dim */
+    printf("  %sINFO> [%s] %s%s\n", DIM, label, text, RESET);
+
+    /* Restore prompt + input */
+    g_cursor_row = 0;
+    line_redraw(ls, handle);
+}
+
+/*
+ * child_pipe_register — Track a pipe fd for captured child output.
+ * Sets O_NONBLOCK so reads in the poll loop don't block.
+ */
+static void child_pipe_register(int fd, const char *label) {
+    ASSERT_MSG(fd >= 0, "child_pipe_register: fd is negative: %d", fd);
+    ASSERT_MSG(label != NULL, "child_pipe_register: label is NULL");
+    ASSERT_MSG(g_child_pipe_count < MAX_CHILD_PIPES,
+               "child_pipe_register: too many child pipes (%d)", g_child_pipe_count);
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    child_pipe_t *cp = &g_child_pipes[g_child_pipe_count++];
+    cp->fd = fd;
+    snprintf(cp->label, sizeof(cp->label), "%s", label);
+    cp->line_buf[0] = '\0';
+    cp->line_len = 0;
+}
+
+/*
+ * child_pipe_drain — Read available bytes from a child pipe, split on
+ * newlines, and emit complete lines as INFO lines. Accumulates partial
+ * lines. On EOF: flush any partial line and close the fd.
+ */
+static void child_pipe_drain(child_pipe_t *cp, line_state_t *ls,
+                             const char *handle) {
+    ASSERT_MSG(cp != NULL, "child_pipe_drain: cp is NULL");
+    ASSERT_MSG(cp->fd >= 0, "child_pipe_drain: fd is closed");
+
+    char buf[256];
+    for (;;) {
+        ssize_t n = read(cp->fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+                return;
+            /* Read error — treat as EOF */
+            break;
+        }
+        if (n == 0) break; /* EOF */
+
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n') {
+                /* Complete line — emit it */
+                cp->line_buf[cp->line_len] = '\0';
+                if (cp->line_len > 0) {
+                    info_line_emit(ls, handle, cp->label, cp->line_buf);
+                }
+                cp->line_len = 0;
+            } else if (cp->line_len < sizeof(cp->line_buf) - 1) {
+                cp->line_buf[cp->line_len++] = buf[i];
+            }
+            /* else: line too long, silently truncate */
+        }
+    }
+
+    /* EOF: flush partial line if any */
+    if (cp->line_len > 0) {
+        cp->line_buf[cp->line_len] = '\0';
+        info_line_emit(ls, handle, cp->label, cp->line_buf);
+        cp->line_len = 0;
+    }
+    close(cp->fd);
+    cp->fd = -1;
+}
+
+/*
+ * child_pipe_compact — Remove closed entries (fd == -1) from the array.
+ */
+static void child_pipe_compact(void) {
+    int dst = 0;
+    for (int src = 0; src < g_child_pipe_count; src++) {
+        if (g_child_pipes[src].fd >= 0) {
+            if (dst != src) {
+                g_child_pipes[dst] = g_child_pipes[src];
+            }
+            dst++;
+        }
+    }
+    g_child_pipe_count = dst;
+}
+
+/*
+ * spawn_with_capture — Fork+exec a command, capturing stdout+stderr
+ * via a pipe registered for INFO line rendering.
+ *
+ * Single fork (not double) because we hold the pipe. The child becomes
+ * a zombie until reaped by waitpid in the poll loop timeout branch.
+ *
+ * Returns the child pid on success, -1 on failure.
+ */
+static pid_t spawn_with_capture(const char *label, const char *argv[]) {
+    ASSERT_MSG(label != NULL, "spawn_with_capture: label is NULL");
+    ASSERT_MSG(argv != NULL, "spawn_with_capture: argv is NULL");
+
+    if (g_child_pipe_count >= MAX_CHILD_PIPES) {
+        fprintf(stderr, "warning: too many child pipes, cannot capture %s\n",
+                label);
+        return -1;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        fprintf(stderr, "warning: pipe() failed for %s: %s\n",
+                label, strerror(errno));
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        fprintf(stderr, "warning: fork() failed for %s: %s\n",
+                label, strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child: redirect stdout+stderr to pipe write end */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    /* Parent: close write end, register read end */
+    close(pipefd[1]);
+    child_pipe_register(pipefd[0], label);
+    return pid;
 }
 
 /* --- Line editing operations --- */
@@ -1531,17 +1700,54 @@ int main(int argc, char **argv) {
 
     /* --- Event loop --- */
     while (!g_quit) {
-        struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
-        int ready = poll(&pfd, 1, POLL_INTERVAL_MS);
+        struct pollfd pfds[1 + MAX_CHILD_PIPES];
+        pfds[0].fd = STDIN_FILENO;
+        pfds[0].events = POLLIN;
+        int nfds = 1;
+        for (int i = 0; i < g_child_pipe_count; i++) {
+            if (g_child_pipes[i].fd >= 0) {
+                pfds[nfds].fd = g_child_pipes[i].fd;
+                pfds[nfds].events = POLLIN;
+                nfds++;
+            }
+        }
+
+        int ready = poll(pfds, (nfds_t)nfds, POLL_INTERVAL_MS);
 
         if (ready < 0) {
             if (errno == EINTR) continue;
             break;
         }
 
-        /* Timeout: poll for new messages */
+        /* Process child pipe events first (drain data, emit INFO lines) */
+        if (ready > 0) {
+            int cp_idx = 0;
+            for (int i = 1; i < nfds; i++) {
+                /* Find corresponding child_pipe_t — pfds[i] maps to
+                 * the cp_idx'th active pipe (fd >= 0) */
+                while (cp_idx < g_child_pipe_count &&
+                       g_child_pipes[cp_idx].fd < 0)
+                    cp_idx++;
+                if (cp_idx >= g_child_pipe_count) break;
+
+                if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
+                    child_pipe_drain(&g_child_pipes[cp_idx], &edit, g_handle);
+                }
+                cp_idx++;
+            }
+            child_pipe_compact();
+        }
+
+        /* Timeout branch: poll for new messages + reap zombies */
         if (ready == 0) {
             poll_and_display(&edit, g_handle);
+
+            /* Reap zombie children from spawn_with_capture */
+            {
+                int wstatus;
+                while (waitpid(-1, &wstatus, WNOHANG) > 0)
+                    ; /* reap all available */
+            }
 
             /* Oracle reaper check — every 10s, kill oracles that posted */
             if (g_watchdog.project_root[0] != '\0' &&
@@ -1583,9 +1789,9 @@ int main(int argc, char **argv) {
         /* Read input if available — prioritise POLLIN over POLLHUP
          * because on pipes both can be set simultaneously when data
          * remains in the buffer after the write end closes. */
-        if (!(pfd.revents & POLLIN)) {
+        if (!(pfds[0].revents & POLLIN)) {
             /* No data to read — check for hangup/error */
-            if (pfd.revents & (POLLHUP | POLLERR)) {
+            if (pfds[0].revents & (POLLHUP | POLLERR)) {
                 if (edit.len > 0) {
                     printf("\n");
                     send_and_display(&edit);
@@ -1824,8 +2030,8 @@ int main(int argc, char **argv) {
             /* /shutdown — announce, wait 10s, kill all agents */
             if (strcmp(edit.buf, "/shutdown") == 0) {
                 if (g_watchdog.project_root[0] == '\0') {
-                    printf("  %sNo project root — nothing to shut down.%s\n",
-                           DIM, RESET);
+                    info_line_emit(&edit, g_handle, "shutdown",
+                                   "No project root — nothing to shut down.");
                     line_state_reset(&edit);
                     print_prompt(g_handle);
                     continue;
@@ -1833,8 +2039,8 @@ int main(int argc, char **argv) {
                 do_send("@team SYSTEM: Shutting down in 10 seconds. "
                         "Finish your current action and save state.");
                 watchdog_disable(&g_watchdog);
-                printf("  %sShutting down in 10 seconds...%s\n", DIM, RESET);
-                fflush(stdout);
+                info_line_emit(&edit, g_handle, "shutdown",
+                               "Shutting down in 10 seconds...");
                 sleep(10);
 
                 /* Kill all sessions for this project — run twice with
@@ -1896,7 +2102,7 @@ int main(int argc, char **argv) {
                     }
                     if (kpid > 0) waitpid(kpid, NULL, 0);
                 }
-                printf("  %sTeam stopped.%s\n", DIM, RESET);
+                info_line_emit(&edit, g_handle, "shutdown", "Team stopped.");
                 line_state_reset(&edit);
                 print_prompt(g_handle);
                 continue;
@@ -1971,34 +2177,20 @@ int main(int argc, char **argv) {
             /* /restart — manual team restart (bypasses rate limit) */
             if (strcmp(edit.buf, "/restart") == 0) {
                 if (!watchdog_is_enabled(&g_watchdog)) {
-                    printf("  %sWatchdog not initialised — cannot restart.%s\n",
-                           DIM, RESET);
+                    info_line_emit(&edit, g_handle, "restart",
+                                   "Watchdog not initialised — cannot restart.");
                 } else {
-                    printf("  %sTriggering manual restart...%s\n", DIM, RESET);
+                    info_line_emit(&edit, g_handle, "restart",
+                                   "Triggering manual restart...");
                     char rscript[4096 + 64];
                     if (resolve_restart_script(g_watchdog.project_root,
                                                rscript, sizeof(rscript)) == 0) {
-                        /* Double-fork to avoid zombie: intermediate child
-                         * exits immediately, grandchild reparented to init. */
-                        pid_t rpid = fork();
-                        if (rpid == 0) {
-                            pid_t rpid2 = fork();
-                            if (rpid2 == 0) {
-                                /* Grandchild: exec restart script */
-                                execlp("bash", "bash", rscript,
-                                       g_watchdog.project_root,
-                                       g_watchdog.chat_path, (char *)NULL);
-                                _exit(127);
-                            }
-                            _exit(rpid2 < 0 ? 127 : 0);
-                        } else if (rpid < 0) {
-                            fprintf(stderr, "warning: fork for /restart failed: %s\n",
-                                    strerror(errno));
-                        } else {
-                            /* Parent: reap intermediate child */
-                            int wstatus;
-                            waitpid(rpid, &wstatus, 0);
-                        }
+                        const char *restart_argv[] = {
+                            "bash", rscript,
+                            g_watchdog.project_root,
+                            g_watchdog.chat_path, NULL
+                        };
+                        spawn_with_capture("restart", restart_argv);
                     }
                 }
                 line_state_reset(&edit);
@@ -2029,11 +2221,11 @@ int main(int argc, char **argv) {
                 }
 
                 if (g_watchdog.project_root[0] == '\0') {
-                    printf("  %sNo project root — watchdog not initialised.%s\n",
-                           DIM, RESET);
+                    info_line_emit(&edit, g_handle, role,
+                                   "No project root — watchdog not initialised.");
                 } else if (!watchdog_is_enabled(&g_watchdog)) {
-                    printf("  %sTeam is paused. Use /resume before spawning oracles.%s\n",
-                           DIM, RESET);
+                    info_line_emit(&edit, g_handle, role,
+                                   "Team is paused. Use /resume before spawning oracles.");
                 } else {
                     /* Also check pause file — sidecars skip all work
                      * when this exists, so the oracle would sit idle. */
@@ -2042,18 +2234,26 @@ int main(int argc, char **argv) {
                              g_watchdog.project_root);
                     struct stat pps;
                     if (stat(pp, &pps) == 0) {
-                        printf("  %sTeam is paused (control-pause file exists). "
-                               "Use /resume first.%s\n", DIM, RESET);
+                        info_line_emit(&edit, g_handle, role,
+                                       "Team is paused (control-pause file exists). "
+                                       "Use /resume first.");
                     } else if (!desc || !skill) {
-                        printf("  %sUnknown oracle: %s%s\n", DIM, role, RESET);
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "Unknown oracle: %s", role);
+                        info_line_emit(&edit, g_handle, role, msg);
                     } else {
-                        printf("  %sSpawning %s worker...%s\n", DIM, role, RESET);
                         if (spawn_trigger_worker(role, skill, desc,
                                                   g_watchdog.project_root) == 0) {
-                            printf("  %s%s spawned (will post to chat when done).%s\n",
-                                   DIM, role, RESET);
+                            char msg[128];
+                            snprintf(msg, sizeof(msg),
+                                     "%s spawned (will post to chat when done).",
+                                     role);
+                            info_line_emit(&edit, g_handle, role, msg);
                         } else {
-                            printf("  %sFailed to spawn %s.%s\n", DIM, role, RESET);
+                            char msg[128];
+                            snprintf(msg, sizeof(msg),
+                                     "Failed to spawn %s.", role);
+                            info_line_emit(&edit, g_handle, role, msg);
                         }
                     }
                 }

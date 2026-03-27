@@ -225,3 +225,14 @@ done
 # a clear goal already exists in the chat).
 
 echo "[watchdog] Team restarted successfully"
+
+# 5. Team health check after agent initialisation
+# 30s wait gives agents time to start their nbs-ts sessions and sidecars.
+NBS_TEAM_CHECK=""
+if [[ -x "${NBS_BIN}/nbs-team-check" ]]; then
+    NBS_TEAM_CHECK="${NBS_BIN}/nbs-team-check"
+fi
+if [[ -n "$NBS_TEAM_CHECK" ]]; then
+    sleep 30
+    "$NBS_TEAM_CHECK" "$CHAT_TAG" "$PROJECT_ROOT" || true
+fi
