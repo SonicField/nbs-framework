@@ -22,11 +22,18 @@ tests/test_*_audit
 # Compiled binaries in bin/ (built by make install, not committed)
 bin/nbs-bus
 bin/nbs-chat
+bin/nbs-chat-edit
 bin/nbs-chat-remote
 bin/nbs-chat-terminal
 bin/nbs-chat-web
+bin/nbs-hub
 bin/nbs-scribe-log
 bin/nbs-sidecar
+bin/nbs-ts
+bin/nbs-ts-grep
+bin/nbs-ts-helper
+bin/nbs-ts-query
+bin/nbs-ts-render
 bin/nbs-workers
 bin/pty-session
 
@@ -89,14 +96,12 @@ src/nbs-scribe-log/*.o
 # Build artefacts for nbs-hub
 src/nbs-hub/nbs-hub
 src/nbs-hub/*.o
-bin/nbs-hub
 # Build artefacts for nbs-ts
 src/nbs-ts/*.o
 src/nbs-ts/nbs-ts
 src/nbs-ts/nbs-ts-helper
 src/nbs-ts/assert_check
 src/nbs-ts/test_nbs_ts
-bin/nbs-ts-helper
 # Build artefacts for nbs-ts-tools
 src/nbs-ts-tools/nbs-ts-grep
 src/nbs-ts-tools/nbs-ts-query
@@ -104,7 +109,5 @@ src/nbs-ts-tools/nbs-ts-query
 src/nbs-ts-render/nbs-ts-render
 src/nbs-ts-render/test_nbs_ts_render
 src/nbs-ts-render/*.o
-bin/nbs-ts-render
 # Build artefacts for nbs-chat-edit
 src/nbs-chat-edit/nbs-chat-edit
-bin/nbs-chat-edit
