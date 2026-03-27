@@ -1000,8 +1000,15 @@ static int cmd_export(int argc, char **argv) {
             !strcasestr_portable(state.messages[i].content, grep_pattern)) {
             continue;
         }
-        render_message(state.messages[i].handle, state.messages[i].content,
-                       state.messages[i].timestamp, stdout);
+        if (strncmp(state.messages[i].handle, "[MEDIC-", 7) == 0) {
+            render_message_medic(state.messages[i].handle,
+                                 state.messages[i].content,
+                                 state.messages[i].timestamp, stdout);
+        } else {
+            render_message(state.messages[i].handle,
+                           state.messages[i].content,
+                           state.messages[i].timestamp, stdout);
+        }
     }
 
     chat_state_free(&state);
