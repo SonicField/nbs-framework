@@ -4,6 +4,7 @@ BIN_DIR = ../../bin
 
 # Dependencies from nbs-chat (compiled as local .o files)
 CHAT_DIR = ../nbs-chat
+COMMON_DIR = ../nbs-common
 
 TARGET = nbs-chat-edit
 
@@ -11,9 +12,10 @@ TARGET = nbs-chat-edit
 
 all: $(TARGET)
 
-$(TARGET): editor.c $(CHAT_DIR)/chat_file.c $(CHAT_DIR)/base64.c $(CHAT_DIR)/lock.c
+$(TARGET): editor.c $(CHAT_DIR)/chat_file.c $(CHAT_DIR)/base64.c $(CHAT_DIR)/lock.c $(CHAT_DIR)/render.c $(COMMON_DIR)/nbs_term_attr.c
 	$(CC) $(CFLAGS) -I$(CHAT_DIR) -o $@ editor.c \
-		$(CHAT_DIR)/chat_file.c $(CHAT_DIR)/base64.c $(CHAT_DIR)/lock.c
+		$(CHAT_DIR)/chat_file.c $(CHAT_DIR)/base64.c $(CHAT_DIR)/lock.c \
+		$(CHAT_DIR)/render.c $(COMMON_DIR)/nbs_term_attr.c
 
 install: all
 	mkdir -p $(BIN_DIR)

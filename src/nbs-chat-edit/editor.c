@@ -32,6 +32,7 @@
 #define _GNU_SOURCE
 
 #include "../nbs-chat/chat_file.h"
+#include "../nbs-chat/render.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -129,47 +130,13 @@ typedef struct {
 
 /* --- Display --- */
 
-/* ANSI colour codes */
-#define C_RESET   "\x1b[0m"
-#define C_BOLD    "\x1b[1m"
-#define C_DIM     "\x1b[2m"
-#define C_RED     "\x1b[31m"
-#define C_GREEN   "\x1b[32m"
-#define C_YELLOW  "\x1b[33m"
-#define C_BLUE    "\x1b[34m"
-#define C_CYAN    "\x1b[36m"
-#define C_REVERSE "\x1b[7m"
-#define C_STRIKE  "\x1b[9m"
-
-/* Handle colour palette — matches render.c in nbs-chat */
-static const char *HANDLE_COLOURS[] = {
-    "\x1b[38;5;39m",   /* Blue */
-    "\x1b[38;5;208m",  /* Orange */
-    "\x1b[38;5;41m",   /* Green */
-    "\x1b[38;5;213m",  /* Pink */
-    "\x1b[38;5;226m",  /* Yellow */
-    "\x1b[38;5;87m",   /* Cyan */
-    "\x1b[38;5;196m",  /* Red */
-    "\x1b[38;5;147m",  /* Lavender */
-};
-#define NUM_HANDLE_COLOURS 8
-
-static struct { char handle[64]; int idx; } g_colour_map[64];
-static int g_colour_count = 0;
-static int g_colour_next = 0;
-
-static const char *handle_colour(const char *handle) {
-    for (int i = 0; i < g_colour_count; i++)
-        if (strcmp(g_colour_map[i].handle, handle) == 0)
-            return HANDLE_COLOURS[g_colour_map[i].idx];
-    if (g_colour_count < 64) {
-        snprintf(g_colour_map[g_colour_count].handle,
-                 sizeof(g_colour_map[0].handle), "%s", handle);
-        g_colour_map[g_colour_count].idx = g_colour_next % NUM_HANDLE_COLOURS;
-        g_colour_count++;
-        g_colour_next++;
-    }
-    return HANDLE_COLOURS[(g_colour_next - 1) % NUM_HANDLE_COLOURS];
+/* Get handle colour as escape sequence string for use in sprintf */
+static const char *handle_colour_str(const char *handle) {
+    static char buf[NBS_STYLE_BUFSIZE];
+    const nbs_style_t *style = nbs_handle_colour(handle);
+    int n = nbs_style_start(style, buf, sizeof(buf));
+    if (n <= 0) buf[0] = '\0';
+    return buf;
 }
 
 static void render(const editor_t *ed) {
@@ -186,22 +153,22 @@ static void render(const editor_t *ed) {
 
     /* Header */
     off += sprintf(buf + off, "%s nbs-chat-edit: %s (%d messages)%s %s\r\n",
-                   C_REVERSE, ed->path, msg_count,
+                   RENDER_REVERSE, ed->path, msg_count,
                    ed->dirty ? " [modified]" : "",
-                   C_RESET);
+                   RENDER_RESET);
 
     /* Messages */
     for (int row = 0; row < content_rows; row++) {
         int idx = ed->scroll_top + row;
         if (idx >= msg_count) {
-            off += sprintf(buf + off, "%s~%s\r\n", C_DIM, C_RESET);
+            off += sprintf(buf + off, "%s~%s\r\n", RENDER_DIM, RENDER_RESET);
             continue;
         }
 
         const chat_message_t *msg = &ed->state.messages[idx];
         int is_cursor = (idx == ed->cursor);
         int is_deleted = ed->deleted[idx];
-        const char *hcol = handle_colour(msg->handle);
+        const char *hcol = handle_colour_str(msg->handle);
 
         /* Format timestamp */
         char ts[32] = "";
@@ -225,19 +192,19 @@ static void render(const editor_t *ed) {
         /* Render line */
         if (is_deleted) {
             off += sprintf(buf + off, "%s%s%s[%3d] %s %s: %s%s\r\n",
-                           is_cursor ? C_REVERSE : "",
-                           C_RED, C_STRIKE,
+                           is_cursor ? RENDER_REVERSE : "",
+                           RENDER_RED, RENDER_STRIKE,
                            idx + 1, ts, msg->handle, preview,
-                           C_RESET);
+                           RENDER_RESET);
         } else {
             off += sprintf(buf + off, "%s%s[%3d]%s %s%s%s%s %s%s%s: %s%s\r\n",
-                           is_cursor ? C_REVERSE : "",
-                           C_DIM, idx + 1, C_RESET,
-                           is_cursor ? C_REVERSE : "",
-                           C_DIM, ts, C_RESET,
-                           is_cursor ? C_REVERSE : "",
+                           is_cursor ? RENDER_REVERSE : "",
+                           RENDER_DIM, idx + 1, RENDER_RESET,
+                           is_cursor ? RENDER_REVERSE : "",
+                           RENDER_DIM, ts, RENDER_RESET,
+                           is_cursor ? RENDER_REVERSE : "",
                            hcol, msg->handle,
-                           preview, C_RESET);
+                           preview, RENDER_RESET);
         }
     }
 
@@ -249,7 +216,7 @@ static void render(const editor_t *ed) {
     char status_left[256];
     if (del_count > 0)
         snprintf(status_left, sizeof(status_left), " %d/%d | %s%d to delete%s",
-                 ed->cursor + 1, msg_count, C_RED, del_count, C_RESET C_REVERSE);
+                 ed->cursor + 1, msg_count, RENDER_RED, del_count, RENDER_RESET RENDER_REVERSE);
     else
         snprintf(status_left, sizeof(status_left), " %d/%d",
                  ed->cursor + 1, msg_count);
@@ -261,9 +228,9 @@ static void render(const editor_t *ed) {
         status_right[0] = '\0';
 
     off += sprintf(buf + off, "\x1b[%d;1H%s%-*s%s%s",
-                   g_term_rows - 1, C_REVERSE,
+                   g_term_rows - 1, RENDER_REVERSE,
                    g_term_cols, status_left,
-                   status_right, C_RESET);
+                   status_right, RENDER_RESET);
 
     /* Message bar */
     off += sprintf(buf + off, "\x1b[%d;1H\x1b[2K%s", g_term_rows,
@@ -701,7 +668,7 @@ static void run_editor(editor_t *ed) {
         case 'v': {
             if (ed->cursor < 0 || ed->cursor >= msg_count) break;
             const chat_message_t *msg = &ed->state.messages[ed->cursor];
-            const char *hcol = handle_colour(msg->handle);
+            const char *hcol = handle_colour_str(msg->handle);
 
             char ts[64] = "";
             if (msg->timestamp > 0) {
@@ -716,14 +683,14 @@ static void run_editor(editor_t *ed) {
             int vo = 0;
             vo += sprintf(vbuf + vo, "\x1b[H\x1b[2J");
             vo += sprintf(vbuf + vo, "%s Message %d/%d %s\r\n\r\n",
-                          C_REVERSE, ed->cursor + 1, msg_count, C_RESET);
+                          RENDER_REVERSE, ed->cursor + 1, msg_count, RENDER_RESET);
             vo += sprintf(vbuf + vo, "  %sFrom:%s  %s%s%s\r\n",
-                          C_DIM, C_RESET, hcol, msg->handle, C_RESET);
+                          RENDER_DIM, RENDER_RESET, hcol, msg->handle, RENDER_RESET);
             vo += sprintf(vbuf + vo, "  %sTime:%s  %s\r\n",
-                          C_DIM, C_RESET, ts);
+                          RENDER_DIM, RENDER_RESET, ts);
             if (ed->deleted[ed->cursor])
                 vo += sprintf(vbuf + vo, "  %s%sMARKED FOR DELETION%s\r\n",
-                              C_RED, C_BOLD, C_RESET);
+                              RENDER_RED, RENDER_BOLD, RENDER_RESET);
             vo += sprintf(vbuf + vo, "\r\n");
 
             /* Print content with line wrapping */
@@ -747,7 +714,7 @@ static void run_editor(editor_t *ed) {
             }
 
             vo += sprintf(vbuf + vo, "\r\n\r\n%s— Press any key to return —%s",
-                          C_DIM, C_RESET);
+                          RENDER_DIM, RENDER_RESET);
             write(STDOUT_FILENO, vbuf, (size_t)vo);
             free(vbuf);
             while (read_key() == KEY_NONE) ;
@@ -760,8 +727,8 @@ static void run_editor(editor_t *ed) {
             if (!hbuf) break;
             int ho = 0;
             ho += sprintf(hbuf + ho, "\x1b[H\x1b[2J");
-            ho += sprintf(hbuf + ho, "%s nbs-chat-edit — Help %s\r\n\r\n", C_REVERSE, C_RESET);
-            ho += sprintf(hbuf + ho, "  %sNavigation%s\r\n", C_BOLD, C_RESET);
+            ho += sprintf(hbuf + ho, "%s nbs-chat-edit — Help %s\r\n\r\n", RENDER_REVERSE, RENDER_RESET);
+            ho += sprintf(hbuf + ho, "  %sNavigation%s\r\n", RENDER_BOLD, RENDER_RESET);
             ho += sprintf(hbuf + ho, "    Up/Down, j/k       One message\r\n");
             ho += sprintf(hbuf + ho, "    Page Up/Down       One screen\r\n");
             ho += sprintf(hbuf + ho, "    Home, g            First message\r\n");
@@ -772,18 +739,18 @@ static void run_editor(editor_t *ed) {
             ho += sprintf(hbuf + ho, "\r\n");
             ho += sprintf(hbuf + ho, "    Enter, v           View full message\r\n");
             ho += sprintf(hbuf + ho, "\r\n");
-            ho += sprintf(hbuf + ho, "  %sEditing%s\r\n", C_BOLD, C_RESET);
+            ho += sprintf(hbuf + ho, "  %sEditing%s\r\n", RENDER_BOLD, RENDER_RESET);
             ho += sprintf(hbuf + ho, "    d                  Mark/unmark for deletion\r\n");
             ho += sprintf(hbuf + ho, "    t                  Truncate (delete from here to end)\r\n");
             ho += sprintf(hbuf + ho, "    u                  Undo\r\n");
             ho += sprintf(hbuf + ho, "    Ctrl-R             Redo\r\n");
             ho += sprintf(hbuf + ho, "\r\n");
-            ho += sprintf(hbuf + ho, "  %sFile%s\r\n", C_BOLD, C_RESET);
+            ho += sprintf(hbuf + ho, "  %sFile%s\r\n", RENDER_BOLD, RENDER_RESET);
             ho += sprintf(hbuf + ho, "    w                  Write changes\r\n");
             ho += sprintf(hbuf + ho, "    q                  Quit (warns if unsaved)\r\n");
             ho += sprintf(hbuf + ho, "    Q                  Force quit without saving\r\n");
             ho += sprintf(hbuf + ho, "\r\n");
-            ho += sprintf(hbuf + ho, "  %sPress any key to return%s", C_DIM, C_RESET);
+            ho += sprintf(hbuf + ho, "  %sPress any key to return%s", RENDER_DIM, RENDER_RESET);
             write(STDOUT_FILENO, hbuf, (size_t)ho);
             free(hbuf);
             /* Wait for any key */
@@ -819,6 +786,9 @@ int main(int argc, char **argv) {
     } else {
         snprintf(abs_path, sizeof(abs_path), "%s", path);
     }
+
+    /* Initialise shared colour table */
+    render_init();
 
     /* Read chat file */
     editor_t ed;

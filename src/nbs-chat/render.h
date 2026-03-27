@@ -4,18 +4,35 @@
  * Used by both nbs-chat-terminal (interactive display) and
  * nbs-chat export (file/stdout export). Single source of truth
  * for how chat messages look.
+ *
+ * Terminal attributes and colour codes come from nbs_term_attr.h.
  */
 
 #ifndef NBS_CHAT_RENDER_H
 #define NBS_CHAT_RENDER_H
 
+#include "../nbs-common/nbs_term_attr.h"
 #include <stdio.h>
 #include <time.h>
 
-/* ANSI escape constants */
-#define RENDER_BOLD  "\033[1m"
-#define RENDER_DIM   "\033[2m"
-#define RENDER_RESET "\033[0m"
+/* String constants for direct use in printf format strings.
+ * These are convenience aliases wrapping nbs_term_attr's bitmask API
+ * for the common case where a single attribute is toggled inline. */
+#define RENDER_BOLD      "\033[1m"
+#define RENDER_DIM       "\033[2m"
+#define RENDER_RESET     "\033[0m"
+#define RENDER_ITALIC    "\033[3m"
+#define RENDER_UNDERLINE "\033[4m"
+#define RENDER_BLINK     "\033[5m"
+#define RENDER_REVERSE   "\033[7m"
+#define RENDER_STRIKE    "\033[9m"
+
+/* Named 256-colour foreground strings for inline use */
+#define RENDER_RED       "\033[38;5;196m"
+#define RENDER_GREEN     "\033[38;5;41m"
+#define RENDER_YELLOW    "\033[38;5;226m"
+#define RENDER_BLUE      "\033[38;5;39m"
+#define RENDER_CYAN      "\033[38;5;87m"
 
 /*
  * render_init — Reset the handle-to-colour mapping.
@@ -26,7 +43,7 @@
 void render_init(void);
 
 /*
- * render_get_colour — Get the ANSI colour code for a handle.
+ * render_get_colour — Get the ANSI colour SGR parameter for a handle.
  *
  * Assigns colours on first use, returns the same colour for the
  * same handle on subsequent calls. Thread-unsafe (main thread only).

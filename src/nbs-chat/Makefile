@@ -11,9 +11,16 @@ BIN_DIR = ../../bin
 TEST_DIR = ../../tests/automated
 UNIT_TEST_DIR = ../../tests
 
+# Common modules from nbs-common
+COMMON_DIR = ../nbs-common
+
 # Shared library objects (used by both binaries)
 LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c render.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
+
+# nbs-common objects
+COMMON_SRCS = $(COMMON_DIR)/nbs_term_attr.c
+COMMON_OBJS = nbs_term_attr.o
 
 # nbs-chat CLI
 CLI_SRCS = main.c
@@ -50,10 +57,10 @@ UNIT_TEST_WATCHDOG = $(UNIT_TEST_DIR)/test_watchdog_unit
 
 all: $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
 
-$(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS)
+$(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(TERM_TARGET): $(TERM_OBJS) $(LIB_OBJS)
+$(TERM_TARGET): $(TERM_OBJS) $(LIB_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
 
 $(REMOTE_TARGET): $(REMOTE_OBJS)
@@ -63,6 +70,9 @@ $(ASSERT_CHECK): assert_check.c
 	$(CC) $(CFLAGS) -o $@ $<
 
 %.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+nbs_term_attr.o: $(COMMON_DIR)/nbs_term_attr.c $(COMMON_DIR)/nbs_term_attr.h $(COMMON_DIR)/nbs_assert.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 install: all
@@ -167,9 +177,9 @@ chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h
 lock.o: lock.c lock.h chat_file.h
 bus_bridge.o: bus_bridge.c bus_bridge.h chat_file.h
-render.o: render.c render.h chat_file.h
+render.o: render.c render.h chat_file.h $(COMMON_DIR)/nbs_term_attr.h
 remote.o: remote.c
 
 clean:
-	rm -f $(LIB_OBJS) $(CLI_OBJS) $(TERM_OBJS) $(REMOTE_OBJS) $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
+	rm -f $(LIB_OBJS) $(CLI_OBJS) $(TERM_OBJS) $(REMOTE_OBJS) $(COMMON_OBJS) $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
 	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT) $(UNIT_TEST_WATCHDOG)
