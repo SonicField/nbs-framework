@@ -65,8 +65,8 @@ create_test_socket() {
     local sock_path="$1"
     mkdir -p "$(dirname "$sock_path")"
     python3 -c "
-import socket, os, threading, time
-path = '$sock_path'
+import socket, os, threading, time, sys
+path = sys.argv[1]
 if os.path.exists(path): os.unlink(path)
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.bind(path)
@@ -81,7 +81,7 @@ def accept_loop():
 t = threading.Thread(target=accept_loop, daemon=True)
 t.start()
 time.sleep(60)
-" &
+" "$sock_path" &
     local pid=$!
     echo "$pid" > "$MOCK_DIR/socket_server.pid"
     # Wait for socket to appear
@@ -496,6 +496,103 @@ RC=$?
 set -e
 check "exit code 1" "$( [[ $RC -eq 1 ]] && echo pass || echo fail )"
 check "mentions not installed" "$( echo "$OUTPUT" | grep -qF 'not installed' && echo pass || echo fail )"
+echo ""
+
+# --- Test 18: test_socket passes path safely (no shell injection) ---
+echo "18. test_socket: safe path passing..."
+reset_mocks
+# Create a socket path with an apostrophe in the directory name
+TRICKY_DIR="$TEST_HOME/.nbs-ts-it's-a-test"
+mkdir -p "$TRICKY_DIR"
+# Create a listening socket at the tricky path
+TRICKY_SOCK="$TRICKY_DIR/helper.sock"
+create_test_socket "$TRICKY_SOCK" || true
+# Override SOCKET_PATH in the script by setting HOME to a dir where
+# .nbs-ts/helper.sock maps to our tricky path — can't do that cleanly.
+# Instead, test the Python snippet directly with the tricky path:
+if command -v python3 >/dev/null 2>&1; then
+    set +e
+    python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sys.argv[1])
+    s.close()
+except:
+    sys.exit(1)
+" "$TRICKY_SOCK" 2>/dev/null
+    SAFE_RC=$?
+    set -e
+    check "python connect with safe arg passing" "$( [[ $SAFE_RC -eq 0 ]] && echo pass || echo fail )"
+else
+    echo "   SKIP: python3 not available"
+fi
+# Also verify the current nbs-ts-sysctl test_socket function would fail
+# with an inline single-quote path (demonstrates the bug)
+set +e
+python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('$TRICKY_SOCK')
+    s.close()
+except:
+    sys.exit(1)
+" 2>/dev/null
+INLINE_RC=$?
+set -e
+# The inline version should fail (syntax error from the apostrophe)
+check "inline path with quote fails (demonstrates bug)" "$( [[ $INLINE_RC -ne 0 ]] && echo pass || echo fail )"
+kill_socket_servers
+echo ""
+
+# --- Test 19: status shows correct binary path ---
+echo "19. status: binary path extraction..."
+reset_mocks
+# Install first so there's a unit file
+create_test_socket "$TEST_HOME/.nbs-ts/helper.sock"
+set +e
+"$SYSCTL" install >/dev/null 2>&1
+set -e
+# Check the unit file was written
+UNIT_FILE="$TEST_HOME/.config/systemd/user/nbs-ts-helper.service"
+check "unit file exists" "$( [[ -f "$UNIT_FILE" ]] && echo pass || echo fail )"
+# Run status and check binary path shows the actual helper path
+set +e
+OUTPUT=$("$SYSCTL" status 2>&1)
+set -e
+HELPER_PATH="$TEST_HOME/.nbs/bin/nbs-ts-helper"
+check "status shows binary path" "$( echo "$OUTPUT" | grep -qF "$HELPER_PATH" && echo pass || echo fail )"
+# The path should NOT show "unknown" or garbage
+check "path is not unknown" "$( echo "$OUTPUT" | grep -i 'Binary:' | grep -qvF 'unknown' && echo pass || echo fail )"
+kill_socket_servers
+echo ""
+
+# --- Test 20: install --reinstall when already installed ---
+echo "20. install --reinstall..."
+reset_mocks
+create_test_socket "$TEST_HOME/.nbs-ts/helper.sock"
+# First install
+set +e
+"$SYSCTL" install >/dev/null 2>&1
+set -e
+# Normal install again should fail
+set +e
+OUTPUT=$("$SYSCTL" install 2>&1)
+RC=$?
+set -e
+check "double install fails" "$( [[ $RC -ne 0 ]] && echo pass || echo fail )"
+check "suggests reinstall" "$( echo "$OUTPUT" | grep -qi 'reinstall\|remove' && echo pass || echo fail )"
+# Now try --reinstall
+set +e
+OUTPUT=$("$SYSCTL" install --reinstall 2>&1)
+RC=$?
+set -e
+check "reinstall succeeds" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "reinstall shows success" "$( echo "$OUTPUT" | grep -qF 'installed and running' && echo pass || echo fail )"
+# Verify systemctl calls include stop and disable (cleanup before reinstall)
+check "reinstall called stop" "$( grep -q 'stop' "$MOCK_LOG" && echo pass || echo fail )"
+kill_socket_servers
 echo ""
 
 # --- Summary ---

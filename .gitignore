@@ -111,3 +111,6 @@ src/nbs-ts-render/test_nbs_ts_render
 src/nbs-ts-render/*.o
 # Build artefacts for nbs-chat-edit
 src/nbs-chat-edit/nbs-chat-edit
+# Build artefacts for nbs-common tests
+src/nbs-common/test_nbs_term_attr
+src/nbs-common/test_nbs_term_attr_asan

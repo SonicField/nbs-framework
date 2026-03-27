@@ -139,6 +139,7 @@ test: all install
 	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 	bash $(TEST_DIR)/test_nbs_team_check.sh
+	bash $(TEST_DIR)/test_nbs_ts_sysctl.sh
 
 test-debug: debug install
 	./$(ASSERT_CHECK)
@@ -147,6 +148,7 @@ test-debug: debug install
 	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 	bash $(TEST_DIR)/test_nbs_team_check.sh
+	bash $(TEST_DIR)/test_nbs_ts_sysctl.sh
 
 test-asan: asan install
 	./$(ASSERT_CHECK)
@@ -155,6 +157,7 @@ test-asan: asan install
 	bash $(TEST_DIR)/test_nbs_chat_watchdog.sh
 	bash $(TEST_DIR)/test_nbs_chat_bus.sh
 	bash $(TEST_DIR)/test_nbs_team_check.sh
+	bash $(TEST_DIR)/test_nbs_ts_sysctl.sh
 
 test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT) $(UNIT_TEST_WATCHDOG)
 	$(UNIT_TEST_CHAT_FILE)

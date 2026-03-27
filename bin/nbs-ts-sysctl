@@ -95,11 +95,11 @@ test_socket() {
 import socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 try:
-    s.connect('$SOCKET_PATH')
+    s.connect(sys.argv[1])
     s.close()
 except:
     sys.exit(1)
-" 2>/dev/null
+" "$SOCKET_PATH" 2>/dev/null
         return $?
     fi
     # Fallback: socket exists, assume connectable
@@ -138,6 +138,11 @@ cleanup_unit() {
 # ---- Subcommands ----
 
 cmd_install() {
+    local reinstall=0
+    if [[ "${1:-}" == "--reinstall" ]]; then
+        reinstall=1
+    fi
+
     # Check systemd
     if ! check_systemd; then
         echo "Error: systemd user session is not available."
@@ -146,10 +151,18 @@ cmd_install() {
     fi
 
     # Check if already installed
-    if is_installed; then
+    if is_installed && [[ $reinstall -eq 0 ]]; then
         echo "nbs-ts-helper service is already installed."
-        echo "  To reinstall: nbs-ts-sysctl remove && nbs-ts-sysctl install"
+        echo "  To reinstall: nbs-ts-sysctl install --reinstall"
         exit 1
+    fi
+
+    # Reinstall: clean up existing installation first
+    if is_installed && [[ $reinstall -eq 1 ]]; then
+        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+        systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+        rm -f "$UNIT_FILE"
+        systemctl --user daemon-reload 2>/dev/null || true
     fi
 
     # Find the binary
@@ -305,10 +318,11 @@ cmd_status() {
 
     # Binary path from unit file
     if [[ -f "$UNIT_FILE" ]]; then
-        local exec_line
-        exec_line="$(grep '^ExecStart=' "$UNIT_FILE" | head -1)"
-        local binary_path="${exec_line#*exec }"
-        binary_path="${binary_path%\'*}"
+        local binary_path
+        # Extract the helper binary path from the ExecStart line.
+        # Format: ExecStart=/bin/bash --login -c 'exec /path/to/nbs-ts-helper'
+        binary_path="$(sed -n "s/.*exec \(.*nbs-ts-helper\).*/\1/p" "$UNIT_FILE" 2>/dev/null)"
+        [[ -z "$binary_path" ]] && binary_path="unknown"
         echo "  Binary:  $binary_path"
         echo "  Unit:    $UNIT_FILE"
     else
@@ -445,7 +459,7 @@ Usage: nbs-ts-sysctl <command>
 Service management for nbs-ts-helper.
 
 Commands:
-  install    Install and start the systemd user service
+  install    Install and start the systemd user service (--reinstall to replace)
   remove     Stop and remove the systemd user service
   start      Start the service
   stop       Stop the service
@@ -469,7 +483,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 case "$1" in
-    install) cmd_install ;;
+    install) cmd_install "${2:-}" ;;
     remove)  cmd_remove ;;
     start)   cmd_start ;;
     stop)    cmd_stop ;;
