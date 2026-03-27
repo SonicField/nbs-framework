@@ -11,7 +11,7 @@
   <rect x="0" y="0" width="240" height="200" rx="16" ry="16" fill="#0a0a2a"/>
 
   <!-- Letters NBS — shifted half a letter left of centre -->
-  <g fill="#1a1a2e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="60" text-anchor="middle">
+  <g fill="#d7875f" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="700" font-size="60" text-anchor="middle">
     <text x="105" y="180">NBS</text>
   </g>
 
