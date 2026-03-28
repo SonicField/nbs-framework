@@ -54,17 +54,12 @@ Every command you need. No others are required.
 |---------|---------|
 | `nbs-bus publish .nbs/events/ fixup <type> <level> "msg"` | Publish a bus event. |
 
-### Agent spawning
+### Agent spawning and verification
 
 | Command | Purpose |
 |---------|---------|
 | `source .nbs/bin/nbs-launch-agent` | Load the `launch_agent` bash function. |
 | `launch_agent HANDLE PROJECT_ROOT NBS_CLAUDE_PATH INITIAL_PROMPT` | Spawn a Claude agent. The only reliable method. |
-
-### Post-restart verification
-
-| Command | Purpose |
-|---------|---------|
 | `nbs-team-check <tag> <project-root>` | Verify agent sessions and sidecars are alive. Exit 0 = healthy, exit 1 = problems. |
 
 ### Deriving the chat file and tag
@@ -92,7 +87,7 @@ The standard team has seven permanent members:
 | Agent | Role |
 |-------|------|
 | scribe | Decision log maintenance via `nbs-scribe-log` |
-| medic | Hallucination monitor — reads session logs, posts warnings |
+| medic | Reasoning quality monitor — reads session logs, posts warnings |
 | supervisor | Task assignment and coordination |
 | gatekeeper | Code review — reads, does not write |
 | theologian | Methodology and design advice |
@@ -155,7 +150,7 @@ echo "$output" | grep -qi "Read\|Bash\|Edit\|Write\|Grep" && echo "TOOL CALLS AC
 
 ## Escalation levels
 
-Four levels. Level 3 is removed. Escalation goes 1 → 2 → 4.
+Three levels. Escalation goes 1 → 2 → 4.
 
 ### Level 1 — Ping
 
@@ -201,55 +196,60 @@ output=$(nbs-ts read-new "$handle" --strip 2>/dev/null)
 
 **If no output:** Escalate to Level 4.
 
-### Level 3 — Removed
-
-No longer used. Escalation goes directly from Level 2 to Level 4.
-
 ### Level 4 — Hard Restart
 
 **When:** Agent dead, missing, context exhausted, or unresponsive after Level 2.
 
-**Action:**
+A Level 4 restart has three phases: kill, spawn, verify. All three are mandatory.
+
+**Phase 1 — Kill:**
 ```bash
-# Kill the existing session if one exists
 handle=$(nbs-ts list --name="nbs-${agent}-${tag}" | grep -v dead | head -1 | cut -f1)
 if [ -n "$handle" ]; then
     nbs-ts kill "$handle" 2>/dev/null
 fi
-
-# Clean up stale pid file
 rm -f .nbs/pids/${agent}.pid
+```
 
-# Respawn using launch_agent — the ONLY reliable method
+**Phase 2 — Reset cursor and spawn:**
+```bash
+# Reset the agent's chat cursor to current message count.
+# Without this, the restarted agent receives stale notifications
+# from her old cursor position instead of current messages.
+msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+cursor_file="${chat_file}.cursors"
+if grep -q "^${agent}=" "$cursor_file" 2>/dev/null; then
+    sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+else
+    echo "${agent}=${msg_count}" >> "$cursor_file"
+fi
+
+# Spawn using launch_agent — the ONLY reliable method
 source .nbs/bin/nbs-launch-agent
 launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
     "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
 ```
 
-**After every Level 4 restart, verify the agent actually started:**
-
+**Phase 3 — Verify:**
 ```bash
-# Wait for the agent to initialise
 sleep 30
 
-# Check that the session appeared and is alive
 handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
     | grep alive | head -1 | cut -f1)
 
 if [ -z "$handle" ]; then
-    # Agent failed to start — report honestly, do NOT claim success
-    results="${results}\n- @${agent}: RESTART FAILED — launch_agent returned but no alive session after 30s"
+    # Agent failed to start — report honestly
+    results="${results}\n- @${agent}: RESTART FAILED — no alive session after 30s"
 else
-    # Verify sidecar is also running
     if pgrep -f "nbs-sidecar.*--handle=${agent}.*$(pwd)" >/dev/null 2>&1; then
-        results="${results}\n- @${agent}: restarted and verified"
+        results="${results}\n- @${agent}: restarted and verified (cursor reset)"
     else
-        results="${results}\n- @${agent}: restarted but sidecar missing — agent will not receive notifications"
+        results="${results}\n- @${agent}: restarted but sidecar missing"
     fi
 fi
 ```
 
-**This verification is mandatory.** Without it, `launch_agent` can return success while the spawned process dies within seconds. Previous fixup runs reported "alive — restarted" for agents that were actually dead, because they checked liveness immediately after spawn instead of waiting for initialisation.
+**All three phases are mandatory.** Skipping the cursor reset produces a deaf agent. Skipping the verification produces false "alive" reports. Both have happened in production.
 
 **CRITICAL:** Use `launch_agent` from `nbs-launch-agent`. This is the only way to spawn Claude that works reliably. The function handles environment scrubbing (`unset CLAUDECODE TMUX` and others), `setsid`, and backgrounding. See `bin/SPAWN_README.md` for the full history of what does not work and why.
 
@@ -258,7 +258,7 @@ fi
 | Method | Failure mode |
 |--------|-------------|
 | `nbs-workers spawn` | Does not scrub environment correctly for all cases. |
-| `nbs-ts create "nbs-claude ..."` | Creates a double session. `nbs-claude` creates its own `nbs-ts` session internally. The outer session wraps the inner one and breaks the sidecar loop. |
+| `nbs-ts create "nbs-claude ..."` | Creates a double session. `nbs-claude` creates its own `nbs-ts` session internally. |
 | C `fork()` + `execl()` | Claude exits after a few API calls. Root cause unknown but reproducible. |
 | Direct `nbs-claude` without `setsid` | Session lifecycle issues. Process group management fails. |
 
@@ -292,68 +292,20 @@ nbs-ts list --name="$tag"
 
 This shows every session (alive and dead) associated with this team. Record which agents have alive sessions and which do not.
 
-### Step 4: Classify and act on each expected agent
+### Step 4: Classify, act, and verify each agent
 
 For each of the seven expected agents (scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist):
 
 1. Search for an alive session named `nbs-<agent>-<tag>`.
-2. If no alive session exists → classify as dead/missing → Level 4.
+2. If no alive session exists → Level 4 (kill, reset cursor, spawn, verify).
 3. If alive session exists → read recent output with `nbs-ts read-new <handle> --strip`.
-4. If output contains active tool calls → classify as working → no action.
-5. If output shows modal/permission prompt → classify as stalled on modal → Level 1.
-6. If no output → classify as stalled → Level 1, escalate to Level 2 if unresponsive, then Level 4.
-7. If output shows context exhaustion (auto-compact loops, empty responses) → Level 4.
+4. If output contains active tool calls → classify as working.
+5. If output shows modal/permission prompt → Level 1.
+6. If no output → Level 1, escalate to Level 2 if unresponsive, then Level 4.
+7. If output shows context exhaustion → Level 4.
+8. **For all alive agents:** check the chat cursor. If the agent is more than 50 messages behind, reset her cursor to current message count and report the desync.
 
-Track the result for each agent: state observed, action taken, outcome.
-
-### Step 4b: Cursor health check
-
-After confirming agents are alive and working, check that their chat cursors are not desynced. A desynced cursor means the agent is not receiving notifications for new messages — she may be alive but deaf.
-
-```bash
-# Read the cursors file
-cursor_file="${chat_file}.cursors"
-
-# Get the current message count
-msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
-
-# For each permanent agent, check if cursor is significantly behind
-for agent in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
-    cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
-    if [ -z "$cursor" ]; then
-        echo "$agent: NO CURSOR (never read chat)"
-        continue
-    fi
-    behind=$((msg_count - cursor))
-    if [ "$behind" -gt 50 ]; then
-        echo "$agent: DESYNCED (cursor=$cursor, messages=$msg_count, behind by $behind)"
-    fi
-done
-```
-
-**What desync means:** The agent's sidecar uses the cursor to determine unread messages. If the cursor is far behind, the sidecar delivers old messages as notifications. The agent processes stale messages, ignoring recent ones. This typically happens when:
-- The agent was restarted but the cursor was not reset
-- The agent crashed mid-read, leaving the cursor at its last-acknowledged position
-- The chat was archived, reducing message count, but the cursor was not adjusted
-
-**How to fix a desynced cursor:**
-
-```bash
-# Reset the agent's cursor to current message count
-# This tells the sidecar "I've read everything up to now"
-msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
-sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "${chat_file}.cursors"
-```
-
-After resetting, the agent will not receive notifications for messages she missed (they are gone). But she will receive all future messages correctly. This is acceptable — the alternative is the agent remaining deaf indefinitely.
-
-**Threshold:** an agent more than 50 messages behind is desynced. Below 50 is normal — agents process messages in batches and may be a few behind during active conversation.
-
-**Report format:** Add cursor status to the per-agent line in the summary:
-```
-- @supervisor: alive — healthy, CURSOR DESYNCED (behind by 128, reset)
-- @scribe: alive — restarted and verified, cursor OK
-```
+Track the result for each agent: state observed, action taken, cursor status, outcome.
 
 ### Step 5: Post summary to chat
 
@@ -361,24 +313,25 @@ After resetting, the agent will not receive notifications for messages she misse
 nbs-chat send "$chat_file" fixup "FIXUP CHECKPOINT
 
 Agents checked: 7
-- @scribe: alive — healthy
-- @supervisor: alive — healthy
-- @gatekeeper: dead — restarted
-- @theologian: alive — pinged (Level 1), recovered
+- @scribe: alive — restarted and verified (cursor reset)
+- @medic: alive — restarted and verified (cursor reset)
+- @supervisor: alive — healthy, CURSOR DESYNCED (behind by 128, reset)
+- @gatekeeper: alive — healthy
+- @theologian: alive — healthy
 - @testkeeper: alive — healthy
-- @generalist: missing — restarted
+- @generalist: alive — pinged (Level 1), recovered
 
 Team health: degraded
-Actions: 2 restarts, 1 ping
+Actions: 2 restarts, 1 ping, 1 cursor reset
 
 ---
 End of fixup."
 ```
 
-Adjust the content to reflect actual findings. One line per agent. State the action taken or "healthy" if none was needed.
+Adjust the content to reflect actual findings. One line per agent. State, action, cursor status, outcome.
 
 Team health classification:
-- **healthy** — all six agents alive and working, zero actions taken.
+- **healthy** — all seven agents alive and working, zero actions taken.
 - **degraded** — one or two agents required intervention.
 - **critical** — three or more agents required intervention, or supervisor was dead.
 
@@ -401,21 +354,25 @@ These are not guidelines. They are rules.
 
 1. **Use `nbs-ts list --name=` for session discovery.** Not JSON files. Not `.nbs/sessions/*.json`. Not pid files. The `nbs-ts list` command reads session state atomically. JSON metadata files are stale, written asynchronously, and deleted by cleanup traps.
 
-2. **Use `launch_agent` for all restarts.** Source `.nbs/bin/nbs-launch-agent` and call `launch_agent`. No other spawn method works reliably. Not `nbs-workers spawn`. Not `nbs-ts create`. Not C fork+exec. See `bin/SPAWN_README.md`.
+2. **Use `launch_agent` for all restarts.** Source `.nbs/bin/nbs-launch-agent` and call `launch_agent`. No other spawn method works reliably.
 
 3. **Skip ephemeral agents.** Do not check, diagnose, or restart: pythia, shepard, librarian, fixup, chatdigest. They are spawned on demand by the sidecar. They are not team members.
 
-4. **Always hard-restart scribe and medic.** Their state lives in external logs, not in their sessions. A fresh restart re-loads the skill and prevents role drift. Kill and respawn both every fixup cycle regardless of health. **Verify each restart** — wait 30 seconds then check for an alive session. Report `RESTART FAILED` if verification fails.
+4. **Always hard-restart scribe and medic.** Their state lives in external logs, not in their sessions. A fresh restart re-loads the skill and prevents role drift. Kill and respawn both every fixup cycle regardless of health. Reset their cursors. Verify each restart — wait 30 seconds then check for an alive session. Report `RESTART FAILED` if verification fails.
 
-5. **Do not kill other working agents.** If `nbs-ts read-new` shows recent tool calls or active output, the agent is working. Leave it alone. Killing a working agent destroys its context and any in-progress work.
+5. **Do not kill other working agents.** If `nbs-ts read-new` shows recent tool calls or active output, she is working. Leave her alone. Killing a working agent destroys her context and any in-progress work.
 
 6. **Escalate, do not guess.** Follow the escalation sequence: Level 1 → Level 2 → Level 4. Do not skip to Level 4 for a stalled agent without trying Level 1 first. The exception is agents that are dead or missing — those go straight to Level 4.
 
-6. **Be brief in the summary.** One line per agent. State, action, outcome. The summary is for the supervisor and the human. They need facts, not narrative.
+7. **Reset cursors on every Level 4 restart.** A restarted agent with a stale cursor is deaf — she receives old messages and misses new ones. Reset the cursor to current message count before spawning.
 
-7. **Exit after posting.** You are ephemeral. Post the summary, publish the bus event, mark complete, stop. Do not wait for responses. Do not engage in conversation.
+8. **Check cursors for alive agents too.** An agent can be alive and working but desynced — processing stale messages while the team has moved on. If her cursor is more than 50 behind, reset it.
 
-8. **Do not touch other teams.** Multiple teams can run on the same machine. Only check sessions matching your tag. The tag is derived from the chat filename. If the chat file is `live.chat`, the tag is `live`. If it is `nn.Module.chat`, the tag is `nn-Module`. Only sessions named `nbs-<agent>-<your-tag>` belong to you.
+9. **Be brief in the summary.** One line per agent. State, action, cursor status, outcome. The summary is for the supervisor and the human.
+
+10. **Exit after posting.** You are ephemeral. Post the summary, publish the bus event, mark complete, stop.
+
+11. **Do not touch other teams.** Only check sessions matching your tag.
 
 ---
 
@@ -425,7 +382,7 @@ These are real failures observed in production. Know them.
 
 ### Agent shows "Resume this session"
 
-The agent crashed or was killed. Its nbs-ts session may still show as alive briefly because the PTY process (tail) outlives the Claude process. Check `nbs-ts read-new` output for "Resume this session" — this means Claude exited. Treat as dead. Level 4.
+The agent crashed or was killed. Her nbs-ts session may still show as alive briefly because the PTY process (tail) outlives the Claude process. Check `nbs-ts read-new` output for "Resume this session" — this means Claude exited. Treat as dead. Level 4.
 
 ### Agent stuck on permission prompt
 
@@ -437,15 +394,21 @@ Previous fixup runs or crashes may leave dead sessions with the same name patter
 
 ### launch_agent appears to succeed but agent dies within 30 seconds
 
-Check whether `CLAUDECODE` or `TMUX` leaked into the environment. `launch_agent` unsets these, but if something re-exports them between the source and the call, the child will detect nesting and exit. This was the root cause of intermittent 30-second worker deaths. The fix is already in `launch_agent` — do not modify the unset logic.
+Check whether `CLAUDECODE` or `TMUX` leaked into the environment. `launch_agent` unsets these, but if something re-exports them between the source and the call, the child will detect nesting and exit. This was the root cause of intermittent 30-second worker deaths.
 
 ### launch_agent returns but agent dies silently
 
-This is the most dangerous failure. `launch_agent` forks, the fork returns success, but the Claude process inside the session exits within seconds. Common causes: model quota exhaustion, API authentication failure, environment contamination. The session may briefly appear alive before going dead.
+The most dangerous failure. `launch_agent` forks, the fork returns success, but the Claude process inside the session exits within seconds. Common causes: model quota exhaustion, API authentication failure, environment contamination.
 
-**This is why post-restart verification is mandatory.** Without the 30-second wait and liveness check, fixup reports "alive — restarted" for dead agents. This happened in production: fixup claimed medic was "alive — hard-restarted" four consecutive times while medic was actually dead the entire time. The team ran for 3.5 hours without hallucination monitoring.
+**This is why post-restart verification is mandatory.** Without the 30-second wait and liveness check, fixup reports "alive — restarted" for dead agents. This happened in production: fixup claimed medic was "alive — hard-restarted" four consecutive times while medic was actually dead for 3.5 hours.
 
-If verification fails, report `RESTART FAILED` honestly. Do not retry — the next fixup cycle will try again. Retrying immediately risks spawning duplicate sessions.
+If verification fails, report `RESTART FAILED` honestly. Do not retry — the next fixup cycle will try again.
+
+### Desynced cursor — agent alive but deaf
+
+The agent's session is alive, she's producing output, but she's processing messages from 100+ messages ago. Her cursor was not reset after a previous restart. She appears healthy but is working on stale information.
+
+This is the root cause of agents "ignoring" recent messages. Check the cursor file — if her cursor is more than 50 behind current message count, reset it.
 
 ### Chat file not found
 
@@ -469,30 +432,53 @@ tag=$(basename "$chat_file" .chat | tr '.' '-')
 # Step 3: Check each agent
 agents="scribe medic supervisor gatekeeper theologian testkeeper generalist"
 results=""
+cursor_file="${chat_file}.cursors"
+msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
 
 for agent in $agents; do
     handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
         | grep alive | head -1 | cut -f1)
 
     if [ -z "$handle" ]; then
-        # Dead or missing — Level 4
+        # Dead or missing — Level 4 (kill, cursor reset, spawn, verify)
         rm -f ".nbs/pids/${agent}.pid"
+
+        # Reset cursor before spawn
+        if grep -q "^${agent}=" "$cursor_file" 2>/dev/null; then
+            sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+        else
+            echo "${agent}=${msg_count}" >> "$cursor_file"
+        fi
+
         source .nbs/bin/nbs-launch-agent
         launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
             "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
-        # Verify the restart actually worked
+
+        # Verify
         sleep 30
         verify_handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
             | grep alive | head -1 | cut -f1)
         if [ -z "$verify_handle" ]; then
             results="${results}\n- @${agent}: RESTART FAILED — no alive session after 30s"
         else
-            results="${results}\n- @${agent}: missing — restarted and verified"
+            results="${results}\n- @${agent}: restarted and verified (cursor reset)"
         fi
     else
         output=$(nbs-ts read-new "$handle" --strip 2>/dev/null)
         if [ -n "$output" ]; then
-            results="${results}\n- @${agent}: alive — healthy"
+            # Alive and working — check cursor
+            cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
+            if [ -n "$cursor" ]; then
+                behind=$((msg_count - cursor))
+                if [ "$behind" -gt 50 ]; then
+                    sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+                    results="${results}\n- @${agent}: alive — healthy, CURSOR DESYNCED (behind by ${behind}, reset)"
+                else
+                    results="${results}\n- @${agent}: alive — healthy"
+                fi
+            else
+                results="${results}\n- @${agent}: alive — healthy"
+            fi
         else
             # Stalled — Level 1
             nbs-ts send "$handle" ""
@@ -510,38 +496,32 @@ for agent in $agents; do
                 if [ -n "$output3" ]; then
                     results="${results}\n- @${agent}: alive — compacted, recovered"
                 else
-                    # Level 4
+                    # Level 4 (kill, cursor reset, spawn, verify)
                     nbs-ts kill "$handle" 2>/dev/null
                     rm -f ".nbs/pids/${agent}.pid"
+
+                    # Reset cursor
+                    if grep -q "^${agent}=" "$cursor_file" 2>/dev/null; then
+                        sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+                    else
+                        echo "${agent}=${msg_count}" >> "$cursor_file"
+                    fi
+
                     source .nbs/bin/nbs-launch-agent
                     launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \
                         "Read .nbs/workers/${agent}-skill.md and follow the role instructions. Then read the chat history and begin work."
-                    # Verify restart
+
+                    # Verify
                     sleep 30
                     verify_handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
                         | grep alive | head -1 | cut -f1)
                     if [ -z "$verify_handle" ]; then
                         results="${results}\n- @${agent}: RESTART FAILED — killed but no alive session after 30s"
                     else
-                        results="${results}\n- @${agent}: unresponsive — killed, restarted, verified"
+                        results="${results}\n- @${agent}: unresponsive — restarted, verified (cursor reset)"
                     fi
                 fi
             fi
-        fi
-    fi
-done
-
-# Step 4b: Cursor health check
-cursor_file="${chat_file}.cursors"
-msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
-for agent in $agents; do
-    cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
-    if [ -n "$cursor" ]; then
-        behind=$((msg_count - cursor))
-        if [ "$behind" -gt 50 ]; then
-            # Reset cursor to current count
-            sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
-            results="${results}\n  cursor: DESYNCED (behind by ${behind}, reset to ${msg_count})"
         fi
     fi
 done
