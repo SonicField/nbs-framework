@@ -2115,7 +2115,6 @@ int main(int argc, char **argv) {
                     info_line_emit(&edit, g_handle, "shutdown",
                                    "No project root — nothing to shut down.");
                     line_state_reset(&edit);
-                    print_prompt(g_handle);
                     continue;
                 }
                 do_send("@team SYSTEM: Shutting down in 10 seconds. "
@@ -2186,7 +2185,6 @@ int main(int argc, char **argv) {
                 }
                 info_line_emit(&edit, g_handle, "shutdown", "Team stopped.");
                 line_state_reset(&edit);
-                print_prompt(g_handle);
                 continue;
             }
 
@@ -2276,7 +2274,6 @@ int main(int argc, char **argv) {
                     }
                 }
                 line_state_reset(&edit);
-                print_prompt(g_handle);
                 continue;
             }
 
@@ -2340,7 +2337,7 @@ int main(int argc, char **argv) {
                     }
                 }
                 line_state_reset(&edit);
-                print_prompt(g_handle);
+                /* info_line_emit already redraws the prompt via line_redraw */
                 continue;
             }
 
