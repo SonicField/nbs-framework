@@ -486,6 +486,7 @@ static void print_help(void) {
     printf("  %s/shepard%s    Spawn shepard (team effectiveness check)\n", DIM, RESET);
     printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
+    printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
     printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
     printf("\n");
@@ -2077,6 +2078,32 @@ int main(int argc, char **argv) {
                 } else {
                     printf("  %sNo filter active%s\n", DIM, RESET);
                 }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /redraw — clear screen, repaint last 50 messages */
+            if (strcmp(edit.buf, "/redraw") == 0) {
+                printf("\033[2J\033[H");
+                chat_state_t redraw_state;
+                if (chat_read(g_chat_file, &redraw_state) == 0) {
+                    int start = redraw_state.message_count - 50;
+                    if (start < 0) start = 0;
+                    for (int i = start; i < redraw_state.message_count; i++) {
+                        if (g_filter_handle[0] != '\0' &&
+                            strcmp(redraw_state.messages[i].handle,
+                                   g_filter_handle) != 0)
+                            continue;
+                        format_message(redraw_state.messages[i].handle,
+                                      redraw_state.messages[i].content,
+                                      g_handle,
+                                      redraw_state.messages[i].timestamp);
+                    }
+                    g_msg_count = redraw_state.message_count;
+                    chat_state_free(&redraw_state);
+                }
+                g_cursor_row = 0;
                 line_state_reset(&edit);
                 print_prompt(g_handle);
                 continue;

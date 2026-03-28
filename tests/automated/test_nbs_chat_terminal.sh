@@ -843,6 +843,40 @@ check "output contains clear sequence" "$( echo "$OUTPUT" | grep -qP '\x1b\[\d+A
 
 echo ""
 
+# --- Test 50: /redraw clears and repaints ---
+echo "50. /redraw clears and repaints..."
+CHAT="$TEST_DIR/test50.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "scribe" "Message before redraw"
+OUTPUT=$({ sleep 1; printf '/redraw\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+# After /redraw, the message should still be visible
+check "/redraw shows messages" "$( echo "$OUTPUT" | grep -qF 'Message before redraw' && echo pass || echo fail )"
+# Output should contain clear-screen sequence (ESC[2J)
+check "/redraw clears screen" "$( echo "$OUTPUT" | grep -qP '\x1b\[2J' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 51: /help lists /redraw ---
+echo "51. /help lists /redraw..."
+CHAT="$TEST_DIR/test51.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$({ sleep 1; printf '/help\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/help mentions /redraw" "$( echo "$OUTPUT" | grep -qF '/redraw' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 52: /redraw respects /filter ---
+echo "52. /redraw respects filter..."
+CHAT="$TEST_DIR/test52.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "scribe" "From scribe"
+"$NBS_CHAT" send "$CHAT" "supervisor" "From supervisor"
+OUTPUT=$({ sleep 1; printf '/filter scribe\n/redraw\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+# After filter+redraw, scribe's message should be visible
+check "filtered redraw shows scribe" "$( echo "$OUTPUT" | grep -qF 'From scribe' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then

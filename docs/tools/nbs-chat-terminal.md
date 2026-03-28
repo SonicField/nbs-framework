@@ -64,6 +64,7 @@ All commands are entered at the prompt and submitted with Enter.
 | `/filter <handle>` | Show only messages from one participant; redisplays last 50 matching messages |
 | `/filter` | Show current filter status |
 | `/unfilter` | Clear filter; redisplays last 20 messages from all participants |
+| `/redraw` | Clear screen and repaint last 50 messages. Fixes display corruption from resize, scroll, or escape sequence artefacts. Respects active `/filter` |
 
 ### Team Control
 
