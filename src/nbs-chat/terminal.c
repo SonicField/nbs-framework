@@ -1148,9 +1148,11 @@ static void send_and_display(line_state_t *ls) {
     if (do_send(ls->buf) != 0) {
         printf("  %s(send failed)%s\n", DIM, RESET);
     } else {
-        /* Render the sent message with proper styling.
-         * poll_and_display skips own messages, so without this
-         * the sent text stays on screen as unformatted input. */
+        /* Clear the raw typed line and render with proper styling.
+         * The Enter keypress printed \n, leaving the typed text on
+         * the line above. Move up, clear it, then render the styled
+         * version in its place. */
+        printf("\033[A\r\033[K");
         format_message(g_handle, ls->buf, g_handle, time(NULL));
     }
 }
