@@ -165,13 +165,101 @@ Exit codes:
 - 1 — error (file not found, write failed)
 - 4 — invalid arguments
 
+## Trigger: Terminal-Driven Auto-Repair
+
+The repair is triggered automatically by `nbs-chat-terminal`.
+
+`poll_and_display` already calls `chat_read`. After the read, if `state.skipped_count > 0`, the terminal:
+
+1. Shows an INFO line: `INFO> [repair] N corrupt lines detected, running auto-repair...`
+2. Runs `nbs-chat-repair <chat-file>` via `spawn_with_capture` — output streams as INFO lines
+3. Sets a flag (`g_repair_triggered`) so the repair runs once, not on every poll cycle
+
+The human sees the repair happen in real time via INFO lines. No manual action required.
+
+The repair can also be run manually:
+```bash
+nbs-chat-repair <chat-file>           # repair now
+nbs-chat-repair <chat-file> --dry-run # report only
+```
+
+## Index and Cursor Safety Analysis
+
+The in-place blank and recovery append are safe with respect to the cursor system, sidecar notifications, and all concurrent readers/writers.
+
+### How message_count works
+
+`chat_read` walks lines after the `---` header, decoding each. Lines that fail base64 validation are skipped (`skipped_count++`) and NOT counted in `message_count`. Only successfully decoded messages get an index:
+
+```
+File lines after ---:
+  Line 1: valid base64    → message[0]
+  Line 2: CORRUPT         → skipped
+  Line 3: valid base64    → message[1]
+  Line 4: valid base64    → message[2]
+
+Result: message_count = 3, skipped_count = 1
+```
+
+### After blanking the corrupt line
+
+The spaces line still fails base64 validation. `chat_read` skips it, exactly as before:
+
+```
+  Line 1: valid base64    → message[0]
+  Line 2: SPACES          → skipped (still fails base64 check)
+  Line 3: valid base64    → message[1]
+  Line 4: valid base64    → message[2]
+
+Result: message_count = 3, skipped_count = 1
+```
+
+Message array is identical. All indices unchanged. All cursors valid.
+
+### After appending the recovery message
+
+`nbs-chat send` appends a new line at the end:
+
+```
+  Line 1: valid base64    → message[0]
+  Line 2: SPACES          → skipped
+  Line 3: valid base64    → message[1]
+  Line 4: valid base64    → message[2]
+  Line 5: recovery msg    → message[3]  ← new
+
+Result: message_count = 4, skipped_count = 1
+```
+
+`message_count` goes from 3 to 4. Every sidecar with `cursor=3` sees one new unread message — the recovery message from `chat-repair`. They deliver a notification to their agent. The agent reads the recovery text and continues normally.
+
+### Concurrent access during repair
+
+- **Another `chat_send` during the blank:** `chat_send` appends to the end. It never reads or writes the interior. The blank writes to the interior. These do not conflict. Even without a lock, the writes target different byte ranges.
+- **A `chat_read` during the blank:** The reader sees either the old corrupt line (skipped) or the new spaces line (skipped). The outcome is identical — same message array, same indices.
+- **A sidecar `chat_poll` during the blank:** `chat_poll` calls `chat_read`. Same analysis — message_count unchanged, cursor comparison unchanged.
+
+### Header consistency
+
+- **`file-length`:** Preserved — the blank writes the same number of bytes. `chat_send` later updates it when appending the recovery message. Both transitions are consistent.
+- **`participants`:** The corrupt line's handle was never parsed (skipped), so the participant list is unchanged by the blank. The recovery message adds `chat-repair(1)` via normal `chat_send` header update.
+- **`last-writer`:** Updated to `chat-repair` by `chat_send`. Diagnostic only — no agent uses this for logic.
+
+### Auto-archive detection
+
+The terminal checks if `message_count` dropped (indicating archive). The blank does not change `message_count`. The append increases it by 1. Neither triggers the archive detection path.
+
+### Idempotency
+
+Running the repair twice does not cause damage. The first run blanks corrupt lines and appends recovery messages. The second run finds no corrupt lines (space-padded lines are already being skipped as corrupt base64, but they are not recoverable text — they are spaces). The script reports "no corruption found" and exits.
+
 ## What Does NOT Change
 
 - `chat_read` — already handles corruption correctly
 - `chat_send` — used normally for the recovery message
 - The wire format — no changes to encoding/decoding
 - The file-length header — preserved by the byte-count-preserving replacement
-- The terminal — could display an INFO line when `skipped_count > 0` but that's a separate change
+- Cursor values — the message index array is identical before and after the blank
+- Sidecar behaviour — the recovery message appears as a normal new message
 
 ## Limitations
 
