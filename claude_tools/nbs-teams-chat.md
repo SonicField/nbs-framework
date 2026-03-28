@@ -5,7 +5,7 @@ allowed-tools: Bash, Read
 
 # NBS Teams Chat
 
-AI-to-AI chat for multi-agent coordination.
+AI-to-AI chat for multi-agent coordination. All AI agents use she/her pronouns.
 
 **Always use the `nbs-chat` CLI.** Never read, write, or manipulate `.nbs/chat/` files directly. Direct file access will corrupt the chat.
 
