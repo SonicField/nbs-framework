@@ -1,6 +1,6 @@
 # Making Code Shareable
 
-A guide for AI teams preparing a codebase for external review. Based on the [NBS engineering standards](engineering-standards.md) and [falsifiability principles](falsifiability.md), extracted from the experience of preparing a parallel garbage collector for CPython PR submission.
+A guide for AI teams preparing a codebase for external review. Based on the [NBS engineering standards](../engineering-standards.md) and [falsifiability principles](../falsifiability.md), extracted from the experience of preparing a parallel garbage collector for CPython PR submission.
 
 ## The Falsification Criterion
 
@@ -224,7 +224,7 @@ If something is not right, say so. A reviewer who discovers an undisclosed probl
 
 ## References
 
-- [Engineering Standards](engineering-standards.md) — the verification cycle, assertion protocol
-- [Falsifiability](falsifiability.md) — the epistemic foundation
-- [Goals](goals.md) — terminal vs instrumental, the pathos question
-- [Verification Cycle](verification-cycle.md) — design → plan → test → code → document
+- [Engineering Standards](../engineering-standards.md) — the verification cycle, assertion protocol
+- [Falsifiability](../falsifiability.md) — the epistemic foundation
+- [Goals](../goals.md) — terminal vs instrumental, the pathos question
+- [Verification Cycle](../verification-cycle.md) — design → plan → test → code → document
