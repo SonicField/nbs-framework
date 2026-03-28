@@ -306,6 +306,55 @@ For each of the seven expected agents (scribe, medic, supervisor, gatekeeper, th
 
 Track the result for each agent: state observed, action taken, outcome.
 
+### Step 4b: Cursor health check
+
+After confirming agents are alive and working, check that their chat cursors are not desynced. A desynced cursor means the agent is not receiving notifications for new messages — she may be alive but deaf.
+
+```bash
+# Read the cursors file
+cursor_file="${chat_file}.cursors"
+
+# Get the current message count
+msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+
+# For each permanent agent, check if cursor is significantly behind
+for agent in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
+    cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
+    if [ -z "$cursor" ]; then
+        echo "$agent: NO CURSOR (never read chat)"
+        continue
+    fi
+    behind=$((msg_count - cursor))
+    if [ "$behind" -gt 50 ]; then
+        echo "$agent: DESYNCED (cursor=$cursor, messages=$msg_count, behind by $behind)"
+    fi
+done
+```
+
+**What desync means:** The agent's sidecar uses the cursor to determine unread messages. If the cursor is far behind, the sidecar delivers old messages as notifications. The agent processes stale messages, ignoring recent ones. This typically happens when:
+- The agent was restarted but the cursor was not reset
+- The agent crashed mid-read, leaving the cursor at its last-acknowledged position
+- The chat was archived, reducing message count, but the cursor was not adjusted
+
+**How to fix a desynced cursor:**
+
+```bash
+# Reset the agent's cursor to current message count
+# This tells the sidecar "I've read everything up to now"
+msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "${chat_file}.cursors"
+```
+
+After resetting, the agent will not receive notifications for messages she missed (they are gone). But she will receive all future messages correctly. This is acceptable — the alternative is the agent remaining deaf indefinitely.
+
+**Threshold:** an agent more than 50 messages behind is desynced. Below 50 is normal — agents process messages in batches and may be a few behind during active conversation.
+
+**Report format:** Add cursor status to the per-agent line in the summary:
+```
+- @supervisor: alive — healthy, CURSOR DESYNCED (behind by 128, reset)
+- @scribe: alive — restarted and verified, cursor OK
+```
+
 ### Step 5: Post summary to chat
 
 ```bash
@@ -478,6 +527,21 @@ for agent in $agents; do
                     fi
                 fi
             fi
+        fi
+    fi
+done
+
+# Step 4b: Cursor health check
+cursor_file="${chat_file}.cursors"
+msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+for agent in $agents; do
+    cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
+    if [ -n "$cursor" ]; then
+        behind=$((msg_count - cursor))
+        if [ "$behind" -gt 50 ]; then
+            # Reset cursor to current count
+            sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+            results="${results}\n  cursor: DESYNCED (behind by ${behind}, reset to ${msg_count})"
         fi
     fi
 done
