@@ -1141,12 +1141,23 @@ static int do_send(const char *msg) {
     return 0;
 }
 
-static void send_and_display(line_state_t *ls) {
+static void send_and_display(line_state_t *ls, int input_rows) {
     ASSERT_MSG(ls != NULL, "send_and_display: ls is NULL");
     ASSERT_MSG(ls->len > 0, "send_and_display: called with empty buffer");
 
+    /* Clear the input area — move up past the \n and all wrapped rows,
+     * then clear from there to end of screen. input_rows is the
+     * g_cursor_row value from before Enter was pressed. */
+    int up = input_rows + 1;  /* +1 for the \n printed by Enter handler */
+    if (up > 0) {
+        printf("\033[%dA", up);
+    }
+    printf("\r\033[J");
+
     if (do_send(ls->buf) != 0) {
         printf("  %s(send failed)%s\n", DIM, RESET);
+    } else {
+        format_message(g_handle, ls->buf, g_handle, time(NULL));
     }
 }
 
@@ -1837,7 +1848,7 @@ int main(int argc, char **argv) {
             if (pfds[0].revents & (POLLHUP | POLLERR)) {
                 if (edit.len > 0) {
                     printf("\n");
-                    send_and_display(&edit);
+                    send_and_display(&edit, 0);
                 }
                 break;
             }
@@ -1852,7 +1863,7 @@ int main(int argc, char **argv) {
                 /* EOF: send pending input if any */
                 if (edit.len > 0) {
                     printf("\n");
-                    send_and_display(&edit);
+                    send_and_display(&edit, 0);
                 }
                 break;
             }
@@ -1867,6 +1878,7 @@ int main(int argc, char **argv) {
 
         /* Enter: submit immediately */
         if (c == '\n' || c == '\r') {
+            int saved_cursor_row = g_cursor_row;
             printf("\n");
             g_cursor_row = 0;
             g_history_pos = -1;  /* Exit history browse mode */
@@ -2306,7 +2318,7 @@ int main(int argc, char **argv) {
             }
 
             /* Regular message: send immediately */
-            send_and_display(&edit);
+            send_and_display(&edit, saved_cursor_row);
             line_state_reset(&edit);
             /* Check for messages after sending */
             poll_and_display(&edit, g_handle);
@@ -2321,7 +2333,7 @@ int main(int argc, char **argv) {
             }
             /* Send pending and exit */
             printf("\n");
-            send_and_display(&edit);
+            send_and_display(&edit, 0);
             break;
         }
 
@@ -2330,7 +2342,7 @@ int main(int argc, char **argv) {
             g_quit = 1;
             if (edit.len > 0) {
                 printf("\n");
-                send_and_display(&edit);
+                send_and_display(&edit, 0);
             }
             break;
         }
