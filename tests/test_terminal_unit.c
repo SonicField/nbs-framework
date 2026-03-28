@@ -46,6 +46,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <ctype.h>
 #include <termios.h>
 #include <errno.h>
 
@@ -1713,6 +1714,135 @@ static void test_medic_handle_detection(void) {
     TEST_PASS("medic handle detection: [MEDIC- prefix");
 }
 
+/* ================================================================
+ * @mention highlight tests
+ * ================================================================ */
+
+/*
+ * Mirror of the @mention word boundary matching logic.
+ *
+ * A match is @handle followed by a word boundary: the next character
+ * is not alphanumeric, underscore, or hyphen — or is end of string.
+ * The @ must be preceded by start-of-string or a non-alphanumeric char
+ * (to avoid matching email addresses like user@martin.com).
+ */
+static int is_mention_boundary(char c) {
+    return !isalnum((unsigned char)c) && c != '_' && c != '-';
+}
+
+/*
+ * Find the next @handle mention in text, respecting word boundaries.
+ * Returns pointer to the '@', or NULL if not found.
+ */
+static const char *find_mention(const char *text, const char *handle) {
+    size_t hlen = strlen(handle);
+    const char *p = text;
+    while ((p = strstr(p, "@")) != NULL) {
+        /* Check preceding char is not alphanumeric (email filter) */
+        if (p > text && isalnum((unsigned char)p[-1])) {
+            p++;
+            continue;
+        }
+        /* Check handle matches */
+        if (strncmp(p + 1, handle, hlen) == 0) {
+            /* Check word boundary after handle */
+            char after = p[1 + hlen];
+            if (after == '\0' || is_mention_boundary(after)) {
+                return p;
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static void test_mention_match_basic(void) {
+    const char *text = "hello @martin how are you";
+    const char *m = find_mention(text, "martin");
+    TEST_ASSERT(m != NULL, "should match @martin");
+    TEST_ASSERT(m == text + 6, "match should be at position 6, got %td", m - text);
+    TEST_PASS("@mention match: basic case");
+}
+
+static void test_mention_match_start_of_string(void) {
+    const char *m = find_mention("@martin hello", "martin");
+    TEST_ASSERT(m != NULL, "should match @martin at start");
+    TEST_ASSERT(m[0] == '@', "should point to @");
+    TEST_PASS("@mention match: start of string");
+}
+
+static void test_mention_match_end_of_string(void) {
+    const char *m = find_mention("hello @martin", "martin");
+    TEST_ASSERT(m != NULL, "should match @martin at end");
+    TEST_PASS("@mention match: end of string");
+}
+
+static void test_mention_no_match_prefix(void) {
+    /* @martinque should NOT match @martin */
+    const char *m = find_mention("hello @martinque", "martin");
+    TEST_ASSERT(m == NULL, "@martinque should not match @martin");
+    TEST_PASS("@mention no match: longer handle (prefix)");
+}
+
+static void test_mention_match_punctuation(void) {
+    /* @martin! @martin? @martin, @martin. should all match */
+    TEST_ASSERT(find_mention("@martin!", "martin") != NULL, "@martin! should match");
+    TEST_ASSERT(find_mention("@martin?", "martin") != NULL, "@martin? should match");
+    TEST_ASSERT(find_mention("@martin,", "martin") != NULL, "@martin, should match");
+    TEST_ASSERT(find_mention("@martin.", "martin") != NULL, "@martin. should match");
+    TEST_ASSERT(find_mention("@martin:", "martin") != NULL, "@martin: should match");
+    TEST_PASS("@mention match: followed by punctuation");
+}
+
+static void test_mention_no_match_email(void) {
+    /* user@martin.com should NOT match */
+    const char *m = find_mention("send to user@martin.com", "martin");
+    TEST_ASSERT(m == NULL, "email should not match");
+    TEST_PASS("@mention no match: email address");
+}
+
+static void test_mention_multiple(void) {
+    const char *text = "@martin said hello to @martin again";
+    const char *m1 = find_mention(text, "martin");
+    TEST_ASSERT(m1 != NULL, "first match should exist");
+    TEST_ASSERT(m1 == text, "first match at start");
+
+    /* Find second match by searching after first */
+    const char *m2 = find_mention(m1 + 1, "martin");
+    TEST_ASSERT(m2 != NULL, "second match should exist");
+    TEST_ASSERT(m2 > m1, "second match after first");
+    TEST_PASS("@mention match: multiple in one string");
+}
+
+static void test_mention_no_match_different_handle(void) {
+    const char *m = find_mention("@supervisor hello", "martin");
+    TEST_ASSERT(m == NULL, "@supervisor should not match martin");
+    TEST_PASS("@mention no match: different handle");
+}
+
+static void test_mention_hyphen_underscore_boundary(void) {
+    /* @martin-foo should NOT match @martin (hyphen is not a boundary) */
+    TEST_ASSERT(find_mention("@martin-foo", "martin") == NULL,
+                "@martin-foo should not match");
+    /* @martin_bar should NOT match @martin (underscore is not a boundary) */
+    TEST_ASSERT(find_mention("@martin_bar", "martin") == NULL,
+                "@martin_bar should not match");
+    TEST_PASS("@mention no match: hyphen/underscore continues handle");
+}
+
+static void test_mention_space_before_at(void) {
+    /* space before @ is fine */
+    TEST_ASSERT(find_mention("hi @martin", "martin") != NULL,
+                "space before @ should match");
+    /* newline before @ is fine */
+    TEST_ASSERT(find_mention("hi\n@martin", "martin") != NULL,
+                "newline before @ should match");
+    /* ( before @ is fine */
+    TEST_ASSERT(find_mention("(@martin)", "martin") != NULL,
+                "paren before @ should match");
+    TEST_PASS("@mention match: various preceding characters");
+}
+
 /* ================================================================ */
 
 int main(void) {
@@ -1815,6 +1945,18 @@ int main(void) {
     test_medic_warning_style_values();
     test_render_message_own_uses_erase_to_eol();
     test_medic_handle_detection();
+
+    /* @mention highlight */
+    test_mention_match_basic();
+    test_mention_match_start_of_string();
+    test_mention_match_end_of_string();
+    test_mention_no_match_prefix();
+    test_mention_match_punctuation();
+    test_mention_no_match_email();
+    test_mention_multiple();
+    test_mention_no_match_different_handle();
+    test_mention_hyphen_underscore_boundary();
+    test_mention_space_before_at();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

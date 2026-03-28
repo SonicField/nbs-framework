@@ -780,6 +780,53 @@ fi
 
 echo ""
 
+# --- Test 45: --highlight-mention inverts @handle in messages ---
+echo "45. --highlight-mention inverts @handle..."
+CHAT="$TEST_DIR/test45.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex please review this"
+OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" --highlight-mention 2>/dev/null || true)
+# The @alex should be wrapped in reverse video \033[7m...\033[0m
+check "highlight contains reverse video" "$( echo "$OUTPUT" | grep -qP '\x1b\[7m' && echo pass || echo fail )"
+check "highlight contains @alex" "$( echo "$OUTPUT" | grep -qF '@alex' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 46: --highlight-mention does not match prefix ---
+echo "46. --highlight-mention no prefix match..."
+CHAT="$TEST_DIR/test46.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alexander"
+OUTPUT=$(printf '/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" --highlight-mention 2>/dev/null || true)
+# @alexander should NOT be wrapped in reverse video — extract the line with alexander
+ALEX_LINE=$(echo "$OUTPUT" | grep 'alexander' || true)
+# The line should NOT contain reverse video immediately before @alexander
+check "no highlight on @alexander" "$( echo "$ALEX_LINE" | grep -qP '\x1b\[7m[^m]*alexander' && echo fail || echo pass )"
+
+echo ""
+
+# --- Test 47: without --highlight-mention, no inverse ---
+echo "47. no --highlight-mention, no inverse..."
+CHAT="$TEST_DIR/test47.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex"
+OUTPUT=$(printf '/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+# Without the flag, no reverse video for mentions (prompt uses bold, not reverse)
+REVERSE_COUNT=$(echo "$OUTPUT" | grep -oP '\x1b\[7m' | wc -l)
+check "no reverse without flag" "$( [[ $REVERSE_COUNT -eq 0 ]] && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 48: --highlight-mention prompt is inverted ---
+echo "48. --highlight-mention prompt inverted..."
+CHAT="$TEST_DIR/test48.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$(printf '/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" --highlight-mention 2>/dev/null || true)
+# Prompt should have reverse video
+check "prompt has reverse" "$( echo "$OUTPUT" | grep -qP '\x1b\[7m.*alex>' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then

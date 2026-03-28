@@ -96,4 +96,15 @@ void render_message_own(const char *handle, const char *content,
 void render_message_medic(const char *handle, const char *content,
                           time_t timestamp, FILE *out);
 
+/*
+ * render_set_highlight_handle — Set the handle for @mention highlighting.
+ *
+ * When set, @handle in message content is rendered with inverse video.
+ * Pass NULL to disable highlighting.
+ *
+ * Preconditions:
+ *   - handle is NULL or points to a valid C string
+ */
+void render_set_highlight_handle(const char *handle);
+
 #endif /* NBS_CHAT_RENDER_H */

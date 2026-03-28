@@ -12,8 +12,71 @@
 #include "render.h"
 #include "chat_file.h"
 
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+
+/* --- @mention highlighting --- */
+
+static const char *g_highlight_handle = NULL;
+
+void render_set_highlight_handle(const char *handle) {
+    g_highlight_handle = handle;
+}
+
+/*
+ * Write content to out, wrapping @handle matches in inverse video.
+ * If g_highlight_handle is NULL, writes content unchanged.
+ */
+static void write_content_highlighted(const char *content, FILE *out) {
+    if (!g_highlight_handle || !g_highlight_handle[0]) {
+        fputs(content, out);
+        return;
+    }
+
+    size_t hlen = strlen(g_highlight_handle);
+    const char *p = content;
+
+    while (*p) {
+        /* Look for @ */
+        const char *at = strchr(p, '@');
+        if (!at) {
+            /* No more @'s — write the rest */
+            fputs(p, out);
+            return;
+        }
+
+        /* Check preceding char is not alphanumeric (email filter) */
+        if (at > content && isalnum((unsigned char)at[-1])) {
+            /* Write up to and including the @ */
+            fwrite(p, 1, (size_t)(at - p + 1), out);
+            p = at + 1;
+            continue;
+        }
+
+        /* Check handle matches */
+        if (strncmp(at + 1, g_highlight_handle, hlen) == 0) {
+            char after = at[1 + hlen];
+            int is_boundary = (after == '\0' ||
+                               (!isalnum((unsigned char)after) &&
+                                after != '_' && after != '-'));
+            if (is_boundary) {
+                /* Write text before the match */
+                fwrite(p, 1, (size_t)(at - p), out);
+                /* Write the @handle in inverse */
+                fputs(RENDER_REVERSE, out);
+                fwrite(at, 1, 1 + hlen, out);
+                fputs(RENDER_RESET, out);
+                p = at + 1 + hlen;
+                continue;
+            }
+        }
+
+        /* No match — write up to and including the @ */
+        fwrite(p, 1, (size_t)(at - p + 1), out);
+        p = at + 1;
+    }
+}
 
 void render_init(void) {
     nbs_handle_colours_init();
@@ -72,9 +135,11 @@ void render_message(const char *handle, const char *content,
     format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
 
     const char *colour = render_get_colour(handle);
-    fprintf(out, "  %s%s%s\033[%sm%s%s%s: %s\n",
+    fprintf(out, "  %s%s%s\033[%sm%s%s%s: ",
             RENDER_DIM, ts_prefix, RENDER_RESET,
-            colour, RENDER_BOLD, handle, RENDER_RESET, content);
+            colour, RENDER_BOLD, handle, RENDER_RESET);
+    write_content_highlighted(content, out);
+    fputc('\n', out);
 }
 
 void render_message_own(const char *handle, const char *content,
@@ -98,7 +163,8 @@ void render_message_own(const char *handle, const char *content,
     /* Content — light grey on dark grey background */
     nbs_style_freset(out);
     nbs_style_fstart(&NBS_STYLE_HUMAN_CONTENT, out);
-    fprintf(out, ": %s", content);
+    fputs(": ", out);
+    write_content_highlighted(content, out);
 
     /* Fill rest of line with background, then reset */
     fputs("\033[K", out);
