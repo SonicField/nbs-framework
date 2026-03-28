@@ -1726,20 +1726,25 @@ static void test_medic_handle_detection(void) {
  * The @ must be preceded by start-of-string or a non-alphanumeric char
  * (to avoid matching email addresses like user@martin.com).
  */
-static int is_mention_boundary(char c) {
-    return !isalnum((unsigned char)c) && c != '_' && c != '-';
+/* Mirror of nbs_mention.h — shared handle/email character classification */
+static int test_is_handle_char(int c) {
+    return isalnum((unsigned char)c) || c == '_' || c == '-';
+}
+static int test_is_email_prefix_char(int c) {
+    return isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' || c == '+';
 }
 
 /*
  * Find the next @handle mention in text, respecting word boundaries.
  * Returns pointer to the '@', or NULL if not found.
+ * Uses the same logic as render.c write_content_highlighted.
  */
 static const char *find_mention(const char *text, const char *handle) {
     size_t hlen = strlen(handle);
     const char *p = text;
     while ((p = strstr(p, "@")) != NULL) {
-        /* Check preceding char is not alphanumeric (email filter) */
-        if (p > text && isalnum((unsigned char)p[-1])) {
+        /* Check preceding char is not an email local-part character */
+        if (p > text && test_is_email_prefix_char((unsigned char)p[-1])) {
             p++;
             continue;
         }
@@ -1747,7 +1752,7 @@ static const char *find_mention(const char *text, const char *handle) {
         if (strncmp(p + 1, handle, hlen) == 0) {
             /* Check word boundary after handle */
             char after = p[1 + hlen];
-            if (after == '\0' || is_mention_boundary(after)) {
+            if (after == '\0' || !test_is_handle_char((unsigned char)after)) {
                 return p;
             }
         }
@@ -1796,9 +1801,18 @@ static void test_mention_match_punctuation(void) {
 
 static void test_mention_no_match_email(void) {
     /* user@martin.com should NOT match */
-    const char *m = find_mention("send to user@martin.com", "martin");
-    TEST_ASSERT(m == NULL, "email should not match");
-    TEST_PASS("@mention no match: email address");
+    TEST_ASSERT(find_mention("send to user@martin.com", "martin") == NULL,
+                "user@martin should not match");
+    /* user.name@martin should NOT match (dot is email prefix char) */
+    TEST_ASSERT(find_mention("user.name@martin hello", "martin") == NULL,
+                "user.name@martin should not match");
+    /* user+tag@martin should NOT match (plus is email prefix char) */
+    TEST_ASSERT(find_mention("user+tag@martin hello", "martin") == NULL,
+                "user+tag@martin should not match");
+    /* user-name@martin should NOT match (hyphen is email prefix char) */
+    TEST_ASSERT(find_mention("user-name@martin hello", "martin") == NULL,
+                "user-name@martin should not match");
+    TEST_PASS("@mention no match: email addresses (all prefix chars)");
 }
 
 static void test_mention_multiple(void) {

@@ -11,6 +11,7 @@
 
 #include "render.h"
 #include "chat_file.h"
+#include "../nbs-common/nbs_mention.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -46,8 +47,8 @@ static void write_content_highlighted(const char *content, FILE *out) {
             return;
         }
 
-        /* Check preceding char is not alphanumeric (email filter) */
-        if (at > content && isalnum((unsigned char)at[-1])) {
+        /* Check preceding char is not an email local-part character */
+        if (at > content && nbs_is_email_prefix_char((unsigned char)at[-1])) {
             /* Write up to and including the @ */
             fwrite(p, 1, (size_t)(at - p + 1), out);
             p = at + 1;
@@ -58,8 +59,7 @@ static void write_content_highlighted(const char *content, FILE *out) {
         if (strncmp(at + 1, g_highlight_handle, hlen) == 0) {
             char after = at[1 + hlen];
             int is_boundary = (after == '\0' ||
-                               (!isalnum((unsigned char)after) &&
-                                after != '_' && after != '-'));
+                               !nbs_is_handle_char((unsigned char)after));
             if (is_boundary) {
                 /* Write text before the match */
                 fwrite(p, 1, (size_t)(at - p), out);

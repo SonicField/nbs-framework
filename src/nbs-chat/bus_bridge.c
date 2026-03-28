@@ -13,6 +13,7 @@
  */
 
 #include "bus_bridge.h"
+#include "../nbs-common/nbs_mention.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -89,24 +90,10 @@ static const char *resolve_nbs_bus(void)
  */
 #define MAX_DIR_WALK_DEPTH 10
 
-/*
- * is_handle_char — Returns true if c is valid in a @handle.
- *
- * Handles can contain: a-z, A-Z, 0-9, underscore, hyphen.
- */
-static int is_handle_char(int c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '-';
-}
-
-/*
- * is_email_prefix_char — Returns true if c can precede @ in an email address.
- *
- * Email local parts can contain: a-z, A-Z, 0-9, dot, underscore, hyphen, plus.
- * If the character before @ is one of these, it's likely an email, not a mention.
- */
-static int is_email_prefix_char(int c) {
-    return isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' || c == '+';
-}
+/* Handle and email character classification now in nbs_mention.h.
+ * Local aliases for backward compatibility with existing call sites. */
+#define is_handle_char(c)       nbs_is_handle_char(c)
+#define is_email_prefix_char(c) nbs_is_email_prefix_char(c)
 
 /*
  * read_chat_participants — Extract participant handles from a chat file header.
