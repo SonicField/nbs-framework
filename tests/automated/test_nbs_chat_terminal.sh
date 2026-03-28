@@ -810,7 +810,7 @@ echo "47. no --highlight-mention, no inverse..."
 CHAT="$TEST_DIR/test47.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 "$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex"
-OUTPUT=$(printf '/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+OUTPUT=$({ sleep 1; printf '/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
 # Without the flag, no reverse video for mentions (prompt uses bold, not reverse)
 REVERSE_COUNT=$(echo "$OUTPUT" | grep -oP '\x1b\[7m' | wc -l)
 check "no reverse without flag" "$( [[ $REVERSE_COUNT -eq 0 ]] && echo pass || echo fail )"
@@ -824,6 +824,22 @@ CHAT="$TEST_DIR/test48.chat"
 OUTPUT=$(printf '/exit\n' | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" --highlight-mention 2>/dev/null || true)
 # Prompt should have reverse video
 check "prompt has reverse" "$( echo "$OUTPUT" | grep -qP '\x1b\[7m.*alex>' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 49: Sent message is re-rendered with styling ---
+echo "49. Sent message is styled after send..."
+CHAT="$TEST_DIR/test49.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$({ sleep 1; printf 'Test message here\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+# The styled version should have the human bg colour
+# (On a real terminal, the cursor-up clears the typed text so only
+# the styled version is visible. In pipe capture both appear — we
+# verify the styled version exists.)
+check "sent message has human bg" "$( echo "$OUTPUT" | grep 'Test message here' | grep -qP '48;5;236' && echo pass || echo fail )"
+# The output should contain the cursor-up + clear sequence used to
+# replace the typed text with the styled render
+check "output contains clear sequence" "$( echo "$OUTPUT" | grep -qP '\x1b\[\d+A' && echo pass || echo fail )"
 
 echo ""
 
