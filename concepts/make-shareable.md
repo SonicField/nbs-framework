@@ -13,11 +13,76 @@ If they have to ask a question, something is missing. The question identifies wh
 Work these phases in order. Each depends on the previous one being complete. Do not parallelise across phases — the team must agree that phase N is done before starting phase N+1. Within a phase, agents may work in parallel on independent tasks.
 
 Why the ordering is strict:
+- Assessment before cleanup — you cannot clean what you do not understand. Deleting a "junk" file that is actually the only working test wastes days.
 - Cleanup before audit — auditing code mixed with junk wastes time on files that will be deleted.
 - Audit before testing — fixing bugs found during audit changes the binary. Testing a pre-audit binary proves nothing about the final code.
 - Testing before documentation — documentation must describe verified behaviour, not hoped-for behaviour. If tests fail, the documentation is speculative.
 - Documentation before upstream sync — the merge will change APIs and constants. But having documentation first means you know what to re-verify.
 - Upstream sync before final review — the merge is the last destructive operation. Final review must be on the exact code that will be shared.
+
+### Phase 0: Assessment
+
+Understand what exists before changing anything. This phase is read-only.
+
+An AI team arriving at an unfamiliar project does not know what is working code, what is a dead end, and what is junk. Proceeding to cleanup without this understanding destroys valuable artefacts and preserves worthless ones.
+
+**Step 1: Catalogue.** List everything in the repository. Source files, tests, documentation, scripts, build system, generated files, configuration. Use `find`, `ls -R`, `git log --stat`. Do not read file contents yet — just build the map.
+
+**Step 2: Classify.** For each artefact, determine its status:
+
+| Classification | Meaning | Examples |
+|---------------|---------|----------|
+| Source | Code that implements the project | `.c`, `.py`, `.rs` files in `src/` |
+| Test | Code that verifies the project | Test files, test fixtures, test scripts |
+| Documentation | Text that explains the project | README, design docs, API reference |
+| Build | Infrastructure that builds the project | Makefile, configure, CMakeLists, CI config |
+| Generated | Output of a build or tool, not hand-written | `.o`, `.pyc`, `build/`, `dist/` |
+| Junk | No clear purpose, likely stale | `temp.py`, `old_version/`, `test2.py.bak` |
+| Unknown | Cannot determine without reading or asking | Anything ambiguous |
+
+Do not guess. If a file's purpose is unclear, classify it as Unknown. Do not delete Unknown files during cleanup — investigate them first.
+
+**Step 3: Check what works.** Before cleaning anything:
+
+```bash
+# Does it build?
+make 2>&1 | tail -5     # or the project's build command
+
+# Do tests exist? Do they pass?
+find . -name '*test*' -o -name '*_test.*' | head -20
+make test 2>&1 | tail -10   # or however tests run
+
+# Is there a .gitignore? Is it correct?
+git status --short | head -20   # untracked files that should be ignored?
+```
+
+Record the answers. A project that builds and has passing tests is in a different state from one that does not compile.
+
+**Step 4: Identify gaps.** What is missing for the terminal goal?
+
+| Gap | Severity | Implication |
+|-----|----------|-------------|
+| No tests | Critical | Phase 3 requires writing tests from scratch, not just running them |
+| No documentation | Critical | Phase 4 requires writing docs from scratch |
+| Build is broken | High | Must be fixed before any other phase can verify its work |
+| No .gitignore | Medium | Generated files are committed, inflating the repo |
+| No CI/linting | Low | Style compliance in Phase 2 must be manual |
+
+**Step 5: Post the assessment.** Write a short report to chat:
+
+```
+ASSESSMENT: [project name]
+
+Files: N source, M tests, K docs, J generated, L junk, P unknown
+Build: [passes / fails / no build system]
+Tests: [N pass, M fail, K skip / no tests]
+Docs: [exist / partial / none]
+Gaps: [list the critical and high gaps]
+
+Recommended focus for Phase 1: [what needs the most cleanup work]
+```
+
+This report drives the rest of the process. A project with no tests needs a different time allocation than one with a full test suite. A project with no documentation needs Phase 4 treated as a major effort, not a polish pass.
 
 ### Phase 1: Cleanup
 
