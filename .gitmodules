@@ -1,0 +1,3 @@
+[submodule "lib/honest"]
+	path = lib/honest
+	url = https://github.com/SonicField/honest.git
