@@ -1028,14 +1028,20 @@ static const char *strcasestr_portable(const char *haystack, const char *needle)
  * Check for new messages and display them without disrupting user input.
  * Only clears and redraws when messages from others actually arrive.
  */
-static void poll_and_display(line_state_t *ls, const char *handle) {
+/*
+ * poll_and_display — Check for new messages and display them.
+ *
+ * Returns 1 if the display was redrawn (prompt already printed via
+ * line_redraw), 0 if nothing changed (caller must print prompt).
+ */
+static int poll_and_display(line_state_t *ls, const char *handle) {
     ASSERT_MSG(handle != NULL, "poll_and_display: handle is NULL");
     ASSERT_MSG(g_chat_file != NULL, "poll_and_display: g_chat_file is NULL");
     ASSERT_MSG(g_msg_count >= 0,
                "poll_and_display: g_msg_count negative: %d", g_msg_count);
 
     chat_state_t state;
-    if (chat_read(g_chat_file, &state) < 0) return;
+    if (chat_read(g_chat_file, &state) < 0) return 0;
 
     /* Auto-archive detection: if message_count dropped, the file was
      * rewritten with fewer messages (first 1000 moved to archive).
@@ -1052,12 +1058,12 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
         g_cursor_row = 0;
         line_redraw(ls, handle);
         chat_state_free(&state);
-        return;
+        return 1;
     }
 
     if (state.message_count <= g_msg_count) {
         chat_state_free(&state);
-        return;
+        return 0;
     }
 
     /* Check if any new messages should be displayed */
@@ -1073,7 +1079,7 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
     if (!has_displayable) {
         g_msg_count = state.message_count;
         chat_state_free(&state);
-        return;
+        return 0;
     }
 
     /* Clear the current input line (may span multiple visual rows) */
@@ -1098,6 +1104,7 @@ static void poll_and_display(line_state_t *ls, const char *handle) {
     /* Restore prompt and user input — cursor starts from fresh line */
     g_cursor_row = 0;
     line_redraw(ls, handle);
+    return 1;
 }
 
 /* --- Send helper --- */
@@ -1886,8 +1893,8 @@ int main(int argc, char **argv) {
 
             if (edit.len == 0) {
                 /* Empty line: just reprint prompt, also poll */
-                poll_and_display(&edit, g_handle);
-                print_prompt(g_handle);
+                if (!poll_and_display(&edit, g_handle))
+                    print_prompt(g_handle);
                 continue;
             }
 
@@ -1948,8 +1955,8 @@ int main(int argc, char **argv) {
                     printf("  %s(empty — not sent)%s\n", DIM, RESET);
                 }
                 /* Check for messages that arrived during editing */
-                poll_and_display(&edit, g_handle);
-                print_prompt(g_handle);
+                if (!poll_and_display(&edit, g_handle))
+                    print_prompt(g_handle);
                 continue;
             }
 
@@ -2345,8 +2352,8 @@ int main(int argc, char **argv) {
             send_and_display(&edit, saved_cursor_row);
             line_state_reset(&edit);
             /* Check for messages after sending */
-            poll_and_display(&edit, g_handle);
-            print_prompt(g_handle);
+            if (!poll_and_display(&edit, g_handle))
+                print_prompt(g_handle);
             continue;
         }
 
