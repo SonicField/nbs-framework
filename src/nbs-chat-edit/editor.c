@@ -33,6 +33,7 @@
 
 #include "../nbs-chat/chat_file.h"
 #include "../nbs-chat/render.h"
+#include "../nbs-chat/handle_styles.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -169,17 +170,13 @@ static void render(const editor_t *ed) {
         int is_cursor = (idx == ed->cursor);
         int is_deleted = ed->deleted[idx];
         const char *hcol;
-        /* Medic warnings get terracotta, sidecar errors get dusty red */
-        static char medic_buf[NBS_STYLE_BUFSIZE];
-        static char error_buf[NBS_STYLE_BUFSIZE];
-        if (strncmp(msg->handle, "[MEDIC-", 7) == 0) {
-            nbs_style_start(&NBS_STYLE_MEDIC_WARNING, medic_buf,
-                            sizeof(medic_buf));
-            hcol = medic_buf;
-        } else if (strncmp(msg->handle, "[SIDECAR-", 9) == 0) {
-            nbs_style_start(&NBS_STYLE_SIDECAR_ERROR, error_buf,
-                            sizeof(error_buf));
-            hcol = error_buf;
+        /* Bracket handles get their registered style colour */
+        static char bracket_buf[NBS_STYLE_BUFSIZE];
+        const nbs_style_t *bracket_style = handle_style_lookup(msg->handle);
+        if (bracket_style) {
+            nbs_style_start(bracket_style, bracket_buf,
+                            sizeof(bracket_buf));
+            hcol = bracket_buf;
         } else {
             hcol = handle_colour_str(msg->handle);
         }

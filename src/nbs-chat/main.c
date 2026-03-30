@@ -27,6 +27,7 @@
 #include "bus_bridge.h"
 #include "chat_file.h"
 #include "render.h"
+#include "handle_styles.h"
 #include "time_parse.h"
 #include <assert.h>
 #include <ctype.h>
@@ -1003,14 +1004,12 @@ static int cmd_export(int argc, char **argv) {
             !strcasestr_portable(state.messages[i].content, grep_pattern)) {
             continue;
         }
-        if (strncmp(state.messages[i].handle, "[MEDIC-", 7) == 0) {
-            render_message_medic(state.messages[i].handle,
-                                 state.messages[i].content,
-                                 state.messages[i].timestamp, stdout);
-        } else if (strncmp(state.messages[i].handle, "[SIDECAR-", 9) == 0) {
-            render_message_error(state.messages[i].handle,
-                                 state.messages[i].content,
-                                 state.messages[i].timestamp, stdout);
+        const nbs_style_t *bracket_style = handle_style_lookup(state.messages[i].handle);
+        if (bracket_style) {
+            render_message_bracket(state.messages[i].handle,
+                                   state.messages[i].content,
+                                   state.messages[i].timestamp,
+                                   bracket_style, stdout);
         } else {
             render_message(state.messages[i].handle,
                            state.messages[i].content,

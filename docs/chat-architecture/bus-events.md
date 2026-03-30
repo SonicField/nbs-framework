@@ -189,7 +189,7 @@ Some chat messages use bracket-delimited handles (e.g. `[MEDIC-WARNING]`, `[SIDE
 
 **Enforcement:** `nbs-chat send` rejects brackets in handles at the binary level. Only dedicated subcommands can create bracket-handle messages. This prevents agents from spoofing system message types.
 
-**Routing:** The rendering dispatch in `format_message` (terminal.c), `cmd_export` (main.c), and the editor (editor.c) uses prefix matching — `strncmp(handle, "[MEDIC-", 7)` and `strncmp(handle, "[SIDECAR-", 9)` — so future bracket handles with different prefixes are automatically routed to the default renderer until explicit routing is added.
+**Routing:** All dispatch points (terminal.c, main.c export, editor.c) use `handle_style_lookup()` from `handle_styles.h` — a table of exact-match handle-to-style mappings. Adding a new bracket handle type requires one row in the table and one style constant in `nbs_term_attr`. Unregistered bracket handles fall through to the default palette renderer.
 
 ## See Also
 

@@ -1698,20 +1698,23 @@ static void test_render_message_own_uses_erase_to_eol(void) {
 }
 
 static void test_medic_handle_detection(void) {
-    /* format_message routes [MEDIC-*] handles to render_message_medic.
-     * The detection uses strncmp(handle, "[MEDIC-", 7). */
+    /* format_message routes bracket handles via exact match (handle_style_lookup).
+     * Only [MEDIC-WARNING] matches — not prefix variants. */
     const char *medic = "[MEDIC-WARNING]";
     const char *normal = "generalist";
     const char *bracket = "[system]";
+    const char *prefix_only = "[MEDIC-INFO]";
 
-    TEST_ASSERT(strncmp(medic, "[MEDIC-", 7) == 0,
-                "[MEDIC-WARNING] should match");
-    TEST_ASSERT(strncmp(normal, "[MEDIC-", 7) != 0,
+    TEST_ASSERT(strcmp(medic, "[MEDIC-WARNING]") == 0,
+                "[MEDIC-WARNING] should match exactly");
+    TEST_ASSERT(strcmp(normal, "[MEDIC-WARNING]") != 0,
                 "generalist should not match");
-    TEST_ASSERT(strncmp(bracket, "[MEDIC-", 7) != 0,
-                "[system] should not match (different prefix)");
+    TEST_ASSERT(strcmp(bracket, "[MEDIC-WARNING]") != 0,
+                "[system] should not match");
+    TEST_ASSERT(strcmp(prefix_only, "[MEDIC-WARNING]") != 0,
+                "[MEDIC-INFO] must not match [MEDIC-WARNING] (exact match)");
 
-    TEST_PASS("medic handle detection: [MEDIC- prefix");
+    TEST_PASS("medic handle detection: exact match");
 }
 
 static void test_sidecar_error_style_values(void) {
@@ -1727,37 +1730,40 @@ static void test_sidecar_error_style_values(void) {
 }
 
 static void test_sidecar_handle_detection(void) {
-    /* format_message routes [SIDECAR-*] handles to render_message_error.
-     * The detection uses strncmp(handle, "[SIDECAR-", 9). */
+    /* format_message routes bracket handles via exact match (strcmp).
+     * Only registered handles match — prefix-only variants do not. */
     const char *error = "[SIDECAR-ERROR]";
     const char *medic = "[MEDIC-WARNING]";
     const char *normal = "sidecar";
     const char *bracket = "[system]";
+    const char *prefix_only = "[SIDECAR-INFO]";
 
-    TEST_ASSERT(strncmp(error, "[SIDECAR-", 9) == 0,
-                "[SIDECAR-ERROR] should match");
-    TEST_ASSERT(strncmp(medic, "[SIDECAR-", 9) != 0,
-                "[MEDIC-WARNING] should not match sidecar prefix");
-    TEST_ASSERT(strncmp(normal, "[SIDECAR-", 9) != 0,
+    TEST_ASSERT(strcmp(error, "[SIDECAR-ERROR]") == 0,
+                "[SIDECAR-ERROR] should match exactly");
+    TEST_ASSERT(strcmp(medic, "[SIDECAR-ERROR]") != 0,
+                "[MEDIC-WARNING] should not match");
+    TEST_ASSERT(strcmp(normal, "[SIDECAR-ERROR]") != 0,
                 "sidecar (no brackets) should not match");
-    TEST_ASSERT(strncmp(bracket, "[SIDECAR-", 9) != 0,
+    TEST_ASSERT(strcmp(bracket, "[SIDECAR-ERROR]") != 0,
                 "[system] should not match");
+    TEST_ASSERT(strcmp(prefix_only, "[SIDECAR-ERROR]") != 0,
+                "[SIDECAR-INFO] must not match [SIDECAR-ERROR] (exact match)");
 
-    TEST_PASS("sidecar handle detection: [SIDECAR- prefix");
+    TEST_PASS("sidecar handle detection: exact match");
 }
 
 static void test_sidecar_medic_no_overlap(void) {
-    /* [SIDECAR-ERROR] must NOT match the [MEDIC- prefix, and vice versa.
-     * This ensures the dispatch order doesn't matter. */
+    /* Bracket handles use exact match — no prefix overlap possible.
+     * This verifies the two registered handles are distinct. */
     const char *error = "[SIDECAR-ERROR]";
     const char *medic = "[MEDIC-WARNING]";
 
-    TEST_ASSERT(strncmp(error, "[MEDIC-", 7) != 0,
-                "[SIDECAR-ERROR] must not match [MEDIC- prefix");
-    TEST_ASSERT(strncmp(medic, "[SIDECAR-", 9) != 0,
-                "[MEDIC-WARNING] must not match [SIDECAR- prefix");
+    TEST_ASSERT(strcmp(error, "[MEDIC-WARNING]") != 0,
+                "[SIDECAR-ERROR] must not match [MEDIC-WARNING]");
+    TEST_ASSERT(strcmp(medic, "[SIDECAR-ERROR]") != 0,
+                "[MEDIC-WARNING] must not match [SIDECAR-ERROR]");
 
-    TEST_PASS("sidecar/medic no overlap: prefixes are disjoint");
+    TEST_PASS("sidecar/medic no overlap: exact handles are disjoint");
 }
 
 /* ================================================================

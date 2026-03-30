@@ -172,33 +172,19 @@ void render_message_own(const char *handle, const char *content,
     fputc('\n', out);
 }
 
-void render_message_medic(const char *handle, const char *content,
-                          time_t timestamp, FILE *out) {
-    ASSERT_MSG(handle != NULL, "render_message_medic: handle is NULL");
-    ASSERT_MSG(content != NULL, "render_message_medic: content is NULL");
-    ASSERT_MSG(out != NULL, "render_message_medic: out is NULL");
+void render_message_bracket(const char *handle, const char *content,
+                            time_t timestamp, const nbs_style_t *style,
+                            FILE *out) {
+    ASSERT_MSG(handle != NULL, "render_message_bracket: handle is NULL");
+    ASSERT_MSG(content != NULL, "render_message_bracket: content is NULL");
+    ASSERT_MSG(style != NULL, "render_message_bracket: style is NULL");
+    ASSERT_MSG(out != NULL, "render_message_bracket: out is NULL");
 
     char ts_prefix[32];
     format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
 
     fprintf(out, "  %s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
-    nbs_style_fstart(&NBS_STYLE_MEDIC_WARNING, out);
-    fprintf(out, "%s", handle);
-    nbs_style_freset(out);
-    fprintf(out, ": %s\n", content);
-}
-
-void render_message_error(const char *handle, const char *content,
-                          time_t timestamp, FILE *out) {
-    ASSERT_MSG(handle != NULL, "render_message_error: handle is NULL");
-    ASSERT_MSG(content != NULL, "render_message_error: content is NULL");
-    ASSERT_MSG(out != NULL, "render_message_error: out is NULL");
-
-    char ts_prefix[32];
-    format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
-
-    fprintf(out, "  %s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
-    nbs_style_fstart(&NBS_STYLE_SIDECAR_ERROR, out);
+    nbs_style_fstart(style, out);
     fprintf(out, "%s", handle);
     nbs_style_freset(out);
     fprintf(out, ": %s\n", content);

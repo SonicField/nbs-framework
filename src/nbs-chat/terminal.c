@@ -28,6 +28,7 @@
 #include "chat_file.h"
 #include "bus_bridge.h"
 #include "render.h"
+#include "handle_styles.h"
 #include "../nbs-common/trigger_defs.h"
 #include "../nbs-common/nbs_helper_check.h"
 #include "../nbs-common/nbs_mention.h"
@@ -475,12 +476,11 @@ static void format_message(const char *handle, const char *content,
     ASSERT_MSG(content != NULL, "format_message: content is NULL");
     ASSERT_MSG(my_handle != NULL, "format_message: my_handle is NULL");
 
+    const nbs_style_t *bracket_style = handle_style_lookup(handle);
     if (strcmp(handle, my_handle) == 0) {
         render_message_own(handle, content, timestamp, stdout);
-    } else if (strncmp(handle, "[MEDIC-", 7) == 0) {
-        render_message_medic(handle, content, timestamp, stdout);
-    } else if (strncmp(handle, "[SIDECAR-", 9) == 0) {
-        render_message_error(handle, content, timestamp, stdout);
+    } else if (bracket_style) {
+        render_message_bracket(handle, content, timestamp, bracket_style, stdout);
     } else {
         render_message(handle, content, timestamp, stdout);
     }

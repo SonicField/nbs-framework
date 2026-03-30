@@ -84,30 +84,20 @@ void render_message_own(const char *handle, const char *content,
                         time_t timestamp, FILE *out);
 
 /*
- * render_message_medic — Render a [MEDIC-WARNING] message.
+ * render_message_bracket — Render a bracket-handle message with a given style.
  *
- * Terracotta bold handle, normal content.
- *
- * Preconditions:
- *   - handle != NULL
- *   - content != NULL
- *   - out != NULL
- */
-void render_message_medic(const char *handle, const char *content,
-                          time_t timestamp, FILE *out);
-
-/*
- * render_message_error — Render a [SIDECAR-ERROR] message.
- *
- * Dusty red bold handle, normal content.
+ * Styled bold handle, normal content. Used for [MEDIC-WARNING],
+ * [SIDECAR-ERROR], and any future bracket handle types.
  *
  * Preconditions:
  *   - handle != NULL
  *   - content != NULL
+ *   - style != NULL
  *   - out != NULL
  */
-void render_message_error(const char *handle, const char *content,
-                          time_t timestamp, FILE *out);
+void render_message_bracket(const char *handle, const char *content,
+                            time_t timestamp, const nbs_style_t *style,
+                            FILE *out);
 
 /*
  * render_set_highlight_handle — Set the handle for @mention highlighting.
