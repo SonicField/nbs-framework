@@ -183,9 +183,18 @@ void render_message_bracket(const char *handle, const char *content,
     char ts_prefix[32];
     format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
 
-    fprintf(out, "  %s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
+    /* Background for the entire line — dark pastel red */
+    fprintf(out, "  \033[48;5;131m%s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
+    /* Handle slug — inverted (white on colour) */
+    fprintf(out, "\033[48;5;131m" RENDER_REVERSE);
     nbs_style_fstart(style, out);
-    fprintf(out, "%s", handle);
+    fprintf(out, " %s ", handle);
     nbs_style_freset(out);
-    fprintf(out, ": %s\n", content);
+    /* Content on dark pastel red background */
+    fprintf(out, "\033[48;5;131m ");
+    fputs(content, out);
+    /* Fill rest of line, then reset */
+    fputs("\033[K", out);
+    nbs_style_freset(out);
+    fputc('\n', out);
 }
