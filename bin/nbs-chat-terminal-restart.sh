@@ -164,6 +164,9 @@ done
 # 3. Reset cursors to current end
 HEADER_LINES=6
 MESSAGE_COUNT=$(( $(wc -l < "$CHAT_FILE") - HEADER_LINES ))
+if [ ! -f "${CHAT_FILE}.cursors" ]; then
+    echo "# Read cursors — last-read message index per handle" > "${CHAT_FILE}.cursors"
+fi
 for handle in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
     if [ -f "${CHAT_FILE}.cursors" ]; then
         if grep -q "^${handle}=" "${CHAT_FILE}.cursors" 2>/dev/null; then
