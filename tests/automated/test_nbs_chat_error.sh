@@ -248,6 +248,38 @@ check "Normal does not use error colour" "$( ! echo "$NORMAL_LINE" | grep -q '38
 
 echo ""
 
+# --- Test 13: Exact match — unregistered bracket handles get normal styling ---
+echo "13. Exact match — unregistered [SIDECAR-INFO] gets normal styling..."
+CHAT="$TEST_DIR/test13.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" error "$CHAT" "real error"
+"$NBS_CHAT" send "$CHAT" "agent" "normal message"
+
+# Inject a [SIDECAR-INFO] message by writing directly to the chat file.
+# We cannot use 'nbs-chat send' (rejects brackets) or 'nbs-chat error'
+# (hardcodes [SIDECAR-ERROR]). Direct file append exercises the render
+# path with a handle that is NOT in the style table.
+# Chat file format: each line is base64("handle|timestamp: content")
+TS=$(date +%s)
+RAW_LINE="[SIDECAR-INFO]|${TS}: informational message"
+B64_LINE=$(echo -n "$RAW_LINE" | base64 -w0)
+echo "$B64_LINE" >> "$CHAT"
+
+OUTPUT=$("$NBS_CHAT" export "$CHAT" 2>&1)
+ERROR_LINE=$(echo "$OUTPUT" | grep 'SIDECAR-ERROR')
+INFO_LINE=$(echo "$OUTPUT" | grep 'SIDECAR-INFO')
+
+# [SIDECAR-ERROR] should still get colour 167 (registered in table)
+check "Registered error gets colour 167" "$( echo "$ERROR_LINE" | grep -qP '38;5;167' && echo pass || echo fail )"
+# [SIDECAR-INFO] should NOT get colour 167 — it's not in the table
+check "Unregistered info does NOT get error colour" "$( ! echo "$INFO_LINE" | grep -q '38;5;167' && echo pass || echo fail )"
+# [SIDECAR-INFO] should NOT get colour 173 (medic) either
+check "Unregistered info does NOT get medic colour" "$( ! echo "$INFO_LINE" | grep -q '38;5;173' && echo pass || echo fail )"
+# [SIDECAR-INFO] should render with a normal palette colour (same path as agent handles)
+check "Unregistered info gets normal palette colour" "$( echo "$INFO_LINE" | grep -qP '38;5;\d+' && echo pass || echo fail )"
+
+echo ""
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 if [[ $FAIL -gt 0 ]]; then
     exit 1
