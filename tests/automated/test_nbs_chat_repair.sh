@@ -486,13 +486,16 @@ echo ""
 # --- Test 20: Last line without trailing newline ---
 # Spec edge case: "If the last line of the file has no trailing newline,
 # the replacement is N space characters with no newline."
+# Known behaviour: dd writes LENGTH (LINE_BYTES+1) bytes, growing the file
+# by 1 byte for a no-newline last line. This is harmless — nbs-chat send
+# rewrites the header with the correct size, and the appended newline makes
+# subsequent reads well-formed. See theologian review of T20.
 echo "20. Last line without trailing newline..."
 CHAT="$TEST_DIR/t20.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
 "$NBS_CHAT" send "$CHAT" alice "valid message" >/dev/null 2>&1
 # Append corrupt text WITHOUT trailing newline (use printf -n equivalent)
 printf '%s' "no newline at end" >> "$CHAT"
-SIZE_BEFORE=$(wc -c < "$CHAT")
 set +e
 "$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
 RC=$?
@@ -501,6 +504,11 @@ CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
 check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
 check "Recovery present" "$( echo "$CHAT_OUTPUT" | grep -qF '[AUTO-REPAIR]' && echo pass || echo fail )"
 check "alice preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'valid message' && echo pass || echo fail )"
+check "Recovered text correct" "$( echo "$CHAT_OUTPUT" | grep -qF 'no newline at end' && echo pass || echo fail )"
+# After repair, file-length header must match actual size (nbs-chat send fixes it)
+HEADER_LENGTH=$(grep '^file-length:' "$CHAT" | awk '{print $2}')
+ACTUAL_LENGTH=$(wc -c < "$CHAT")
+check "file-length consistent after no-newline repair" "$( [[ "$HEADER_LENGTH" -eq "$ACTUAL_LENGTH" ]] && echo pass || echo fail )"
 echo ""
 
 # --- Test 21: Binary garbage hex dump format ---
