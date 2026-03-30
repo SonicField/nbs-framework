@@ -10,7 +10,14 @@
 
 .PHONY: all install test clean debug asan test-unit test-all
 
-all:
+# Ensure git submodules are initialised before building
+submodules:
+	@if [ ! -f lib/honest/Makefile ]; then \
+		echo "Initialising git submodules..."; \
+		git submodule update --init; \
+	fi
+
+all: submodules
 	$(MAKE) -C src/nbs-bus
 	$(MAKE) -C src/nbs-chat
 	$(MAKE) -C src/nbs-chat-edit
