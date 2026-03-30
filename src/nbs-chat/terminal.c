@@ -486,6 +486,7 @@ static void print_help(void) {
     printf("  %s/shepard%s    Spawn shepard (team effectiveness check)\n", DIM, RESET);
     printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
+    printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
     printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
     printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
@@ -2278,6 +2279,52 @@ int main(int argc, char **argv) {
                             g_watchdog.chat_path, NULL
                         };
                         spawn_with_capture("restart", restart_argv);
+                    }
+                }
+                continue;
+            }
+
+            /* /kick <agent> — hard restart a single agent */
+            if (strncmp(edit.buf, "/kick ", 6) == 0 ||
+                strcmp(edit.buf, "/kick") == 0) {
+                const char *agent = (edit.len > 5) ? edit.buf + 6 : NULL;
+                line_state_reset(&edit);
+
+                if (g_watchdog.project_root[0] == '\0') {
+                    info_line_emit(&edit, g_handle, "kick",
+                                   "No project root — cannot kick.");
+                } else if (!agent || agent[0] == '\0') {
+                    info_line_emit(&edit, g_handle, "kick",
+                                   "Usage: /kick <agent> (e.g. /kick scribe)");
+                } else {
+                    /* Find nbs-kick-agent: .nbs/bin/, bin/, or PATH */
+                    const char *kick_bin = "nbs-kick-agent";
+                    char kick_path[4096];
+                    int kn = snprintf(kick_path, sizeof(kick_path),
+                                      "%s/.nbs/bin/nbs-kick-agent",
+                                      g_watchdog.project_root);
+                    if (kn > 0 && (size_t)kn < sizeof(kick_path) &&
+                        access(kick_path, X_OK) == 0) {
+                        kick_bin = kick_path;
+                    } else {
+                        kn = snprintf(kick_path, sizeof(kick_path),
+                                      "%s/bin/nbs-kick-agent",
+                                      g_watchdog.project_root);
+                        if (kn > 0 && (size_t)kn < sizeof(kick_path) &&
+                            access(kick_path, X_OK) == 0) {
+                            kick_bin = kick_path;
+                        }
+                        /* else: fall through to "nbs-kick-agent" from PATH */
+                    }
+                    {
+                        char agent_arg[64];
+                        snprintf(agent_arg, sizeof(agent_arg), "%s", agent);
+                        const char *kick_argv[] = {
+                            "bash", kick_bin, agent_arg,
+                            g_watchdog.project_root,
+                            g_watchdog.chat_path, NULL
+                        };
+                        spawn_with_capture("kick", kick_argv);
                     }
                 }
                 continue;

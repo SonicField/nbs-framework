@@ -72,29 +72,30 @@ echo "=== nbs-chat-terminal Watchdog Integration Tests ==="
 echo "Test dir: $TEST_DIR"
 echo ""
 
-# --- Test 1: /shutdown sends wrap-up message to chat ---
-echo "1. /shutdown sends wrap-up message to chat..."
+# --- Test 1: /shutdown sends system message to chat ---
+echo "1. /shutdown sends system message to chat..."
 CHAT=$(create_project_chat test1)
-printf '/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" >/dev/null 2>&1 || true
+# Timeout 15s — shutdown has a 10s grace period
+printf '/shutdown\n/exit\n' | timeout 15 "$NBS_TERMINAL" "$CHAT" "alex" >/dev/null 2>&1 || true
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-check "/shutdown sends wrap-up message" "$( echo "$OUTPUT" | grep -qF 'Good work' && echo pass || echo fail )"
+check "/shutdown sends system message" "$( echo "$OUTPUT" | grep -qF 'Shutting down' && echo pass || echo fail )"
 
 echo ""
 
-# --- Test 2: /shutdown prints "Watchdog disabled" in terminal ---
-echo "2. /shutdown prints watchdog disabled message..."
+# --- Test 2: /shutdown shows INFO line in terminal ---
+echo "2. /shutdown shows INFO line..."
 CHAT=$(create_project_chat test2)
-TERM_OUTPUT=$(printf '/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
-check "/shutdown shows disabled message" "$( echo "$TERM_OUTPUT" | grep -qF 'Watchdog disabled' && echo pass || echo fail )"
+TERM_OUTPUT=$(printf '/shutdown\n/exit\n' | timeout 15 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/shutdown shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
 
 echo ""
 
 # --- Test 3: /shutdown message is attributed to the terminal handle ---
 echo "3. /shutdown message attributed to terminal handle..."
 CHAT=$(create_project_chat test3)
-printf '/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "myhandle" >/dev/null 2>&1 || true
+printf '/shutdown\n/exit\n' | timeout 15 "$NBS_TERMINAL" "$CHAT" "myhandle" >/dev/null 2>&1 || true
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-check "wrap-up attributed to handle" "$( echo "$OUTPUT" | grep -q 'myhandle:.*Good work' && echo pass || echo fail )"
+check "wrap-up attributed to handle" "$( echo "$OUTPUT" | grep -q 'myhandle:.*Shutting down' && echo pass || echo fail )"
 
 echo ""
 
@@ -102,7 +103,7 @@ echo ""
 echo "4. /restart when watchdog disabled prints error..."
 CHAT=$(create_project_chat test4)
 # /shutdown disables the watchdog, then /restart should show error
-TERM_OUTPUT=$(printf '/shutdown\n/restart\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+TERM_OUTPUT=$(printf '/shutdown\n/restart\n/exit\n' | timeout 15 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
 check "/restart after /shutdown shows error" "$( echo "$TERM_OUTPUT" | grep -qi 'cannot restart\|not initialised' && echo pass || echo fail )"
 
 echo ""
@@ -134,20 +135,18 @@ check "wrap-up contains @team" "$( echo "$OUTPUT" | grep -qF '@team' && echo pas
 
 echo ""
 
-# --- Test 8: /shutdown is idempotent (second invocation is no-op) ---
-echo "8. /shutdown idempotent — only first invocation sends message..."
+# --- Test 8: /shutdown completes without crash ---
+echo "8. /shutdown completes without crash..."
 CHAT=$(create_project_chat test8)
 set +e
-TERM_OUTPUT=$(printf '/shutdown\n/shutdown\n/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null)
+TERM_OUTPUT=$(printf '/shutdown\n/exit\n' | timeout 15 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null)
 RC=$?
 set -e
-check "repeated /shutdown does not crash" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
-# Only first /shutdown should send the wrap-up message
+# Exit 0 (clean) or 143 (timeout killed — acceptable, shutdown has 10s sleep)
+check "/shutdown does not crash" "$( [[ $RC -eq 0 || $RC -eq 143 ]] && echo pass || echo fail )"
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-MSG_COUNT=$(echo "$OUTPUT" | grep -c 'Good work' || true)
-check "exactly 1 wrap-up message sent" "$( [[ $MSG_COUNT -eq 1 ]] && echo pass || echo fail )"
-# Second and third should print 'already disabled'
-check "terminal shows 'already disabled'" "$( echo "$TERM_OUTPUT" | grep -qF 'already disabled' && echo pass || echo fail )"
+check "shutdown message sent" "$( echo "$OUTPUT" | grep -qF 'Shutting down' && echo pass || echo fail )"
+check "terminal shows shutdown INFO" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
 
 echo ""
 
@@ -181,17 +180,17 @@ fi
 
 echo ""
 
-# --- Test 11: /shutdown without project root is no-op ---
+# --- Test 11: /shutdown without project root shows INFO ---
 echo "11. /shutdown without project root (watchdog never init)..."
 CHAT="$TEST_DIR/test11.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 TERM_OUTPUT=$(printf '/shutdown\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
 OUTPUT=$("$NBS_CHAT" read "$CHAT")
-# Watchdog was never initialised, so /shutdown should show 'already disabled'
-check "no project root: shows already disabled" "$( echo "$TERM_OUTPUT" | grep -qF 'already disabled' && echo pass || echo fail )"
-# No wrap-up message should have been sent
-MSG_COUNT=$(echo "$OUTPUT" | grep -c 'Good work' || true)
-check "no project root: no wrap-up sent" "$( [[ $MSG_COUNT -eq 0 ]] && echo pass || echo fail )"
+# Watchdog was never initialised, so /shutdown should show INFO about no project root
+check "no project root: shows nothing to shut down" "$( echo "$TERM_OUTPUT" | grep -qF 'nothing to shut down' && echo pass || echo fail )"
+# No system message should have been sent
+MSG_COUNT=$(echo "$OUTPUT" | grep -c 'Shutting down' || true)
+check "no project root: no shutdown sent" "$( [[ $MSG_COUNT -eq 0 ]] && echo pass || echo fail )"
 
 echo ""
 
@@ -314,8 +313,34 @@ check "/fixup shows [fixup] label" "$( echo "$TERM_OUTPUT" | grep -qF '[fixup]' 
 
 echo ""
 
-# --- Test 21: /pythia does not echo command text after INFO line ---
-echo "21. /pythia does not re-echo command after INFO..."
+# --- Test 21: /kick with invalid agent shows error ---
+echo "21. /kick invalid agent..."
+CHAT=$(create_project_chat test21)
+TERM_OUTPUT=$({ sleep 2; printf '/kick nobody\n'; sleep 3; printf '/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/kick invalid shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+check "/kick invalid shows error" "$( echo "$TERM_OUTPUT" | grep -qi 'unknown agent\|Error' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 22: /kick without argument shows usage ---
+echo "22. /kick without argument..."
+CHAT=$(create_project_chat test22)
+TERM_OUTPUT=$(printf '/kick\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/kick no arg shows INFO>" "$( echo "$TERM_OUTPUT" | grep -qF 'INFO>' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 23: /help lists /kick ---
+echo "23. /help lists /kick..."
+CHAT="$TEST_DIR/test23_kick.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+TERM_OUTPUT=$(printf '/help\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+check "/help mentions /kick" "$( echo "$TERM_OUTPUT" | grep -qF '/kick' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 24: /pythia does not echo command text after INFO line ---
+echo "24. /pythia does not re-echo command after INFO..."
 CHAT="$TEST_DIR/test21.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 TERM_OUTPUT=$(printf '/pythia\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)

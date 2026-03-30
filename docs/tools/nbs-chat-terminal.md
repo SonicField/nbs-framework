@@ -73,7 +73,8 @@ All commands are entered at the prompt and submitted with Enter.
 | `/pause` | Freeze the team. Creates `.nbs/control-pause`, disables watchdog, broadcasts stop order to `@team`. Agents keep context but stop receiving work |
 | `/resume` | Resume a paused team. Removes pause file, re-enables watchdog, broadcasts resume order. Also recovers from `/shutdown` (which disables the watchdog without a pause file) |
 | `/shutdown` | Announce shutdown with 10-second warning, then kill all agent sessions, sidecars, and nbs-claude processes for this project. Disables watchdog |
-| `/restart` | Manually trigger a team restart via the restart script. Bypasses rate limiting. Double-forks to avoid blocking the terminal |
+| `/restart` | Manually trigger a team restart via the restart script. Bypasses rate limiting |
+| `/kick <agent>` | Hard restart a single agent: kill session, reset cursor, respawn, verify. Other agents unaffected. Agent must be one of: scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist |
 
 ### Oracle Triggers
 

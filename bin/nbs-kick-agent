@@ -1,0 +1,103 @@
+#!/bin/bash
+# nbs-kick-agent — Level 4 hard restart of a single agent
+#
+# Usage: nbs-kick-agent <agent> <project-root> <chat-file>
+#
+# Performs: kill session, clean PID, reset cursor, respawn, verify.
+# Output goes to stdout for capture by nbs-chat-terminal INFO lines.
+#
+# Exit codes:
+#   0 — agent restarted and verified
+#   1 — restart failed (agent did not come up)
+#   4 — invalid arguments
+
+set -uo pipefail
+
+if [[ $# -ne 3 ]]; then
+    echo "Usage: nbs-kick-agent <agent> <project-root> <chat-file>"
+    exit 4
+fi
+
+AGENT="$1"
+PROJECT_ROOT="$2"
+CHAT_FILE="$3"
+
+# Validate agent name
+VALID_AGENTS="scribe medic supervisor gatekeeper theologian testkeeper generalist"
+VALID=0
+for a in $VALID_AGENTS; do
+    if [[ "$AGENT" == "$a" ]]; then
+        VALID=1
+        break
+    fi
+done
+
+if [[ $VALID -eq 0 ]]; then
+    echo "Error: unknown agent '$AGENT'"
+    echo "Valid agents: $VALID_AGENTS"
+    exit 4
+fi
+
+# Derive tag from chat file
+TAG=$(basename "$CHAT_FILE" .chat | tr '.' '-')
+SESSION_NAME="nbs-${AGENT}-${TAG}"
+
+# 1. Kill existing session
+HANDLE=$(nbs-ts list --name="$TAG" 2>/dev/null | grep "alive.*${SESSION_NAME}" | head -1 | cut -f1)
+if [[ -n "$HANDLE" ]]; then
+    echo "Killing session $SESSION_NAME..."
+    nbs-ts kill "$HANDLE" 2>/dev/null || true
+else
+    echo "No alive session for $AGENT (already dead)"
+fi
+
+# 2. Clean PID file
+rm -f "${PROJECT_ROOT}/.nbs/pids/${AGENT}.pid"
+
+# 3. Reset cursor
+CURSOR_FILE="${CHAT_FILE}.cursors"
+if [[ -f "$CURSOR_FILE" ]]; then
+    MSG_COUNT=$(wc -l < "$CHAT_FILE" 2>/dev/null || echo 0)
+    MSG_COUNT=$((MSG_COUNT - 6))  # subtract header lines
+    if [[ $MSG_COUNT -lt 0 ]]; then MSG_COUNT=0; fi
+
+    if grep -q "^${AGENT}=" "$CURSOR_FILE" 2>/dev/null; then
+        sed -i "s/^${AGENT}=.*/${AGENT}=${MSG_COUNT}/" "$CURSOR_FILE"
+    else
+        echo "${AGENT}=${MSG_COUNT}" >> "$CURSOR_FILE"
+    fi
+    echo "Cursor reset to $MSG_COUNT"
+fi
+
+# 4. Respawn
+echo "Respawning $AGENT..."
+cd "$PROJECT_ROOT" || exit 1
+
+NBS_LAUNCH="${PROJECT_ROOT}/.nbs/bin/nbs-launch-agent"
+if [[ ! -f "$NBS_LAUNCH" ]]; then
+    NBS_LAUNCH="${PROJECT_ROOT}/bin/nbs-launch-agent"
+fi
+if [[ ! -f "$NBS_LAUNCH" ]]; then
+    echo "Error: nbs-launch-agent not found"
+    exit 1
+fi
+
+source "$NBS_LAUNCH"
+launch_agent "${AGENT}" "${PROJECT_ROOT}" ".nbs/bin/nbs-claude" \
+    "Read .nbs/workers/${AGENT}-skill.md and follow the role instructions. Then read the chat history and begin work."
+
+# 5. Verify (wait up to 30s)
+echo "Waiting for $AGENT to start..."
+ELAPSED=0
+while [[ $ELAPSED -lt 30 ]]; do
+    sleep 5
+    ELAPSED=$((ELAPSED + 5))
+    VERIFY=$(nbs-ts list --name="$TAG" 2>/dev/null | grep "alive.*${SESSION_NAME}" | head -1 | cut -f1)
+    if [[ -n "$VERIFY" ]]; then
+        echo "$AGENT alive and verified"
+        exit 0
+    fi
+done
+
+echo "RESTART FAILED — $AGENT not alive after 30s"
+exit 1
