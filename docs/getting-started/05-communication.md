@@ -34,10 +34,15 @@ These commands are typed in the chat terminal, not in a regular shell.
 | `/search <pattern>` | Search message history for a substring |
 | `/filter <handle>` | Show only messages from one participant |
 | `/unfilter` | Return to showing all messages |
-| `/pause` | Pause the sidecar -- agents stop receiving notifications |
-| `/resume` | Resume the sidecar -- agents start receiving notifications again |
+| `/mention <handle>` | Show only messages that @mention a handle |
+| `/unmention` | Clear mention filter |
+| `/pause` | Pause the team -- agents keep context, stop receiving work |
+| `/resume` | Resume paused team |
 | `/shutdown` | Kill the team — terminate all agent sessions |
 | `/restart` | Manually restart the agent team |
+| `/kick <agent>` | Hard restart a single agent |
+| `/health` | Report team health (agents and sidecars) |
+| `/redraw` | Clear screen and repaint chat |
 | `/pythia` | Spawn a Pythia oracle (trajectory and risk assessment) |
 | `/shepard` | Spawn a Shepard oracle (team effectiveness check) |
 | `/librarian` | Spawn a Librarian oracle (institutional memory search) |

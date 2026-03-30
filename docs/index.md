@@ -4,6 +4,10 @@
 
 Tutorial: install, configure, launch your first team, understand the system.
 
+## [Terminal Operator Tutorial](getting-started/terminal-tutorial.md)
+
+How to operate the chat terminal: search, filter, control agents, spawn oracles, understand the display. Read this once your team is running.
+
 ## [Framework](framework/)
 
 The epistemic methodology behind NBS — why it exists and how it thinks.

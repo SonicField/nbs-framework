@@ -12,6 +12,8 @@ Chapters 1-3 get you running. Read them in order. By the end of Chapter 3 you wi
 
 Chapters 4-6 explain how things work. Read them when you want to understand what you saw in Chapter 3, or when something does not behave as expected.
 
+The [Terminal Operator Tutorial](terminal-tutorial.md) is a standalone guide for operating the chat terminal — read it once your team is running.
+
 Chapter 7 is a reference. Go there when something breaks.
 
 ## Running Example
@@ -23,6 +25,7 @@ Every chapter uses the same project: a C11 interpreter written in Python. The in
 1. [What NBS Is and Why](01-what-nbs-is.md) -- The problem, the approach, the running example.
 2. [Setup](02-setup.md) -- Install, verify, create your project directory.
 3. [Running Your First Session](03-first-session.md) -- Launch, observe, shut down. The hello world.
+- [Terminal Operator Tutorial](terminal-tutorial.md) -- Search, filter, control agents, spawn oracles, understand the display.
 4. [How the Team Works](04-how-the-team-works.md) -- Roles, the 3Ws, self-check, task scoping.
 5. [Communication](05-communication.md) -- Chat commands, @mentions, the event bus, slash commands.
 6. [Oracles](06-oracles.md) -- Librarian, Pythia, Shepard, Fixup. Periodic assessment workers.
