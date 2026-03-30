@@ -1462,6 +1462,10 @@ int main(int argc, char **argv) {
             no_restart = 1;
         } else if (strcmp(argv[i], "--highlight-mention") == 0) {
             highlight_mention = 1;
+        } else {
+            fprintf(stderr, "Error: unknown flag '%s'\n", argv[i]);
+            print_usage();
+            return 4;
         }
     }
 
