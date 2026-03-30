@@ -36,6 +36,8 @@ bin/nbs-ts-query
 bin/nbs-ts-render
 bin/nbs-workers
 bin/pty-session
+bin/honest-build
+bin/honest-get
 
 # Build artefacts (intermediate objects and binaries in source dirs)
 src/nbs-chat/nbs-chat

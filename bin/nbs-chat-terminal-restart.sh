@@ -116,7 +116,8 @@ if [[ "$SURVIVORS" -gt 0 ]]; then
 fi
 
 rm -f "${PROJECT_ROOT}/.nbs/pids/"*.pid 2>/dev/null || true
-rm -f "${PROJECT_ROOT}/.nbs/sessions/"*.json 2>/dev/null || true
+rm -f "${PROJECT_ROOT}/.nbs/sessions/"*.honest 2>/dev/null || true
+rm -f "${PROJECT_ROOT}/.nbs/sessions/"*.json 2>/dev/null || true  # transitional: clean pre-migration files
 rm -f "${PROJECT_ROOT}/.nbs/control-pause" 2>/dev/null || true
 # Reset trigger timestamps so librarian/pythia/shepard/fixup use their
 # first_delay timing (e.g. librarian fires after 5 min, not 15).

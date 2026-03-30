@@ -138,6 +138,7 @@ mkdir -p "$PREFIX/scribe"
 mkdir -p "$PREFIX/workers"
 mkdir -p "$PREFIX/pids"
 mkdir -p "$PREFIX/sessions"
+mkdir -p "$PREFIX/honest"
 
 # 2. Process command templates
 # V7.2: Check claude_tools directory exists before globbing
@@ -163,7 +164,22 @@ done
     exit 1
 }
 
-# 3. Build binaries from source (clean first to avoid stale object files)
+# 3. Build honest library
+echo "Building honest library..."
+HONEST_BUILD_OK=false
+if make -C "$PROJECT_ROOT/lib/honest" 2>&1; then
+    echo "  honest library built"
+    HONEST_BUILD_OK=true
+    # Install session rulebook (not affected by bin/ symlink step)
+    install -m 644 "$PROJECT_ROOT/lib/honest/lib/session.honest-rulebook" \
+        "$PREFIX/honest/session.honest-rulebook"
+    echo "  Installed: session.honest-rulebook"
+else
+    echo "WARNING: honest library build failed." >&2
+    echo "  Session metadata will not use Honest format." >&2
+fi
+
+# 4. Build binaries from source (clean first to avoid stale object files)
 # Install to PREFIX/bin via BIN_DIR override — avoids "Text file busy"
 # when live binaries are in use by running agents.
 echo "Building from source..."
@@ -176,7 +192,7 @@ if ! make -C "$PROJECT_ROOT" install BIN_DIR="$PREFIX/bin" 2>&1; then
     echo "  Run 'make install BIN_DIR=$PREFIX/bin' manually to retry." >&2
 fi
 
-# 4. Symlink supporting directories
+# 5. Symlink supporting directories
 echo "Creating symlinks to supporting directories..."
 for dir in concepts docs templates bin terminal-weathering; do
     target="$PREFIX/$dir"
@@ -199,7 +215,19 @@ for dir in concepts docs templates bin terminal-weathering; do
     echo "  Linked: $dir/"
 done
 
-# 5. Create ~/.claude/commands symlinks
+# 5b. Install honest CLI tools (after symlink step — PREFIX/bin is now
+# a symlink to PROJECT_ROOT/bin, so tools end up in the source tree's bin/)
+if $HONEST_BUILD_OK; then
+    for tool in honest-build honest-get; do
+        if [[ -f "$PROJECT_ROOT/lib/honest/build/$tool" ]]; then
+            rm -f "$PREFIX/bin/$tool"
+            install "$PROJECT_ROOT/lib/honest/build/$tool" "$PREFIX/bin/$tool"
+            echo "  Installed: $tool"
+        fi
+    done
+fi
+
+# 6. Create ~/.claude/commands symlinks
 #
 # CRITICAL: Symlinks ALWAYS point to ~/.nbs/commands/ (the global default
 # prefix), never to a project-specific prefix. This ensures that deleting
@@ -276,7 +304,7 @@ for link in "$CLAUDE_COMMANDS_DIR"/nbs-*.md; do
     }
 done
 
-# 6. Offer to add bin/ to PATH
+# 7. Offer to add bin/ to PATH
 BIN_DIR="$PREFIX/bin"
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\"  # NBS Framework PATH"
 

@@ -110,6 +110,24 @@ if [[ ! -x "$NBS_TS" ]]; then
     echo "Error: nbs-ts not found" >&2
     exit 1
 fi
+
+# Resolve honest-build for session metadata
+HONEST_BUILD="${SCRIPT_DIR}/honest-build"
+if [[ ! -x "$HONEST_BUILD" ]]; then
+    HONEST_BUILD="${HOME}/.nbs/bin/honest-build"
+fi
+if [[ ! -x "$HONEST_BUILD" ]]; then
+    echo "Error: honest-build not found (required for session metadata)" >&2
+    exit 1
+fi
+SESSION_RULEBOOK="${SCRIPT_DIR}/../lib/honest/lib/session.honest-rulebook"
+if [[ ! -f "$SESSION_RULEBOOK" ]]; then
+    SESSION_RULEBOOK="${HOME}/.nbs/honest/session.honest-rulebook"
+fi
+if [[ ! -f "$SESSION_RULEBOOK" ]]; then
+    echo "Error: session.honest-rulebook not found" >&2
+    exit 1
+fi
 if [[ ! -x "$NBS_SIDECAR" ]]; then
     echo "Error: nbs-sidecar not found at $NBS_SIDECAR" >&2
     exit 1
@@ -137,7 +155,7 @@ cleanup() {
     fi
 
     # Remove session metadata
-    local session_meta="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
+    local session_meta="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.honest"
     rm -f "$session_meta" 2>/dev/null || true
 
     # Kill sidecar if running
@@ -272,7 +290,7 @@ fi
 
 # --- Session metadata ---
 mkdir -p "${NBS_ROOT}/.nbs/sessions"
-SESSION_META="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.json"
+SESSION_META="${NBS_ROOT}/.nbs/sessions/${SIDECAR_HANDLE}.honest"
 TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-nbs-${SIDECAR_HANDLE}-live}"
 
 # V1.3: SECURITY — validate TMUX_SESSION_NAME from environment
@@ -282,20 +300,22 @@ if [[ ! "$TMUX_SESSION_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
 fi
 
 NBS_TS_HANDLE=""  # populated in ts mode
-cat > "$SESSION_META" << EOF
-{
-  "session_id": "$SESSION_UUID",
-  "handle": "$SIDECAR_HANDLE",
-  "model": "$NBS_MODEL",
-  
-  "nbs_ts_handle": "${NBS_TS_HANDLE}",
-  "transport": "${NBS_TRANSPORT:-auto}",
-  "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "project_root": "$NBS_ROOT",
-  "pid": $$,
-  "initial_prompt_set": $(if [[ -n "$INITIAL_PROMPT" ]]; then echo "true"; else echo "false"; fi)
-}
-EOF
+# SessionMeta: session_id, handle, model, nbs_ts_handle, transport (Auto|Ts),
+#   started, project_root, pid, initial_prompt_set
+"$HONEST_BUILD" --type SessionMeta --rulebook "$SESSION_RULEBOOK" \
+  session_id="$SESSION_UUID" \
+  handle="$SIDECAR_HANDLE" \
+  model="$NBS_MODEL" \
+  nbs_ts_handle="" \
+  transport="$(if [[ "${NBS_TRANSPORT:-auto}" == "ts" ]]; then echo "Ts"; else echo "Auto"; fi)" \
+  started="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  project_root="$NBS_ROOT" \
+  pid=$$ \
+  initial_prompt_set="$(if [[ -n "$INITIAL_PROMPT" ]]; then echo "True"; else echo "False"; fi)" \
+  > "$SESSION_META" || {
+    echo "Error: honest-build failed to create session metadata" >&2
+    exit 1
+  }
 
 dbg "start: handle=$SIDECAR_HANDLE root=$NBS_ROOT model=$NBS_MODEL transport=$NBS_TRANSPORT"
 dbg "start: poll_disable=$POLL_DISABLE initial_prompt_len=${#INITIAL_PROMPT} tty=$(tty 2>/dev/null || echo none)"
@@ -377,19 +397,20 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
     echo ""
 
     # Update session metadata with nbs-ts handle
-    cat > "$SESSION_META" << EOF
-{
-  "session_id": "$SESSION_UUID",
-  "handle": "$SIDECAR_HANDLE",
-  "model": "$NBS_MODEL",
-  "nbs_ts_handle": "${NBS_TS_HANDLE}",
-  "transport": "ts",
-  "started": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "project_root": "$NBS_ROOT",
-  "pid": $$,
-  "initial_prompt_set": $(if [[ -n "$INITIAL_PROMPT" ]]; then echo "true"; else echo "false"; fi)
-}
-EOF
+    "$HONEST_BUILD" --type SessionMeta --rulebook "$SESSION_RULEBOOK" \
+      session_id="$SESSION_UUID" \
+      handle="$SIDECAR_HANDLE" \
+      model="$NBS_MODEL" \
+      nbs_ts_handle="$NBS_TS_HANDLE" \
+      transport="Ts" \
+      started="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      project_root="$NBS_ROOT" \
+      pid=$$ \
+      initial_prompt_set="$(if [[ -n "$INITIAL_PROMPT" ]]; then echo "True"; else echo "False"; fi)" \
+      > "$SESSION_META" || {
+        echo "Error: honest-build failed to update session metadata" >&2
+        exit 1
+      }
 
     SIDECAR_ARGS+=("--transport=ts" "--session=$SESSION_NAME")
 

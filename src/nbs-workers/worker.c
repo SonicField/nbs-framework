@@ -17,7 +17,7 @@
 
 #include "worker.h"
 #include "nbs_assert.h"
-
+#include "honest.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -208,7 +208,7 @@ static void build_session_file_path(char *buf, size_t bufsz,
     ASSERT_MSG(buf != NULL, "build_session_file_path: buf is NULL");
     ASSERT_MSG(cwd != NULL, "build_session_file_path: cwd is NULL");
     ASSERT_MSG(handle != NULL, "build_session_file_path: handle is NULL");
-    int n = snprintf(buf, bufsz, "%s/%s/%s.json", cwd, SESSIONS_SUBDIR, handle);
+    int n = snprintf(buf, bufsz, "%s/%s/%s.honest", cwd, SESSIONS_SUBDIR, handle);
     ASSERT_MSG(n > 0 && (size_t)n < bufsz,
                "build_session_file_path: path too long");
 }
@@ -735,113 +735,24 @@ static size_t strip_ansi(const char *input, size_t input_len,
 }
 
 /* ------------------------------------------------------------------ */
-/* JSON field extraction (minimal, for fixed-format session files)      */
+/* Session metadata (Honest format)                                    */
 /* ------------------------------------------------------------------ */
 
-static int json_extract_string(const char *json, const char *key,
-                               char *buf, size_t bufsz)
-{
-    ASSERT_MSG(json != NULL, "json_extract_string: json is NULL");
-    ASSERT_MSG(key != NULL, "json_extract_string: key is NULL");
-    ASSERT_MSG(buf != NULL, "json_extract_string: buf is NULL");
-    ASSERT_MSG(bufsz > 0, "json_extract_string: bufsz is 0");
+/* Session metadata is stored as Honest documents (.honest files).
+ * Parsed via hon_parse_file, fields extracted via hon_get_string/hon_get_long.
+ * The document variable is named "result" (produced by honest-build).
+ *
+ * Type definition (from session.honest-rulebook):
+ *   Transport = (Auto, Ts);
+ *   SessionMeta = record
+ *     session_id, handle, model, nbs_ts_handle : String;
+ *     transport : Transport;
+ *     started, project_root : String;
+ *     pid : LongInt;
+ *     initial_prompt_set : Boolean;
+ *   end;
+ */
 
-    char pattern[256];
-    int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    if (n < 0 || (size_t)n >= sizeof(pattern))
-        return -1;
-
-    /* Search for the key, verifying it is at a JSON key position
-     * (not a substring of another key or embedded in a value).
-     * A key must be preceded by '{', ',', or whitespace. */
-    const char *pos = json;
-    size_t pat_len = strlen(pattern);
-    while ((pos = strstr(pos, pattern)) != NULL) {
-        if (pos == json) {
-            break; /* At start of string -- valid key position */
-        }
-        char prev = *(pos - 1);
-        if (prev == '{' || prev == ',' ||
-            prev == ' ' || prev == '\t' ||
-            prev == '\n' || prev == '\r') {
-            break;
-        }
-        pos += pat_len; /* Not at key position -- skip and continue */
-    }
-    if (!pos)
-        return -1;
-
-    pos += pat_len;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
-        pos++;
-    if (*pos != ':')
-        return -1;
-    pos++;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
-        pos++;
-
-    if (*pos != '"')
-        return -1;
-    pos++;
-
-    size_t i = 0;
-    while (*pos && *pos != '"' && i < bufsz - 1) {
-        buf[i++] = *pos++;
-    }
-    buf[i] = '\0';
-
-    /* Postcondition: no unprocessed JSON escape sequences.
-     * This parser does not handle \", \\, \n etc. If the value
-     * contains a backslash, the extraction is wrong. */
-    ASSERT_MSG(strchr(buf, '\\') == NULL,
-               "json_extract_string: unhandled escape sequence in value "
-               "for key '%s': '%s'", key, buf);
-
-    return 0;
-}
-
-static long json_extract_number(const char *json, const char *key)
-{
-    ASSERT_MSG(json != NULL, "json_extract_number: json is NULL");
-    ASSERT_MSG(key != NULL, "json_extract_number: key is NULL");
-
-    char pattern[256];
-    int n = snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    if (n < 0 || (size_t)n >= sizeof(pattern))
-        return -1;
-
-    const char *pos = json;
-    size_t pat_len = strlen(pattern);
-    while ((pos = strstr(pos, pattern)) != NULL) {
-        if (pos == json) {
-            break;
-        }
-        char prev = *(pos - 1);
-        if (prev == '{' || prev == ',' ||
-            prev == ' ' || prev == '\t' ||
-            prev == '\n' || prev == '\r') {
-            break;
-        }
-        pos += pat_len;
-    }
-    if (!pos)
-        return -1;
-
-    pos += pat_len;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
-        pos++;
-    if (*pos != ':')
-        return -1;
-    pos++;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')
-        pos++;
-
-    char *end = NULL;
-    long val = strtol(pos, &end, 10);
-    if (end == pos)
-        return -1;
-    return val;
-}
 
 /* ------------------------------------------------------------------ */
 /* In-place field update                                               */
@@ -1754,12 +1665,13 @@ int cmd_continue(const char *handle, const char *model_override,
         return EXIT_NOT_FOUND;
     }
 
-    /* Read session metadata */
-    size_t json_len = 0;
-    char *json = read_file(meta_file, &json_len);
-    if (!json) {
-        fprintf(stderr, "Error: failed to read session metadata: %s\n",
+    /* Read session metadata (Honest format) */
+    hon_diag_list diags = {0};
+    hon_document *doc = hon_parse_file(meta_file, &diags);
+    if (!doc) {
+        fprintf(stderr, "Error: failed to parse session metadata: %s\n",
                 meta_file);
+        hon_diag_free(&diags);
         return EXIT_ERROR;
     }
 
@@ -1768,23 +1680,27 @@ int cmd_continue(const char *handle, const char *model_override,
     char project_root[PATH_BUF_SIZE] = {0};
     char ts_session_handle[NAME_MAX_LEN] = {0};
 
-    json_extract_string(json, "session_id", session_id, sizeof(session_id));
-    json_extract_string(json, "model", model, sizeof(model));
-    if (json_extract_string(json, "project_root", project_root,
-                            sizeof(project_root)) != 0) {
-        free(json);
+    hon_get_string(doc, "result", "session_id", session_id, sizeof(session_id));
+    hon_get_string(doc, "result", "model", model, sizeof(model));
+    if (hon_get_string(doc, "result", "project_root", project_root,
+                       sizeof(project_root)) != 0) {
+        hon_doc_free(doc);
+        hon_diag_free(&diags);
         fprintf(stderr, "Error: missing 'project_root' in session metadata\n");
         return EXIT_ERROR;
     }
-    if (json_extract_string(json, "nbs_ts_handle", ts_session_handle,
-                            sizeof(ts_session_handle)) != 0) {
-        free(json);
+    if (hon_get_string(doc, "result", "nbs_ts_handle", ts_session_handle,
+                       sizeof(ts_session_handle)) != 0) {
+        hon_doc_free(doc);
+        hon_diag_free(&diags);
         fprintf(stderr, "Error: missing 'nbs_ts_handle' in session metadata\n");
         return EXIT_ERROR;
     }
-    long old_pid = json_extract_number(json, "pid");
+    long old_pid = -1;
+    hon_get_long(doc, "result", "pid", &old_pid);
 
-    free(json);
+    hon_doc_free(doc);
+    hon_diag_free(&diags);
 
     /* Validate session ID is UUID */
     if (!validate_uuid(session_id)) {
@@ -1928,11 +1844,12 @@ int cmd_session(const char *handle, const char *cwd)
     printf("Session metadata for '%s':\n", handle);
     printf("  File: %s\n", meta_file);
 
-    /* Read and parse JSON */
-    size_t json_len = 0;
-    char *json = read_file(meta_file, &json_len);
-    if (!json) {
-        fprintf(stderr, "Error: failed to read session file\n");
+    /* Read and parse session metadata (Honest format) */
+    hon_diag_list diags = {0};
+    hon_document *doc = hon_parse_file(meta_file, &diags);
+    if (!doc) {
+        fprintf(stderr, "Error: failed to parse session file\n");
+        hon_diag_free(&diags);
         return EXIT_ERROR;
     }
 
@@ -1942,16 +1859,18 @@ int cmd_session(const char *handle, const char *cwd)
     char project_root[PATH_BUF_SIZE] = {0};
     char ts_session_handle[NAME_MAX_LEN] = {0};
 
-    int has_session_id = json_extract_string(json, "session_id", session_id, sizeof(session_id)) == 0;
-    json_extract_string(json, "model", model_buf, sizeof(model_buf));
-    int has_started = json_extract_string(json, "started", started, sizeof(started)) == 0;
-    int has_project_root = json_extract_string(json, "project_root", project_root,
+    int has_session_id = hon_get_string(doc, "result", "session_id", session_id, sizeof(session_id)) == 0;
+    hon_get_string(doc, "result", "model", model_buf, sizeof(model_buf));
+    int has_started = hon_get_string(doc, "result", "started", started, sizeof(started)) == 0;
+    int has_project_root = hon_get_string(doc, "result", "project_root", project_root,
                         sizeof(project_root)) == 0;
-    int has_session = json_extract_string(json, "nbs_ts_handle", ts_session_handle,
+    int has_session = hon_get_string(doc, "result", "nbs_ts_handle", ts_session_handle,
                         sizeof(ts_session_handle)) == 0;
-    long pid_val = json_extract_number(json, "pid");
+    long pid_val = -1;
+    hon_get_long(doc, "result", "pid", &pid_val);
 
-    free(json);
+    hon_doc_free(doc);
+    hon_diag_free(&diags);
 
     printf("  Session ID: %s\n", has_session_id ? session_id : "<missing>");
     printf("  Model: %s\n", model_buf[0] ? model_buf : "<default>");
