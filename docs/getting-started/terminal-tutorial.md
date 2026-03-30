@@ -152,6 +152,11 @@ Hard restart a single agent without touching the others. The agent's session is 
 
 ```
 alex> /kick scribe
+  INFO> [kick] Killing session nbs-scribe-phoenix...
+  INFO> [kick] Cursor reset to 428
+  INFO> [kick] Respawning scribe...
+  INFO> [kick] Waiting for scribe to start...
+  INFO> [kick] scribe alive and verified
 ```
 
 ### `/health`
@@ -160,6 +165,18 @@ Report team health. This runs `nbs-team-check` and displays the results as INFO 
 
 ```
 alex> /health
+  INFO> [health] All 7 agents alive, 7 sidecars running
+```
+
+Or if something is wrong:
+
+```
+alex> /health
+  INFO> [health] Agents: 6/7 alive
+  INFO> [health]   Dead agents: medic
+  INFO> [health] Sidecars: 6/7 running
+  INFO> [health]   Missing sidecars: medic
+  INFO> [health] Suggest: /fixup to diagnose and restart stalled agents
 ```
 
 The output appears as `[health]` INFO lines. This is a quick, synchronous check — use it when you want a snapshot of who is running without waiting for a full Shepard assessment.
@@ -245,7 +262,7 @@ Clears the screen and repaints the last 50 messages. Use this when the display g
 alex> /redraw
 ```
 
-`/redraw` respects the active `/filter`, so filtered messages stay filtered.
+`/redraw` respects both active `/filter` and `/mention`, so filtered messages stay filtered.
 
 ## 6. Command-Line Flags
 
