@@ -1,0 +1,23 @@
+{ Session metadata type definition }
+{ Standalone rulebook — no dependency on nbs-standard.honest-rulebook }
+
+type
+  { Transport mode for agent sessions.
+    Auto: default mode, determined at startup.
+    Ts: nbs-ts terminal session mode. }
+  Transport = (Auto, Ts);
+
+  { Session metadata for a running agent.
+    Written by nbs-claude (bash), read by worker.c (C API).
+    File: .nbs/sessions/<handle>.honest }
+  SessionMeta = record
+    session_id         : String;
+    handle             : String;
+    model              : String;
+    nbs_ts_handle      : String;
+    transport          : Transport;
+    started            : String;
+    project_root       : String;
+    pid                : LongInt;
+    initial_prompt_set : Boolean;
+  end;

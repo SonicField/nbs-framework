@@ -120,7 +120,7 @@ if [[ ! -x "$HONEST_BUILD" ]]; then
     echo "Error: honest-build not found (required for session metadata)" >&2
     exit 1
 fi
-SESSION_RULEBOOK="${SCRIPT_DIR}/../lib/honest/lib/session.honest-rulebook"
+SESSION_RULEBOOK="${SCRIPT_DIR}/../honest/session.honest-rulebook"
 if [[ ! -f "$SESSION_RULEBOOK" ]]; then
     SESSION_RULEBOOK="${HOME}/.nbs/honest/session.honest-rulebook"
 fi

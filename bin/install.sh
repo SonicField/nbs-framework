@@ -171,7 +171,7 @@ if make -C "$PROJECT_ROOT/lib/honest" 2>&1; then
     echo "  honest library built"
     HONEST_BUILD_OK=true
     # Install session rulebook (not affected by bin/ symlink step)
-    install -m 644 "$PROJECT_ROOT/lib/honest/lib/session.honest-rulebook" \
+    install -m 644 "$PROJECT_ROOT/honest/session.honest-rulebook" \
         "$PREFIX/honest/session.honest-rulebook"
     echo "  Installed: session.honest-rulebook"
 else
