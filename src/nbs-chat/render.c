@@ -183,7 +183,10 @@ void render_message_bracket(const char *handle, const char *content,
     char ts_prefix[32];
     format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
 
-    /* Background for the entire line — dark pastel red */
+    /* Background for the entire line — darkest red in 256 palette (52, #5f0000).
+     * 24-bit true colour (48;2;R;G;B) would allow better desaturation but
+     * most users route through screen or tmux which lands with xterm-256color
+     * or tmux-256color — no true colour support. Stick to 256 palette. */
     fprintf(out, "  \033[48;5;52m%s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
     /* Handle slug — inverted (white on colour) */
     fprintf(out, "\033[48;5;52m" RENDER_REVERSE);
