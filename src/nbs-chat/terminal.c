@@ -2118,10 +2118,10 @@ int main(int argc, char **argv) {
 
             /* /shutdown — announce, wait 10s, kill all agents */
             if (strcmp(edit.buf, "/shutdown") == 0) {
+                line_state_reset(&edit);
                 if (g_watchdog.project_root[0] == '\0') {
                     info_line_emit(&edit, g_handle, "shutdown",
                                    "No project root — nothing to shut down.");
-                    line_state_reset(&edit);
                     continue;
                 }
                 do_send("@team SYSTEM: Shutting down in 10 seconds. "
@@ -2191,7 +2191,6 @@ int main(int argc, char **argv) {
                     if (kpid > 0) waitpid(kpid, NULL, 0);
                 }
                 info_line_emit(&edit, g_handle, "shutdown", "Team stopped.");
-                line_state_reset(&edit);
                 continue;
             }
 
@@ -2263,6 +2262,7 @@ int main(int argc, char **argv) {
 
             /* /restart — manual team restart (bypasses rate limit) */
             if (strcmp(edit.buf, "/restart") == 0) {
+                line_state_reset(&edit);
                 if (!watchdog_is_enabled(&g_watchdog)) {
                     info_line_emit(&edit, g_handle, "restart",
                                    "Watchdog not initialised — cannot restart.");
@@ -2280,7 +2280,6 @@ int main(int argc, char **argv) {
                         spawn_with_capture("restart", restart_argv);
                     }
                 }
-                line_state_reset(&edit);
                 continue;
             }
 
@@ -2289,7 +2288,10 @@ int main(int argc, char **argv) {
                 strcmp(edit.buf, "/shepard") == 0 ||
                 strcmp(edit.buf, "/librarian") == 0 ||
                 strcmp(edit.buf, "/fixup") == 0) {
-                const char *role = edit.buf + 1;  /* skip the '/' */
+                /* Save role before resetting — role pointed into edit.buf */
+                char role_buf[16];
+                snprintf(role_buf, sizeof(role_buf), "%s", edit.buf + 1);
+                const char *role = role_buf;
                 const char *desc = NULL;
                 const char *skill = NULL;
                 if (strcmp(role, "pythia") == 0) {
@@ -2305,6 +2307,7 @@ int main(int argc, char **argv) {
                     desc = TRIGGER_DESC_FIXUP;
                     skill = TRIGGER_SKILL_FIXUP;
                 }
+                line_state_reset(&edit);
 
                 if (g_watchdog.project_root[0] == '\0') {
                     info_line_emit(&edit, g_handle, role,
@@ -2343,7 +2346,6 @@ int main(int argc, char **argv) {
                         }
                     }
                 }
-                line_state_reset(&edit);
                 /* info_line_emit already redraws the prompt via line_redraw */
                 continue;
             }

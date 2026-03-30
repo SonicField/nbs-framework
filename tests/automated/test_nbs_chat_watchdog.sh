@@ -314,6 +314,18 @@ check "/fixup shows [fixup] label" "$( echo "$TERM_OUTPUT" | grep -qF '[fixup]' 
 
 echo ""
 
+# --- Test 21: /pythia does not echo command text after INFO line ---
+echo "21. /pythia does not re-echo command after INFO..."
+CHAT="$TEST_DIR/test21.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+TERM_OUTPUT=$(printf '/pythia\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+# After the INFO line, the prompt should be empty (alex>) not (alex> /pythia)
+# Count occurrences of /pythia in output — should be 1 (the typed command), not 2
+PYTHIA_COUNT=$(echo "$TERM_OUTPUT" | grep -c '/pythia' || true)
+check "/pythia not re-echoed after INFO" "$( [[ $PYTHIA_COUNT -le 1 ]] && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Results: $PASS_COUNT passed, $ERRORS failed ==="
 if [[ $ERRORS -eq 0 ]]; then
