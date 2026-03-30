@@ -20,6 +20,15 @@
 #  14.  Missing file — exit 1
 #  15.  File byte count preserved after in-place replacement
 #  16.  Message indices unchanged after repair (cursor safety)
+#  17.  Multi-byte UTF-8 byte offset — two corrupt lines (LC_ALL=C falsifier)
+#  18.  Multiple separate corruption groups — correct sections and line labels
+#  19.  Short corrupt line (4 bytes → 3 spaces + newline)
+#  20.  Last line without trailing newline
+#  21.  Binary garbage hex dump format verification
+#  22.  CR to newline conversion in sanitisation
+#  23.  Mixed corruption types (ASCII + binary + truncated + multi-line)
+#  24.  Previous repair spaces + new corruption coexistence
+#  25.  file-length header consistency after repair
 
 set -euo pipefail
 
@@ -418,6 +427,212 @@ check "bob preserved between corruptions" "$( echo "$CHAT_OUTPUT" | grep -qF 'me
 check "charlie preserved after second corruption" "$( echo "$CHAT_OUTPUT" | grep -qF 'message after second corruption' && echo pass || echo fail )"
 check "First corrupt text recovered" "$( echo "$CHAT_OUTPUT" | grep -qF '这是中文测试消息需要正确处理' && echo pass || echo fail )"
 check "Second corrupt text recovered" "$( echo "$CHAT_OUTPUT" | grep -qF 'second corrupt line after utf8' && echo pass || echo fail )"
+echo ""
+
+# --- Test 18: Multiple separate corruption groups ---
+# Spec: "If multiple groups of consecutive corrupt lines exist, each group
+# gets its own section with line numbers."
+echo "18. Multiple separate corruption groups..."
+CHAT="$TEST_DIR/t18.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "first valid" >/dev/null 2>&1
+inject_raw_line "$CHAT" "group one line one"
+inject_raw_line "$CHAT" "group one line two"
+"$NBS_CHAT" send "$CHAT" bob "second valid" >/dev/null 2>&1
+inject_raw_line "$CHAT" "group two isolated"
+"$NBS_CHAT" send "$CHAT" charlie "third valid" >/dev/null 2>&1
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+# Should have 2 recovery sections (group 1: consecutive, group 2: isolated)
+RECOVERY_SECTIONS=$(echo "$CHAT_OUTPUT" | grep -cE 'Recovered text|Unrecoverable' || true)
+check "Two recovery sections" "$( [[ "$RECOVERY_SECTIONS" -eq 2 ]] && echo pass || echo fail )"
+# Group 1 should say "lines" (plural), group 2 should say "line" (singular)
+check "Group 1 uses plural 'lines'" "$( echo "$CHAT_OUTPUT" | grep -qF 'lines ' && echo pass || echo fail )"
+check "Group 1 content present" "$( echo "$CHAT_OUTPUT" | grep -qF 'group one line one' && echo pass || echo fail )"
+check "Group 2 content present" "$( echo "$CHAT_OUTPUT" | grep -qF 'group two isolated' && echo pass || echo fail )"
+check "All valid messages preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'first valid' && echo "$CHAT_OUTPUT" | grep -qF 'second valid' && echo "$CHAT_OUTPUT" | grep -qF 'third valid' && echo pass || echo fail )"
+echo ""
+
+# --- Test 19: Short corrupt line (4 bytes → 3 spaces + newline) ---
+# Spec edge case: "A 4-byte corrupt line becomes 3 spaces + newline.
+# chat_read sees a 3-character line, checks 3 % 4 != 0, skips it."
+echo "19. Short corrupt line (4 bytes)..."
+CHAT="$TEST_DIR/t19.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "before short" >/dev/null 2>&1
+# "bug" is 3 chars — not multiple of 4 and contains no base64-invalid chars
+# but length 3 % 4 != 0, so it's corrupt
+inject_raw_line "$CHAT" "bug"
+"$NBS_CHAT" send "$CHAT" bob "after short" >/dev/null 2>&1
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "Recovery contains 'bug'" "$( echo "$CHAT_OUTPUT" | grep -qF 'bug' && echo pass || echo fail )"
+check "bob still readable" "$( echo "$CHAT_OUTPUT" | grep -qF 'after short' && echo pass || echo fail )"
+# Verify the replaced line is 3 spaces (the original "bug" was 3 bytes)
+BODY_START=$(get_body_start "$CHAT")
+CORRUPT_LINE_NUM=$((BODY_START + 2))
+REPLACED=$(LC_ALL=C sed -n "${CORRUPT_LINE_NUM}p" "$CHAT")
+check "Replaced line is 3 spaces" "$( [[ "$REPLACED" == "   " ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 20: Last line without trailing newline ---
+# Spec edge case: "If the last line of the file has no trailing newline,
+# the replacement is N space characters with no newline."
+echo "20. Last line without trailing newline..."
+CHAT="$TEST_DIR/t20.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "valid message" >/dev/null 2>&1
+# Append corrupt text WITHOUT trailing newline (use printf -n equivalent)
+printf '%s' "no newline at end" >> "$CHAT"
+SIZE_BEFORE=$(wc -c < "$CHAT")
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "Recovery present" "$( echo "$CHAT_OUTPUT" | grep -qF '[AUTO-REPAIR]' && echo pass || echo fail )"
+check "alice preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'valid message' && echo pass || echo fail )"
+echo ""
+
+# --- Test 21: Binary garbage hex dump format ---
+# Spec: "report byte count and hex dump of the first 40 bytes for diagnostic"
+echo "21. Binary garbage hex dump format..."
+CHAT="$TEST_DIR/t21.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "valid" >/dev/null 2>&1
+# Inject known binary bytes so we can verify the hex dump
+inject_raw_bytes "$CHAT" '\xDE\xAD\xBE\xEF\xCA\xFE\n'
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "Hex dump contains deadbeef" "$( echo "$CHAT_OUTPUT" | grep -qi 'deadbeef' && echo pass || echo fail )"
+check "Hex dump contains cafe" "$( echo "$CHAT_OUTPUT" | grep -qi 'cafe' && echo pass || echo fail )"
+check "Reports byte count" "$( echo "$CHAT_OUTPUT" | grep -qE '[0-9]+ bytes' && echo pass || echo fail )"
+echo ""
+
+# --- Test 22: CR to newline conversion ---
+# Spec: "0x0D (carriage return) — convert to newline"
+echo "22. CR to newline conversion..."
+CHAT="$TEST_DIR/t22.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "valid" >/dev/null 2>&1
+# Inject text with embedded \r (carriage return within the line)
+inject_raw_bytes "$CHAT" 'line one\rline two\n'
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+# CR should be converted to newline, not left as \r
+check "No CR in recovery" "$( echo "$CHAT_OUTPUT" | grep -qP '\r' && echo fail || echo pass )"
+check "Both parts preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'line one' && echo "$CHAT_OUTPUT" | grep -qF 'line two' && echo pass || echo fail )"
+echo ""
+
+# --- Test 23: Mixed corruption types in one file ---
+# Real-world scenario: a file with ASCII corruption, binary garbage, and
+# a truncated base64 line, all in the same file. Tests interaction between
+# different recovery paths and correct grouping.
+echo "23. Mixed corruption types in one file..."
+CHAT="$TEST_DIR/t23.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "message one" >/dev/null 2>&1
+# Type 1: raw ASCII
+inject_raw_line "$CHAT" "@supervisor status update"
+"$NBS_CHAT" send "$CHAT" bob "message two" >/dev/null 2>&1
+# Type 5: binary garbage
+inject_raw_bytes "$CHAT" '\xFF\xFE\xFD\xFC\xFB\n'
+"$NBS_CHAT" send "$CHAT" charlie "message three" >/dev/null 2>&1
+# Type 3: truncated base64 (length not multiple of 4)
+inject_raw_line "$CHAT" "YWxpY2V8MTcwMDAwMDAwMDog"
+# Type 6: multi-line raw text (consecutive)
+inject_raw_line "$CHAT" "first line of multi"
+inject_raw_line "$CHAT" "second line of multi"
+"$NBS_CHAT" send "$CHAT" dave "message four" >/dev/null 2>&1
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+# All 4 valid messages must survive
+check "alice preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'message one' && echo pass || echo fail )"
+check "bob preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'message two' && echo pass || echo fail )"
+check "charlie preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'message three' && echo pass || echo fail )"
+check "dave preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'message four' && echo pass || echo fail )"
+# Recovery should contain the ASCII text
+check "ASCII corruption recovered" "$( echo "$CHAT_OUTPUT" | grep -qF '@supervisor status update' && echo pass || echo fail )"
+# Binary should be unrecoverable
+check "Binary garbage flagged" "$( echo "$CHAT_OUTPUT" | grep -qiE 'unrecoverable|hex|byte' && echo pass || echo fail )"
+# Multi-line should be grouped
+check "Multi-line content present" "$( echo "$CHAT_OUTPUT" | grep -qF 'first line of multi' && echo pass || echo fail )"
+# Should have multiple recovery/unrecoverable sections
+SECTIONS=$(echo "$CHAT_OUTPUT" | grep -cE 'Recovered text|Unrecoverable' || true)
+check "Multiple recovery sections" "$( [[ "$SECTIONS" -ge 3 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 24: Space-padded from previous repair + new corruption ---
+# Verifies that space-padded lines from a previous repair are skipped
+# while genuinely new corrupt lines are still detected and repaired.
+echo "24. Previous repair spaces + new corruption..."
+CHAT="$TEST_DIR/t24.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "original" >/dev/null 2>&1
+inject_raw_line "$CHAT" "first corruption"
+"$NBS_CHAT" send "$CHAT" bob "middle" >/dev/null 2>&1
+# First repair — blanks "first corruption"
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+set -e
+MSGS_AFTER_FIRST=$(count_valid_messages "$CHAT")
+# Now inject NEW corruption after the first repair
+inject_raw_line "$CHAT" "brand new corruption after repair"
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+MSGS_AFTER_SECOND=$(count_valid_messages "$CHAT")
+CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "New corruption recovered" "$( echo "$CHAT_OUTPUT" | grep -qF 'brand new corruption after repair' && echo pass || echo fail )"
+# Should have exactly 1 more message (the new recovery)
+check "One new recovery message" "$( [[ "$MSGS_AFTER_SECOND" -eq $((MSGS_AFTER_FIRST + 1)) ]] && echo pass || echo fail )"
+# The original recovery from first repair should still be there
+RECOVERY_COUNT=$(echo "$CHAT_OUTPUT" | grep -c '\[AUTO-REPAIR\]' || true)
+check "Both repair messages present" "$( [[ "$RECOVERY_COUNT" -eq 2 ]] && echo pass || echo fail )"
+echo ""
+
+# --- Test 25: file-length header consistency after repair ---
+# Spec: "file-length header remains valid" after in-place replacement.
+# The blank preserves byte count, then nbs-chat send updates file-length
+# when appending the recovery. Verify the header matches actual file size.
+echo "25. file-length header consistency..."
+CHAT="$TEST_DIR/t25.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" alice "test message" >/dev/null 2>&1
+inject_raw_line "$CHAT" "corrupt data for header test"
+"$NBS_CHAT" send "$CHAT" bob "another test" >/dev/null 2>&1
+set +e
+"$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
+RC=$?
+set -e
+# Extract file-length from header and compare to actual file size
+HEADER_LENGTH=$(grep '^file-length:' "$CHAT" | awk '{print $2}')
+ACTUAL_LENGTH=$(wc -c < "$CHAT")
+check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
+check "file-length header matches actual size" "$( [[ "$HEADER_LENGTH" -eq "$ACTUAL_LENGTH" ]] && echo pass || echo fail )"
 echo ""
 
 # --- Summary ---
