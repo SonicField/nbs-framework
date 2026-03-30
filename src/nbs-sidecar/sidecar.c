@@ -698,7 +698,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                             snprintf(errmsg, sizeof(errmsg),
                                      "@%s? query failed — could not capture session output for %s",
                                      cfg->handle, cfg->handle);
-                            chat_client_send(qchat_path, "sidecar", errmsg);
+                            chat_client_error(qchat_path, errmsg);
                         }
                         bus_client_ack_event(qbus_dir, qevent_file);
                     }

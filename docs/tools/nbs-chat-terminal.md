@@ -317,6 +317,19 @@ After every send, the terminal publishes two bus events via `bus_bridge_after_se
 - A `human-input` priority signal (allows sidecars to react faster to human messages)
 
 
+## Message Styling
+
+Messages are visually differentiated by handle type:
+
+| Handle Pattern | Style | Source |
+|---------------|-------|--------|
+| Own handle | Cream bold on dark grey background | Human operator |
+| `[MEDIC-*]` | Terracotta bold (fg 173) | `nbs-chat warn` |
+| `[SIDECAR-*]` | Dusty red bold (fg 167) | `nbs-chat error` |
+| All others | Palette colour, bold | Normal agent messages |
+
+Bracket handles (`[MEDIC-WARNING]`, `[SIDECAR-ERROR]`) cannot be produced by `nbs-chat send` — brackets are rejected in handles. Only dedicated subcommands (`warn`, `error`) can create these messages, enforced at the binary level.
+
 ## Signal Handling
 
 SIGINT and SIGTERM are caught via `sigaction`. The handler sets a flag (`g_quit`) which the event loop checks. On Ctrl-C, pending input is sent before exiting. On exit, the terminal restores the original termios state and prints "Left chat."

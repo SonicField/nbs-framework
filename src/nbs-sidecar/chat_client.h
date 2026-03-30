@@ -56,4 +56,12 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
 int chat_client_send(const char *chat_path, const char *handle,
                       const char *message);
 
+/*
+ * chat_client_error — Post a [SIDECAR-ERROR] message via fork+exec
+ * of nbs-chat error.
+ *
+ * Returns: 0 on success, -1 on failure
+ */
+int chat_client_error(const char *chat_path, const char *message);
+
 #endif /* NBS_CHAT_CLIENT_H */

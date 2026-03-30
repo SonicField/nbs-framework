@@ -479,6 +479,8 @@ static void format_message(const char *handle, const char *content,
         render_message_own(handle, content, timestamp, stdout);
     } else if (strncmp(handle, "[MEDIC-", 7) == 0) {
         render_message_medic(handle, content, timestamp, stdout);
+    } else if (strncmp(handle, "[SIDECAR-", 9) == 0) {
+        render_message_error(handle, content, timestamp, stdout);
     } else {
         render_message(handle, content, timestamp, stdout);
     }

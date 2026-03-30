@@ -169,12 +169,17 @@ static void render(const editor_t *ed) {
         int is_cursor = (idx == ed->cursor);
         int is_deleted = ed->deleted[idx];
         const char *hcol;
-        /* Medic warnings get terracotta instead of palette colour */
+        /* Medic warnings get terracotta, sidecar errors get dusty red */
         static char medic_buf[NBS_STYLE_BUFSIZE];
+        static char error_buf[NBS_STYLE_BUFSIZE];
         if (strncmp(msg->handle, "[MEDIC-", 7) == 0) {
             nbs_style_start(&NBS_STYLE_MEDIC_WARNING, medic_buf,
                             sizeof(medic_buf));
             hcol = medic_buf;
+        } else if (strncmp(msg->handle, "[SIDECAR-", 9) == 0) {
+            nbs_style_start(&NBS_STYLE_SIDECAR_ERROR, error_buf,
+                            sizeof(error_buf));
+            hcol = error_buf;
         } else {
             hcol = handle_colour_str(msg->handle);
         }

@@ -76,6 +76,9 @@ extern const nbs_style_t NBS_STYLE_HUMAN_PROMPT;     /* fg:223 (cream), bg:236, 
 /* Medic warning style — terracotta, bold */
 extern const nbs_style_t NBS_STYLE_MEDIC_WARNING;   /* fg:173 (terracotta), bold */
 
+/* Sidecar error style — red-tinted, bold */
+extern const nbs_style_t NBS_STYLE_SIDECAR_ERROR;   /* fg:167 (dusty red), bold */
+
 /* --- Escape sequence generation --- */
 
 /*

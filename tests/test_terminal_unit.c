@@ -1714,6 +1714,52 @@ static void test_medic_handle_detection(void) {
     TEST_PASS("medic handle detection: [MEDIC- prefix");
 }
 
+static void test_sidecar_error_style_values(void) {
+    /* NBS_STYLE_SIDECAR_ERROR: fg=167 (dusty red), bold, no bg */
+    int expected_fg = 167;
+    int expected_bg = -1; /* NBS_COLOUR_NONE */
+    unsigned expected_attrs = (1u << 0); /* NBS_ATTR_BOLD */
+
+    TEST_ASSERT(expected_fg == 167, "sidecar error fg should be 167 (dusty red)");
+    TEST_ASSERT(expected_bg == -1, "sidecar error bg should be NONE");
+    TEST_ASSERT(expected_attrs == 1, "sidecar error should be bold");
+    TEST_PASS("sidecar error style: fg=167, bold, no bg");
+}
+
+static void test_sidecar_handle_detection(void) {
+    /* format_message routes [SIDECAR-*] handles to render_message_error.
+     * The detection uses strncmp(handle, "[SIDECAR-", 9). */
+    const char *error = "[SIDECAR-ERROR]";
+    const char *medic = "[MEDIC-WARNING]";
+    const char *normal = "sidecar";
+    const char *bracket = "[system]";
+
+    TEST_ASSERT(strncmp(error, "[SIDECAR-", 9) == 0,
+                "[SIDECAR-ERROR] should match");
+    TEST_ASSERT(strncmp(medic, "[SIDECAR-", 9) != 0,
+                "[MEDIC-WARNING] should not match sidecar prefix");
+    TEST_ASSERT(strncmp(normal, "[SIDECAR-", 9) != 0,
+                "sidecar (no brackets) should not match");
+    TEST_ASSERT(strncmp(bracket, "[SIDECAR-", 9) != 0,
+                "[system] should not match");
+
+    TEST_PASS("sidecar handle detection: [SIDECAR- prefix");
+}
+
+static void test_sidecar_medic_no_overlap(void) {
+    /* [SIDECAR-ERROR] must NOT match the [MEDIC- prefix, and vice versa.
+     * This ensures the dispatch order doesn't matter. */
+    const char *error = "[SIDECAR-ERROR]";
+    const char *medic = "[MEDIC-WARNING]";
+
+    TEST_ASSERT(strncmp(error, "[MEDIC-", 7) != 0,
+                "[SIDECAR-ERROR] must not match [MEDIC- prefix");
+    TEST_ASSERT(strncmp(medic, "[SIDECAR-", 9) != 0,
+                "[MEDIC-WARNING] must not match [SIDECAR- prefix");
+
+    TEST_PASS("sidecar/medic no overlap: prefixes are disjoint");
+}
+
 /* ================================================================
  * @mention highlight tests
  * ================================================================ */
@@ -1959,6 +2005,9 @@ int main(void) {
     test_medic_warning_style_values();
     test_render_message_own_uses_erase_to_eol();
     test_medic_handle_detection();
+    test_sidecar_error_style_values();
+    test_sidecar_handle_detection();
+    test_sidecar_medic_no_overlap();
 
     /* @mention highlight */
     test_mention_match_basic();

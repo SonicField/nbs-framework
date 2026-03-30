@@ -187,3 +187,19 @@ void render_message_medic(const char *handle, const char *content,
     nbs_style_freset(out);
     fprintf(out, ": %s\n", content);
 }
+
+void render_message_error(const char *handle, const char *content,
+                          time_t timestamp, FILE *out) {
+    ASSERT_MSG(handle != NULL, "render_message_error: handle is NULL");
+    ASSERT_MSG(content != NULL, "render_message_error: content is NULL");
+    ASSERT_MSG(out != NULL, "render_message_error: out is NULL");
+
+    char ts_prefix[32];
+    format_timestamp(timestamp, ts_prefix, sizeof(ts_prefix));
+
+    fprintf(out, "  %s%s%s", RENDER_DIM, ts_prefix, RENDER_RESET);
+    nbs_style_fstart(&NBS_STYLE_SIDECAR_ERROR, out);
+    fprintf(out, "%s", handle);
+    nbs_style_freset(out);
+    fprintf(out, ": %s\n", content);
+}

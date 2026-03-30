@@ -178,6 +178,19 @@ Participants are read from the chat file header (`participants:` line).
 | 4 | Invalid arguments |
 | 5 | Deduplicated (event dropped) |
 
+## Bracket Handles
+
+Some chat messages use bracket-delimited handles (e.g. `[MEDIC-WARNING]`, `[SIDECAR-ERROR]`) instead of normal agent handles. These are system message types with distinct visual rendering.
+
+| Handle | Subcommand | Style | Purpose |
+|--------|-----------|-------|---------|
+| `[MEDIC-WARNING]` | `nbs-chat warn` | Terracotta bold (fg 173) | Medic agent warnings |
+| `[SIDECAR-ERROR]` | `nbs-chat error` | Dusty red bold (fg 167) | Sidecar failures (query errors, escalations) |
+
+**Enforcement:** `nbs-chat send` rejects brackets in handles at the binary level. Only dedicated subcommands can create bracket-handle messages. This prevents agents from spoofing system message types.
+
+**Routing:** The rendering dispatch in `format_message` (terminal.c), `cmd_export` (main.c), and the editor (editor.c) uses prefix matching — `strncmp(handle, "[MEDIC-", 7)` and `strncmp(handle, "[SIDECAR-", 9)` — so future bracket handles with different prefixes are automatically routed to the default renderer until explicit routing is added.
+
 ## See Also
 
 - [Sidecar Notifications](sidecar.md) — how the sidecar consumes bus events

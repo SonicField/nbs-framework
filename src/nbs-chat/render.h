@@ -97,6 +97,19 @@ void render_message_medic(const char *handle, const char *content,
                           time_t timestamp, FILE *out);
 
 /*
+ * render_message_error — Render a [SIDECAR-ERROR] message.
+ *
+ * Dusty red bold handle, normal content.
+ *
+ * Preconditions:
+ *   - handle != NULL
+ *   - content != NULL
+ *   - out != NULL
+ */
+void render_message_error(const char *handle, const char *content,
+                          time_t timestamp, FILE *out);
+
+/*
  * render_set_highlight_handle — Set the handle for @mention highlighting.
  *
  * When set, @handle in message content is rendered with inverse video.

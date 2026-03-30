@@ -593,3 +593,23 @@ int chat_client_send(const char *chat_path, const char *handle,
     int rc = exec_fire_and_forget(argv);
     return (rc == 0) ? 0 : -1;
 }
+
+/* ---- chat_client_error ---- */
+
+int chat_client_error(const char *chat_path, const char *message)
+{
+    ASSERT_MSG(chat_path != NULL, "chat_client_error: chat_path is NULL");
+    ASSERT_MSG(chat_path[0] != '\0', "chat_client_error: chat_path is empty");
+    ASSERT_MSG(message != NULL, "chat_client_error: message is NULL");
+    ASSERT_MSG(message[0] != '\0', "chat_client_error: message is empty");
+
+    const char *chat_bin = resolve_nbs_chat();
+    ASSERT_MSG(chat_bin != NULL, "chat_client_error: resolve_nbs_chat returned NULL");
+
+    const char *argv[] = {
+        chat_bin, "error", chat_path, message, NULL
+    };
+
+    int rc = exec_fire_and_forget(argv);
+    return (rc == 0) ? 0 : -1;
+}

@@ -32,6 +32,9 @@ const nbs_style_t NBS_STYLE_HUMAN_PROMPT    = { 223, 236, NBS_ATTR_BOLD };
 /* Medic warning — terracotta bold */
 const nbs_style_t NBS_STYLE_MEDIC_WARNING   = { 173, NBS_COLOUR_NONE, NBS_ATTR_BOLD };
 
+/* Sidecar error — dusty red bold (167 = #d75f5f, readable on dark bg) */
+const nbs_style_t NBS_STYLE_SIDECAR_ERROR   = { 167, NBS_COLOUR_NONE, NBS_ATTR_BOLD };
+
 /* --- Escape sequence generation --- */
 
 int nbs_style_start(const nbs_style_t *style, char *buf, size_t bufsize) {

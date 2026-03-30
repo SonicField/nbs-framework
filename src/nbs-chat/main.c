@@ -6,6 +6,8 @@
  * Commands:
  *   create <file>                    Create new chat file
  *   send <file> <handle> <message>   Send a message
+ *   warn <file> <message>            Post a [MEDIC-WARNING]
+ *   error <file> <message>           Post a [SIDECAR-ERROR]
  *   read <file> [options]            Read messages
  *   poll <file> <handle> [options]   Wait for new message
  *   search <file> <pattern> [opts]   Search message history
@@ -43,6 +45,7 @@ static void print_usage(void) {
     printf("  create <file>                    Create new chat file\n");
     printf("  send <file> <handle> <message>   Send a message\n");
     printf("  warn <file> <message>            Post a [MEDIC-WARNING]\n");
+    printf("  error <file> <message>           Post a [SIDECAR-ERROR]\n");
     printf("  read <file> [options]            Read messages\n");
     printf("  poll <file> <handle> [options]   Wait for new message\n");
     printf("  search <file> <pattern> [opts]   Search message history\n");
@@ -1004,6 +1007,10 @@ static int cmd_export(int argc, char **argv) {
             render_message_medic(state.messages[i].handle,
                                  state.messages[i].content,
                                  state.messages[i].timestamp, stdout);
+        } else if (strncmp(state.messages[i].handle, "[SIDECAR-", 9) == 0) {
+            render_message_error(state.messages[i].handle,
+                                 state.messages[i].content,
+                                 state.messages[i].timestamp, stdout);
         } else {
             render_message(state.messages[i].handle,
                            state.messages[i].content,
@@ -1158,6 +1165,38 @@ static int cmd_warn(int argc, char **argv) {
     return 0;
 }
 
+/*
+ * cmd_error — Post a sidecar error to a chat file.
+ *
+ * Uses the reserved handle [SIDECAR-ERROR] which cannot be produced by
+ * cmd_send (brackets are rejected). This enforces at the binary level
+ * that only the error subcommand can create these messages.
+ */
+static int cmd_error(int argc, char **argv) {
+    if (argc < 4) {
+        fprintf(stderr, "Usage: nbs-chat error <file> <message>\n");
+        return 4;
+    }
+
+    const char *path = argv[2];
+    const char *message = argv[3];
+    const char *handle = "[SIDECAR-ERROR]";
+
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_error") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
+    int result = chat_send(path, handle, message);
+    if (result < 0) {
+        fprintf(stderr, "Error: Failed to send error to '%s'\n", path);
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Error: No command specified\n");
@@ -1175,6 +1214,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "create") == 0) rc = cmd_create(argc, argv);
     else if (strcmp(cmd, "send") == 0) rc = cmd_send(argc, argv);
     else if (strcmp(cmd, "warn") == 0) rc = cmd_warn(argc, argv);
+    else if (strcmp(cmd, "error") == 0) rc = cmd_error(argc, argv);
     else if (strcmp(cmd, "read") == 0) rc = cmd_read(argc, argv);
     else if (strcmp(cmd, "poll") == 0) rc = cmd_poll(argc, argv);
     else if (strcmp(cmd, "search") == 0) rc = cmd_search(argc, argv);
