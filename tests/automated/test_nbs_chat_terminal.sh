@@ -877,6 +877,39 @@ check "filtered redraw shows scribe" "$( echo "$OUTPUT" | grep -qF 'From scribe'
 
 echo ""
 
+# --- Test 53: /mention shows matching messages ---
+echo "53. /mention shows matching messages..."
+CHAT="$TEST_DIR/test53.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex please review"
+"$NBS_CHAT" send "$CHAT" "scribe" "Decision logged"
+OUTPUT=$({ sleep 1; printf '/mention alex\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/mention shows @alex message" "$( echo "$OUTPUT" | grep -qF 'please review' && echo pass || echo fail )"
+check "/mention hides non-matching" "$( echo "$OUTPUT" | grep 'Decision logged' | grep -qvF 'INFO' && echo fail || echo pass )"
+
+echo ""
+
+# --- Test 54: /unmention clears filter ---
+echo "54. /unmention clears filter..."
+CHAT="$TEST_DIR/test54.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+"$NBS_CHAT" send "$CHAT" "supervisor" "@alex hello"
+"$NBS_CHAT" send "$CHAT" "scribe" "No mention here"
+OUTPUT=$({ sleep 1; printf '/mention alex\n/unmention\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/unmention shows all messages" "$( echo "$OUTPUT" | grep -qF 'No mention here' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 55: /help lists /mention and /unmention ---
+echo "55. /help lists /mention..."
+CHAT="$TEST_DIR/test55.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$({ sleep 1; printf '/help\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/help mentions /mention" "$( echo "$OUTPUT" | grep -qF '/mention' && echo pass || echo fail )"
+check "/help mentions /unmention" "$( echo "$OUTPUT" | grep -qF '/unmention' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then

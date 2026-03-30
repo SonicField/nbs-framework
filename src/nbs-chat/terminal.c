@@ -30,6 +30,7 @@
 #include "render.h"
 #include "../nbs-common/trigger_defs.h"
 #include "../nbs-common/nbs_helper_check.h"
+#include "../nbs-common/nbs_mention.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -71,6 +72,7 @@ static const char *g_handle = NULL;
 static int g_msg_count = 0;
 static volatile sig_atomic_t g_quit = 0;
 static char g_filter_handle[MAX_HANDLE_LEN] = {0};  /* empty = show all, non-empty = show only this handle */
+static char g_mention_handle[MAX_HANDLE_LEN] = {0}; /* empty = no mention filter, non-empty = show only messages mentioning this handle */
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
@@ -444,6 +446,27 @@ typedef struct {
     int param;   /* Numeric parameter (-1 = none) */
 } esc_parser_t;
 
+/* --- Mention matching for /mention filter --- */
+
+static int content_mentions(const char *content, const char *handle) {
+    size_t hlen = strlen(handle);
+    const char *p = content;
+    while ((p = strstr(p, "@")) != NULL) {
+        if (p > content && nbs_is_email_prefix_char((unsigned char)p[-1])) {
+            p++;
+            continue;
+        }
+        if (strncmp(p + 1, handle, hlen) == 0) {
+            char after = p[1 + hlen];
+            if (after == '\0' || !nbs_is_handle_char((unsigned char)after)) {
+                return 1;
+            }
+        }
+        p++;
+    }
+    return 0;
+}
+
 /* --- Display functions --- */
 
 static void format_message(const char *handle, const char *content,
@@ -478,6 +501,8 @@ static void print_help(void) {
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
+    printf("  %s/mention%s    Show messages mentioning @handle (e.g. /mention alex)\n", DIM, RESET);
+    printf("  %s/unmention%s  Clear mention filter\n", DIM, RESET);
     printf("  %s/pause%s      Pause team — agents keep context, stop receiving work\n", DIM, RESET);
     printf("  %s/resume%s     Resume paused team\n", DIM, RESET);
     printf("  %s/shutdown%s   Announce shutdown, wait 10s, kill all agents\n", DIM, RESET);
@@ -1073,6 +1098,8 @@ static int poll_and_display(line_state_t *ls, const char *handle) {
         if (strcmp(state.messages[i].handle, g_handle) == 0) continue;
         if (g_filter_handle[0] != '\0' &&
             strcmp(state.messages[i].handle, g_filter_handle) != 0) continue;
+        if (g_mention_handle[0] != '\0' &&
+            !content_mentions(state.messages[i].content, g_mention_handle)) continue;
         has_displayable = 1;
         break;
     }
@@ -1089,11 +1116,13 @@ static int poll_and_display(line_state_t *ls, const char *handle) {
     }
     printf("\r\033[J");
 
-    /* Display new messages (filtered if g_filter_handle is set) */
+    /* Display new messages (filtered if g_filter_handle/g_mention_handle is set) */
     for (int i = g_msg_count; i < state.message_count; i++) {
         if (strcmp(state.messages[i].handle, g_handle) == 0) continue;
         if (g_filter_handle[0] != '\0' &&
             strcmp(state.messages[i].handle, g_filter_handle) != 0) continue;
+        if (g_mention_handle[0] != '\0' &&
+            !content_mentions(state.messages[i].content, g_mention_handle)) continue;
         format_message(state.messages[i].handle,
                       state.messages[i].content, g_handle,
                       state.messages[i].timestamp);
@@ -2091,6 +2120,81 @@ int main(int argc, char **argv) {
                 continue;
             }
 
+            /* /mention <handle> — show only messages that @mention a handle */
+            if (strncmp(edit.buf, "/mention ", 9) == 0) {
+                const char *target = edit.buf + 9;
+                while (*target == ' ') target++;
+                if (*target == '\0') {
+                    printf("  %sUsage: /mention <handle>%s\n", DIM, RESET);
+                } else {
+                    snprintf(g_mention_handle, sizeof(g_mention_handle), "%s", target);
+                    printf("  %sMention filter: showing messages mentioning @%s%s\n",
+                           DIM, g_mention_handle, RESET);
+                    chat_state_t mstate;
+                    if (chat_read(g_chat_file, &mstate) == 0) {
+                        int matches[50];
+                        int match_count = 0;
+                        for (int i = mstate.message_count - 1; i >= 0 && match_count < 50; i--) {
+                            if (content_mentions(mstate.messages[i].content, g_mention_handle)) {
+                                matches[match_count++] = i;
+                            }
+                        }
+                        for (int j = match_count - 1; j >= 0; j--) {
+                            int i = matches[j];
+                            format_message(mstate.messages[i].handle,
+                                          mstate.messages[i].content, g_handle,
+                                          mstate.messages[i].timestamp);
+                        }
+                        if (match_count == 0) {
+                            printf("  %sNo messages mentioning @%s%s\n",
+                                   DIM, g_mention_handle, RESET);
+                        }
+                        chat_state_free(&mstate);
+                    }
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            if (strcmp(edit.buf, "/mention") == 0) {
+                if (g_mention_handle[0] != '\0') {
+                    printf("  %sMention filter active: @%s%s\n",
+                           DIM, g_mention_handle, RESET);
+                } else {
+                    printf("  %sNo mention filter. Usage: /mention <handle>%s\n",
+                           DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /unmention — clear mention filter */
+            if (strcmp(edit.buf, "/unmention") == 0) {
+                if (g_mention_handle[0] != '\0') {
+                    g_mention_handle[0] = '\0';
+                    printf("  %sMention filter cleared — showing last 20 messages%s\n",
+                           DIM, RESET);
+                    chat_state_t ustate;
+                    if (chat_read(g_chat_file, &ustate) == 0) {
+                        int start = ustate.message_count - 20;
+                        if (start < 0) start = 0;
+                        for (int i = start; i < ustate.message_count; i++) {
+                            format_message(ustate.messages[i].handle,
+                                          ustate.messages[i].content, g_handle,
+                                          ustate.messages[i].timestamp);
+                        }
+                        chat_state_free(&ustate);
+                    }
+                } else {
+                    printf("  %sNo mention filter active%s\n", DIM, RESET);
+                }
+                line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
             /* /redraw — clear screen, repaint last 50 messages */
             if (strcmp(edit.buf, "/redraw") == 0) {
                 printf("\033[2J\033[H");
@@ -2102,6 +2206,10 @@ int main(int argc, char **argv) {
                         if (g_filter_handle[0] != '\0' &&
                             strcmp(redraw_state.messages[i].handle,
                                    g_filter_handle) != 0)
+                            continue;
+                        if (g_mention_handle[0] != '\0' &&
+                            !content_mentions(redraw_state.messages[i].content,
+                                              g_mention_handle))
                             continue;
                         format_message(redraw_state.messages[i].handle,
                                       redraw_state.messages[i].content,
