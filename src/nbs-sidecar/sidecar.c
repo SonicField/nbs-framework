@@ -689,6 +689,18 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                                             qevent_file, sizeof(qevent_file)) == 0) {
                     if (handle_query(tp, cfg, registry_path) == 0) {
                         bus_client_ack_event(qbus_dir, qevent_file);
+                    } else {
+                        /* Query failed — post error to chat so the user knows */
+                        char qchat_path[SIDECAR_MAX_PATH];
+                        if (registry_find_first(registry_path, "chat",
+                                                 qchat_path, sizeof(qchat_path)) == 0) {
+                            char errmsg[256];
+                            snprintf(errmsg, sizeof(errmsg),
+                                     "@%s? query failed — could not capture session output for %s",
+                                     cfg->handle, cfg->handle);
+                            chat_client_send(qchat_path, "sidecar", errmsg);
+                        }
+                        bus_client_ack_event(qbus_dir, qevent_file);
                     }
                 }
             }
