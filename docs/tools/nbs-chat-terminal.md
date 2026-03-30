@@ -15,6 +15,7 @@ nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]
 | `<handle>` | Your display name in the chat. ASCII-only — multi-byte characters break cursor positioning |
 | `--restart` | Kill and restart the agent team immediately on launch |
 | `--goal-file=PATH` | Inject file contents into chat before restart, then disable the auto-restart watchdog thread |
+| `--no-restart` | Disable the watchdog auto-restart thread. Restarts must be triggered manually via `/restart` or `/kick`. Useful when monitoring a team without wanting crashed agents automatically respawned. |
 | `--highlight-mention` | Render `@<handle>` mentions in chat messages with inverse video. The prompt is also inverted. Matching uses word boundaries — `@alex` matches but `@alexander` does not. |
 
 ### Exit Codes

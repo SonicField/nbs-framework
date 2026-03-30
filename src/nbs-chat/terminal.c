@@ -1422,12 +1422,13 @@ static void print_usage(void) {
     printf("nbs-chat-terminal: Interactive terminal client for nbs-chat\n\n");
     printf("Usage:\n");
     printf("  nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]\n");
-    printf("                                    [--highlight-mention]\n\n");
+    printf("                                    [--no-restart] [--highlight-mention]\n\n");
     printf("  <file>      Path to chat file (must exist)\n");
     printf("  <handle>    Your display name in the chat\n");
     printf("  --restart           Start/restart the agent team immediately\n");
     printf("  --goal-file=PATH    Inject file contents into chat as session goal\n");
     printf("                      (posted as your handle, before restart/digest)\n");
+    printf("  --no-restart        Disable watchdog auto-restart (manual restarts only)\n");
     printf("  --highlight-mention Invert @<handle> mentions in chat messages\n\n");
     printf("Controls:\n");
     printf("  Type a message and press Enter to send.\n");
@@ -1447,8 +1448,9 @@ int main(int argc, char **argv) {
     g_chat_file = argv[1];
     g_handle = argv[2];
 
-    /* Check for --restart, --goal-file, and --highlight-mention flags */
+    /* Check for --restart, --goal-file, --no-restart, and --highlight-mention flags */
     int restart_immediately = 0;
+    int no_restart = 0;
     int highlight_mention = 0;
     const char *goal_file_path = NULL;
     for (int i = 3; i < argc; i++) {
@@ -1456,6 +1458,8 @@ int main(int argc, char **argv) {
             restart_immediately = 1;
         } else if (strncmp(argv[i], "--goal-file=", 12) == 0) {
             goal_file_path = argv[i] + 12;
+        } else if (strcmp(argv[i], "--no-restart") == 0) {
+            no_restart = 1;
         } else if (strcmp(argv[i], "--highlight-mention") == 0) {
             highlight_mention = 1;
         }
@@ -1771,9 +1775,8 @@ int main(int argc, char **argv) {
          * Only start the auto-restart THREAD when --goal-file is not set. */
         watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
 
-        if (goal_file_path != NULL) {
-            printf("%sAuto-restart disabled (--goal-file mode: fixup handles crashes)%s\n",
-                   DIM, RESET);
+        if (goal_file_path != NULL || no_restart) {
+            printf("%sAuto-restart disabled%s\n", DIM, RESET);
         } else {
             pthread_t watchdog_tid;
             if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
