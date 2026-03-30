@@ -216,7 +216,11 @@ rm -f .nbs/pids/${agent}.pid
 # Reset the agent's chat cursor to current message count.
 # Without this, the restarted agent receives stale notifications
 # from her old cursor position instead of current messages.
-msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+# Count messages: raw file lines minus 6 header lines.
+# Do NOT use `nbs-chat read | wc -l` — that counts rendered output
+# lines (multi-line messages produce multiple lines of output),
+# giving a count far larger than the actual message count.
+msg_count=$(( $(wc -l < "$chat_file") - 6 ))
 cursor_file="${chat_file}.cursors"
 if grep -q "^${agent}=" "$cursor_file" 2>/dev/null; then
     sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
@@ -433,7 +437,11 @@ tag=$(basename "$chat_file" .chat | tr '.' '-')
 agents="scribe medic supervisor gatekeeper theologian testkeeper generalist"
 results=""
 cursor_file="${chat_file}.cursors"
-msg_count=$(nbs-chat read "$chat_file" 2>/dev/null | wc -l)
+# Count messages: raw file lines minus 6 header lines.
+# Do NOT use `nbs-chat read | wc -l` — that counts rendered output
+# lines (multi-line messages produce multiple lines of output),
+# giving a count far larger than the actual message count.
+msg_count=$(( $(wc -l < "$chat_file") - 6 ))
 
 for agent in $agents; do
     handle=$(nbs-ts list --name="nbs-${agent}-${tag}" 2>/dev/null \
