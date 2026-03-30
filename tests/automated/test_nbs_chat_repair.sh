@@ -392,18 +392,21 @@ AFTER_MSG4=$(echo "$AFTER_OUTPUT" | sed -n '4p')
 check "4th message is recovery" "$( echo "$AFTER_MSG4" | grep -qF '[AUTO-REPAIR]' && echo pass || echo fail )"
 echo ""
 
-# --- Test 17: Multi-byte UTF-8 corrupt line does not corrupt subsequent valid messages ---
-# Falsifier: under the old char-counting code, ${#line} returned 4 for "这是测试"
-# (4 characters) instead of 12 (byte count). This caused the byte offset for the
-# dd in-place write to be wrong, potentially overwriting the next valid message.
-echo "17. Multi-byte UTF-8 byte offset correctness..."
+# --- Test 17: Multi-byte UTF-8 byte offset — two corrupt lines ---
+# Falsifier: if byte offsets use character count instead of byte count,
+# a multi-byte corrupt line (14 chars = 42 bytes) shifts all subsequent
+# offsets by 28 bytes. A second dd write at the wrong offset would
+# overwrite a valid base64 message instead of the second corrupt line.
+echo "17. Multi-byte UTF-8 byte offset — two corrupt lines..."
 CHAT="$TEST_DIR/t17.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null 2>&1
 "$NBS_CHAT" send "$CHAT" alice "message before" >/dev/null 2>&1
-# Chinese text: 4 chars but 12 bytes in UTF-8
+# First corrupt line: 14 Chinese chars × 3 bytes = 42 bytes (but ${#} = 14 in UTF-8 locale)
 inject_raw_line "$CHAT" "这是中文测试消息需要正确处理"
-"$NBS_CHAT" send "$CHAT" bob "message after utf8 corruption" >/dev/null 2>&1
-"$NBS_CHAT" send "$CHAT" charlie "third message after" >/dev/null 2>&1
+"$NBS_CHAT" send "$CHAT" bob "message between corruptions" >/dev/null 2>&1
+# Second corrupt line: ASCII
+inject_raw_line "$CHAT" "second corrupt line after utf8"
+"$NBS_CHAT" send "$CHAT" charlie "message after second corruption" >/dev/null 2>&1
 set +e
 "$NBS_REPAIR" "$CHAT" >/dev/null 2>&1
 RC=$?
@@ -411,9 +414,10 @@ set -e
 CHAT_OUTPUT=$("$NBS_CHAT" read "$CHAT" 2>/dev/null)
 check "Exit 0" "$( [[ $RC -eq 0 ]] && echo pass || echo fail )"
 check "alice preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'message before' && echo pass || echo fail )"
-check "bob preserved after UTF-8 corrupt line" "$( echo "$CHAT_OUTPUT" | grep -qF 'message after utf8 corruption' && echo pass || echo fail )"
-check "charlie preserved" "$( echo "$CHAT_OUTPUT" | grep -qF 'third message after' && echo pass || echo fail )"
-check "Recovery present" "$( echo "$CHAT_OUTPUT" | grep -qF '[AUTO-REPAIR]' && echo pass || echo fail )"
+check "bob preserved between corruptions" "$( echo "$CHAT_OUTPUT" | grep -qF 'message between corruptions' && echo pass || echo fail )"
+check "charlie preserved after second corruption" "$( echo "$CHAT_OUTPUT" | grep -qF 'message after second corruption' && echo pass || echo fail )"
+check "First corrupt text recovered" "$( echo "$CHAT_OUTPUT" | grep -qF '这是中文测试消息需要正确处理' && echo pass || echo fail )"
+check "Second corrupt text recovered" "$( echo "$CHAT_OUTPUT" | grep -qF 'second corrupt line after utf8' && echo pass || echo fail )"
 echo ""
 
 # --- Summary ---

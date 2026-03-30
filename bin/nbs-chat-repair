@@ -88,11 +88,14 @@ BYTE_OFFSET=0
 LINE_NUM=0
 PAST_SEPARATOR=0
 
-# Force C locale for byte-accurate ${#var} — without this, ${#var}
-# returns character count in UTF-8 locales, corrupting byte offsets.
-while LC_ALL=C IFS= read -r line || [[ -n "$line" ]]; do
+# Save and override locale — ${#var} must return byte count, not character
+# count, so that dd byte offsets are correct for multi-byte UTF-8 lines.
+_SAVED_LC_ALL="${LC_ALL:-}"
+export LC_ALL=C
+
+while IFS= read -r line || [[ -n "$line" ]]; do
     LINE_NUM=$((LINE_NUM + 1))
-    # In LC_ALL=C, ${#line} returns byte count (not character count)
+    # Under LC_ALL=C, ${#line} returns byte count
     LINE_BYTES=${#line}
 
     if [[ $PAST_SEPARATOR -eq 0 ]]; then
@@ -139,6 +142,13 @@ while LC_ALL=C IFS= read -r line || [[ -n "$line" ]]; do
 
     BYTE_OFFSET=$((BYTE_OFFSET + LINE_BYTES + 1))
 done < "$CHAT_FILE"
+
+# Restore locale
+if [[ -n "$_SAVED_LC_ALL" ]]; then
+    export LC_ALL="$_SAVED_LC_ALL"
+else
+    unset LC_ALL
+fi
 
 # --- Check results ---
 
