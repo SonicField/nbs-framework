@@ -79,6 +79,7 @@ All commands are entered at the prompt and submitted with Enter.
 | `/shutdown` | Announce shutdown with 10-second warning, then kill all agent sessions, sidecars, and nbs-claude processes for this project. Disables watchdog |
 | `/restart` | Manually trigger a team restart via the restart script. Bypasses rate limiting |
 | `/kick <agent>` | Hard restart a single agent: kill session, reset cursor, respawn, verify. Other agents unaffected. Agent must be one of: scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist |
+| `/health` | Report team health: per-agent session and sidecar status via `nbs-team-check` |
 
 ### Oracle Triggers
 

@@ -512,6 +512,7 @@ static void print_help(void) {
     printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
     printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
+    printf("  %s/health%s     Report team health (agents and sidecars)\n", DIM, RESET);
     printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
     printf("  %s/exit%s       Leave the chat\n", DIM, RESET);
@@ -2445,6 +2446,36 @@ int main(int argc, char **argv) {
                         };
                         spawn_with_capture("kick", kick_argv);
                     }
+                }
+                continue;
+            }
+
+            /* /health — report team health */
+            if (strcmp(edit.buf, "/health") == 0) {
+                line_state_reset(&edit);
+                if (g_watchdog.project_root[0] == '\0') {
+                    info_line_emit(&edit, g_handle, "health",
+                                   "No project root — cannot check health.");
+                } else {
+                    /* Derive chat tag for nbs-team-check */
+                    char health_tag[256];
+                    {
+                        const char *base = strrchr(g_watchdog.chat_path, '/');
+                        base = base ? base + 1 : g_watchdog.chat_path;
+                        size_t blen = strlen(base);
+                        if (blen > 5 && strcmp(base + blen - 5, ".chat") == 0)
+                            blen -= 5;
+                        if (blen >= sizeof(health_tag)) blen = sizeof(health_tag) - 1;
+                        memcpy(health_tag, base, blen);
+                        health_tag[blen] = '\0';
+                        for (size_t i = 0; i < blen; i++)
+                            if (health_tag[i] == '.') health_tag[i] = '-';
+                    }
+                    const char *health_argv[] = {
+                        "nbs-team-check", health_tag,
+                        g_watchdog.project_root, NULL
+                    };
+                    spawn_with_capture("health", health_argv);
                 }
                 continue;
             }
