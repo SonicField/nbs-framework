@@ -1931,6 +1931,10 @@ int main(int argc, char **argv) {
                 continue;
             }
 
+            /* Record all non-empty input in history — messages and
+             * commands alike — so up-arrow recalls /filter, /mention etc. */
+            history_add(edit.buf);
+
             /* Check for commands */
             if (strcmp(edit.buf, "/exit") == 0) {
                 line_state_free(&edit);
