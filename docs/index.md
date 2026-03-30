@@ -22,6 +22,21 @@ The epistemic methodology behind NBS — why it exists and how it thinks.
 | [Style Guide](framework/STYLE.md) | Writing conventions |
 | [Wiki Style](framework/WIKI_STYLE.md) | Wiki-specific formatting |
 
+## [Chat System Architecture](chat-architecture/)
+
+Internal architecture of the NBS chat system. Data structures defined in Honest notation.
+
+| Document | Description |
+|----------|-------------|
+| [Overview](chat-architecture/README.md) | Reading order, source file map, Honest notation conventions |
+| [Chat File Format](chat-architecture/chat-file.md) | Header fields, base64-encoded messages, three wire formats, atomic writes |
+| [Cursor System](chat-architecture/cursors.md) | Per-agent read tracking, sender auto-advance, archive adjustment |
+| [Bus Events](chat-architecture/bus-events.md) | Event files, priority levels, publish→ack→prune lifecycle, @mention extraction |
+| [Session Metadata](chat-architecture/session-metadata.md) | Honest-format session files: 9 fields, who writes/reads/deletes |
+| [Sidecar Notifications](chat-architecture/sidecar.md) | Tick loop, prompt detection, notification injection, interrupt protocol |
+| [Control Files](chat-architecture/control-files.md) | Registry, pause file, PID files |
+| [Archive and Truncation](chat-architecture/archive.md) | Auto-archive at 2000 messages, cursor survival, terminal detection |
+
 ## [Tools](tools/)
 
 Reference documentation for infrastructure components.
