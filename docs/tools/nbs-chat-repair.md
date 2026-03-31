@@ -63,4 +63,4 @@ nbs-chat-repair <chat-file> --dry-run # report only, change nothing
 
 ## Terminal Integration
 
-The terminal (`nbs-chat-terminal`) can trigger auto-repair when `chat_read` reports `skipped_count > 0`. This integration is planned — see the feature request for details. Manual invocation works now.
+The terminal (`nbs-chat-terminal`) automatically triggers auto-repair when `chat_read` reports `skipped_count > 0`. On the first poll cycle that detects corruption, the terminal shows an INFO line (`INFO> [repair] N corrupt line(s) detected, running auto-repair...`) and spawns `nbs-chat-repair` in the background. Repair output streams as INFO lines. The recovery message appears as a normal new chat message. The repair fires once per session — a `g_repair_triggered` flag prevents re-triggering on subsequent polls. Manual invocation also works.

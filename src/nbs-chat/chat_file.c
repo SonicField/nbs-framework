@@ -697,6 +697,16 @@ int chat_read(const char *path, chat_state_t *state) {
         }
 
         if (past_header && len > 0 && state->message_count < MAX_MESSAGES) {
+            /* Space-padded lines are repair artefacts from nbs-chat-repair.
+             * Skip them silently — they are not corruption. */
+            {
+                int all_spaces = 1;
+                for (size_t si = 0; si < len; si++) {
+                    if (line[si] != ' ') { all_spaces = 0; break; }
+                }
+                if (all_spaces) continue;
+            }
+
             /* Validate base64 padding before decode — corrupt lines with
              * length not a multiple of 4 would trigger the precondition
              * assert in base64_decoded_size and abort the process. Skip

@@ -20,7 +20,7 @@ nbs-remote-git <host> <remote-path> clone <local-path>
 
 **Example:**
 ```bash
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alexturner/cinderx_dev/cinderx clone /local/phoenix-cpython
+nbs-remote-git build-server.example.com /home/user/project clone /local/project
 ```
 
 ### push
@@ -35,8 +35,8 @@ Must be run from inside a local git repository. The branch defaults to HEAD if n
 
 **Example:**
 ```bash
-cd /local/phoenix-cpython
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alexturner/cinderx_dev/cinderx push phoenix
+cd /local/project
+nbs-remote-git build-server.example.com /home/user/project push my-branch
 ```
 
 ### pull
@@ -51,8 +51,8 @@ Without a branch argument, runs `git fetch`. With a branch, runs `git pull`.
 
 **Example:**
 ```bash
-cd /local/phoenix-cpython
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alexturner/cinderx_dev/cinderx pull main
+cd /local/project
+nbs-remote-git build-server.example.com /home/user/project pull main
 ```
 
 ### status
@@ -67,14 +67,14 @@ Uses `nbs-remote-run` (not `nbs-local-run`) because it runs git on the remote ma
 
 **Example:**
 ```bash
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alexturner/cinderx_dev/cinderx status
+nbs-remote-git build-server.example.com /home/user/project status
 ```
 
 ## How It Works
 
 - `clone`, `push`, and `pull` wrap git commands in `nbs-local-run`, which provides SSH credentials through the nbs-ts-helper daemon.
 - `status` uses `nbs-remote-run` to execute git commands on the remote machine directly.
-- On first `push` or `pull`, the tool adds a git remote named `remote-<hostname>` (e.g. `remote-devgpu004`). Subsequent operations reuse it.
+- On first `push` or `pull`, the tool adds a git remote named `remote-<hostname>` (e.g. `remote-build-server`). Subsequent operations reuse it.
 
 ## Prerequisites
 

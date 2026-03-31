@@ -142,8 +142,8 @@ Here's what good recommendations look like — and what to avoid:
 
 ```
 BAD: "@generalist Check ~/.nbs/docs/tools/tools.md for remote access tools."
-GOOD: "@generalist Use `nbs-remote-run devgpu004 'cd /home/alex/project && make -j8'`
-       to run the build on devgpu004. It handles SSH and returns output."
+GOOD: "@generalist Use `nbs-remote-run remote-host 'cd /home/alex/project && make -j8'`
+       to run the build on remote-host. It handles SSH and returns output."
 ```
 
 ```
@@ -155,9 +155,9 @@ GOOD: "@testkeeper Try `nbs-ts wait-pattern ab12cd34 'Build succeeded' --timeout
 
 ```
 BAD: "@theologian The remote tools section has what you need for file editing."
-GOOD: "@theologian Use `nbs-remote-edit pull devgpu004 /home/alex/project/src/parser.cpp`
+GOOD: "@theologian Use `nbs-remote-edit pull remote-host /home/alex/project/src/parser.cpp`
        to download the file, edit it locally, then
-       `nbs-remote-edit push devgpu004 /home/alex/project/src/parser.cpp` to send it
+       `nbs-remote-edit push remote-host /home/alex/project/src/parser.cpp` to send it
        back. Safer than sed over a terminal session."
 ```
 

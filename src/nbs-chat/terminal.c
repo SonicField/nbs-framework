@@ -81,6 +81,10 @@ static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
 /* @mention highlighting — prompt inverts when enabled */
 static int g_highlight_mention = 0;
 
+/* Auto-repair: set while repair is in flight, cleared when
+ * skipped_count drops to 0 (repair completed successfully). */
+static int g_repair_running = 0;
+
 /* --- Child pipe capture (INFO lines) --- */
 
 typedef struct {
@@ -1071,6 +1075,24 @@ static int poll_and_display(line_state_t *ls, const char *handle) {
 
     chat_state_t state;
     if (chat_read(g_chat_file, &state) < 0) return 0;
+
+    /* Auto-repair: skipped_count > 0 means real corruption exists
+     * (chat_read silently skips space-padded repair artefacts without
+     * counting them).  Trigger repair once; clear when count drops to 0. */
+    if (state.skipped_count > 0 && !g_repair_running) {
+        g_repair_running = 1;
+        char count_str[64];
+        snprintf(count_str, sizeof(count_str),
+                 "%d corrupt line(s) detected, running auto-repair...",
+                 state.skipped_count);
+        info_line_emit(ls, handle, "repair", count_str);
+        const char *argv[] = {
+            "nbs-chat-repair", g_chat_file, NULL
+        };
+        spawn_with_capture("repair", argv);
+    } else if (state.skipped_count == 0) {
+        g_repair_running = 0;
+    }
 
     /* Auto-archive detection: if message_count dropped, the file was
      * rewritten with fewer messages (first 1000 moved to archive).

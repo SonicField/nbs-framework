@@ -50,6 +50,7 @@ PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 NBS_CHAT="${NBS_CHAT_BIN:-$PROJECT_ROOT/bin/nbs-chat}"
 NBS_TERMINAL="${NBS_TERMINAL_BIN:-$PROJECT_ROOT/bin/nbs-chat-terminal}"
 NBS_BUS="${NBS_BUS_BIN:-$PROJECT_ROOT/bin/nbs-bus}"
+NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
 
 # Add bin/ to PATH so bus_bridge.c can find nbs-bus via execlp
 export PATH="$PROJECT_ROOT/bin:$PATH"
@@ -405,12 +406,9 @@ echo "25. Background polling..."
 CHAT="$TEST_DIR/test25.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 
-# Start terminal in background with stdin held open (sleep provides this)
-(sleep 8 | timeout 7 "$NBS_TERMINAL" "$CHAT" "listener" 2>/dev/null) > "$TEST_DIR/poll_output" &
-TERM_PID=$!
-
-# Wait for terminal to start
-sleep 1
+# Start terminal in background via nbs-ts (provides PTY, clean lifecycle)
+T25_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT listener" 2>&1 | tail -1)
+"$NBS_TS" wait-pattern "$T25_HANDLE" 'listener>' --timeout=10 >/dev/null 2>&1
 
 # Send a message from CLI (terminal should pick it up via poll)
 "$NBS_CHAT" send "$CHAT" "sender" "Background message"
@@ -418,9 +416,9 @@ sleep 1
 # Wait for poll interval to elapse
 sleep 3
 
-# Kill terminal
-kill "$TERM_PID" 2>/dev/null || true
-wait "$TERM_PID" 2>/dev/null || true
+# Read output and kill
+"$NBS_TS" read "$T25_HANDLE" > "$TEST_DIR/poll_output" 2>/dev/null || true
+"$NBS_TS" kill "$T25_HANDLE" >/dev/null 2>&1 || true
 
 # Check if the terminal output contains the message
 check "Background poll shows message" "$( grep -qF 'sender' "$TEST_DIR/poll_output" && echo pass || echo fail )"
@@ -601,11 +599,10 @@ check "@mention generates chat-mention event" "$( [[ $MENTION_EVENTS -ge 1 ]] &&
 
 echo ""
 
+
 # ============================================================
 # Auto-archive recovery tests (nbs-ts driven)
 # ============================================================
-
-NBS_TS="$PROJECT_ROOT/bin/nbs-ts"
 
 # Helper: create a chat file and populate it with N messages from varying senders
 create_populated_chat() {
@@ -810,9 +807,12 @@ echo "47. no --highlight-mention, no inverse..."
 CHAT="$TEST_DIR/test47.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 "$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex"
-OUTPUT=$({ sleep 1; printf '/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "alex" 2>/dev/null || true)
+T47_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT alex --no-restart" 2>&1 | tail -1)
+sleep 2
+OUTPUT=$("$NBS_TS" read "$T47_HANDLE" 2>/dev/null || true)
+"$NBS_TS" kill "$T47_HANDLE" >/dev/null 2>&1 || true
 # Without the flag, no reverse video for mentions (prompt uses bold, not reverse)
-REVERSE_COUNT=$(echo "$OUTPUT" | grep -oP '\x1b\[7m' | wc -l)
+REVERSE_COUNT=$(echo "$OUTPUT" | grep -oP '\x1b\[7m' | wc -l || true)
 check "no reverse without flag" "$( [[ $REVERSE_COUNT -eq 0 ]] && echo pass || echo fail )"
 
 echo ""
@@ -877,15 +877,26 @@ check "filtered redraw shows scribe" "$( echo "$OUTPUT" | grep -qF 'From scribe'
 
 echo ""
 
-# --- Test 53: /mention shows matching messages ---
-echo "53. /mention shows matching messages..."
+# --- Test 53: /mention filters polled messages ---
+echo "53. /mention filters polled messages..."
 CHAT="$TEST_DIR/test53.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
-"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex please review"
+"$NBS_CHAT" send "$CHAT" "setup" "Initial message"
+# Start terminal via nbs-ts, set /mention filter, then send matching and non-matching
+T53_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer --no-restart" 2>&1 | tail -1)
+"$NBS_TS" wait-pattern "$T53_HANDLE" 'viewer>' --timeout=5 >/dev/null 2>&1
+"$NBS_TS" send "$T53_HANDLE" "/mention viewer"
+sleep 1
+# Drain the read cursor so we only see output after the filter is set
+"$NBS_TS" read-new "$T53_HANDLE" >/dev/null 2>&1 || true
+# Send messages — only the one mentioning @viewer should appear
+"$NBS_CHAT" send "$CHAT" "supervisor" "Hello @viewer please review"
 "$NBS_CHAT" send "$CHAT" "scribe" "Decision logged"
-OUTPUT=$({ sleep 1; printf '/mention alex\n/exit\n'; } | timeout 10 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
-check "/mention shows @alex message" "$( echo "$OUTPUT" | grep -qF 'please review' && echo pass || echo fail )"
-check "/mention hides non-matching" "$( echo "$OUTPUT" | grep 'Decision logged' | grep -qvF 'INFO' && echo fail || echo pass )"
+sleep 2
+OUTPUT=$("$NBS_TS" read-new "$T53_HANDLE" 2>/dev/null || true)
+"$NBS_TS" kill "$T53_HANDLE" >/dev/null 2>&1 || true
+check "/mention shows @viewer message" "$( echo "$OUTPUT" | grep -qF 'please review' && echo pass || echo fail )"
+check "/mention hides non-matching" "$( echo "$OUTPUT" | grep -qF 'Decision logged' && echo fail || echo pass )"
 
 echo ""
 

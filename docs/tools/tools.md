@@ -472,7 +472,7 @@ Commands mirror `nbs-chat`: `create`, `send`, `read`, `poll`, `participants`, `h
 
 **Example:**
 ```bash
-NBS_CHAT_HOST=user@devgpu004 nbs-chat-remote read /home/user/project/.nbs/chat/live.chat --last=10
+NBS_CHAT_HOST=user@remote-host nbs-chat-remote read /home/user/project/.nbs/chat/live.chat --last=10
 ```
 
 **When to use:** Use `nbs-chat-remote` to read or write to chat files on a remote machine. IF the project `.nbs/` directory lives on a remote host, THEN use `nbs-chat-remote` instead of `nbs-chat`.
@@ -567,7 +567,7 @@ nbs-ts create [--name=NAME] <command>
 
 **Example:**
 ```bash
-nbs-ts create --name=nbs-supervisor-build 'ssh user@devgpu004'
+nbs-ts create --name=nbs-supervisor-build 'ssh user@remote-host'
 ```
 
 **When to use:** Use `nbs-ts create` to start a persistent process. Higher-level tools (`nbs-remote-session`, `nbs-local-session`) call this automatically. Use `nbs-ts create` directly only IF no higher-level tool fits.
@@ -1053,7 +1053,7 @@ nbs-remote-run <host> [--cwd=PATH] [--timeout=N] <command>
 
 **Example:**
 ```bash
-nbs-remote-run devgpu004 --cwd=/home/user/project 'make -j8'
+nbs-remote-run remote-host --cwd=/home/user/project 'make -j8'
 ```
 
 **When to use:** Use `nbs-remote-run` for one-shot commands on a remote machine. It creates an ephemeral session, runs the command, captures output, and cleans up. IF you need to run multiple commands interactively, use `nbs-remote-session` instead.
@@ -1089,7 +1089,7 @@ Prints the session handle to stdout. Use the handle with `nbs-ts send`, `nbs-ts 
 
 **Example:**
 ```bash
-HANDLE=$(nbs-remote-session devgpu004 --name=build --cwd=/home/user/project)
+HANDLE=$(nbs-remote-session remote-host --name=build --cwd=/home/user/project)
 nbs-ts send "$HANDLE" 'make -j8'
 nbs-ts read-new "$HANDLE" --strip
 nbs-ts kill "$HANDLE"
@@ -1131,7 +1131,7 @@ nbs-remote-read <server> <remote-path> [--head=N] [--tail=N] [--lines=M-N] [--gr
 
 **Example:**
 ```bash
-nbs-remote-read devgpu004 /home/user/project/build.log --tail=50
+nbs-remote-read remote-host /home/user/project/build.log --tail=50
 ```
 
 **When to use:** Use `nbs-remote-read` to glance at remote files — code, logs, or config — without downloading them. IF you need to edit a file, use `nbs-remote-edit pull` instead.
@@ -1173,10 +1173,10 @@ nbs-remote-edit <subcommand> <server> <remote-path>
 
 **Example:**
 ```bash
-nbs-remote-edit pull devgpu004 /home/user/project/src/main.cpp
+nbs-remote-edit pull remote-host /home/user/project/src/main.cpp
 # Edit locally with the Edit tool
-nbs-remote-edit diff devgpu004 /home/user/project/src/main.cpp
-nbs-remote-edit push devgpu004 /home/user/project/src/main.cpp
+nbs-remote-edit diff remote-host /home/user/project/src/main.cpp
+nbs-remote-edit push remote-host /home/user/project/src/main.cpp
 ```
 
 **When to use:** Use `nbs-remote-edit` to modify remote files safely. The pull/edit/diff/push workflow prevents sed corruption and gives you a local diff review before pushing.
@@ -1324,7 +1324,7 @@ nbs-remote-git <host> <remote-path> <command> [args]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<host>` | Yes | Remote hostname (e.g. `devgpu004.kcm2.facebook.com`) |
+| `<host>` | Yes | Remote hostname (e.g. `build-server.example.com`) |
 | `<remote-path>` | Yes | Absolute path to the git repository on the remote machine |
 
 **Exit Codes:**
@@ -1337,15 +1337,15 @@ nbs-remote-git <host> <remote-path> <command> [args]
 
 **Example:**
 ```bash
-# Clone a repo from devgpu004
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alex/project clone /local/project
+# Clone a repo from a remote build machine
+nbs-remote-git build-server.example.com /home/user/project clone /local/project
 
-# Push changes to devgpu004
+# Push changes
 cd /local/project
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alex/project push phoenix
+nbs-remote-git build-server.example.com /home/user/project push my-branch
 
 # Check remote status
-nbs-remote-git devgpu004.kcm2.facebook.com /data/users/alex/project status
+nbs-remote-git build-server.example.com /home/user/project status
 ```
 
 **When to use:** Use `nbs-remote-git` to synchronise an entire repository between this machine and a remote build/test machine. IF you need to sync individual files, THEN use `nbs-remote-edit` instead. IF you need to run a command on the remote without syncing code, THEN use `nbs-remote-run` instead. The tool auto-adds a git remote on first `push` or `pull`.
@@ -1698,7 +1698,7 @@ nbs-claude-remote --host=USER@HOST --root=PATH [--handle=NAME] [--name=NAME] [--
 
 **Example:**
 ```bash
-nbs-claude-remote --host=user@devgpu004 --root=/home/user/project --handle=remote-builder
+nbs-claude-remote --host=user@remote-host --root=/home/user/project --handle=remote-builder
 ```
 
 **When to use:** Use `nbs-claude-remote` to run a Claude Code agent on a remote machine where the project lives. All file access happens on the remote machine.

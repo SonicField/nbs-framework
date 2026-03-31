@@ -26,7 +26,7 @@ REMOTE_PATH="$2"
 CMD="$3"
 shift 3
 
-REMOTE_URL="alexturner@${HOST}:${REMOTE_PATH}"
+REMOTE_URL="${USER}@${HOST}:${REMOTE_PATH}"
 
 case "$CMD" in
     clone)
