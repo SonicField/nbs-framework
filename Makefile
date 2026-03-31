@@ -40,6 +40,9 @@ install: all
 	$(MAKE) -C src/nbs-workers install
 	$(MAKE) -C src/nbs-scribe-log install
 	$(MAKE) -C src/nbs-hub install
+	@mkdir -p $(HOME)/.nbs/commands
+	@cp claude_tools/*.md $(HOME)/.nbs/commands/
+	@echo "Installed skill files to ~/.nbs/commands/"
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
