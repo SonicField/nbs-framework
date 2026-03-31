@@ -210,6 +210,40 @@ No other modals permitted. "Could", "might", "would", "can" are banned.
 
 ---
 
+## Honest Type Definitions in PTE
+
+When a PTE document defines a data structure, a protocol, or a tool contract, the document MUST include an Honest type definition for that structure.
+
+### Rules
+
+1. IF a PTE document defines a data structure, a protocol, or a tool contract, THEN the document MUST include an Honest type definition for that structure.
+2. The Honest definition MUST appear in a `pascal` fenced code block.
+3. The Honest definition is authoritative. IF the PTE prose and the Honest definition conflict, THEN the Honest definition governs.
+4. The Honest definition MUST include comments (in `{ }` syntax) for constraints the type system cannot express.
+5. The PTE prose MUST reference the Honest definition by type name. The PTE prose MUST NOT repeat field definitions that are already in the Honest definition.
+
+### Example
+
+A PTE specification for a build result reporting contract:
+
+> The BuildReporter MUST emit EXACTLY ONE `BuildResult` after EACH build completes. IF the build fails, THEN the BuildReporter MUST set the `outcome` field to `Failure`. The BuildReporter MUST record the elapsed time in the `duration_ms` field of `BuildResult`.
+
+```pascal
+type
+  BuildOutcome = (Success, Failure, Timeout);
+
+  BuildResult = record
+    outcome     : BuildOutcome;
+    duration_ms : LongInt;       { MUST be non-negative }
+    output      : String;        { truncated to 65535 bytes if longer }
+    exit_code   : Integer;
+  end;
+```
+
+The PTE prose references `BuildResult` and `outcome` by name. The PTE prose does NOT restate the field list — the Honest definition is the authoritative field inventory.
+
+---
+
 ## The Value Proposition
 
 PTE front-loads the cost. The specification phase becomes slower and more tedious. The implementation phase becomes faster. Fewer wrong guesses. Fewer bugs that trace back to "I thought you meant..."
