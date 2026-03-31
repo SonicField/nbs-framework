@@ -90,7 +90,9 @@ type
   { HardRestart:       kill, reset cursor, spawn, verify }
 
   { Outcome of fixup action on one agent }
-  ActionOutcome = (Healthy, Recovered, Restarted, RestartFailed, SidecarMissing, CursorReset);
+  ActionOutcome = (Healthy, Recovered, Restarted, MandatoryRestart, RestartFailed, SidecarMissing, CursorReset);
+  { Restarted:         agent was broken and required a repair restart }
+  { MandatoryRestart:  agent was healthy but restarted by policy (scribe, medic) }
 
   AgentResult = record
     agent          : AgentRole;
@@ -102,9 +104,9 @@ type
   end;
 
   TeamHealth = (Healthy, Degraded, Critical);
-  { Healthy:   all 7 alive and working, zero actions }
-  { Degraded:  1-2 agents required intervention }
-  { Critical:  3+ agents required intervention, or supervisor was dead }
+  { Healthy:   all 7 alive and working — MandatoryRestart does NOT count as intervention }
+  { Degraded:  1-2 agents required non-mandatory intervention }
+  { Critical:  3+ agents required non-mandatory intervention, or supervisor was dead }
 
   FixupReport = record
     agents_checked : Integer;           { always 7 }
@@ -279,9 +281,9 @@ Format: ONE line per agent. State, action taken, cursor status.
 
 | `TeamHealth` | Condition |
 |--------------|-----------|
-| `Healthy` | All seven agents alive and working. Zero actions taken. |
-| `Degraded` | ONE OR TWO agents required intervention. |
-| `Critical` | THREE OR MORE agents required intervention, OR supervisor was dead. |
+| `Healthy` | All seven agents alive and working. `MandatoryRestart` of scribe/medic does NOT count — routine maintenance is not degradation. |
+| `Degraded` | ONE OR TWO agents required non-mandatory intervention (repair restart, escalation, or context exhaustion). |
+| `Critical` | THREE OR MORE agents required non-mandatory intervention, OR supervisor was dead. |
 
 AFTER posting, publish a bus event:
 
