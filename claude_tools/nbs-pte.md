@@ -5,7 +5,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, AskUserQuestion
 
 # NBS PTE
 
-Precise Technical English (PTE) is a constrained subset of English designed to eliminate ambiguity in technical specifications.
+Precise Technical English (PTE) is a constrained subset of English designed to eliminate ambiguity in technical specifications. PTE has two complementary tools: **constrained prose** (RFC 2119 modals, explicit cardinality, condition-action structure) and **Honest type definitions** (Pascal-based data definitions for structures, states, and contracts). PTE prose states what agents MUST do. Honest definitions state what the data looks like. Together they eliminate the two main sources of ambiguity: vague verbs and undefined nouns.
 
 ---
 
@@ -212,15 +212,22 @@ No other modals permitted. "Could", "might", "would", "can" are banned.
 
 ## Honest Type Definitions in PTE
 
-When a PTE document defines a data structure, a protocol, or a tool contract, the document MUST include an Honest type definition for that structure.
+IF a PTE document defines a data structure, a protocol, a state machine, or a tool contract, THEN the document MUST include an Honest type definition for that structure. Honest is the data definition half of PTE — prose says what agents do, Honest says what the data looks like.
+
+### Preamble requirement
+
+Any document that contains Honest definitions MUST include a brief preamble before the first definition stating what Honest is and how to read it. The reader MAY be an agent who has never encountered Honest before. The preamble SHOULD be TWO TO THREE sentences. Example:
+
+> The states and structures below are defined in Honest — a Pascal-based data definition language used for precise type specifications. Code blocks marked `pascal` in this document are Honest type definitions. They are authoritative: IF the PTE prose and the Honest definitions conflict, THEN the Honest definitions govern.
 
 ### Rules
 
-1. IF a PTE document defines a data structure, a protocol, or a tool contract, THEN the document MUST include an Honest type definition for that structure.
+1. IF a PTE document defines a data structure, a protocol, a state machine, or a tool contract, THEN the document MUST include an Honest type definition for that structure.
 2. The Honest definition MUST appear in a `pascal` fenced code block.
 3. The Honest definition is authoritative. IF the PTE prose and the Honest definition conflict, THEN the Honest definition governs.
 4. The Honest definition MUST include comments (in `{ }` syntax) for constraints the type system cannot express.
 5. The PTE prose MUST reference the Honest definition by type name. The PTE prose MUST NOT repeat field definitions that are already in the Honest definition.
+6. The document MUST include a preamble before the first Honest definition (see above).
 
 ### Example
 
