@@ -111,6 +111,10 @@ The key handler callback lets `nbs-chat-edit` intercept `d`, `t`, `u`, `w` etc. 
 - `nbs-chat read` / `nbs-chat send` — browse is read-only, uses `chat_read` directly
 - Cursor system, sidecar behaviour — browse is terminal-local
 
+## Development
+
+To polish the TUI experience spin up a chat using fake messages in the chat using tmux and from that ensure all the features and key presses work nicely. This is in addition to formal testing - see below.
+
 ## Testing
 
 | Test | Verification |
