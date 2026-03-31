@@ -20,6 +20,7 @@
 #define TRIGGER_ROLE_SHEPARD   "shepard"
 #define TRIGGER_ROLE_FIXUP     "fixup"
 #define TRIGGER_ROLE_LIBRARIAN "librarian"
+#define TRIGGER_ROLE_DIGEST    "chatdigest"
 
 /* Skill files under {{NBS_ROOT}}/commands/ (processed templates).
  * Relative to the .nbs/ directory — callers prepend the nbs_root. */
@@ -27,6 +28,7 @@
 #define TRIGGER_SKILL_SHEPARD   "commands/nbs-shepard.md"
 #define TRIGGER_SKILL_FIXUP     "commands/nbs-fixup-auto.md"
 #define TRIGGER_SKILL_LIBRARIAN "commands/nbs-librarian.md"
+#define TRIGGER_SKILL_DIGEST    "commands/nbs-chat-digest.md"
 
 /* Task instructions appended AFTER the embedded skill content.
  * These do NOT say "Load /nbs-X" — the skill is already inline. */
@@ -54,5 +56,12 @@
     "Search scribe log for answers to questions or blockers the team is " \
     "stuck on. Post findings with @team! tag as librarian. If scribe has nothing " \
     "relevant, stay silent. Then stop — do not do anything else."
+
+#define TRIGGER_DESC_DIGEST \
+    "Your handle is 'chatdigest' — use this for all nbs-chat send commands. " \
+    "Run the digest procedure on the chat file. " \
+    "Post the digest to chat using nbs-chat send. " \
+    "MUST use nbs-chat send — MUST NOT write directly to the chat file. " \
+    "Then stop — do not do anything else after posting."
 
 #endif /* NBS_TRIGGER_DEFS_H */

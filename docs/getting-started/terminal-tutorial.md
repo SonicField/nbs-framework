@@ -195,6 +195,8 @@ The output appears as `[health]` INFO lines. This is a quick, synchronous check 
 
 Oracles are ephemeral workers. They spawn, perform a specific assessment, post results to chat, and exit. They do not participate in ongoing conversation or accumulate context — fresh perspective is the point.
 
+Oracles work while the team is paused. A common workflow: `/pause`, then `/digest` or `/pythia` to assess the state, then `/resume`.
+
 ### `/pythia`
 
 Trajectory and risk assessment. Pythia reads the last 500 lines of the Scribe's decision log and posts a structured checkpoint covering hidden assumptions, second-order risks, missing validation, and a confidence level.
@@ -225,6 +227,14 @@ Diagnose and restart stalled agents. Fixup runs diagnostics on all agents, ident
 
 ```
 alex> /fixup
+```
+
+### `/digest`
+
+Extract structured learnings from the chat. The digest agent reads the full conversation, produces a summary covering decisions, what worked, what didn't, and continuation goals, then posts the digest to chat.
+
+```
+alex> /digest
 ```
 
 ### Oracle Output

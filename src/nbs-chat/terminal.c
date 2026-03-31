@@ -517,6 +517,7 @@ static void print_help(void) {
     printf("  %s/shepard%s    Spawn shepard (team effectiveness check)\n", DIM, RESET);
     printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
+    printf("  %s/digest%s     Spawn chatdigest (extract learnings from chat)\n", DIM, RESET);
     printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
     printf("  %s/health%s     Report team health (agents and sidecars)\n", DIM, RESET);
     printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
@@ -2508,7 +2509,8 @@ int main(int argc, char **argv) {
             if (strcmp(edit.buf, "/pythia") == 0 ||
                 strcmp(edit.buf, "/shepard") == 0 ||
                 strcmp(edit.buf, "/librarian") == 0 ||
-                strcmp(edit.buf, "/fixup") == 0) {
+                strcmp(edit.buf, "/fixup") == 0 ||
+                strcmp(edit.buf, "/digest") == 0) {
                 /* Save role before resetting — role pointed into edit.buf */
                 char role_buf[16];
                 snprintf(role_buf, sizeof(role_buf), "%s", edit.buf + 1);
@@ -2527,44 +2529,36 @@ int main(int argc, char **argv) {
                 } else if (strcmp(role, "fixup") == 0) {
                     desc = TRIGGER_DESC_FIXUP;
                     skill = TRIGGER_SKILL_FIXUP;
+                } else if (strcmp(role, "digest") == 0) {
+                    role = TRIGGER_ROLE_DIGEST;
+                    desc = TRIGGER_DESC_DIGEST;
+                    skill = TRIGGER_SKILL_DIGEST;
                 }
                 line_state_reset(&edit);
 
+                /* Oracles work while paused — they read chat and post
+                 * results, they don't need active sidecars. This lets
+                 * the human /pause, /digest, /pythia, /resume. */
                 if (g_watchdog.project_root[0] == '\0') {
                     info_line_emit(&edit, g_handle, role,
                                    "No project root — watchdog not initialised.");
-                } else if (!watchdog_is_enabled(&g_watchdog)) {
-                    info_line_emit(&edit, g_handle, role,
-                                   "Team is paused. Use /resume before spawning oracles.");
+                } else if (!desc || !skill) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Unknown oracle: %s", role);
+                    info_line_emit(&edit, g_handle, role, msg);
                 } else {
-                    /* Also check pause file — sidecars skip all work
-                     * when this exists, so the oracle would sit idle. */
-                    char pp[8192];
-                    snprintf(pp, sizeof(pp), "%s/.nbs/control-pause",
-                             g_watchdog.project_root);
-                    struct stat pps;
-                    if (stat(pp, &pps) == 0) {
-                        info_line_emit(&edit, g_handle, role,
-                                       "Team is paused (control-pause file exists). "
-                                       "Use /resume first.");
-                    } else if (!desc || !skill) {
+                    if (spawn_trigger_worker(role, skill, desc,
+                                              g_watchdog.project_root) == 0) {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "Unknown oracle: %s", role);
+                        snprintf(msg, sizeof(msg),
+                                 "%s spawned (will post to chat when done).",
+                                 role);
                         info_line_emit(&edit, g_handle, role, msg);
                     } else {
-                        if (spawn_trigger_worker(role, skill, desc,
-                                                  g_watchdog.project_root) == 0) {
-                            char msg[128];
-                            snprintf(msg, sizeof(msg),
-                                     "%s spawned (will post to chat when done).",
-                                     role);
-                            info_line_emit(&edit, g_handle, role, msg);
-                        } else {
-                            char msg[128];
-                            snprintf(msg, sizeof(msg),
-                                     "Failed to spawn %s.", role);
-                            info_line_emit(&edit, g_handle, role, msg);
-                        }
+                        char msg[128];
+                        snprintf(msg, sizeof(msg),
+                                 "Failed to spawn %s.", role);
+                        info_line_emit(&edit, g_handle, role, msg);
                     }
                 }
                 /* info_line_emit already redraws the prompt via line_redraw */

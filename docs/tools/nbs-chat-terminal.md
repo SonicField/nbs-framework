@@ -89,10 +89,9 @@ All commands are entered at the prompt and submitted with Enter.
 | `/shepard` | shepard | Team effectiveness check. Lists nbs-ts sessions, captures panes, reads last 20 chat messages, posts assessment |
 | `/librarian` | librarian | Institutional memory search. Reads last 100 chat messages, searches scribe log for answers to blockers, posts findings with `@team!` tag |
 | `/fixup` | fixup | Diagnose and restart stalled agents. Runs `/nbs-teams-fixup` on all agents, posts summary |
+| `/digest` | chatdigest | Extract structured learnings from the chat. Posts a digest with decisions, 3Ws, and continuation goals |
 
-All oracle commands check two conditions before spawning:
-- The watchdog must be enabled (team not paused or shut down)
-- The `control-pause` file must not exist
+Oracle commands work while the team is paused. This supports the workflow: `/pause`, `/digest`, `/pythia`, `/resume` — assess the team's state before resuming. The only requirement is that a project root is set (watchdog initialised).
 
 If either check fails, the command prints an error and does nothing. This prevents spawning oracles that would sit idle in a paused team.
 
@@ -207,7 +206,7 @@ The watchdog thread checks for `.nbs/control-pause` at the start of every poll c
 
 ## Oracle Spawning
 
-Oracle commands (`/pythia`, `/shepard`, `/librarian`, `/fixup`) share a single code path: `spawn_trigger_worker()`.
+Oracle commands (`/pythia`, `/shepard`, `/librarian`, `/fixup`, `/digest`) share a single code path: `spawn_trigger_worker()`.
 
 ### Mechanism
 
@@ -226,6 +225,7 @@ Role definitions live in `src/nbs-common/trigger_defs.h` — the single source o
 | shepard | `commands/nbs-shepard.md` | shepard |
 | librarian | `commands/nbs-librarian.md` | librarian |
 | fixup | `commands/nbs-fixup-auto.md` | fixup |
+| digest | `commands/nbs-chat-digest.md` | chatdigest |
 
 
 ## Oracle Reaper
