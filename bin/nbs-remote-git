@@ -1,0 +1,87 @@
+#!/bin/bash
+# nbs-remote-git — Git operations between this machine and a remote host
+#
+# Uses nbs-local-run for SSH credentials. The helper must be running.
+#
+# Usage:
+#   nbs-remote-git <host> <remote-path> clone <local-path>
+#   nbs-remote-git <host> <remote-path> push [branch]
+#   nbs-remote-git <host> <remote-path> pull [branch]
+#   nbs-remote-git <host> <remote-path> status
+#
+# Exit codes:
+#   0 — success
+#   1 — operation failed
+#   4 — invalid arguments
+
+set -uo pipefail
+
+if [[ $# -lt 3 ]]; then
+    echo "Usage: nbs-remote-git <host> <remote-path> <clone|push|pull|status> [args]"
+    exit 4
+fi
+
+HOST="$1"
+REMOTE_PATH="$2"
+CMD="$3"
+shift 3
+
+REMOTE_URL="alexturner@${HOST}:${REMOTE_PATH}"
+
+case "$CMD" in
+    clone)
+        if [[ $# -lt 1 ]]; then
+            echo "Usage: nbs-remote-git <host> <remote-path> clone <local-path>"
+            exit 4
+        fi
+        LOCAL_PATH="$1"
+        echo "Cloning ${HOST}:${REMOTE_PATH} → ${LOCAL_PATH}"
+        nbs-local-run "git clone '${REMOTE_URL}' '${LOCAL_PATH}'" 2>&1
+        ;;
+
+    push)
+        BRANCH="${1:-HEAD}"
+        if [[ ! -d .git ]]; then
+            echo "Error: not in a git repository"
+            exit 1
+        fi
+        # Add remote if not already configured
+        REMOTE_NAME="remote-${HOST%%.*}"
+        if ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+            git remote add "$REMOTE_NAME" "$REMOTE_URL"
+            echo "Added remote '${REMOTE_NAME}' → ${REMOTE_URL}"
+        fi
+        echo "Pushing ${BRANCH} to ${HOST}:${REMOTE_PATH}"
+        nbs-local-run "cd '$(pwd)' && git push '${REMOTE_NAME}' '${BRANCH}'" 2>&1
+        ;;
+
+    pull)
+        BRANCH="${1:-}"
+        if [[ ! -d .git ]]; then
+            echo "Error: not in a git repository"
+            exit 1
+        fi
+        REMOTE_NAME="remote-${HOST%%.*}"
+        if ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+            git remote add "$REMOTE_NAME" "$REMOTE_URL"
+            echo "Added remote '${REMOTE_NAME}' → ${REMOTE_URL}"
+        fi
+        echo "Pulling from ${HOST}:${REMOTE_PATH}"
+        if [[ -n "$BRANCH" ]]; then
+            nbs-local-run "cd '$(pwd)' && git pull '${REMOTE_NAME}' '${BRANCH}'" 2>&1
+        else
+            nbs-local-run "cd '$(pwd)' && git fetch '${REMOTE_NAME}'" 2>&1
+        fi
+        ;;
+
+    status)
+        echo "Remote: ${HOST}:${REMOTE_PATH}"
+        nbs-remote-run "$HOST" "cd '${REMOTE_PATH}' && git log --oneline -3 && echo '---' && git status --short" 2>&1
+        ;;
+
+    *)
+        echo "Error: unknown command '$CMD'"
+        echo "Commands: clone, push, pull, status"
+        exit 4
+        ;;
+esac
