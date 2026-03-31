@@ -65,6 +65,7 @@ Reference documentation for infrastructure components.
 | [nbs-scribe-log](tools/nbs-scribe-log.md) | Decision log binary (append-only) |
 | [nbs-workers](tools/nbs-workers.md) | Worker lifecycle: spawn, status, dismiss |
 | [Remote Tools](tools/nbs-remote.md) | nbs-remote-run/edit/read and nbs-local-run |
+| [Remote Git](tools/nbs-remote-git.md) | Git sync between machines via SSH |
 | [Testing Strategy](tools/testing-strategy.md) | Test philosophy and methodology |
 | [Interactive Testing](tools/interactive-testing.md) | Manual testing procedures |
 
