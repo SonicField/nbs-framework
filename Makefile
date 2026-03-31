@@ -43,6 +43,13 @@ install: all
 	@mkdir -p $(HOME)/.nbs/commands
 	@cp claude_tools/*.md $(HOME)/.nbs/commands/
 	@echo "Installed skill files to ~/.nbs/commands/"
+	@mkdir -p $(HOME)/.nbs/bin
+	@if [ -d lib/honest/build ]; then \
+		cp lib/honest/build/honest-build lib/honest/build/honest-extract \
+		   lib/honest/build/honest-fmt lib/honest/build/honest-get \
+		   lib/honest/build/honest-parse $(HOME)/.nbs/bin/; \
+		echo "Installed honest tools to ~/.nbs/bin/"; \
+	fi
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
