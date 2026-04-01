@@ -42,13 +42,15 @@ fi
 TAG=$(basename "$CHAT_FILE" .chat | tr '.' '-')
 SESSION_NAME="nbs-${AGENT}-${TAG}"
 
-# 1. Kill existing session
-HANDLE=$(nbs-ts list --name="$TAG" 2>/dev/null | grep "alive.*${SESSION_NAME}" | head -1 | cut -f1)
+# 1. Kill existing session (use nbs-ts find for exact match)
+HANDLE=$(nbs-ts find "$SESSION_NAME" 2>/dev/null)
 if [[ -n "$HANDLE" ]]; then
-    echo "Killing session $SESSION_NAME..."
+    STATUS=$(nbs-ts status "$HANDLE" 2>/dev/null)
+    echo "Killing session $SESSION_NAME ($HANDLE, $STATUS)..."
     nbs-ts kill "$HANDLE" 2>/dev/null || true
+    sleep 2  # wait for session cleanup before spawning replacement
 else
-    echo "No alive session for $AGENT (already dead)"
+    echo "No session found for $AGENT ($SESSION_NAME)"
 fi
 
 # 2. Clean PID file
@@ -92,10 +94,13 @@ ELAPSED=0
 while [[ $ELAPSED -lt 30 ]]; do
     sleep 5
     ELAPSED=$((ELAPSED + 5))
-    VERIFY=$(nbs-ts list --name="$TAG" 2>/dev/null | grep "alive.*${SESSION_NAME}" | head -1 | cut -f1)
+    VERIFY=$(nbs-ts find "$SESSION_NAME" 2>/dev/null)
     if [[ -n "$VERIFY" ]]; then
-        echo "$AGENT alive and verified"
-        exit 0
+        VSTATUS=$(nbs-ts status "$VERIFY" 2>/dev/null)
+        if [[ "$VSTATUS" == "alive" ]]; then
+            echo "$AGENT alive and verified ($VERIFY)"
+            exit 0
+        fi
     fi
 done
 
