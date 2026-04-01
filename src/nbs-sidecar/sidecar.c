@@ -280,13 +280,36 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     }
     close(log_fd);
 
+    /* Resolve nbs-ts-render to absolute path — same directory as this
+     * binary.  Bare "nbs-ts-render" fails silently when PATH doesn't
+     * include the install directory (the 2>/dev/null suppresses the
+     * shell error, producing empty output that looks like a dead session). */
+    char render_bin[4096] = "nbs-ts-render";  /* fallback to PATH */
+    {
+        char self_path[4096];
+        ssize_t rlen = readlink("/proc/self/exe", self_path,
+                                 sizeof(self_path) - 1);
+        if (rlen > 0) {
+            self_path[rlen] = '\0';
+            char *slash = strrchr(self_path, '/');
+            if (slash) {
+                size_t dir_len = (size_t)(slash - self_path);
+                if (dir_len + sizeof("/nbs-ts-render") <= sizeof(render_bin)) {
+                    memcpy(render_bin, self_path, dir_len);
+                    memcpy(render_bin + dir_len, "/nbs-ts-render",
+                           sizeof("/nbs-ts-render"));
+                }
+            }
+        }
+    }
+
     /* Pipe from render_start through nbs-ts-render */
     char render_cmd[8192];
     snprintf(render_cmd, sizeof(render_cmd),
              "tail -c +%" PRId64 " '%s' 2>/dev/null | "
-             "nbs-ts-render --width=80 --height=24 2>/dev/null",
+             "'%s' --width=80 --height=24 2>/dev/null",
              (int64_t)(render_start + 1), /* tail -c +N is 1-based */
-             log_path);
+             log_path, render_bin);
 
     char truncated[SIDECAR_MAX_CONTENT];
     truncated[0] = '\0';
@@ -696,7 +719,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                                                  qchat_path, sizeof(qchat_path)) == 0) {
                             char errmsg[256];
                             snprintf(errmsg, sizeof(errmsg),
-                                     "@%s? query failed — could not capture session output for %s",
+                                     "%s? query failed — could not capture session output for %s",
                                      cfg->handle, cfg->handle);
                             chat_client_error(qchat_path, errmsg);
                         }

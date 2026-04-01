@@ -237,28 +237,35 @@ int bus_extract_mentions(const char *message,
         memcpy(candidate, start, handle_len);
         candidate[handle_len] = '\0';
 
+        /* Determine suffix: '!' (interrupt=1), '?' (query=2), none (mention=0).
+         * Also accept '\!' and '\?' — LLMs frequently backslash-escape
+         * these characters because markdown training primes them to
+         * treat '!' as a special character. */
+        int this_flag = 0;
+        if (*end == '!' || (*end == '\\' && *(end + 1) == '!')) {
+            this_flag = 1;
+        } else if (*end == '?' || (*end == '\\' && *(end + 1) == '?')) {
+            this_flag = 2;
+        }
+
+        /* Check for duplicates — if the same handle appears again with a
+         * higher-priority suffix (query > interrupt > mention), upgrade.
+         * This prevents @alice @alice? from dropping the query intent. */
         int is_dup = 0;
         for (int i = 0; i < found; i++) {
             if (strcmp(out_handles[i], candidate) == 0) {
                 is_dup = 1;
+                if (out_interrupt_flags != NULL && this_flag > out_interrupt_flags[i]) {
+                    out_interrupt_flags[i] = this_flag;
+                }
                 break;
             }
         }
 
         if (!is_dup) {
             memcpy(out_handles[found], candidate, handle_len + 1);
-            /* Check for suffix: '!' (interrupt) or '?' (query) after handle.
-             * Also accept '\!' and '\?' — LLMs frequently backslash-escape
-             * these characters because markdown training primes them to
-             * treat '!' as a special character. */
             if (out_interrupt_flags != NULL) {
-                if (*end == '!' || (*end == '\\' && *(end + 1) == '!')) {
-                    out_interrupt_flags[found] = 1;
-                } else if (*end == '?' || (*end == '\\' && *(end + 1) == '?')) {
-                    out_interrupt_flags[found] = 2;
-                } else {
-                    out_interrupt_flags[found] = 0;
-                }
+                out_interrupt_flags[found] = this_flag;
             }
             found++;
         }
