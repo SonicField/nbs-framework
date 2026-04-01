@@ -273,120 +273,9 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     return 0;
 }
 
-static void *watchdog_thread_fn(void *arg) {
-    watchdog_state_t *ws = (watchdog_state_t *)arg;
-
-    while (watchdog_is_enabled(ws)) {
-        sleep(WATCHDOG_POLL_INTERVAL_S);
-        if (!watchdog_is_enabled(ws)) break;
-
-        /* Skip if team is paused */
-        {
-            char pause_path[8192];
-            snprintf(pause_path, sizeof(pause_path),
-                     "%s/.nbs/control-pause", ws->project_root);
-            struct stat pause_st;
-            if (stat(pause_path, &pause_st) == 0) continue;
-        }
-
-        /* Derive session prefix from chat filename.
-         * live.chat → "live", nn.Module.chat → "nn-Module"
-         * Dots replaced with dashes (session names use dashes). */
-        char chat_tag[256];
-        {
-            const char *base = strrchr(ws->chat_path, '/');
-            base = base ? base + 1 : ws->chat_path;
-            size_t blen = strlen(base);
-            /* Strip .chat suffix */
-            if (blen > 5 && strcmp(base + blen - 5, ".chat") == 0)
-                blen -= 5;
-            if (blen >= sizeof(chat_tag)) blen = sizeof(chat_tag) - 1;
-            memcpy(chat_tag, base, blen);
-            chat_tag[blen] = '\0';
-            /* Replace dots with dashes */
-            for (size_t i = 0; i < blen; i++)
-                if (chat_tag[i] == '.') chat_tag[i] = '-';
-        }
-
-        /* Count alive agent sessions for THIS chat only.
-         * Count alive nbs-ts sessions.
-         *
-         * Uses fork+exec+pipe instead of popen — popen is not
-         * async-signal-safe and must not be called from a
-         * multi-threaded process. */
-        int count = 0;
-        {
-            int pipefd[2];
-            if (pipe(pipefd) == 0) {
-                pid_t cpid = fork();
-                if (cpid == 0) {
-                    /* Child: redirect stdout to pipe, exec shell */
-                    close(pipefd[0]);
-                    if (dup2(pipefd[1], STDOUT_FILENO) != -1) {
-                        int devnull = open("/dev/null", O_WRONLY);
-                        if (devnull >= 0) {
-                            dup2(devnull, STDERR_FILENO);
-                            close(devnull);
-                        }
-                        execlp("sh", "sh", "-c",
-                               "nbs-ts list 2>/dev/null | grep -c alive || echo 0",
-                               (char *)NULL);
-                    }
-                    _exit(127);
-                } else if (cpid > 0) {
-                    /* Parent: read count from pipe */
-                    close(pipefd[1]);
-                    FILE *fp = fdopen(pipefd[0], "r");
-                    if (fp) {
-                        if (fscanf(fp, "%d", &count) != 1) count = 0;
-                        fclose(fp); /* closes pipefd[0] */
-                    } else {
-                        close(pipefd[0]);
-                    }
-                    int wstatus;
-                    waitpid(cpid, &wstatus, 0);
-                } else {
-                    /* fork failed */
-                    close(pipefd[0]);
-                    close(pipefd[1]);
-                }
-            }
-        }
-        /* nbs-ts is the only session transport — no fallback needed */
-
-        time_t eval_now = time(NULL);
-        if (eval_now == (time_t)-1) continue; /* clock error — skip this cycle */
-        watchdog_decision_t d = watchdog_evaluate(ws, count, eval_now);
-        if (d == WATCHDOG_RESTART) {
-            char script[4096 + 64];
-            if (resolve_restart_script(ws->project_root,
-                                        script, sizeof(script)) == 0) {
-                /* Safety: fork in a multi-threaded process is POSIX-legal
-                 * provided the child calls only async-signal-safe functions
-                 * before exec. execlp and _exit satisfy this constraint.
-                 * No heap allocation, no stdio, no mutex acquisition. */
-                pid_t rpid = fork();
-                if (rpid == 0) {
-                    /* Child: exec restart script with project_root and chat_path */
-                    execlp("bash", "bash", script,
-                           ws->project_root, ws->chat_path, (char *)NULL);
-                    _exit(127);
-                } else if (rpid > 0) {
-                    /* Wait for restart to complete before resuming polling.
-                     * Without this, the watchdog fires again while the
-                     * restart script is still running (digest takes minutes),
-                     * spawning concurrent restarts that kill each other. */
-                    int wstatus;
-                    waitpid(rpid, &wstatus, 0);
-                }
-                /* fork failure: silently continue — next poll will retry */
-            }
-        }
-        /* WATCHDOG_RATE_LIMITED: evaluate already set enabled=0.
-         * Thread will exit on next loop iteration. */
-    }
-    return NULL;
-}
+/* Watchdog auto-restart thread removed. Crash recovery is handled by
+ * /fixup (manual or sidecar-triggered). The watchdog state machine
+ * (watchdog.c) is retained for /pause and /resume state tracking. */
 
 /* --- Terminal width --- */
 
@@ -1448,13 +1337,12 @@ static void print_usage(void) {
     printf("nbs-chat-terminal: Interactive terminal client for nbs-chat\n\n");
     printf("Usage:\n");
     printf("  nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]\n");
-    printf("                                    [--no-restart] [--highlight-mention]\n\n");
+    printf("                                    [--highlight-mention]\n\n");
     printf("  <file>      Path to chat file (must exist)\n");
     printf("  <handle>    Your display name in the chat\n");
     printf("  --restart           Start/restart the agent team immediately\n");
     printf("  --goal-file=PATH    Inject file contents into chat as session goal\n");
     printf("                      (posted as your handle, before restart/digest)\n");
-    printf("  --no-restart        Disable watchdog auto-restart (manual restarts only)\n");
     printf("  --highlight-mention Invert @<handle> mentions in chat messages\n\n");
     printf("Controls:\n");
     printf("  Type a message and press Enter to send.\n");
@@ -1474,9 +1362,8 @@ int main(int argc, char **argv) {
     g_chat_file = argv[1];
     g_handle = argv[2];
 
-    /* Check for --restart, --goal-file, --no-restart, and --highlight-mention flags */
+    /* Check for --restart, --goal-file, and --highlight-mention flags */
     int restart_immediately = 0;
-    int no_restart = 0;
     int highlight_mention = 0;
     const char *goal_file_path = NULL;
     for (int i = 3; i < argc; i++) {
@@ -1484,8 +1371,6 @@ int main(int argc, char **argv) {
             restart_immediately = 1;
         } else if (strncmp(argv[i], "--goal-file=", 12) == 0) {
             goal_file_path = argv[i] + 12;
-        } else if (strcmp(argv[i], "--no-restart") == 0) {
-            no_restart = 1;
         } else if (strcmp(argv[i], "--highlight-mention") == 0) {
             highlight_mention = 1;
         } else {
@@ -1800,22 +1685,10 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* Always init the watchdog — it holds the project root needed
-         * by /pythia, /shepard, /librarian, /fixup trigger commands.
-         * Only start the auto-restart THREAD when --goal-file is not set. */
+        /* Init watchdog state — holds project_root and chat_path needed
+         * by oracle commands, /pause, /resume, /kick, /health, /restart.
+         * No auto-restart thread — crash recovery is via /fixup. */
         watchdog_init(&g_watchdog, g_chat_file, wd_project_root);
-
-        if (goal_file_path != NULL || no_restart) {
-            printf("%sAuto-restart disabled%s\n", DIM, RESET);
-        } else {
-            pthread_t watchdog_tid;
-            if (pthread_create(&watchdog_tid, NULL, watchdog_thread_fn,
-                               &g_watchdog) == 0) {
-                pthread_detach(watchdog_tid);
-            } else {
-                fprintf(stderr, "warning: failed to start watchdog thread\n");
-            }
-        }
     } else {
         fprintf(stderr, "warning: could not resolve project root from %s "
                         "— watchdog disabled\n", g_chat_file);

@@ -51,7 +51,6 @@ UNIT_TEST_TIME = $(UNIT_TEST_DIR)/test_chat_time_unit
 UNIT_TEST_TRUNCATE = $(UNIT_TEST_DIR)/test_chat_truncate_unit
 UNIT_TEST_CHAT_MAIN = $(UNIT_TEST_DIR)/test_chat_main_unit
 UNIT_TEST_AUDIT = $(UNIT_TEST_DIR)/test_chat_file_audit
-UNIT_TEST_WATCHDOG = $(UNIT_TEST_DIR)/test_watchdog_unit
 
 .PHONY: all clean install debug asan test test-debug test-asan test-unit test-all
 
@@ -127,8 +126,6 @@ $(UNIT_TEST_CHAT_MAIN): $(UNIT_TEST_DIR)/test_chat_main_unit.c chat_file.c lock.
 $(UNIT_TEST_AUDIT): $(UNIT_TEST_DIR)/test_chat_file_audit.c chat_file.c lock.c base64.c chat_file.h lock.h base64.h
 	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_chat_file_audit.c chat_file.c lock.c base64.c $(LDFLAGS)
 
-$(UNIT_TEST_WATCHDOG): $(UNIT_TEST_DIR)/test_watchdog_unit.c watchdog.c watchdog.h ../nbs-common/nbs_assert.h
-	$(CC) $(CFLAGS) -I. -o $@ $(UNIT_TEST_DIR)/test_watchdog_unit.c watchdog.c $(LDFLAGS)
 
 # --- Test targets ---
 
@@ -159,7 +156,7 @@ test-asan: asan install
 	bash $(TEST_DIR)/test_nbs_team_check.sh
 	bash $(TEST_DIR)/test_nbs_ts_sysctl.sh
 
-test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT) $(UNIT_TEST_WATCHDOG)
+test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT)
 	$(UNIT_TEST_CHAT_FILE)
 	$(UNIT_TEST_BASE64)
 	$(UNIT_TEST_BUS_BRIDGE)
@@ -170,7 +167,6 @@ test-unit: $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(
 	$(UNIT_TEST_TRUNCATE)
 	cd $(UNIT_TEST_DIR) && ./test_chat_main_unit
 	$(UNIT_TEST_AUDIT)
-	$(UNIT_TEST_WATCHDOG)
 
 # Full test run: release + ASan
 test-all: test-unit test test-asan
@@ -188,4 +184,4 @@ remote.o: remote.c
 
 clean:
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(TERM_OBJS) $(REMOTE_OBJS) $(COMMON_OBJS) $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
-	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT) $(UNIT_TEST_WATCHDOG)
+	rm -f $(UNIT_TEST_CHAT_FILE) $(UNIT_TEST_BASE64) $(UNIT_TEST_BUS_BRIDGE) $(UNIT_TEST_LOCK) $(UNIT_TEST_REMOTE) $(UNIT_TEST_TERMINAL) $(UNIT_TEST_TIME) $(UNIT_TEST_TRUNCATE) $(UNIT_TEST_CHAT_MAIN) $(UNIT_TEST_AUDIT)
