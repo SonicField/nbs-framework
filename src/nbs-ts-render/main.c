@@ -41,6 +41,7 @@ static void print_help(void) {
         "                  Set screen width in columns (default: %d)\n"
         "    --height=N, --height N\n"
         "                  Set screen height in rows (default: %d)\n"
+        "    --no-strip    Preserve SGR colour/style escape sequences in output\n"
         "    --help        Show this help message and exit\n"
         "\n"
         "DESCRIPTION:\n"
@@ -109,6 +110,7 @@ static int parse_int_arg(const char *arg, const char *prefix, int *out) {
 int main(int argc, char *argv[]) {
     int width = NBS_TS_RENDER_DEFAULT_COLS;
     int height = NBS_TS_RENDER_DEFAULT_ROWS;
+    int no_strip = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -124,6 +126,11 @@ int main(int argc, char *argv[]) {
         result = parse_int_arg(argv[i], "--height=", &height);
         if (result == -1) return NBS_TS_EXIT_BAD_ARGS;
         if (result == 1) continue;
+
+        if (strcmp(argv[i], "--no-strip") == 0) {
+            no_strip = 1;
+            continue;
+        }
 
         /* Support space-separated form: --width N / --height N */
         if (strcmp(argv[i], "--width") == 0) {
@@ -160,6 +167,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "nbs-ts-render: failed to allocate terminal buffer (%dx%d)\n",
                 width, height);
         return 1;
+    }
+
+    if (no_strip) {
+        ts_render_set_preserve_sgr(t, 1);
     }
 
     /* Read stdin in 64KB chunks and feed to emulator */

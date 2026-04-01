@@ -10,6 +10,7 @@
 #include "nbs_ts_wcwidth.h"
 #include "nbs_ts_bidi.h"
 #include "../nbs-common/nbs_assert.h"
+#include "../nbs-common/nbs_term_attr.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,7 @@ static const ts_render_cell_t *cell_at_const(const ts_render_t *t, int row, int 
 static void clear_cell(ts_render_cell_t *c) {
     memset(c->ch, 0, NBS_TS_RENDER_CELL_BYTES);
     c->len = 0;
+    c->style = (nbs_style_t){ NBS_COLOUR_NONE, NBS_COLOUR_NONE, 0 };
 }
 
 static void clear_row(ts_render_t *t, int row) {
@@ -222,6 +224,7 @@ static void put_char(ts_render_t *t, const char *ch, int len) {
             memset(c->ch + len, 0, (size_t)(NBS_TS_RENDER_CELL_BYTES - len));
         }
         c->len = len;
+        if (t->preserve_sgr) c->style = t->active_style;
 
         /* Mark next cell as continuation */
         set_continuation(cell_at(t, t->cursor_row, t->cursor_col + 1));
@@ -246,6 +249,7 @@ static void put_char(ts_render_t *t, const char *ch, int len) {
         memset(c->ch + len, 0, (size_t)(NBS_TS_RENDER_CELL_BYTES - len));
     }
     c->len = len;
+    if (t->preserve_sgr) c->style = t->active_style;
 
     /* Advance cursor */
     if (t->cursor_col >= t->cols - 1) {
@@ -471,9 +475,54 @@ static void dispatch_csi(ts_render_t *t, char final_byte) {
         break;
     }
 
-    /* ── SGR (decoration — we strip it) ───────────────────────── */
+    /* ── SGR (decoration) ──────────────────────────────────────── */
     case 'm': /* SGR — Select Graphic Rendition */
-        /* Intentionally ignored — we strip all decoration. */
+        if (t->preserve_sgr) {
+            if (t->param_count == 0) {
+                t->active_style = (nbs_style_t){ NBS_COLOUR_NONE, NBS_COLOUR_NONE, 0 };
+            }
+            for (int pi = 0; pi < t->param_count; pi++) {
+                int p = t->params[pi];
+                if (p == 0) {
+                    t->active_style = (nbs_style_t){ NBS_COLOUR_NONE, NBS_COLOUR_NONE, 0 };
+                } else if (p == 1) { t->active_style.attrs |= NBS_ATTR_BOLD;
+                } else if (p == 2) { t->active_style.attrs |= NBS_ATTR_DIM;
+                } else if (p == 3) { t->active_style.attrs |= NBS_ATTR_ITALIC;
+                } else if (p == 4) { t->active_style.attrs |= NBS_ATTR_UNDERLINE;
+                } else if (p == 5) { t->active_style.attrs |= NBS_ATTR_BLINK;
+                } else if (p == 7) { t->active_style.attrs |= NBS_ATTR_INVERSE;
+                } else if (p == 9) { t->active_style.attrs |= NBS_ATTR_STRIKE;
+                } else if (p == 22) { t->active_style.attrs &= ~(NBS_ATTR_BOLD | NBS_ATTR_DIM);
+                } else if (p == 23) { t->active_style.attrs &= ~NBS_ATTR_ITALIC;
+                } else if (p == 24) { t->active_style.attrs &= ~NBS_ATTR_UNDERLINE;
+                } else if (p == 25) { t->active_style.attrs &= ~NBS_ATTR_BLINK;
+                } else if (p == 27) { t->active_style.attrs &= ~NBS_ATTR_INVERSE;
+                } else if (p == 29) { t->active_style.attrs &= ~NBS_ATTR_STRIKE;
+                } else if (p == 38 && pi + 2 < t->param_count && t->params[pi + 1] == 5) {
+                    t->active_style.fg = t->params[pi + 2]; pi += 2;
+                } else if (p == 48 && pi + 2 < t->param_count && t->params[pi + 1] == 5) {
+                    t->active_style.bg = t->params[pi + 2]; pi += 2;
+                } else if (p == 38 && pi + 4 < t->param_count && t->params[pi + 1] == 2) {
+                    int r = t->params[pi+2], g = t->params[pi+3], b = t->params[pi+4];
+                    t->active_style.fg = (r == g && g == b)
+                        ? 232 + (r * 23 / 255)
+                        : 16 + (r*5/255)*36 + (g*5/255)*6 + (b*5/255);
+                    pi += 4;
+                } else if (p == 48 && pi + 4 < t->param_count && t->params[pi + 1] == 2) {
+                    int r = t->params[pi+2], g = t->params[pi+3], b = t->params[pi+4];
+                    t->active_style.bg = (r == g && g == b)
+                        ? 232 + (r * 23 / 255)
+                        : 16 + (r*5/255)*36 + (g*5/255)*6 + (b*5/255);
+                    pi += 4;
+                } else if (p >= 30 && p <= 37) { t->active_style.fg = p - 30;
+                } else if (p >= 40 && p <= 47) { t->active_style.bg = p - 40;
+                } else if (p >= 90 && p <= 97) { t->active_style.fg = p - 90 + 8;
+                } else if (p >= 100 && p <= 107) { t->active_style.bg = p - 100 + 8;
+                } else if (p == 39) { t->active_style.fg = NBS_COLOUR_NONE;
+                } else if (p == 49) { t->active_style.bg = NBS_COLOUR_NONE;
+                }
+            }
+        }
         break;
 
     /* ── Cursor visibility and other modes (ignored) ──────────── */
@@ -833,11 +882,20 @@ void ts_render_feed(ts_render_t *t, const char *data, size_t len) {
     }
 }
 
+static int style_eq(const nbs_style_t *a, const nbs_style_t *b) {
+    return a->fg == b->fg && a->bg == b->bg && a->attrs == b->attrs;
+}
+
+static int style_is_default(const nbs_style_t *s) {
+    return s->fg == NBS_COLOUR_NONE && s->bg == NBS_COLOUR_NONE && s->attrs == 0;
+}
+
 char *ts_render_snapshot(const ts_render_t *t) {
     ASSERT_MSG(t != NULL, "ts_render_snapshot: t must be non-NULL");
 
-    /* Worst case: each cell is 4 bytes + newline per row + NUL */
-    size_t buf_size = (size_t)(t->rows * (t->cols * NBS_TS_RENDER_CELL_BYTES + 1)) + 1;
+    /* Worst case: each cell is cell_bytes + SGR overhead (~64 bytes) + newline + NUL */
+    size_t sgr_overhead = t->preserve_sgr ? NBS_STYLE_BUFSIZE : 0;
+    size_t buf_size = (size_t)(t->rows * (t->cols * (NBS_TS_RENDER_CELL_BYTES + sgr_overhead) + 1)) + 64;
     char *buf = malloc(buf_size);
     if (!buf) return NULL;
 
@@ -882,10 +940,29 @@ char *ts_render_snapshot(const ts_render_t *t) {
         }
 
         /* Write cells in visual order, with bracket mirroring */
+        nbs_style_t cur_style = { NBS_COLOUR_NONE, NBS_COLOUR_NONE, 0 };
         for (int vi = 0; vi < char_count; vi++) {
             int li = visual_map[vi]; /* logical index */
             int col = col_map[li];
             const ts_render_cell_t *c = cell_at_const(t, row, col);
+
+            /* Emit SGR transition if style changed */
+            if (t->preserve_sgr) {
+                const nbs_style_t *cell_style = &c->style;
+                if (!style_eq(&cur_style, cell_style)) {
+                    char sgr_buf[NBS_STYLE_BUFSIZE];
+                    if (!style_is_default(&cur_style)) {
+                        int rn = nbs_style_reset(sgr_buf, sizeof(sgr_buf));
+                        if (rn > 0) { memcpy(buf + pos, sgr_buf, (size_t)rn); pos += (size_t)rn; }
+                    }
+                    if (!style_is_default(cell_style)) {
+                        int sn = nbs_style_start(cell_style, sgr_buf, sizeof(sgr_buf));
+                        if (sn > 0) { memcpy(buf + pos, sgr_buf, (size_t)sn); pos += (size_t)sn; }
+                    }
+                    cur_style = *cell_style;
+                }
+            }
+
             if (c->len > 0) {
                 /* Check if this char needs mirroring (odd bidi level) */
                 if (bidi_levels[li] & 1) {
@@ -927,6 +1004,13 @@ char *ts_render_snapshot(const ts_render_t *t) {
                            "ts_render_snapshot: buffer overflow (space) at row=%d col=%d", row, col);
                 buf[pos++] = ' ';
             }
+        }
+
+        /* Reset style at end of row if active */
+        if (t->preserve_sgr && !style_is_default(&cur_style)) {
+            char sgr_buf[NBS_STYLE_BUFSIZE];
+            int rn = nbs_style_reset(sgr_buf, sizeof(sgr_buf));
+            if (rn > 0) { memcpy(buf + pos, sgr_buf, (size_t)rn); pos += (size_t)rn; }
         }
 
         /* Add newline (except after last row if it's empty) */
@@ -972,6 +1056,12 @@ void ts_render_reset(ts_render_t *t) {
     t->saved_cursor_col = 0;
     t->utf8_len = 0;
     t->utf8_expect = 0;
+    t->active_style = (nbs_style_t){ NBS_COLOUR_NONE, NBS_COLOUR_NONE, 0 };
 
     init_tab_stops(t);
+}
+
+void ts_render_set_preserve_sgr(ts_render_t *t, int enable) {
+    ASSERT_MSG(t != NULL, "ts_render_set_preserve_sgr: t must be non-NULL");
+    t->preserve_sgr = enable;
 }

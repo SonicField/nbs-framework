@@ -28,6 +28,7 @@ all: submodules
 	$(MAKE) -C src/nbs-workers
 	$(MAKE) -C src/nbs-scribe-log
 	$(MAKE) -C src/nbs-hub
+	$(MAKE) -C src/nbs-md-viewer
 
 install: all
 	$(MAKE) -C src/nbs-bus install
@@ -40,6 +41,7 @@ install: all
 	$(MAKE) -C src/nbs-workers install
 	$(MAKE) -C src/nbs-scribe-log install
 	$(MAKE) -C src/nbs-hub install
+	$(MAKE) -C src/nbs-md-viewer install
 	@mkdir -p $(HOME)/.nbs/commands
 	@cp claude_tools/*.md $(HOME)/.nbs/commands/
 	@echo "Installed skill files to ~/.nbs/commands/"
@@ -62,6 +64,7 @@ clean:
 	-$(MAKE) -C src/nbs-workers clean
 	-$(MAKE) -C src/nbs-scribe-log clean
 	-$(MAKE) -C src/nbs-hub clean
+	-$(MAKE) -C src/nbs-md-viewer clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
@@ -82,6 +85,7 @@ test: install
 	$(MAKE) -C src/nbs-ts-render test
 	$(MAKE) -C src/nbs-workers test
 	$(MAKE) -C src/nbs-scribe-log test
+	$(MAKE) -C src/nbs-md-viewer test
 	bash tests/automated/test_interrupt_pattern.sh
 	bash tests/automated/test_auto_archive.sh
 

@@ -116,6 +116,22 @@ src/nbs-ts-render/test_nbs_ts_render
 src/nbs-ts-render/*.o
 # Build artefacts for nbs-chat-edit
 src/nbs-chat-edit/nbs-chat-edit
-# Build artefacts for nbs-common tests
+# Build artefacts for nbs-md-viewer
+src/nbs-md-viewer/nbs-md-viewer
+src/nbs-md-viewer/*.o
+src/nbs-md-viewer/test_md_ast
+src/nbs-md-viewer/test_md_ast_asan
+src/nbs-md-viewer/test_md_highlight
+src/nbs-md-viewer/test_md_highlight_asan
+src/nbs-md-viewer/test_md_parse
+src/nbs-md-viewer/test_md_parse_asan
+src/nbs-md-viewer/test_md_render
+src/nbs-md-viewer/test_md_render_asan
+src/nbs-md-viewer/test_md_table
+src/nbs-md-viewer/test_md_table_asan
+src/nbs-md-viewer/test_md_viewport
+bin/nbs-md-viewer
+# Build artefacts for nbs-common
+src/nbs-common/*.o
 src/nbs-common/test_nbs_term_attr
 src/nbs-common/test_nbs_term_attr_asan

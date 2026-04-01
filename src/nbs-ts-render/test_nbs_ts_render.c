@@ -967,6 +967,106 @@ TEST(test_bidi_bracket_mirroring) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
+/*  SGR PRESERVATION (--no-strip)                                    */
+/* ══════════════════════════════════════════════════════════════════ */
+
+/* Helper: check that snapshot output contains a substring */
+static int contains(const char *haystack, const char *needle) {
+    return strstr(haystack, needle) != NULL;
+}
+
+TEST(test_preserve_sgr_bold) {
+    ts_render_t *t = ts_render_create(3, 20);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[1mBold\x1b[0m Normal");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_bold: snapshot not NULL");
+    ASSERT_MSG(contains(snap, "Bold"), "preserve_sgr_bold: text present");
+    ASSERT_MSG(contains(snap, "\033["), "preserve_sgr_bold: SGR present");
+    ASSERT_MSG(contains(snap, "\033[0m"), "preserve_sgr_bold: reset present");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_256_color) {
+    ts_render_t *t = ts_render_create(3, 20);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[38;5;196mRed\x1b[0m");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_256_color: snapshot not NULL");
+    ASSERT_MSG(contains(snap, "38;5;196"), "preserve_sgr_256_color: fg=196");
+    ASSERT_MSG(contains(snap, "Red"), "preserve_sgr_256_color: text");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_off_is_default) {
+    /* Without preserve_sgr, behaviour matches original (no SGR in output) */
+    ts_render_t *t = ts_render_create(3, 20);
+    /* preserve_sgr defaults to 0 */
+    feed_str(t, "\x1b[1;31mBold Red\x1b[0m Normal");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_off: snapshot not NULL");
+    ASSERT_MSG(!contains(snap, "\033["), "preserve_sgr_off: no SGR in output");
+    ASSERT_MSG(contains(snap, "Bold Red Normal"), "preserve_sgr_off: text intact");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_multiple_attrs) {
+    ts_render_t *t = ts_render_create(3, 30);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[1;3;4mBIU\x1b[0m");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_multi: snapshot not NULL");
+    ASSERT_MSG(contains(snap, "BIU"), "preserve_sgr_multi: text");
+    /* Should contain bold(1), italic(3), underline(4) in the SGR sequence */
+    ASSERT_MSG(contains(snap, "\033["), "preserve_sgr_multi: has SGR");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_bg_color) {
+    ts_render_t *t = ts_render_create(3, 20);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[48;5;236mBG\x1b[0m");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_bg: snapshot not NULL");
+    ASSERT_MSG(contains(snap, "48;5;236"), "preserve_sgr_bg: bg=236");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_style_changes) {
+    ts_render_t *t = ts_render_create(3, 30);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[31mRed\x1b[32mGreen\x1b[0m");
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_changes: snapshot not NULL");
+    ASSERT_MSG(contains(snap, "Red"), "preserve_sgr_changes: Red text");
+    ASSERT_MSG(contains(snap, "Green"), "preserve_sgr_changes: Green text");
+    /* Should have at least 2 style transitions */
+    ASSERT_MSG(contains(snap, "\033[0m"), "preserve_sgr_changes: reset");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+TEST(test_preserve_sgr_reset_at_eol) {
+    /* Ensure SGR is reset before the newline at end of row */
+    ts_render_t *t = ts_render_create(3, 20);
+    ts_render_set_preserve_sgr(t, 1);
+    feed_str(t, "\x1b[1mBold line");
+    /* Style active through end of content — should see reset before newline */
+    char *snap = ts_render_snapshot(t);
+    ASSERT_MSG(snap != NULL, "preserve_sgr_eol: snapshot not NULL");
+    /* The last SGR sequence before the newline should be a reset */
+    char *last_reset = strstr(snap, "\033[0m");
+    ASSERT_MSG(last_reset != NULL, "preserve_sgr_eol: has reset");
+    free(snap);
+    ts_render_destroy(t);
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
 /*  TEST RUNNER                                                      */
 /* ══════════════════════════════════════════════════════════════════ */
 
@@ -1104,6 +1204,15 @@ int main(void) {
     RUN_TEST(test_bidi_hebrew_with_sgr);
     RUN_TEST(test_bidi_hebrew_multiline);
     RUN_TEST(test_bidi_bracket_mirroring);
+
+    printf("\nSGR preservation (--no-strip):\n");
+    RUN_TEST(test_preserve_sgr_bold);
+    RUN_TEST(test_preserve_sgr_256_color);
+    RUN_TEST(test_preserve_sgr_off_is_default);
+    RUN_TEST(test_preserve_sgr_multiple_attrs);
+    RUN_TEST(test_preserve_sgr_bg_color);
+    RUN_TEST(test_preserve_sgr_style_changes);
+    RUN_TEST(test_preserve_sgr_reset_at_eol);
 
     printf("\nAPI:\n");
     RUN_TEST(test_reset_clears_all);

@@ -13,6 +13,7 @@
 #define NBS_TS_RENDER_H
 
 #include <stddef.h>
+#include "../nbs-common/nbs_term_attr.h"
 
 /* Default PTY size matching nbs-ts-helper (helper.c:162) */
 #define NBS_TS_RENDER_DEFAULT_COLS 80
@@ -41,6 +42,7 @@ typedef enum {
 typedef struct {
     char ch[NBS_TS_RENDER_CELL_BYTES]; /* UTF-8 codepoint (NUL-padded) */
     int  len;                          /* byte length of ch (0 = empty) */
+    nbs_style_t style;                 /* SGR state when cell was written */
 } ts_render_cell_t;
 
 /* The terminal emulator context */
@@ -83,6 +85,10 @@ typedef struct {
 
     /* Tab stops (bitfield: 1 bit per column) */
     unsigned char *tab_stops;
+
+    /* SGR preservation mode (--no-strip) */
+    int preserve_sgr;                  /* 0 = strip (default), 1 = preserve */
+    nbs_style_t active_style;          /* current SGR state from input stream */
 } ts_render_t;
 
 /*
@@ -113,5 +119,13 @@ char *ts_render_snapshot(const ts_render_t *t);
  * Reset the terminal to initial state (clear screen, home cursor).
  */
 void ts_render_reset(ts_render_t *t);
+
+/*
+ * Enable or disable SGR preservation mode.
+ * When enabled, the snapshot output includes ANSI escape sequences
+ * that reproduce the colour and attribute state of each cell.
+ * Default: disabled (all SGR is stripped).
+ */
+void ts_render_set_preserve_sgr(ts_render_t *t, int enable);
 
 #endif /* NBS_TS_RENDER_H */
