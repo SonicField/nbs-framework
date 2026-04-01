@@ -16,6 +16,8 @@ typedef enum {
     MD_KEY_PAGE_DOWN,
     MD_KEY_HOME,
     MD_KEY_END,
+    MD_KEY_HELP,
+    MD_KEY_ENTER,
     MD_KEY_QUIT,
     MD_KEY_UNKNOWN
 } md_key_t;

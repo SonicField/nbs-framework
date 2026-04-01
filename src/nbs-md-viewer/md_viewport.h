@@ -42,4 +42,7 @@ void md_viewport_pan_left(md_view_state_t *vs);
 /* Draw the current viewport to stdout. */
 void md_viewport_draw(md_view_state_t *vs, md_layout_t *layout);
 
+/* Draw a help screen showing key bindings. */
+void md_viewport_draw_help(md_view_state_t *vs);
+
 #endif /* MD_VIEWPORT_H */

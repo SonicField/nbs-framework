@@ -132,6 +132,12 @@ md_key_t md_terminal_read_key(void)
         return MD_KEY_QUIT; /* real error */
     }
 
+    if (c == 'h' || c == 'H' || c == '?')
+        return MD_KEY_HELP;
+
+    if (c == '\r' || c == '\n')
+        return MD_KEY_ENTER;
+
     if (c == 'q' || c == 'Q')
         return MD_KEY_QUIT;
 

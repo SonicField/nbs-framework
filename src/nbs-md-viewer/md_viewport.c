@@ -9,6 +9,7 @@
 
 #include "md_viewport.h"
 #include "md_terminal.h"
+#include "md_parse.h"
 #include "md_style.h"
 #include "md_render.h"
 #include "../nbs-common/nbs_term_attr.h"
@@ -321,4 +322,36 @@ line_done:
 
     nbs_style_freset(out);
     fflush(out);
+}
+
+void md_viewport_draw_help(md_view_state_t *vs) {
+    static const char *help_md =
+        "## nbs-md-viewer\n"
+        "\n"
+        "| Key | Action |\n"
+        "|-----|--------|\n"
+        "| Up / Down | Scroll one line |\n"
+        "| Page Up / Down | Scroll one page |\n"
+        "| Home | Jump to top |\n"
+        "| End | Jump to bottom |\n"
+        "| Left / Right | Pan wide tables and code |\n"
+        "| h / ? | This help screen |\n"
+        "| q | Quit |\n"
+        "\n"
+        "*On Mac: use Fn + Arrow for Page/Home/End*\n"
+        "\n"
+        "---\n"
+        "\n"
+        "*Press Enter to return*\n";
+
+    md_block_node_t *doc = md_parse(help_md);
+    md_layout_t *layout = md_render(doc, vs->terminal_cols);
+
+    md_view_state_t help_vs;
+    memset(&help_vs, 0, sizeof(help_vs));
+    md_viewport_init(&help_vs, vs->visible_rows + 1, vs->terminal_cols, layout->line_count);
+    md_viewport_draw(&help_vs, layout);
+
+    md_layout_destroy(layout);
+    md_block_destroy(doc);
 }

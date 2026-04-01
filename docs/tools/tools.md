@@ -1016,7 +1016,25 @@ nbs-ts-render [--width=N] [--height=N] < input.log
 cat /tmp/nbs-ts-*/output.log | nbs-ts-render --width=120 --height=40
 ```
 
-**When to use:** Use `nbs-ts-render` to convert raw terminal output (with escape sequences) into readable plain text. This is useful for processing session logs that contain cursor movement and colour codes.
+**When to use:** Use `nbs-ts-render` to convert raw terminal output (with escape sequences) into readable plain text. This is useful for processing session logs that contain cursor movement and colour codes. Use `--no-strip` to preserve colour/style information in the output.
+
+---
+
+### nbs-md-viewer
+
+Terminal markdown viewer. Renders markdown with full styling (headings, tables, code, lists) in a scrollable pager.
+
+```bash
+nbs-md-viewer < document.md
+cat README.md | nbs-md-viewer
+nbs-md-viewer --width=100 < document.md
+```
+
+**Features:** Paragraph reflow, Unicode box drawing tables, syntax highlighting (C, C++, JS, TS, Python, Pascal), nested lists, blockquotes, horizontal panning for wide content, bidirectional text support.
+
+**Keys:** Arrow keys scroll, Page Up/Down for pages, Home/End for top/bottom, Left/Right to pan wide tables, `h` for help, `q` to quit.
+
+**When to use:** Use `nbs-md-viewer` to read markdown documents in the terminal with proper formatting and colour. Especially useful for viewing plan documents, specifications, and documentation.
 
 ---
 

@@ -22,6 +22,7 @@ All decoration (colour, bold, italic, underline) is stripped. The output is plai
 |--------|---------|-------------|
 | `--width=N` | 80 | Screen width in columns |
 | `--height=N` | 24 | Screen height in rows |
+| `--no-strip` | off | Preserve SGR colour/style escape sequences in output |
 
 The defaults match the PTY size used by `nbs-ts-helper`.
 

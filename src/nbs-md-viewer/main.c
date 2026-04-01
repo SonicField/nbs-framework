@@ -164,6 +164,18 @@ int main(int argc, char *argv[]) {
         case MD_KEY_LEFT:
             md_viewport_pan_left(&vs);
             break;
+        case MD_KEY_HELP:
+            md_viewport_draw_help(&vs);
+            /* Wait for Enter to return */
+            while (1) {
+                md_key_t hk = md_terminal_read_key();
+                if (hk == MD_KEY_ENTER || hk == MD_KEY_HELP || hk == MD_KEY_QUIT)
+                    break;
+            }
+            break;
+        case MD_KEY_ENTER:
+            need_draw = 0;
+            break;
         default:
             need_draw = 0;
             break;
