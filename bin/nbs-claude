@@ -372,9 +372,13 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
     # Derive session name tag from chat file in project root.
     # Convention: nbs-<handle>-<tag> where tag comes from the first .chat file.
     # e.g. poem.chat → nbs-supervisor-poem, nn.Module.chat → nbs-supervisor-nn-Module
+    # Skip archive files — they sort before the active file and produce
+    # wrong tags like "phoenix-20260401-014643-archive" instead of "phoenix".
     NBS_TS_TAG=""
     for chatf in "${NBS_ROOT}/.nbs/chat/"*.chat; do
         if [[ -f "$chatf" ]]; then
+            local_name=$(basename "$chatf")
+            [[ "$local_name" == *-archive* ]] && continue
             NBS_TS_TAG=$(basename "$chatf" .chat | tr '.' '-')
             break
         fi
