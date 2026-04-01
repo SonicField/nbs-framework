@@ -19,7 +19,7 @@ The library provides:
 - **Message list rendering** — full-screen layout with header, scrollable message area, status bar
 - **Navigation** — cursor movement (j/k, arrows, Page Up/Down, Home/End, G/g)
 - **Search** — forward search (`/`), next/previous match (`n`/`N`), regex support
-- **Full message view** — expand a single message to fill the screen (`Enter`/`v`)
+- **Full message view** — `Enter`/`v` opens the selected message in `nbs-md-viewer` for full markdown rendering (headings, tables, code blocks with syntax highlighting, lists). The message content is piped to `nbs-md-viewer` via stdin. On quit (`q`), returns to the message list. This gives agents' structured chat messages (which are often markdown) a beautiful rendered view instead of raw text.
 - **Handle colouring** — uses existing `handle_colour_str()` and `handle_style_lookup()`
 - **Mention highlighting** — uses existing `write_content_highlighted()` when active
 - **Read-only by default** — the library renders and navigates but does not modify the chat file
@@ -124,5 +124,6 @@ To polish the TUI experience spin up a chat using fake messages in the chat usin
 | Search in browse mode | `/pattern` highlights matches, `n`/`N` cycle through them |
 | New messages during browse | Status bar shows count, `G` reveals them |
 | `/browse <pattern>` | Opens with cursor on first match |
+| Message view renders markdown | Enter on a message with `## heading` and ```` ```code``` ```` shows styled output via nbs-md-viewer |
 | `nbs-chat-edit` unchanged behaviour | All existing edit tests pass after refactor |
 | Library builds independently | `make` in `src/nbs-chatview/` produces `libchatview.a` |
