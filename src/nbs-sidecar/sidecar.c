@@ -223,6 +223,27 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     ASSERT_MSG(cfg != NULL, "handle_query: cfg is NULL");
     ASSERT_MSG(registry_path != NULL, "handle_query: registry_path is NULL");
 
+    /* Resolve chat path FIRST — every failure path needs it to post
+     * an error message.  If we can't find the chat, we can't report
+     * anything, so that's the only truly silent failure. */
+    char chat_path[SIDECAR_MAX_PATH];
+    if (registry_find_first(registry_path, "chat",
+                             chat_path, sizeof(chat_path)) != 0) {
+        fprintf(stderr, "handle_query: no chat registered for '%s'\n",
+                cfg->handle);
+        return -1;
+    }
+
+    /* Helper: post an error to chat with a specific reason.
+     * Uses [SIDECAR-ERROR] bracket handle for visibility. */
+#define QUERY_ERROR(reason) do { \
+    char _qerr[512]; \
+    snprintf(_qerr, sizeof(_qerr), \
+             "%s? query: %s", cfg->handle, (reason)); \
+    chat_client_error(chat_path, _qerr); \
+    fprintf(stderr, "handle_query: %s for '%s'\n", (reason), cfg->handle); \
+} while (0)
+
     /* Get session dir from transport context */
     const char *session_dir = NULL;
     if (tp->ctx) {
@@ -230,7 +251,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         session_dir = (const char *)tp->ctx;
     }
     if (!session_dir || session_dir[0] == '\0') {
-        fprintf(stderr, "handle_query: no session dir for '%s'\n", cfg->handle);
+        QUERY_ERROR("no nbs-ts session directory — agent may not have started");
         return -1;
     }
 
@@ -247,14 +268,13 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     int log_fd = open(log_path, O_RDONLY);
     if (log_fd < 0) {
-        fprintf(stderr, "handle_query: cannot open %s\n", log_path);
+        QUERY_ERROR("session output.log not found — agent session may have been cleaned up");
         return -1;
     }
 
     off_t file_end = lseek(log_fd, 0, SEEK_END);
     off_t render_start = 0;
     if (file_end > 0) {
-        /* Scan backwards in 64KB chunks, up to 1MB */
         off_t max_scan = 1024 * 1024;
         if (max_scan > file_end) max_scan = file_end;
         off_t scan_pos = file_end - max_scan;
@@ -262,7 +282,6 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         if (scan_buf) {
             ssize_t nr = pread(log_fd, scan_buf, (size_t)max_scan, scan_pos);
             if (nr > 2) {
-                /* Search backwards for ESC[2J */
                 for (ssize_t i = nr - 3; i >= 0; i--) {
                     if (scan_buf[i] == '\x1b' && scan_buf[i+1] == '[' &&
                         scan_buf[i+2] == '2' &&
@@ -274,7 +293,6 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
             }
             free(scan_buf);
         }
-        /* If no screen clear found, fall back to last 64KB */
         if (render_start == 0 && file_end > 65536)
             render_start = file_end - 65536;
     }
@@ -282,9 +300,8 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     /* Resolve nbs-ts-render to absolute path — same directory as this
      * binary.  Bare "nbs-ts-render" fails silently when PATH doesn't
-     * include the install directory (the 2>/dev/null suppresses the
-     * shell error, producing empty output that looks like a dead session). */
-    char render_bin[4096] = "nbs-ts-render";  /* fallback to PATH */
+     * include the install directory. */
+    char render_bin[4096] = "nbs-ts-render";
     {
         char self_path[4096];
         ssize_t rlen = readlink("/proc/self/exe", self_path,
@@ -308,7 +325,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     snprintf(render_cmd, sizeof(render_cmd),
              "tail -c +%" PRId64 " '%s' 2>/dev/null | "
              "'%s' --width=80 --height=24 2>/dev/null",
-             (int64_t)(render_start + 1), /* tail -c +N is 1-based */
+             (int64_t)(render_start + 1),
              log_path, render_bin);
 
     char truncated[SIDECAR_MAX_CONTENT];
@@ -316,7 +333,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
 
     FILE *pipe = popen(render_cmd, "r");
     if (!pipe) {
-        fprintf(stderr, "handle_query: popen failed for '%s'\n", cfg->handle);
+        QUERY_ERROR("failed to launch terminal renderer");
         return -1;
     }
 
@@ -334,7 +351,7 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         /* Fallback: if render fails, try raw capture */
         char *content = tp->capture(tp, 30);
         if (!content) {
-            fprintf(stderr, "handle_query: capture failed for '%s'\n", cfg->handle);
+            QUERY_ERROR("session has no visible output — agent may be initialising or dead");
             return -1;
         }
         strip_ansi(content);
@@ -348,24 +365,15 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
     /* Escape @ signs to prevent mention feedback loops. */
     sanitise_at_signs(truncated);
 
-    /* Find first registered chat and send */
-    char chat_path[SIDECAR_MAX_PATH];
-    if (registry_find_first(registry_path, "chat",
-                             chat_path, sizeof(chat_path)) != 0) {
-        fprintf(stderr, "handle_query: no chat registered for '%s'\n",
-                cfg->handle);
-        return -1;
-    }
-
     char msg[SIDECAR_MAX_CONTENT];
     snprintf(msg, sizeof(msg),
              "session output for %s:\n%s", cfg->handle, truncated);
     int rc = chat_client_send(chat_path, "sidecar", msg);
     if (rc != 0) {
-        fprintf(stderr, "handle_query: chat_client_send failed for '%s'\n",
-                cfg->handle);
+        QUERY_ERROR("failed to post session output to chat");
     }
 
+#undef QUERY_ERROR
     return rc;
 }
 
@@ -710,21 +718,12 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                                             cfg->handle, qpayload,
                                             sizeof(qpayload),
                                             qevent_file, sizeof(qevent_file)) == 0) {
-                    if (handle_query(tp, cfg, registry_path) == 0) {
-                        bus_client_ack_event(qbus_dir, qevent_file);
-                    } else {
-                        /* Query failed — post error to chat so the user knows */
-                        char qchat_path[SIDECAR_MAX_PATH];
-                        if (registry_find_first(registry_path, "chat",
-                                                 qchat_path, sizeof(qchat_path)) == 0) {
-                            char errmsg[256];
-                            snprintf(errmsg, sizeof(errmsg),
-                                     "%s? query failed — could not capture session output for %s",
-                                     cfg->handle, cfg->handle);
-                            chat_client_error(qchat_path, errmsg);
-                        }
-                        bus_client_ack_event(qbus_dir, qevent_file);
-                    }
+                    /* handle_query posts its own errors to chat on
+                     * every failure path — no separate error posting
+                     * needed here.  Always ack regardless of outcome
+                     * (queries are one-shot, not retried). */
+                    handle_query(tp, cfg, registry_path);
+                    bus_client_ack_event(qbus_dir, qevent_file);
                 }
             }
         }
