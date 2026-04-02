@@ -2489,8 +2489,11 @@ int main(int argc, char **argv) {
                     }
                     if (sn > 0 && (size_t)sn < sizeof(sc_path) &&
                         access(sc_path, X_OK) == 0) {
+                        char root_flag[4200];
+                        snprintf(root_flag, sizeof(root_flag),
+                                 "--root=%s", g_watchdog.project_root);
                         const char *sc_argv[] = {
-                            sc_path, "--respawn", NULL
+                            sc_path, "--respawn", root_flag, NULL
                         };
                         spawn_with_capture("sidecar", sc_argv);
                     } else {

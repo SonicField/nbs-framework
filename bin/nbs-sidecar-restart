@@ -5,6 +5,7 @@
 #   nbs-sidecar-restart              # restart all running sidecars (pick up new binary)
 #   nbs-sidecar-restart <handle>     # restart just one sidecar
 #   nbs-sidecar-restart --respawn    # scan all teams, spawn missing sidecars
+#   nbs-sidecar-restart --respawn --root=/path  # only this project's sidecars
 #
 # Default mode: reads each running sidecar's command line from /proc,
 # strips --initial-prompt, kills the old process, launches a new one.
@@ -27,13 +28,15 @@ esac
 MODE="restart"
 TARGET_HANDLE=""
 NAME_PATTERN=""
+ROOT_FILTER=""
 
 for arg in "$@"; do
     case "$arg" in
         --respawn) MODE="respawn" ;;
         --name=*) NAME_PATTERN="${arg#--name=}" ;;
+        --root=*) ROOT_FILTER="${arg#--root=}" ;;
         --help|-h)
-            echo "Usage: $(basename "$0") [--respawn] [--name=PATTERN] [handle]"
+            echo "Usage: $(basename "$0") [--respawn] [--name=PATTERN] [--root=PATH] [handle]"
             echo ""
             echo "Hot-restart or respawn nbs-sidecar processes."
             echo "Agents (Claude sessions) are not affected."
@@ -42,6 +45,7 @@ for arg in "$@"; do
             echo "  <handle>      Restart only the sidecar for this handle"
             echo "  --respawn     Scan all teams, spawn missing sidecars, restart existing ones"
             echo "  --name=PAT    Filter nbs-ts sessions by name substring (reduces scan)"
+            echo "  --root=PATH   Only affect sidecars for this project root"
             exit 0
             ;;
         *) TARGET_HANDLE="$arg" ;;
@@ -89,6 +93,15 @@ restart_running() {
         [[ -n "$HANDLE" ]] || continue
         [[ -z "$TARGET_HANDLE" || "$HANDLE" == "$TARGET_HANDLE" ]] || continue
         is_infrastructure "$HANDLE" && continue
+
+        # Filter by project root if --root was given
+        if [[ -n "$ROOT_FILTER" ]]; then
+            local SC_ROOT=""
+            for arg in "${ARGS[@]}"; do
+                case "$arg" in --root=*) SC_ROOT="${arg#--root=}" ;; esac
+            done
+            [[ "$SC_ROOT" == "$ROOT_FILTER" ]] || continue
+        fi
 
         # Reconstruct args
         local NEW_ARGS=()
