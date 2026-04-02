@@ -30,6 +30,7 @@ all: submodules
 	$(MAKE) -C src/nbs-scribe-log
 	$(MAKE) -C src/nbs-hub
 	$(MAKE) -C src/nbs-md-viewer
+	$(MAKE) -C src/nbs-help
 
 install: all
 	$(MAKE) -C src/nbs-bus install
@@ -53,8 +54,7 @@ install: all
 		   lib/honest/build/honest-parse $(HOME)/.nbs/bin/; \
 		echo "Installed honest tools to ~/.nbs/bin/"; \
 	fi
-	@install src/nbs-help/nbs-help bin/
-	@echo "Installed nbs-help to bin/"
+	$(MAKE) -C src/nbs-help install
 	@cp MANIFEST.honest $(HOME)/.nbs/
 	@rm -rf $(HOME)/.nbs/docs $(HOME)/.nbs/concepts $(HOME)/.nbs/terminal-weathering
 	@cp -r docs $(HOME)/.nbs/docs

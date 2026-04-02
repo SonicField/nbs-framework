@@ -131,6 +131,8 @@ src/nbs-md-viewer/test_md_table
 src/nbs-md-viewer/test_md_table_asan
 src/nbs-md-viewer/test_md_viewport
 bin/nbs-md-viewer
+bin/nbs-help
+src/nbs-help/nbs-help
 # Build artefacts for nbs-common
 src/nbs-common/*.o
 src/nbs-common/test_nbs_term_attr
