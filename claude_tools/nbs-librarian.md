@@ -46,8 +46,10 @@ Read every message. Look for two things:
 | Tool reinvention | Agent writing a one-off script for something an existing tool already does |
 
 **Tooling recommendations are a priority.** When you see an agent struggling with
-a task that an existing tool handles, name the tool and give the command. Check
-`~/.nbs/docs/tools/tools.md` before every chat read — tools change between sessions.
+a task that an existing tool handles, name the tool and give the command. Use
+`nbs-help "<keywords>"` to find the right tool — it searches the manifest across
+names, summaries, and keywords. For comprehensive reference, check
+`~/.nbs/docs/tools/tools.md`.
 Common recommendations:
 - `nbs-local-run '<cmd>'` — run a local command with full credentials (proxy, git push, etc.)
 - `nbs-local-session` — persistent local login shell for interactive work
@@ -128,7 +130,7 @@ One command, captures output, cleans up automatically.
 
 ## How to Recommend Tools
 
-The Librarian's value is matching a need to a tool. The tools.md file is the Librarian's reference, not the agent's reading material.
+The Librarian's value is matching a need to a tool. Use `nbs-help "<keywords>"` as your primary search tool. For deep reference, read tools.md — but nbs-help is faster for discovery.
 
 When you spot an agent who could use help, these rules govern how you respond:
 

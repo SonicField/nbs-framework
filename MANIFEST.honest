@@ -1,0 +1,861 @@
+{ NBS Framework Manifest — Single source of truth for tool, skill, and document discovery }
+{ Machine-parseable via honest-get, human-readable by design }
+
+type
+  EntryKind = (Tool, Skill, Document, Concept);
+
+  Keywords = sequence of String;
+
+  ManifestEntry = record
+    kind        : EntryKind;
+    name        : String;
+    path        : String;
+    summary     : String;
+    when_to_use : String;
+    keywords    : Keywords;
+  end;
+
+  Entries = sequence of ManifestEntry;
+
+  Manifest = record
+    version : String;
+    entries : Entries;
+  end;
+
+var manifest : Manifest = (
+  version : '0.1.0';
+  entries : (
+
+    { ============================================================= }
+    { --- Tools --- }
+    { ============================================================= }
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat';
+      path        : 'docs/tools/nbs-chat.md';
+      summary     : 'Send, read, search, create, and manage chat files for AI-to-AI and human-to-AI communication.';
+      when_to_use : 'When you need to send messages, read chat history, search conversations, or create new chat files.';
+      keywords    : ('chat'; 'send'; 'read'; 'search'; 'message'; 'communication'; 'create');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-terminal';
+      path        : 'src/nbs-chat/terminal.c';
+      summary     : 'Interactive terminal client for real-time chat with background message polling and /browse mode.';
+      when_to_use : 'When a human wants to participate in a live chat session with agents.';
+      keywords    : ('chat'; 'terminal'; 'interactive'; 'browse'; 'live'; 'polling');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-edit';
+      path        : 'src/nbs-chat-edit/editor.c';
+      summary     : 'Full-screen editor for chat files with delete, truncate, undo, and atomic rewrite.';
+      when_to_use : 'When you need to delete or truncate messages from a chat file.';
+      keywords    : ('chat'; 'edit'; 'delete'; 'truncate'; 'undo'; 'editor');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts';
+      path        : 'docs/tools/nbs-ts.md';
+      summary     : 'Terminal session manager — create, send input to, read output from, and manage PTY sessions.';
+      when_to_use : 'When you need to run commands in a persistent terminal session, capture output, or automate interactive programs.';
+      keywords    : ('terminal'; 'session'; 'pty'; 'send'; 'read'; 'capture'; 'interactive'; 'tmux');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-md-viewer';
+      path        : 'src/nbs-md-viewer/main.c';
+      summary     : 'Full-screen markdown viewer with syntax highlighting, tables, and vim-style navigation.';
+      when_to_use : 'When you need to render and browse a markdown document with styled output in the terminal.';
+      keywords    : ('markdown'; 'viewer'; 'render'; 'syntax'; 'highlight'; 'table'; 'pager');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-bus';
+      path        : 'docs/tools/nbs-bus.md';
+      summary     : 'Event bus for publishing and consuming events between agents and sidecars.';
+      when_to_use : 'When you need to publish events, trigger actions, or coordinate between agents asynchronously.';
+      keywords    : ('bus'; 'event'; 'publish'; 'consume'; 'trigger'; 'async'; 'coordination');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-sidecar';
+      path        : 'src/nbs-sidecar/main.c';
+      summary     : 'Background daemon that monitors agent sessions, detects mentions, and triggers responses.';
+      when_to_use : 'Runs automatically alongside each agent — not invoked directly.';
+      keywords    : ('sidecar'; 'monitor'; 'mention'; 'detect'; 'trigger'; 'daemon'; 'background');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-init';
+      path        : 'docs/tools/nbs-chat-init.md';
+      summary     : 'Initialises any directory for NBS team operation by creating the tripod — bus, chat, scribe log — and optionally spawning agents.';
+      when_to_use : 'When bootstrapping a new project for multi-agent NBS team work.';
+      keywords    : ('init'; 'bootstrap'; 'project'; 'setup'; 'tripod'; 'spawn');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-repair';
+      path        : 'docs/tools/nbs-chat-repair.md';
+      summary     : 'Detect and repair corrupt lines in nbs-chat files by blanking bad lines and appending salvaged content.';
+      when_to_use : 'When a chat file is corrupted or contains garbled lines that break parsing.';
+      keywords    : ('chat'; 'repair'; 'corrupt'; 'recovery'; 'salvage'; 'fix');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-remote';
+      path        : 'src/nbs-chat/nbs-chat-remote';
+      summary     : 'SSH proxy for nbs-chat that routes chat commands to a remote host for cross-machine team communication.';
+      when_to_use : 'When agents on different machines need to share a chat file via SSH.';
+      keywords    : ('chat'; 'remote'; 'ssh'; 'proxy'; 'cross-machine'; 'network');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-claude';
+      path        : 'docs/tools/nbs-claude.md';
+      summary     : 'Launches Claude Code inside an nbs-ts session with a background sidecar that monitors for events, messages, and blocking dialogues.';
+      when_to_use : 'When spawning a Claude Code agent with integrated sidecar lifecycle management.';
+      keywords    : ('claude'; 'launch'; 'sidecar'; 'session'; 'agent'; 'spawn');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-doctor';
+      path        : 'bin/nbs-doctor';
+      summary     : 'Diagnose and repair the NBS environment — checks global installation, project structure, symlinks, and binaries.';
+      when_to_use : 'When NBS tools are misbehaving or after installation to verify environment health.';
+      keywords    : ('diagnose'; 'repair'; 'health'; 'environment'; 'check'; 'fix');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-hub';
+      path        : 'docs/tools/nbs-hub.md';
+      summary     : 'Deterministic process enforcement for AI teams — gates spawns, phase transitions, document registry, and decision logging.';
+      when_to_use : 'When running multi-agent teams that need spawn gating, phase gates, or shared document tracking.';
+      keywords    : ('hub'; 'enforcement'; 'gate'; 'spawn'; 'phase'; 'registry'; 'process');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-kick-agent';
+      path        : 'bin/nbs-kick-agent';
+      summary     : 'Level 4 hard restart of a single agent — kills session, cleans PID, resets cursor, respawns, and verifies.';
+      when_to_use : 'When an agent is unrecoverably stuck and graduated fixup levels 1-3 have failed.';
+      keywords    : ('kick'; 'restart'; 'agent'; 'kill'; 'respawn'; 'recovery');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-local-run';
+      path        : 'docs/tools/nbs-remote.md';
+      summary     : 'Run a command locally with the user full login environment — proxy credentials, SSH agent, authenticated remotes.';
+      when_to_use : 'When you need proxy access or SSH credentials the sandbox does not have, such as git push.';
+      keywords    : ('local'; 'run'; 'credentials'; 'proxy'; 'environment'; 'push');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-oracle-reaper';
+      path        : 'docs/tools/nbs-oracle-reaper.md';
+      summary     : 'Stateless cleanup daemon that kills ephemeral oracle sessions after they post their results to chat.';
+      when_to_use : 'Called automatically by the sidecar — not invoked directly by agents.';
+      keywords    : ('oracle'; 'reaper'; 'cleanup'; 'ephemeral'; 'kill'; 'stateless');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-remote-build';
+      path        : 'bin/nbs-remote-build';
+      summary     : 'Run a build command on a remote nbs-ts session while polling for chat messages between checks.';
+      when_to_use : 'When building on a remote machine and you need to remain chat-responsive during the build.';
+      keywords    : ('remote'; 'build'; 'poll'; 'chat-aware'; 'compile'; 'timeout');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-remote-edit';
+      path        : 'docs/tools/nbs-remote.md';
+      summary     : 'Edit files on remote machines via scp with a pull-edit-push workflow and diff support.';
+      when_to_use : 'When you need to modify a file on a remote machine from within the sandbox.';
+      keywords    : ('remote'; 'edit'; 'scp'; 'pull'; 'push'; 'diff');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-remote-git';
+      path        : 'docs/tools/nbs-remote-git.md';
+      summary     : 'Synchronise git repositories between local and remote machines via SSH using nbs-ts-helper credentials.';
+      when_to_use : 'When you need to clone, push, pull, or sync git repos across machines.';
+      keywords    : ('remote'; 'git'; 'sync'; 'clone'; 'push'; 'pull'; 'ssh');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-remote-read';
+      path        : 'docs/tools/nbs-remote.md';
+      summary     : 'Read a file or filtered portion of a file on a remote machine via scp without staging.';
+      when_to_use : 'When you need to quickly inspect a remote file without the full pull-edit-push cycle.';
+      keywords    : ('remote'; 'read'; 'inspect'; 'scp'; 'head'; 'tail'; 'grep');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-remote-status';
+      path        : 'bin/nbs-remote-status';
+      summary     : 'Quick state check of a remote nbs-ts session — runs git status, git diff stat, and captures scrollback.';
+      when_to_use : 'When you need a fast overview of what is happening on a remote development session.';
+      keywords    : ('remote'; 'status'; 'git'; 'scrollback'; 'check'; 'overview');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-scribe-log';
+      path        : 'docs/tools/nbs-scribe-log.md';
+      summary     : 'Deterministic CLI for appending structured, timestamped decision entries to the scribe log with validation and bus events.';
+      when_to_use : 'When recording a decision, blocker, or risk to the project scribe log.';
+      keywords    : ('scribe'; 'log'; 'decision'; 'timestamp'; 'append'; 'structured');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-scribe-query';
+      path        : 'bin/nbs-scribe-query';
+      summary     : 'Search the scribe decision log by pattern, ID, handle, tag, or recency, including archived logs.';
+      when_to_use : 'When looking up past decisions, searching for context, or counting decision history.';
+      keywords    : ('scribe'; 'query'; 'search'; 'decision'; 'history'; 'archive');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-team-check';
+      path        : 'docs/tools/tools.md';
+      summary     : 'Report the health status of every agent in a running NBS team — session alive, chat active, context level.';
+      when_to_use : 'When diagnosing team health or checking which agents are alive and responsive.';
+      keywords    : ('team'; 'health'; 'status'; 'check'; 'agent'; 'alive');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts-grep';
+      path        : 'docs/tools/nbs-ts-grep.md';
+      summary     : 'Pattern search across one or all agent session logs with ANSI stripping and line-range filtering.';
+      when_to_use : 'When searching for specific output, errors, or patterns in agent terminal session logs.';
+      keywords    : ('grep'; 'search'; 'session'; 'log'; 'ansi'; 'pattern');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts-helper';
+      path        : 'docs/tools/nbs-ts.md';
+      summary     : 'Long-running daemon that allocates PTYs with the user login credentials for nbs-ts sessions via Unix socket fd passing.';
+      when_to_use : 'Must be running in the user terminal for any nbs-ts, nbs-remote, or nbs-claude operation.';
+      keywords    : ('helper'; 'daemon'; 'pty'; 'credentials'; 'socket'; 'fd-passing');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts-query';
+      path        : 'docs/tools/nbs-ts-grep.md';
+      summary     : 'Extract a range of lines from a single agent session log as clean, ANSI-stripped text.';
+      when_to_use : 'When you need to read a specific portion of an agent session log without pattern matching.';
+      keywords    : ('query'; 'extract'; 'session'; 'log'; 'lines'; 'range');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts-render';
+      path        : 'docs/tools/nbs-ts-render.md';
+      summary     : 'Virtual terminal renderer that processes raw PTY output through a headless terminal emulator and outputs plain UTF-8 text.';
+      when_to_use : 'When you need to see what a human would see on screen from raw terminal session output.';
+      keywords    : ('render'; 'terminal'; 'vt100'; 'ansi'; 'screen'; 'emulator');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-ts-sysctl';
+      path        : 'docs/tools/nbs-ts-sysctl.md';
+      summary     : 'Manages the nbs-ts-helper daemon as a systemd user service — install, start, stop, diagnostics, and removal.';
+      when_to_use : 'When setting up or managing the nbs-ts-helper systemd service for persistent PTY allocation.';
+      keywords    : ('sysctl'; 'systemd'; 'service'; 'install'; 'daemon'; 'lifecycle');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-workers';
+      path        : 'docs/tools/nbs-workers.md';
+      summary     : 'Higher-level worker lifecycle management with unique naming, persistent logging, and task file integration.';
+      when_to_use : 'When a supervisor needs to spawn, monitor, search, or kill Claude worker instances.';
+      keywords    : ('workers'; 'spawn'; 'lifecycle'; 'logging'; 'task'; 'supervisor');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'honest-get';
+      path        : 'lib/honest/tools/honest-get.c';
+      summary     : 'Extract field values from an Honest document by variable name and field path.';
+      when_to_use : 'When you need to programmatically read specific fields from an Honest file.';
+      keywords    : ('honest'; 'get'; 'extract'; 'field'; 'value'; 'query');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'honest-parse';
+      path        : 'lib/honest/tools/honest-parse.c';
+      summary     : 'Parse and validate an Honest document, reporting diagnostics for any syntax or structure errors.';
+      when_to_use : 'When validating that an Honest file is syntactically correct before use.';
+      keywords    : ('honest'; 'parse'; 'validate'; 'syntax'; 'check'; 'diagnostic');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'honest-fmt';
+      path        : 'lib/honest/tools/honest-fmt.c';
+      summary     : 'Reformat an Honest document into wire mode or human-readable document mode.';
+      when_to_use : 'When you need to normalise or pretty-print an Honest file.';
+      keywords    : ('honest'; 'format'; 'wire'; 'document'; 'pretty-print'; 'normalise');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'honest-build';
+      path        : 'lib/honest/tools/honest-build.c';
+      summary     : 'Construct an Honest document from CLI key=value arguments with support for nested records and sequences.';
+      when_to_use : 'When programmatically generating Honest documents from shell scripts or automation.';
+      keywords    : ('honest'; 'build'; 'construct'; 'generate'; 'cli'; 'key-value');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'honest-extract';
+      path        : 'lib/honest/tools/honest-extract.c';
+      summary     : 'Extract the first valid Honest document embedded in mixed text such as markdown or chat logs.';
+      when_to_use : 'When an Honest document is embedded in a larger file and needs to be isolated for parsing.';
+      keywords    : ('honest'; 'extract'; 'embedded'; 'mixed-text'; 'scan'; 'isolate');
+    );
+
+    { ============================================================= }
+    { --- Skills --- }
+    { ============================================================= }
+
+    (
+      kind        : Skill;
+      name        : 'nbs-testkeeper';
+      path        : 'claude_tools/nbs-testkeeper.md';
+      summary     : 'Test suite ownership — run tests, report results with evidence, challenge unverified claims.';
+      when_to_use : 'Loaded automatically for the testkeeper agent role.';
+      keywords    : ('test'; 'testing'; 'verification'; 'benchmark'; 'coverage'; 'ABBA'; 'falsification');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-theologian';
+      path        : 'claude_tools/nbs-theologian.md';
+      summary     : 'Architecture advisor — read code, map invariants, identify risks, review fixes.';
+      when_to_use : 'Loaded automatically for the theologian agent role.';
+      keywords    : ('architecture'; 'review'; 'invariant'; 'risk'; 'design'; 'theory');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-supervisor';
+      path        : 'claude_tools/nbs-supervisor.md';
+      summary     : 'Team coordination — delegate work, track progress, manage agent lifecycle.';
+      when_to_use : 'Loaded automatically for the supervisor agent role.';
+      keywords    : ('supervisor'; 'coordinate'; 'delegate'; 'team'; 'manage'; 'lifecycle');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-discovery';
+      path        : 'claude_tools/nbs-discovery.md';
+      summary     : 'Collaborative, read-only discovery of artefacts in projects lacking epistemic structure.';
+      when_to_use : 'When onboarding to a disordered project to understand its state before making changes.';
+      keywords    : ('discovery'; 'read-only'; 'artefact'; 'epistemic'; 'onboarding'; 'report');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-recovery';
+      path        : 'claude_tools/nbs-recovery.md';
+      summary     : 'Step-wise restructuring and consolidation of projects based on a prior discovery report.';
+      when_to_use : 'After running nbs-discovery, when ready to restructure and establish epistemic discipline.';
+      keywords    : ('recovery'; 'restructure'; 'consolidate'; 'discipline'; 'action'; 'fix');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-investigation';
+      path        : 'claude_tools/nbs-investigation.md';
+      summary     : 'Falsification-driven exploration of a specific hypothesis as an isolated side quest.';
+      when_to_use : 'When you have a specific hypothesis to test that is separate from main development work.';
+      keywords    : ('investigation'; 'hypothesis'; 'falsification'; 'side-quest'; 'test'; 'explore');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-review';
+      path        : 'claude_tools/nbs.md';
+      summary     : 'Systematic audit of reasoning quality, goal alignment, and falsification discipline across a project.';
+      when_to_use : 'When reviewing work for epistemic rigour — checks for investigations, terminal weathering, and drift.';
+      keywords    : ('review'; 'audit'; 'reasoning'; 'alignment'; 'quality'; 'drift');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-discovery-verify';
+      path        : 'claude_tools/nbs-discovery-verify.md';
+      summary     : 'Checkpoint verification that a discovery report is complete before proceeding to recovery.';
+      when_to_use : 'Immediately after completing nbs-discovery to verify the report captures everything discussed.';
+      keywords    : ('discovery'; 'verify'; 'checkpoint'; 'completeness'; 'report'; 'check');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-doc-plan';
+      path        : 'claude_tools/nbs-doc-plan.md';
+      summary     : 'Interactive planning for documents — clarify goals, audience, and structure before writing a single word.';
+      when_to_use : 'Before writing any significant document to prevent conception-phase failures.';
+      keywords    : ('document'; 'plan'; 'audience'; 'structure'; 'goals'; 'conception');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-doc-describe';
+      path        : 'claude_tools/nbs-doc-describe.md';
+      summary     : 'Interactive help describing systems, code, or concepts — find the right words through questioning.';
+      when_to_use : 'When you know what something is but need help articulating it clearly for a reader.';
+      keywords    : ('describe'; 'document'; 'explain'; 'articulate'; 'system'; 'concept');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-doc-analyse';
+      path        : 'claude_tools/nbs-doc-analyse.md';
+      summary     : 'Falsification-focused analysis of documents for hidden goals, rhetoric, and bullshit.';
+      when_to_use : 'When you need to expose the gap between stated goals and actual goals in a document or communication.';
+      keywords    : ('analyse'; 'document'; 'rhetoric'; 'bullshit'; 'goals'; 'falsification');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-doc-help';
+      path        : 'claude_tools/nbs-doc-help.md';
+      summary     : 'Interactive mentor-style guidance for the NBS document tools.';
+      when_to_use : 'When you need help choosing or using the nbs-doc-plan, nbs-doc-describe, or nbs-doc-analyse tools.';
+      keywords    : ('document'; 'help'; 'guidance'; 'mentor'; 'tools'; 'interactive');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-natural';
+      path        : 'claude_tools/nbs-natural.md';
+      summary     : 'Exit Precise Technical English mode and return to natural language communication.';
+      when_to_use : 'When PTE constraints are no longer needed and you want informal communication.';
+      keywords    : ('natural'; 'language'; 'pte'; 'exit'; 'informal'; 'mode');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-oracular-speech';
+      path        : 'claude_tools/nbs-oracular-speech.md';
+      summary     : 'Compressed insight mode using productive ambiguity and metaphor to force interpretation.';
+      when_to_use : 'When standard prose is too diffuse and you need dense, aphoristic expression.';
+      keywords    : ('oracular'; 'speech'; 'metaphor'; 'compressed'; 'insight'; 'ambiguity');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-bus (skill)';
+      path        : 'claude_tools/nbs-bus.md';
+      summary     : 'Event-driven coordination skill — publish events, check queues, and manage the bus from an agent context.';
+      when_to_use : 'When an agent needs to publish events, check pending work, or manage bus state.';
+      keywords    : ('bus'; 'event'; 'publish'; 'queue'; 'coordination'; 'agent');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-chat-digest';
+      path        : 'claude_tools/nbs-chat-digest.md';
+      summary     : 'Ephemeral agent that extracts structured learnings from chat files into persistent knowledge.';
+      when_to_use : 'When chat history needs to be distilled into structured, reusable learnings.';
+      keywords    : ('chat'; 'digest'; 'learnings'; 'extract'; 'ephemeral'; 'knowledge');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-teams-start';
+      path        : 'claude_tools/nbs-teams-start.md';
+      summary     : 'Cold start bootstrap — gather user intent, run nbs-chat-init, spawn and verify a full multi-agent team.';
+      when_to_use : 'When bootstrapping a new NBS team from scratch in a project with no existing .nbs/ structure.';
+      keywords    : ('teams'; 'start'; 'bootstrap'; 'cold-start'; 'spawn'; 'init');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-hub (skill)';
+      path        : 'claude_tools/nbs-hub.md';
+      summary     : 'Deterministic process enforcement skill — spawn gating, phase transitions, and decision logging for supervisors.';
+      when_to_use : 'When a supervisor needs to interact with the hub for teams work, spawn gating, or phase management.';
+      keywords    : ('hub'; 'enforcement'; 'gate'; 'spawn'; 'phase'; 'supervisor');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-init';
+      path        : 'claude_tools/nbs-init.md';
+      summary     : 'Configure a project CLAUDE.md to reference NBS engineering standards — idempotent and safe to repeat.';
+      when_to_use : 'When setting up a project to use NBS engineering standards for the first time.';
+      keywords    : ('init'; 'configure'; 'CLAUDE.md'; 'standards'; 'project'; 'setup');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-help';
+      path        : 'claude_tools/nbs-help.md';
+      summary     : 'Interactive mentor-style guidance for the NBS framework — ask, explain, check understanding.';
+      when_to_use : 'When you need help understanding any part of the NBS framework.';
+      keywords    : ('help'; 'guidance'; 'mentor'; 'framework'; 'interactive'; 'explain');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-poll';
+      path        : 'claude_tools/nbs-poll.md';
+      summary     : 'Check for pending bus events and unread chat messages — currently disabled but retained for reference.';
+      when_to_use : 'Currently disabled (NBS_POLL_INTERVAL=0) — sidecar notifications replaced polling.';
+      keywords    : ('poll'; 'check'; 'messages'; 'events'; 'bus'; 'disabled');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-teams-restart';
+      path        : 'claude_tools/nbs-teams-restart.md';
+      summary     : 'Partial recovery after downtime — triage all agents, assess before acting, recover in priority order.';
+      when_to_use : 'After overnight idle, crash, or network partition to recover a multi-agent team.';
+      keywords    : ('teams'; 'restart'; 'recovery'; 'triage'; 'downtime'; 'partial');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-remote-dev';
+      path        : 'claude_tools/nbs-remote-dev.md';
+      summary     : 'Remote development workflow patterns for editing, building, and debugging on remote machines from an AI agent.';
+      when_to_use : 'When doing sustained development work on a remote machine through nbs-ts sessions.';
+      keywords    : ('remote'; 'development'; 'workflow'; 'build'; 'debug'; 'ssh');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-gdb';
+      path        : 'claude_tools/nbs-gdb.md';
+      summary     : 'Falsification-focused GDB debugging via nbs-ts — hypothesis before commands, measurement not exploration.';
+      when_to_use : 'When debugging C/C++ programs and you need persistent GDB sessions with hypothesis discipline.';
+      keywords    : ('gdb'; 'debug'; 'hypothesis'; 'falsification'; 'breakpoint'; 'persistent');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-terminal-weathering';
+      path        : 'claude_tools/nbs-terminal-weathering.md';
+      summary     : 'Hypothesis-driven performance optimisation of Python systems through evidence-gated architectural intervention.';
+      when_to_use : 'When conducting performance optimisation work that requires profiling, benchmarking, and C extension writing.';
+      keywords    : ('performance'; 'optimisation'; 'profiling'; 'benchmark'; 'c-extension'; 'hypothesis');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-terminal-weathering-review';
+      path        : 'claude_tools/nbs-terminal-weathering-review.md';
+      summary     : 'Correctness review for terminal weathering sessions — applied in addition to the normal NBS review.';
+      when_to_use : 'When reviewing a branch or session that contains terminal weathering performance work.';
+      keywords    : ('review'; 'weathering'; 'correctness'; 'performance'; 'check'; 'supplementary');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-teams-fixup';
+      path        : 'claude_tools/nbs-teams-fixup.md';
+      summary     : 'Diagnose and restart stalled agents using a graduated escalation ladder from least to most destructive.';
+      when_to_use : 'When an agent is stalled and needs graduated recovery — context compaction check before hard restart.';
+      keywords    : ('fixup'; 'stalled'; 'escalation'; 'restart'; 'diagnose'; 'recovery');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-notify';
+      path        : 'claude_tools/nbs-notify.md';
+      summary     : 'Process pending events or messages injected by the sidecar notification system.';
+      when_to_use : 'Triggered automatically by sidecar when bus events or unread chat messages are detected.';
+      keywords    : ('notify'; 'sidecar'; 'event'; 'message'; 'pending'; 'trigger');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-audit';
+      path        : 'claude_tools/nbs-audit.md';
+      summary     : 'Full codebase audit against engineering standards with parallel sub-agents and adversarial TDD fix plans.';
+      when_to_use : 'When auditing an entire codebase for engineering standards violations and producing a fix plan.';
+      keywords    : ('audit'; 'standards'; 'violations'; 'TDD'; 'parallel'; 'codebase');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-scribe';
+      path        : 'claude_tools/nbs-scribe.md';
+      summary     : 'Institutional memory agent — observes conversations and distils decisions into a structured log that survives restarts.';
+      when_to_use : 'Loaded automatically for the scribe agent role in a multi-agent team.';
+      keywords    : ('scribe'; 'memory'; 'decision'; 'log'; 'institutional'; 'distil');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-medic';
+      path        : 'claude_tools/nbs-medic.md';
+      summary     : 'Meta-cognitive monitor that detects hallucinations, motivated reasoning, and epistemic decay — communicates only via warnings.';
+      when_to_use : 'Loaded automatically for the medic agent role — monitors reasoning quality silently.';
+      keywords    : ('medic'; 'monitor'; 'hallucination'; 'reasoning'; 'epistemic'; 'warning');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-gatekeeper';
+      path        : 'claude_tools/nbs-gatekeeper.md';
+      summary     : 'Pre-push commit review agent — reviews commits for correctness, consistency, and completeness before code reaches the remote.';
+      when_to_use : 'Loaded automatically for the gatekeeper agent role before any git push.';
+      keywords    : ('gatekeeper'; 'review'; 'commit'; 'push'; 'correctness'; 'pre-push');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-worker';
+      path        : 'claude_tools/nbs-worker.md';
+      summary     : 'Task execution role — execute a specific task with fresh context, report findings, and exit.';
+      when_to_use : 'Loaded automatically for worker agents spawned by a supervisor in a teams hierarchy.';
+      keywords    : ('worker'; 'task'; 'execute'; 'report'; 'fresh-context'; 'role');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-pythia';
+      path        : 'claude_tools/nbs-pythia.md';
+      summary     : 'Ephemeral oracle that reads the decision log, assesses trajectory and risk, posts a structured checkpoint, and exits.';
+      when_to_use : 'Spawned automatically at checkpoints to provide trajectory and risk assessment.';
+      keywords    : ('pythia'; 'oracle'; 'trajectory'; 'risk'; 'checkpoint'; 'ephemeral');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-librarian';
+      path        : 'claude_tools/nbs-librarian.md';
+      summary     : 'Ephemeral helper oracle that knows where the answers are, what tools exist, and what the team decided before.';
+      when_to_use : 'Spawned when agents are stuck or drifting from prior decisions and need institutional knowledge.';
+      keywords    : ('librarian'; 'oracle'; 'knowledge'; 'helper'; 'decisions'; 'unstick');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-pte';
+      path        : 'claude_tools/nbs-pte.md';
+      summary     : 'Activate Precise Technical English mode — constrained prose with RFC 2119 modals and Honest type definitions.';
+      when_to_use : 'When specifications require unambiguous language with explicit cardinality and condition-action structure.';
+      keywords    : ('pte'; 'precise'; 'technical'; 'english'; 'unambiguous'; 'specification');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-teams-help';
+      path        : 'claude_tools/nbs-teams-help.md';
+      summary     : 'Interactive mentor-style guidance for NBS teams usage and operations.';
+      when_to_use : 'When you need help understanding how to use NBS teams features.';
+      keywords    : ('teams'; 'help'; 'guidance'; 'mentor'; 'interactive'; 'operations');
+    );
+
+    (
+      kind        : Skill;
+      name        : 'nbs-shepard';
+      path        : 'claude_tools/nbs-shepard.md';
+      summary     : 'Ephemeral team shepherd oracle that assesses team dynamics and posts actionable coordination recommendations.';
+      when_to_use : 'Spawned at checkpoints to evaluate how well the team is coordinating and suggest improvements.';
+      keywords    : ('shepard'; 'oracle'; 'team'; 'dynamics'; 'coordination'; 'assessment');
+    );
+
+    { ============================================================= }
+    { --- Documents and Concepts --- }
+    { ============================================================= }
+
+    (
+      kind        : Document;
+      name        : 'C++ to C Patterns';
+      path        : 'terminal-weathering/concepts/cpp-to-c-patterns.md';
+      summary     : '19 conversion patterns for porting C++ code to pure C with risk levels and pitfalls.';
+      when_to_use : 'When converting C++ files to C — read before starting any conversion.';
+      keywords    : ('c++'; 'c'; 'porting'; 'conversion'; 'template'; 'RAII'; 'enum class'; 'namespace');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Terminal Weathering';
+      path        : 'terminal-weathering/concepts/terminal-weathering.md';
+      summary     : 'Hypothesis-driven performance optimisation methodology with evidence-gated architectural intervention.';
+      when_to_use : 'When planning or executing performance optimisation work on a codebase.';
+      keywords    : ('performance'; 'optimisation'; 'hypothesis'; 'profiling'; 'benchmark'; 'architecture');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Goals';
+      path        : 'concepts/goals.md';
+      summary     : 'Terminal vs instrumental goals — the root distinction that prevents optimising the wrong thing.';
+      when_to_use : 'When setting project direction or when instrumental goals risk consuming all resources.';
+      keywords    : ('goals'; 'terminal'; 'instrumental'; 'strategic'; 'tactical'; 'alignment');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Falsifiability';
+      path        : 'concepts/falsifiability.md';
+      summary     : 'The epistemological foundation — any claim worth making must articulate what would prove it wrong.';
+      when_to_use : 'When evaluating claims, writing tests, or challenging assertions that lack falsification criteria.';
+      keywords    : ('falsifiability'; 'epistemology'; 'counterexample'; 'claim'; 'verification'; 'proof');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Rhetoric';
+      path        : 'concepts/rhetoric.md';
+      summary     : 'Ethos, Pathos, Logos in engineering — exposing the hidden emotional motivations behind logical arguments.';
+      when_to_use : 'When analysing why a technical decision is being pushed or when aesthetic preferences masquerade as logic.';
+      keywords    : ('rhetoric'; 'ethos'; 'pathos'; 'logos'; 'persuasion'; 'motivation');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Bullshit Detection';
+      path        : 'concepts/bullshit-detection.md';
+      summary     : 'Identifying indifference to truth — the gap between sounding right and being right, especially in AI output.';
+      when_to_use : 'When evaluating AI output or human claims that optimise for plausibility over accuracy.';
+      keywords    : ('bullshit'; 'detection'; 'truth'; 'plausibility'; 'RLHF'; 'indifference');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Engineering Standards';
+      path        : 'concepts/engineering-standards.md';
+      summary     : 'Verification-first engineering — safety from verbs not nouns, falsifiability as foundation, test the real system.';
+      when_to_use : 'When writing code, reviewing code, or auditing a codebase against NBS quality standards.';
+      keywords    : ('standards'; 'verification'; 'assertions'; 'testing'; 'invariants'; 'quality');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Coordination';
+      path        : 'concepts/coordination.md';
+      summary     : 'How isolated AI agents coordinate via files, bus events, and sidecars without the ability to interrupt each other.';
+      when_to_use : 'When designing multi-agent workflows or debugging coordination failures between agents.';
+      keywords    : ('coordination'; 'agents'; 'polling'; 'sidecar'; 'bus'; 'file-authority');
+    );
+
+    (
+      kind        : Concept;
+      name        : 'Precise Technical English';
+      path        : 'concepts/pte.md';
+      summary     : 'Constrained subset of English that eliminates ambiguity through RFC 2119 modals, explicit cardinality, and Honest types.';
+      when_to_use : 'When writing specifications that must be unambiguous — read before using PTE mode.';
+      keywords    : ('pte'; 'precision'; 'ambiguity'; 'specification'; 'modals'; 'honest');
+    );
+
+    (
+      kind        : Document;
+      name        : 'What NBS Is';
+      path        : 'docs/getting-started/01-what-nbs-is.md';
+      summary     : 'The problem NBS solves — epistemic failure in AI collaboration, goal drift, confirmation bias, and authority worship.';
+      when_to_use : 'When onboarding someone who needs to understand why NBS exists and what problems it addresses.';
+      keywords    : ('introduction'; 'overview'; 'problem'; 'drift'; 'bias'; 'epistemic');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Setup Guide';
+      path        : 'docs/getting-started/02-setup.md';
+      summary     : 'Installation prerequisites and step-by-step setup for a working NBS environment.';
+      when_to_use : 'When installing NBS for the first time or verifying installation prerequisites.';
+      keywords    : ('setup'; 'install'; 'prerequisites'; 'gcc'; 'make'; 'getting-started');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Tools Reference';
+      path        : 'docs/tools/tools.md';
+      summary     : 'Master reference for every tool in ~/.nbs/bin/ with purpose, usage, arguments, exit codes, and examples.';
+      when_to_use : 'When you need definitive documentation on any NBS tool — the single source of truth for tool contracts.';
+      keywords    : ('tools'; 'reference'; 'master'; 'usage'; 'arguments'; 'exit-codes');
+    );
+
+    (
+      kind        : Document;
+      name        : 'NBS Teams';
+      path        : 'docs/team/nbs-teams.md';
+      summary     : 'Supervisor/worker pattern for multi-agent AI work — fresh context, specific tasks, success criteria.';
+      when_to_use : 'When understanding the teams architecture or deciding whether to use workers for a task.';
+      keywords    : ('teams'; 'supervisor'; 'worker'; 'multi-agent'; 'pattern'; 'delegation');
+    );
+
+    (
+      kind        : Document;
+      name        : 'C Extension Performance';
+      path        : 'terminal-weathering/concepts/c-extension-performance.md';
+      summary     : 'Performance discipline for CPython C extensions — METH_FASTCALL over METH_VARARGS, measured overhead comparisons.';
+      when_to_use : 'When writing or reviewing CPython C extensions to avoid the slow tutorial patterns.';
+      keywords    : ('c-extension'; 'cpython'; 'METH_FASTCALL'; 'METH_VARARGS'; 'performance'; 'calling-convention');
+    );
+
+    (
+      kind        : Document;
+      name        : 'C++ to C Analysis';
+      path        : 'terminal-weathering/concepts/cpp-to-c-analysis.md';
+      summary     : 'Detailed analysis of patterns, build failures, and interop from a large-scale C++ to C conversion of a JIT compiler.';
+      when_to_use : 'When planning or executing a large C++ to C conversion and need to learn from prior experience.';
+      keywords    : ('c++'; 'c'; 'conversion'; 'analysis'; 'jit'; 'interop'; 'large-scale');
+    );
+
+    (
+      kind        : Document;
+      name        : 'C++ to C Build Failures';
+      path        : 'terminal-weathering/concepts/cpp-to-c-build-failures.md';
+      summary     : 'Catalogue of compiler and linker errors from C++ to C conversion with root causes, fixes, and prevention rules.';
+      when_to_use : 'When hitting build errors during a C++ to C conversion — look up the exact error message.';
+      keywords    : ('c++'; 'c'; 'build'; 'errors'; 'linker'; 'compiler'; 'catalogue');
+    );
+
+    (
+      kind        : Document;
+      name        : 'C++ to C Checklist';
+      path        : 'terminal-weathering/concepts/cpp-to-c-checklist.md';
+      summary     : 'Mechanical yes/no checklist to run before compiling a converted C++ file for the first time.';
+      when_to_use : 'Before compiling any file that was converted from C++ to C — prevents known failure classes.';
+      keywords    : ('c++'; 'c'; 'checklist'; 'pre-compile'; 'verification'; 'mechanical');
+    );
+
+    (
+      kind        : Document;
+      name        : 'C++ to C Types';
+      path        : 'terminal-weathering/concepts/cpp-to-c-types.md';
+      summary     : 'Honest type definitions for the C++ to C porting vocabulary — BuildFailureClass, ConversionPattern, and related types.';
+      when_to_use : 'When reading the companion C++ to C documents and need the formal type definitions.';
+      keywords    : ('c++'; 'c'; 'types'; 'honest'; 'definitions'; 'vocabulary'; 'formal');
+    );
+
+  );
+);

@@ -53,6 +53,18 @@ install: all
 		   lib/honest/build/honest-parse $(HOME)/.nbs/bin/; \
 		echo "Installed honest tools to ~/.nbs/bin/"; \
 	fi
+	@install src/nbs-help/nbs-help bin/
+	@echo "Installed nbs-help to bin/"
+	@if [ -f MANIFEST.honest ] && command -v honest-parse >/dev/null 2>&1; then \
+		honest-parse MANIFEST.honest >/dev/null 2>&1 || \
+			echo "WARNING: MANIFEST.honest has parse errors"; \
+		for tool in bin/nbs-*; do \
+			name=$$(basename "$$tool"); \
+			if ! grep -q "'$$name'" MANIFEST.honest 2>/dev/null; then \
+				echo "WARNING: $$name missing from MANIFEST.honest"; \
+			fi; \
+		done; \
+	fi
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
