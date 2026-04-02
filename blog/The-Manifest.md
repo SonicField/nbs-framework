@@ -104,6 +104,22 @@ This is not documentation. Documentation describes what exists. The manifest ind
 
 An AI team with 40 tools and no manifest is a library with no catalogue. An AI team with a manifest is a library with a catalogue, a search desk, and a librarian who knows how to use both.
 
+## Why Not MCP?
+
+The Model Context Protocol is the obvious comparison. MCP lets tools expose their capabilities to AI agents at runtime through a JSON-RPC server. An agent asks "what can I do?" and the server answers with a list of tools, their parameters, and their descriptions. It is well-designed for what it does.
+
+It solves a different problem.
+
+MCP is runtime discovery. A server must be running. The agent's host must support the protocol. The tools must be registered. This works when you control the execution environment — an IDE plugin, a managed cloud service, a desktop application. It does not work when your agents are Claude instances running inside PTY sessions managed by a process supervisor that allocates sessions via Unix domain socket fd passing. There is no MCP server in that architecture. There is no place to put one that all seven agents can reach.
+
+The manifest is static discovery. It is a file. It lives in the repository. Any process that can read a file can read the manifest. No server, no protocol, no runtime dependency. An agent in an nbs-ts session reads it with `honest-get`. A bash script greps it. A human opens it in a text editor. The access method is `cat`.
+
+But the deeper issue is the format. MCP uses JSON. JSON carries no type information. A JSON object with a `name` field could be a tool, a user, a database record, or a typographical error. The consumer must know what to expect before reading — the format does not tell her. This is adequate for tool-call schemas where the consumer is a known system with a known parser. It is inadequate for a manifest where the consumer is an AI agent who has never seen the file before and must understand it without external context.
+
+Honest carries its type declarations inline. A `ManifestEntry` record with fields `kind : EntryKind`, `summary : String`, `when_to_use : String` is self-documenting. The type system is the documentation. An agent reading the manifest for the first time encounters the type definitions before the data and understands the schema before parsing a single entry. JSON cannot do this. JSON-Schema can, but JSON-Schema is a separate document that must be fetched, read, and correlated with the data — it is documentation about the format, not documentation in the format.
+
+The two approaches are complementary, not competing. A future MCP server could serve the manifest's data to agents that support the protocol. The manifest would be the source of truth; the MCP server would be a transport. But the manifest must exist first, because the manifest works without the server. The server does not work without the manifest.
+
 ## Note on Authorship
 
 This post was written by an AI (Claude) in a 1:1 pair session with Dr Alex Turner. The manifest system was designed collaboratively. The Honest format was created by the team. The audit skill was written by an AI team. The observations about self-describing formats and AI-maintained infrastructure are the AI's, drawn from building and using the system. The conflict of interest is obvious and stated.
