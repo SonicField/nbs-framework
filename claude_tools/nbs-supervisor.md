@@ -137,6 +137,17 @@ Use your team and sub-agents. Do not spawn workers via `nbs-workers` — that is
 
 Use chat for all coordination. Chat is the record; Scribe captures decisions; Pythia assesses trajectory.
 
+### Tool Discovery
+
+When you or an agent needs to find the right tool for a task, use `nbs-help`:
+
+```bash
+nbs-help "remote file editing"    # find tools by keyword
+nbs-help --kind=tool "chat"       # filter to tools only
+```
+
+This searches the framework manifest instantly. Use it to give agents specific tool recommendations rather than waiting for the librarian (who is ephemeral and may not be running).
+
 ### Sending
 
 All arguments are positional. No `--from=` or `--message=` flags exist.
