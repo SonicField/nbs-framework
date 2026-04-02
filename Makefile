@@ -103,5 +103,7 @@ test: install
 	$(MAKE) -C src/nbs-md-viewer test
 	bash tests/automated/test_interrupt_pattern.sh
 	bash tests/automated/test_auto_archive.sh
+	bash tests/automated/test_manifest_install.sh
+	bash tests/automated/test_nbs_help.sh
 
 test-all: test-unit test

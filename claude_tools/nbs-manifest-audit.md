@@ -39,6 +39,20 @@ for skill in claude_tools/nbs-*.md; do
 done
 ```
 
+### Step 4.5: Find missing documents and concepts
+Scan `docs/` and `concepts/` for documentation not in the manifest:
+```bash
+for doc in docs/**/*.md docs/*.md; do
+    [ -f "$doc" ] || continue
+    grep -q "path        : '$doc'" MANIFEST.honest || echo "MISSING doc: $doc"
+done
+for concept in concepts/**/*.md concepts/*.md; do
+    [ -f "$concept" ] || continue
+    grep -q "path        : '$concept'" MANIFEST.honest || echo "MISSING concept: $concept"
+done
+```
+Also check `lib/honest/docs/` and `lib/honest/specs/` for Honest library documentation.
+
 ### Step 5: Assess summary quality
 For each entry, check:
 - Summary is one sentence (not empty, not a paragraph)
