@@ -123,6 +123,38 @@ Ten scenarios have been identified, ordered by likelihood of causing regular des
 | 9 | Auto-repair +1 | After repair | None needed | **None** |
 | 10 | Send/read race | Under high load | None needed | **None** |
 
+## Rogue Process Cleanup
+
+In production, 47 sidecars were found running when only ~21 were expected (3 teams × 7 agents). 27 of those were for phoenix alone. This is the primary cause of cursor desync — duplicate sidecars advancing the same cursor independently.
+
+### Problems
+
+1. **No tool to audit process count.** `/health` shows agent and sidecar counts but does not identify duplicates. There is no way to say "show me all sidecars for phoenix and which session each is attached to."
+
+2. **No tool to kill all processes for a team.** Killing rogue processes requires manual `pkill` with regex patterns. This is error-prone and risks killing processes on other teams.
+
+3. **Restart and fixup do not kill old sidecars reliably.** When `/restart` runs, it kills nbs-ts sessions but sidecar-loop scripts may survive (they're in a different process group). The orphaned sidecar-loop respawns a new sidecar, creating a duplicate.
+
+4. **`/sidecar` restarts existing sidecars but does not kill duplicates.** If three sidecars exist for the same agent, `/sidecar` restarts all three — preserving the duplication.
+
+### Proposed Tools
+
+**`nbs-team-status <tag>`** — show every process (session, sidecar, sidecar-loop) for a team, with PIDs, session handles, and duplicate detection. Flag duplicates explicitly:
+
+```
+supervisor:  session=8c73007c  sidecar=PID:737309  OK
+generalist:  session=a37b0504  sidecar=PID:123456  OK
+generalist:  (none)            sidecar=PID:789012  DUPLICATE — no session
+testkeeper:  session=541029aa  sidecar=PID:234567  OK
+                               sidecar=PID:345678  DUPLICATE — same handle
+```
+
+**`nbs-team-kill <tag>`** — kill ALL processes for a team: sessions, sidecars, sidecar-loops. Clean slate. Should also clear cursor file and PID files.
+
+**Fixup and restart must kill sidecar-loops.** Before spawning new agents, the restart script should `pkill -f "nbs-sidecar-loop.*<project-root>"` to ensure no orphaned loops respawn sidecars after the restart.
+
+**`/sidecar` should deduplicate.** Before respawning, count sidecars per handle. If duplicates exist, kill all but the newest, then respawn any that are missing.
+
 ## What Does NOT Change
 
 - The cursor file format (`handle=count` lines)
