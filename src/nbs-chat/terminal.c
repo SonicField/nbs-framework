@@ -2019,12 +2019,31 @@ int main(int argc, char **argv) {
                     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
                 }
 
-                /* Sync message count so we don't re-display old messages */
+                /* Redraw — clear screen and repaint last 50 messages
+                 * so the user returns to a clean chat view, not stale
+                 * scrollback with the /browse command visible. */
+                printf("\033[2J\033[H");
                 {
-                    chat_state_t sync_state;
-                    if (chat_read(g_chat_file, &sync_state) == 0) {
-                        g_msg_count = sync_state.message_count;
-                        chat_state_free(&sync_state);
+                    chat_state_t redraw_state;
+                    if (chat_read(g_chat_file, &redraw_state) == 0) {
+                        int start = redraw_state.message_count - 50;
+                        if (start < 0) start = 0;
+                        for (int i = start; i < redraw_state.message_count; i++) {
+                            if (g_filter_handle[0] != '\0' &&
+                                strcmp(redraw_state.messages[i].handle,
+                                       g_filter_handle) != 0)
+                                continue;
+                            if (g_mention_handle[0] != '\0' &&
+                                !content_mentions(redraw_state.messages[i].content,
+                                                  g_mention_handle))
+                                continue;
+                            format_message(redraw_state.messages[i].handle,
+                                          redraw_state.messages[i].content,
+                                          g_handle,
+                                          redraw_state.messages[i].timestamp);
+                        }
+                        g_msg_count = redraw_state.message_count;
+                        chat_state_free(&redraw_state);
                     }
                 }
 
