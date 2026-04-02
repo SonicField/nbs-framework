@@ -57,7 +57,7 @@ Tools:
     Use when: syncing entire repositories, not individual files
 ```
 
-Pure bash. Reads the manifest. Matches keywords against the query. Returns results grouped by kind. No embeddings, no vector database, no AI invocation. The documents are well-structured enough that keyword matching works.
+Pure C. Parses the manifest once into memory via `libhonest`, matches keywords in microseconds. The original bash prototype took 5.7 seconds (spawning 500+ `honest-get` subprocesses per search). The C version takes 4 milliseconds. No embeddings, no vector database, no AI invocation. The documents are well-structured enough that keyword matching works — and when the data structure is right, a linear scan of 162 entries in memory is faster than any index.
 
 The librarian now calls `nbs-help` instead of grepping the repository. She spends her context on recommendations, not search. The search is instant — a subprocess call, not a file read.
 
