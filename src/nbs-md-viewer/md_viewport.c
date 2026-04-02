@@ -163,6 +163,7 @@ void md_viewport_draw(md_view_state_t *vs, md_layout_t *layout) {
 
         if (line_idx >= vs->total_lines || line_idx >= layout->line_count) {
             /* Past end of document: empty line */
+            fputs("\033[0m", out);
             fputs("\033[K", out);
             if (row < vs->visible_rows - 1) {
                 fputs("\r\n", out);
@@ -288,6 +289,12 @@ void md_viewport_draw(md_view_state_t *vs, md_layout_t *layout) {
         free(visual_map);
 
 line_done:
+
+        /* Ensure all attributes are cleared before erasing to end of line.
+         * Without this explicit reset, attributes like underline (from link
+         * text styles) can leak into the \033[K erase region on terminals
+         * that don't fully honour the preceding \033[0m. */
+        fputs("\033[0m", out);
 
         /* Clear to end of line */
         fputs("\033[K", out);

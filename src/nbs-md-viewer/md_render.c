@@ -212,34 +212,11 @@ static void collect_inline_frags(md_inline_node_t *inl, nbs_style_t parent_style
         }
 
         case MD_INLINE_LINK: {
-            /* Link text in link style */
+            /* Link text in link style, inheriting parent's background */
             if (inl->children) {
                 nbs_style_t ls = MD_STYLE_LINK_TEXT;
+                ls.bg = parent_style.bg;
                 collect_inline_frags(inl->children, ls, frags, count, cap);
-            }
-            /* URL in parens, dim */
-            if (inl->url) {
-                /* space before URL */
-                if (*count >= *cap) {
-                    *cap = (*cap == 0) ? 64 : *cap * 2;
-                    *frags = realloc(*frags, (size_t)*cap * sizeof(word_frag_t));
-                }
-                /* Build "(url)" string */
-                int ulen = (int)strlen(inl->url);
-                int flen = ulen + 2; /* ( + url + ) */
-                char *ubuf = malloc((size_t)flen + 1);
-                ubuf[0] = '(';
-                memcpy(ubuf + 1, inl->url, (size_t)ulen);
-                ubuf[flen - 1] = ')';
-                ubuf[flen] = '\0';
-
-                word_frag_t *f = &(*frags)[*count];
-                f->byte_len = flen;
-                f->text = ubuf;
-                f->display_width = flen; /* ASCII URL */
-                f->style = MD_STYLE_LINK_URL;
-                f->is_space = 0;
-                (*count)++;
             }
             break;
         }

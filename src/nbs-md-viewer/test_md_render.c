@@ -442,14 +442,17 @@ TEST(link_renders_url) {
     md_layout_t *layout;
     parse_and_render(input, 80, &doc, &layout);
 
-    /* Link URL should appear in the rendered output */
+    /* Link text should appear but URL should NOT */
+    int found_text = 0;
     int found_url = 0;
     for (int i = 0; i < layout->line_count; i++) {
         char *t = line_text(&layout->lines[i]);
+        if (strstr(t, "here")) found_text = 1;
         if (strstr(t, "example.com")) found_url = 1;
         free(t);
     }
-    T_ASSERT(found_url, "link URL should appear in rendered output");
+    T_ASSERT(found_text, "link text should appear in rendered output");
+    T_ASSERT(!found_url, "link URL should NOT appear in rendered output");
     md_layout_destroy(layout);
     md_block_destroy(doc);
 }
@@ -806,11 +809,13 @@ TEST(test_inline_code_style) {
 }
 
 TEST(test_link_style) {
-    /* Link text: UNDERLINE; Link URL: DIM */
+    /* Link text: underlined muted magenta, no background by default */
     T_ASSERT(MD_STYLE_LINK_TEXT.attrs & NBS_ATTR_UNDERLINE,
              "link text should have UNDERLINE");
-    T_ASSERT(MD_STYLE_LINK_URL.attrs & NBS_ATTR_DIM,
-             "link URL should have DIM");
+    T_ASSERT(MD_STYLE_LINK_TEXT.fg == 176,
+             "link text should be muted magenta (176)");
+    T_ASSERT(MD_STYLE_LINK_TEXT.bg == NBS_COLOUR_NONE,
+             "link text base bg should be NONE (inherits parent at render time)");
 }
 
 /* ================================================================
@@ -884,6 +889,73 @@ TEST(test_bidi_display_width) {
                  "BiDi line %d: display_width %d > 20",
                  i, layout->lines[i].display_width);
     }
+    md_layout_destroy(layout);
+    md_block_destroy(doc);
+}
+
+/* ================================================================
+ * LINK BG + URL REGRESSION (testkeeper D, E-revised)
+ * ================================================================ */
+
+/* (D) Link URL must not appear in rendered paragraph output */
+TEST(test_link_no_url_in_paragraph) {
+    const char *input = "See [the docs](https://docs.example.com/guide) for details";
+    md_block_node_t *doc;
+    md_layout_t *layout;
+    parse_and_render(input, 80, &doc, &layout);
+
+    int found_text = 0;
+    int found_url = 0;
+    for (int i = 0; i < layout->line_count; i++) {
+        char *t = line_text(&layout->lines[i]);
+        if (strstr(t, "the docs")) found_text = 1;
+        if (strstr(t, "docs.example.com")) found_url = 1;
+        free(t);
+    }
+    T_ASSERT(found_text, "link display text must appear");
+    T_ASSERT(!found_url, "link URL must NOT appear in rendered output");
+    md_layout_destroy(layout);
+    md_block_destroy(doc);
+}
+
+/* (E-revised) Heading containing a link must have continuous bg on every span */
+TEST(test_heading_link_bg_continuous) {
+    const char *input = "## [Getting Started](getting-started/index.md)";
+    md_block_node_t *doc;
+    md_layout_t *layout;
+    parse_and_render(input, 80, &doc, &layout);
+
+    /* Find the heading line (first non-blank content line) */
+    int heading_idx = -1;
+    for (int i = 0; i < layout->line_count; i++) {
+        if (layout->lines[i].span_count > 0) {
+            heading_idx = i;
+            break;
+        }
+    }
+    T_ASSERT(heading_idx >= 0, "heading line must exist");
+
+    md_display_line_t *hl = &layout->lines[heading_idx];
+    int expected_bg = MD_STYLE_H2.bg; /* 235 */
+
+    for (int s = 0; s < hl->span_count; s++) {
+        T_ASSERT(hl->spans[s].style.bg == expected_bg,
+                 "span %d bg=%d, expected %d (heading bg must be continuous)",
+                 s, hl->spans[s].style.bg, expected_bg);
+    }
+
+    /* Also verify link text appears and URL does not */
+    int found_text = 0;
+    int found_url = 0;
+    for (int i = 0; i < layout->line_count; i++) {
+        char *t = line_text(&layout->lines[i]);
+        if (strstr(t, "Getting Started")) found_text = 1;
+        if (strstr(t, "getting-started")) found_url = 1;
+        free(t);
+    }
+    T_ASSERT(found_text, "heading link text must appear");
+    T_ASSERT(!found_url, "heading link URL must NOT appear");
+
     md_layout_destroy(layout);
     md_block_destroy(doc);
 }
@@ -980,6 +1052,10 @@ int main(void) {
     printf("\nBiDi / RTL rendering:\n");
     RUN(test_bidi_hebrew_renders);
     RUN(test_bidi_display_width);
+
+    printf("\nLink bg + URL regression:\n");
+    RUN(test_link_no_url_in_paragraph);
+    RUN(test_heading_link_bg_continuous);
 
     printf("\n==============\n");
     printf("%d passed, %d failed, %d total\n", g_pass, g_fail, g_pass + g_fail);

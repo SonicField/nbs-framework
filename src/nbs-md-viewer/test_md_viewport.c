@@ -643,6 +643,93 @@ TEST(viewport_clip_wide_table) {
 }
 
 /* ================================================================
+ * SGR RESET BEFORE ERASE — attribute leak regression
+ *
+ * Every \033[K (erase to end of line) must be preceded by \033[0m
+ * (attribute reset). Without this, active attributes (underline,
+ * bold, bg colour) leak into the erased region on terminals that
+ * fill with current attributes. Bug: link underline leaked across
+ * entire line when \033[K was emitted without prior reset.
+ *
+ * Falsifier: any \033[K in the draw output that is NOT immediately
+ * preceded by \033[0m.
+ * ================================================================ */
+
+TEST(sgr_reset_before_every_erase) {
+    /* Render a paragraph containing a link (which has UNDERLINE).
+     * Draw through viewport. Scan output for \033[K and verify
+     * each is preceded by \033[0m. */
+    const char *input = "Click [here](https://example.com) for info";
+    md_block_node_t *doc = md_parse(input);
+    md_layout_t *layout = md_render(doc, 60);
+    T_ASSERT(layout != NULL, "render should succeed");
+    T_ASSERT(layout->line_count > 0, "should have display lines");
+
+    md_view_state_t vs = {0};
+    md_viewport_init(&vs, 10, 60, layout->line_count);
+
+    /* Redirect stdout to temp file */
+    char tmppath[] = "/tmp/sgr_test_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    T_ASSERT(tmpfd >= 0, "mkstemp failed");
+
+    FILE *saved_stdout = stdout;
+    stdout = fdopen(tmpfd, "w");
+    T_ASSERT(stdout != NULL, "fdopen failed");
+
+    md_viewport_draw(&vs, layout);
+    fflush(stdout);
+    fclose(stdout);
+    stdout = saved_stdout;
+
+    /* Read the output */
+    FILE *f = fopen(tmppath, "r");
+    T_ASSERT(f != NULL, "failed to open temp file");
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    unlink(tmppath);
+
+    T_ASSERT(n > 0, "viewport draw should produce output");
+
+    /* Scan for every \033[K and verify \033[0m precedes it.
+     * The reset may be immediately before, or separated only by
+     * whitespace/cursor-movement sequences. We check that \033[0m
+     * appears within the 10 bytes before each \033[K. */
+    int erase_count = 0;
+    int unprotected = 0;
+    for (size_t i = 0; i + 1 < n; i++) {
+        if (buf[i] == '\033' && buf[i + 1] == '[') {
+            /* Check if this is \033[K */
+            if (i + 2 < n && buf[i + 2] == 'K') {
+                erase_count++;
+                /* Look back for \033[0m within preceding 10 bytes */
+                int found_reset = 0;
+                size_t search_start = (i >= 10) ? i - 10 : 0;
+                for (size_t j = search_start; j + 3 <= i; j++) {
+                    if (buf[j] == '\033' && buf[j+1] == '[' &&
+                        buf[j+2] == '0' && buf[j+3] == 'm') {
+                        found_reset = 1;
+                        break;
+                    }
+                }
+                if (!found_reset) unprotected++;
+            }
+        }
+    }
+
+    T_ASSERT(erase_count > 0,
+             "viewport draw output must contain \\033[K sequences");
+    T_ASSERT(unprotected == 0,
+             "%d of %d \\033[K sequences lack preceding \\033[0m reset",
+             unprotected, erase_count);
+
+    md_layout_destroy(layout);
+    md_block_destroy(doc);
+}
+
+/* ================================================================
  * MAIN
  * ================================================================ */
 
@@ -696,6 +783,9 @@ int main(void) {
 
     printf("\nRegression — wide table clipping:\n");
     RUN(viewport_clip_wide_table);
+
+    printf("\nSGR reset before erase:\n");
+    RUN(sgr_reset_before_every_erase);
 
     printf("\n================\n");
     printf("%d passed, %d failed, %d total\n", g_pass, g_fail, g_pass + g_fail);

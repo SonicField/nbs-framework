@@ -95,7 +95,7 @@ static void tbl_add_span(md_display_line_t *dl, const char *text, int text_len,
 
 /* ── cell text extraction ────────────────────────────────────────── */
 
-/* Get plain text content from inline nodes of a cell */
+/* Get plain text content from inline nodes of a cell (for width measurement) */
 static char *cell_text(md_block_node_t *cell) {
     if (!cell || !cell->inlines) return strdup("");
 
@@ -115,7 +115,7 @@ static char *cell_text(md_block_node_t *cell) {
             memcpy(buf + len, t, (size_t)tl);
             len += tl;
         }
-        /* recurse into children */
+        /* recurse into children (e.g. link display text) */
         if (inl->children) {
             md_inline_node_t *ch = inl->children;
             while (ch) {
@@ -139,6 +139,45 @@ static char *cell_text(md_block_node_t *cell) {
     return buf;
 }
 
+/*
+ * Add styled spans for a cell's inline nodes.
+ * Links get MD_STYLE_LINK_TEXT, other text gets the base cell style.
+ */
+static void cell_add_styled_spans(md_display_line_t *dl,
+                                  md_block_node_t *cell,
+                                  nbs_style_t base_style) {
+    if (!cell || !cell->inlines) return;
+
+    for (md_inline_node_t *inl = cell->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_LINK && inl->children) {
+            /* Link: render children with link text style, inherit parent bg */
+            nbs_style_t ls = MD_STYLE_LINK_TEXT;
+            ls.bg = base_style.bg;
+            for (md_inline_node_t *ch = inl->children; ch; ch = ch->next) {
+                if (ch->text) {
+                    int tl = (int)strlen(ch->text);
+                    int tw = utf8_display_width_t(ch->text, tl);
+                    tbl_add_span(dl, ch->text, tl, ls, tw);
+                }
+            }
+        } else if (inl->text) {
+            /* Normal text */
+            int tl = (int)strlen(inl->text);
+            int tw = utf8_display_width_t(inl->text, tl);
+            tbl_add_span(dl, inl->text, tl, base_style, tw);
+        } else if (inl->children) {
+            /* Other node with children (bold, italic, etc.) */
+            for (md_inline_node_t *ch = inl->children; ch; ch = ch->next) {
+                if (ch->text) {
+                    int tl = (int)strlen(ch->text);
+                    int tw = utf8_display_width_t(ch->text, tl);
+                    tbl_add_span(dl, ch->text, tl, base_style, tw);
+                }
+            }
+        }
+    }
+}
+
 /* ── main table render ───────────────────────────────────────────── */
 
 void md_table_render(md_layout_t *layout, md_block_node_t *table,
@@ -156,23 +195,27 @@ void md_table_render(md_layout_t *layout, md_block_node_t *table,
     while (row) { nrows++; row = row->next; }
     if (nrows == 0) return;
 
-    /* Allocate cell text array [row][col] */
+    /* Allocate cell text array [row][col] and AST node refs */
     char ***cells = calloc((size_t)nrows, sizeof(char **));
+    md_block_node_t ***cell_nodes = calloc((size_t)nrows, sizeof(md_block_node_t **));
     int *is_header = calloc((size_t)nrows, sizeof(int));
     int r = 0;
     row = table->children;
     while (row) {
         cells[r] = calloc((size_t)ncols, sizeof(char *));
+        cell_nodes[r] = calloc((size_t)ncols, sizeof(md_block_node_t *));
         is_header[r] = row->is_header;
         md_block_node_t *cell = row->children;
         int c = 0;
         while (cell && c < ncols) {
             cells[r][c] = cell_text(cell);
+            cell_nodes[r][c] = cell;
             cell = cell->next;
             c++;
         }
         while (c < ncols) {
             cells[r][c] = strdup("");
+            cell_nodes[r][c] = NULL;
             c++;
         }
         r++;
@@ -281,12 +324,16 @@ void md_table_render(md_layout_t *layout, md_block_node_t *table,
 
             int ct_len = (int)strlen(ct);
             if (ct_len > 0) {
-                /* Apply header or body bg band */
+                /* Apply header or body style, with per-inline link styling */
                 nbs_style_t cell_style = text_style;
                 if (is_header[ri] && MD_STYLE_TABLE_HEADER.bg != NBS_COLOUR_NONE) {
                     cell_style = MD_STYLE_TABLE_HEADER;
                 }
-                tbl_add_span(&dline, ct, ct_len, cell_style, ct_width);
+                if (cell_nodes[ri][ci]) {
+                    cell_add_styled_spans(&dline, cell_nodes[ri][ci], cell_style);
+                } else {
+                    tbl_add_span(&dline, ct, ct_len, cell_style, ct_width);
+                }
             }
 
             if (right_pad > 0) {
@@ -316,8 +363,10 @@ void md_table_render(md_layout_t *layout, md_block_node_t *table,
     for (int ri = 0; ri < nrows; ri++) {
         for (int ci = 0; ci < ncols; ci++) free(cells[ri][ci]);
         free(cells[ri]);
+        free(cell_nodes[ri]);
     }
     free(cells);
+    free(cell_nodes);
     free(is_header);
     free(col_widths);
 }
