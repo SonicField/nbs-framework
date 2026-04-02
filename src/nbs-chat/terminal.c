@@ -432,6 +432,7 @@ static void print_help(void) {
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
     printf("  %s/digest%s     Spawn chatdigest (extract learnings from chat)\n", DIM, RESET);
     printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
+    printf("  %s/sidecar%s    Restart sidecars — respawn missing, refresh all\n", DIM, RESET);
     printf("  %s/health%s     Report team health (agents and sidecars)\n", DIM, RESET);
     printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
@@ -2462,6 +2463,40 @@ int main(int argc, char **argv) {
                         g_watchdog.project_root, NULL
                     };
                     spawn_with_capture("health", health_argv);
+                }
+                continue;
+            }
+
+            /* /sidecar — restart sidecars (respawn missing, refresh all) */
+            if (strcmp(edit.buf, "/sidecar") == 0) {
+                line_state_reset(&edit);
+                if (g_watchdog.project_root[0] == '\0') {
+                    info_line_emit(&edit, g_handle, "sidecar",
+                                   "No project root — cannot restart sidecars.");
+                } else {
+                    info_line_emit(&edit, g_handle, "sidecar",
+                                   "Restarting sidecars (respawning missing)...");
+                    /* Find nbs-sidecar-restart: .nbs/bin/ then bin/ */
+                    char sc_path[4096];
+                    int sn = snprintf(sc_path, sizeof(sc_path),
+                                      "%s/.nbs/bin/nbs-sidecar-restart",
+                                      g_watchdog.project_root);
+                    if (sn <= 0 || (size_t)sn >= sizeof(sc_path) ||
+                        access(sc_path, X_OK) != 0) {
+                        sn = snprintf(sc_path, sizeof(sc_path),
+                                      "%s/bin/nbs-sidecar-restart",
+                                      g_watchdog.project_root);
+                    }
+                    if (sn > 0 && (size_t)sn < sizeof(sc_path) &&
+                        access(sc_path, X_OK) == 0) {
+                        const char *sc_argv[] = {
+                            sc_path, "--respawn", NULL
+                        };
+                        spawn_with_capture("sidecar", sc_argv);
+                    } else {
+                        info_line_emit(&edit, g_handle, "sidecar",
+                                       "nbs-sidecar-restart not found.");
+                    }
                 }
                 continue;
             }

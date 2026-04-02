@@ -100,8 +100,14 @@ if [[ $sidecar_count -lt $EXPECTED_COUNT ]]; then
     fi
 fi
 
-if [[ $alive_count -lt $EXPECTED_COUNT || $sidecar_count -lt $EXPECTED_COUNT ]]; then
+if [[ $alive_count -lt $EXPECTED_COUNT ]]; then
     echo "Suggest: /fixup to diagnose and restart stalled agents"
+fi
+
+if [[ $sidecar_count -lt $EXPECTED_COUNT && $alive_count -ge $EXPECTED_COUNT ]]; then
+    echo "Suggest: /sidecar to respawn missing sidecars (agents keep their context)"
+elif [[ $sidecar_count -lt $EXPECTED_COUNT ]]; then
+    echo "Suggest: /sidecar to respawn missing sidecars"
 fi
 
 exit 1
