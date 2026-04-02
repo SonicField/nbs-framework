@@ -921,6 +921,33 @@ check "/help mentions /unmention" "$( echo "$OUTPUT" | grep -qF '/unmention' && 
 
 echo ""
 
+# --- Test 56: /help lists /sidecar ---
+echo "56. /help lists /sidecar..."
+CHAT="$TEST_DIR/test56.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$(printf '/help\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/help mentions /sidecar" "$( echo "$OUTPUT" | grep -qF '/sidecar' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 57: /sidecar without project root shows error ---
+echo "57. /sidecar without project root..."
+CHAT="$TEST_DIR/test57.chat"
+"$NBS_CHAT" create "$CHAT" >/dev/null
+OUTPUT=$(printf '/sidecar\n/exit\n' | timeout 5 "$NBS_TERMINAL" "$CHAT" "viewer" 2>/dev/null || true)
+check "/sidecar no project shows error" "$( echo "$OUTPUT" | grep -qi 'cannot\|not found\|No project' && echo pass || echo fail )"
+
+echo ""
+
+# --- Test 58: /health suggests /sidecar when sidecars missing ---
+echo "58. /health suggests /sidecar..."
+# nbs-team-check output includes "/sidecar" suggestion when sidecars are down
+# We test the script directly since it doesn't need a running team
+OUTPUT=$(bash "$PROJECT_ROOT/bin/nbs-team-check" "nonexistent-tag" "$TEST_DIR" 2>&1 || true)
+check "team-check mentions /sidecar" "$( echo "$OUTPUT" | grep -qF '/sidecar' && echo pass || echo fail )"
+
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then
