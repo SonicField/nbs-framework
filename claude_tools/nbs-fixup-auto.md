@@ -46,6 +46,7 @@ You are ephemeral. One invocation, one job, gone. When a `[NBS-CHAT-NOTIFICATION
 | `launch_agent <handle> <root> <nbs-claude-path> <prompt>` | Spawn an agent. The ONLY reliable spawn method. |
 | `nbs-team-check <tag> <project-root>` | Verify agent sessions and sidecars are alive. Exit 0 = healthy, exit 1 = problems. |
 | `pgrep -f "nbs-sidecar.*--handle=<agent>.*<root>"` | Check whether an agent's sidecar process is running. |
+| `nbs-sidecar-restart <handle>` | Respawn a single sidecar without killing the agent session. Preserves context. |
 
 ---
 
@@ -77,20 +78,22 @@ type
   SessionState = (Alive, Dead, NotFound);
 
   { Classification after reading session output }
-  AgentClassification = (Working, StalledOnModal, ContextExhausted, Stalled, NeedsRestart);
-  { Working:           alive, recent tool calls visible }
+  AgentClassification = (Working, StalledOnModal, ContextExhausted, Stalled, SidecarDead, NeedsRestart);
+  { Working:           alive, recent tool calls visible, sidecar running }
   { StalledOnModal:    alive, permission prompt visible }
   { ContextExhausted:  alive, auto-compact or context window message visible }
   { Stalled:           alive, no new output }
+  { SidecarDead:       alive session, but sidecar process is missing — agent is deaf }
   { NeedsRestart:      dead, missing, or scribe/medic (mandatory restart) }
 
-  EscalationLevel = (Ping, InterruptCompact, HardRestart);
+  EscalationLevel = (Ping, InterruptCompact, SidecarRestart, HardRestart);
   { Ping:              send Enter, wait 15s }
   { InterruptCompact:  send Escape + /compact, wait 60s }
+  { SidecarRestart:    respawn sidecar only — preserves agent context }
   { HardRestart:       kill, reset cursor, spawn, verify }
 
   { Outcome of fixup action on one agent }
-  ActionOutcome = (Healthy, Recovered, Restarted, MandatoryRestart, RestartFailed, SidecarMissing, CursorReset);
+  ActionOutcome = (Healthy, Recovered, Restarted, MandatoryRestart, RestartFailed, SidecarRestarted, CursorReset);
   { Restarted:         agent was broken and required a repair restart }
   { MandatoryRestart:  agent was healthy but restarted by policy (scribe, medic) }
 
@@ -182,7 +185,15 @@ output=$(nbs-ts read-new "$handle" --strip 2>/dev/null)
 | Contains "auto-compact" or "context window" | `ContextExhausted` | `HardRestart` |
 | Empty (no new output) | `Stalled` | `Ping` |
 
-AFTER classification, check the cursor:
+AFTER output classification, check the sidecar:
+
+```bash
+sidecar_alive=$(pgrep -f "nbs-sidecar.*--handle=${agent}.*$(pwd)" >/dev/null 2>&1 && echo yes || echo no)
+```
+
+IF `sidecar_alive` is `no`, THEN classify as `SidecarDead` regardless of output classification. The agent is alive but deaf — she receives no chat notifications. Proceed to Step 5 (`SidecarRestart`). MUST NOT hard-restart the agent — the session is healthy, only the sidecar needs respawning.
+
+AFTER sidecar check, check the cursor:
 
 ```bash
 cursor=$(grep "^${agent}=" "$cursor_file" 2>/dev/null | cut -d= -f2)
@@ -218,6 +229,28 @@ output=$(nbs-ts read-new "$handle" --strip 2>/dev/null)
 
 IF output appeared, THEN the agent recovered. Done.
 IF no output, THEN escalate to Level 4.
+
+**Sidecar Restart — Respawn sidecar without killing the agent:**
+
+**When:** Agent session is `Alive` and working, but sidecar process is missing (`SidecarDead`). The agent has context and in-progress work — killing her would destroy that. Only the sidecar needs respawning.
+
+```bash
+nbs-sidecar-restart "${agent}"
+```
+
+`nbs-sidecar-restart` finds the agent's nbs-ts session, reads the original sidecar command line, and spawns a fresh sidecar attached to the existing session. The agent keeps her context and immediately starts receiving notifications again.
+
+**Then:** Verify the sidecar is running:
+
+```bash
+sleep 5
+pgrep -f "nbs-sidecar.*--handle=${agent}.*$(pwd)" >/dev/null 2>&1 && echo "sidecar restored" || echo "sidecar restart failed"
+```
+
+IF the sidecar is running, THEN report `SidecarRestarted`. Done.
+IF the sidecar is NOT running, THEN escalate to Level 4 (the session may be in a bad state that prevents sidecar attachment).
+
+MUST NOT skip to Level 4 for `SidecarDead` agents. The sidecar restart preserves the agent's context. Level 4 destroys it.
 
 **Level 4 — Hard Restart:**
 
