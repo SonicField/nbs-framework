@@ -19,7 +19,6 @@ const nbs_style_t MD_STYLE_INLINE_CODE    = { 114, 235, 0 };
 const nbs_style_t MD_STYLE_CODE_FENCE     = { 114, 234, 0 };
 const nbs_style_t MD_STYLE_CODE_BORDER    = { 240, NBS_COLOUR_NONE, 0 };
 const nbs_style_t MD_STYLE_LINK_TEXT      = { 176, NBS_COLOUR_NONE, NBS_ATTR_UNDERLINE };
-const nbs_style_t MD_STYLE_LINK_URL       = { 242, NBS_COLOUR_NONE, NBS_ATTR_UNDERLINE | NBS_ATTR_DIM };
 const nbs_style_t MD_STYLE_HRULE          = { 240, NBS_COLOUR_NONE, 0 };
 const nbs_style_t MD_STYLE_TABLE_BORDER   = { 240, NBS_COLOUR_NONE, 0 };
 const nbs_style_t MD_STYLE_TABLE_HEADER   = { 223, 236, NBS_ATTR_BOLD };

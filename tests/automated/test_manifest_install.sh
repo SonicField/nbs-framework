@@ -70,6 +70,47 @@ else
     fail "Manifest has only $ENTRY_COUNT entries (expected >= 30)"
 fi
 
+# MI5: All manifest paths resolve under NBS_HOME after install
+echo "MI5. Manifest paths resolve under NBS_HOME..."
+NBS_HOME="${NBS_HOME:-$HOME/.nbs}"
+# Extract all path values from manifest
+PATHS=$(grep -oP "path\s*:\s*'\K[^']+" MANIFEST.honest 2>/dev/null || true)
+TOTAL_PATHS=0
+MISSING_PATHS=0
+MISSING_LIST=""
+for p in $PATHS; do
+    TOTAL_PATHS=$((TOTAL_PATHS + 1))
+    # Map repo paths to install paths:
+    #   docs/    -> $NBS_HOME/docs/
+    #   bin/     -> $NBS_HOME/bin/
+    #   commands/ or claude_tools/ -> $NBS_HOME/commands/
+    #   concepts/ -> $NBS_HOME/concepts/
+    case "$p" in
+        docs/*|bin/*|concepts/*)
+            resolved="$NBS_HOME/$p"
+            ;;
+        claude_tools/*)
+            # claude_tools/foo.md -> commands/foo.md
+            resolved="$NBS_HOME/commands/${p#claude_tools/}"
+            ;;
+        *)
+            # src/ or other non-install paths — must resolve somewhere
+            resolved="$NBS_HOME/$p"
+            ;;
+    esac
+    if [ ! -e "$resolved" ]; then
+        MISSING_PATHS=$((MISSING_PATHS + 1))
+        MISSING_LIST="$MISSING_LIST  $p -> $resolved\n"
+    fi
+done
+
+if [ "$MISSING_PATHS" -eq 0 ]; then
+    pass "All $TOTAL_PATHS manifest paths resolve under $NBS_HOME"
+else
+    fail "$MISSING_PATHS of $TOTAL_PATHS paths do not resolve under $NBS_HOME"
+    printf "$MISSING_LIST" | head -10
+fi
+
 echo ""
 echo "=== Results ==="
 if [ $ERRORS -eq 0 ]; then

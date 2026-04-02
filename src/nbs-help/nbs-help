@@ -126,6 +126,9 @@ get_keywords() {
     echo "$kw"
 }
 
+# Resolve paths relative to the directory containing MANIFEST.honest
+MANIFEST_ROOT="$(dirname "$(realpath "$MANIFEST")")"
+
 # Format and print an entry
 print_entry() {
     local idx=$1
@@ -137,7 +140,7 @@ print_entry() {
     when_to_use=$(get_field "$idx" when_to_use)
 
     printf "  \033[1m%s\033[0m — %s\n" "$name" "$summary"
-    printf "    Path: %s\n" "$path"
+    printf "    Path: %s/%s\n" "$MANIFEST_ROOT" "$path"
     printf "    Use when: %s\n" "$when_to_use"
 }
 

@@ -22,7 +22,6 @@ extern const nbs_style_t MD_STYLE_INLINE_CODE;
 extern const nbs_style_t MD_STYLE_CODE_FENCE;
 extern const nbs_style_t MD_STYLE_CODE_BORDER;
 extern const nbs_style_t MD_STYLE_LINK_TEXT;
-extern const nbs_style_t MD_STYLE_LINK_URL;
 extern const nbs_style_t MD_STYLE_HRULE;
 extern const nbs_style_t MD_STYLE_TABLE_BORDER;
 extern const nbs_style_t MD_STYLE_TABLE_HEADER;

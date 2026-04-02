@@ -55,6 +55,15 @@ install: all
 	fi
 	@install src/nbs-help/nbs-help bin/
 	@echo "Installed nbs-help to bin/"
+	@cp MANIFEST.honest $(HOME)/.nbs/
+	@rm -rf $(HOME)/.nbs/docs $(HOME)/.nbs/concepts $(HOME)/.nbs/terminal-weathering
+	@cp -r docs $(HOME)/.nbs/docs
+	@cp -r concepts $(HOME)/.nbs/concepts
+	@mkdir -p $(HOME)/.nbs/lib/honest/docs $(HOME)/.nbs/lib/honest/specs
+	@cp lib/honest/docs/*.md $(HOME)/.nbs/lib/honest/docs/ 2>/dev/null || true
+	@cp lib/honest/specs/*.md $(HOME)/.nbs/lib/honest/specs/ 2>/dev/null || true
+	@cp -r terminal-weathering $(HOME)/.nbs/terminal-weathering 2>/dev/null || true
+	@echo "Installed manifest, docs, and concepts to ~/.nbs/"
 	@if [ -f MANIFEST.honest ] && command -v honest-parse >/dev/null 2>&1; then \
 		honest-parse MANIFEST.honest >/dev/null 2>&1 || \
 			echo "WARNING: MANIFEST.honest has parse errors"; \
