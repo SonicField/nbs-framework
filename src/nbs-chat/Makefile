@@ -14,9 +14,16 @@ UNIT_TEST_DIR = ../../tests
 # Common modules from nbs-common
 COMMON_DIR = ../nbs-common
 
+# libchatview (shared TUI library, used by nbs-chat-terminal)
+CHATVIEW_DIR = ../nbs-chatview
+CHATVIEW_LIB = $(CHATVIEW_DIR)/libchatview.a
+
 # Shared library objects (used by both binaries)
 LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c render.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
+
+# Objects NOT included in libchatview (needed for terminal)
+TERM_EXTRA_OBJS = bus_bridge.o time_parse.o
 
 # nbs-common objects
 COMMON_SRCS = $(COMMON_DIR)/nbs_term_attr.c $(COMMON_DIR)/nbs_helper_check.c
@@ -52,15 +59,20 @@ UNIT_TEST_TRUNCATE = $(UNIT_TEST_DIR)/test_chat_truncate_unit
 UNIT_TEST_CHAT_MAIN = $(UNIT_TEST_DIR)/test_chat_main_unit
 UNIT_TEST_AUDIT = $(UNIT_TEST_DIR)/test_chat_file_audit
 
-.PHONY: all clean install debug asan test test-debug test-asan test-unit test-all
+.PHONY: all clean install debug asan test test-debug test-asan test-unit test-all chatview
 
 all: $(CLI_TARGET) $(TERM_TARGET) $(REMOTE_TARGET) $(ASSERT_CHECK)
+
+chatview:
+	$(MAKE) -C $(CHATVIEW_DIR)
 
 $(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(TERM_TARGET): $(TERM_OBJS) $(LIB_OBJS) $(COMMON_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lpthread
+$(CHATVIEW_LIB): chatview
+
+$(TERM_TARGET): $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB)
+	$(CC) $(CFLAGS) -o $@ $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB) $(LDFLAGS) -lpthread
 
 $(REMOTE_TARGET): $(REMOTE_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -173,7 +185,7 @@ test-all: test-unit test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h time_parse.h render.h
-terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h render.h
+terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h render.h $(CHATVIEW_DIR)/chatview.h
 watchdog.o: watchdog.c watchdog.h ../nbs-common/nbs_assert.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h

@@ -29,6 +29,7 @@
 #include "bus_bridge.h"
 #include "render.h"
 #include "handle_styles.h"
+#include "../nbs-chatview/chatview.h"
 #include "../nbs-common/trigger_defs.h"
 #include "../nbs-common/nbs_helper_check.h"
 #include "../nbs-common/nbs_mention.h"
@@ -379,6 +380,28 @@ static void format_message(const char *handle, const char *content,
     }
 }
 
+/* --- Browse mode poll callback --- */
+
+/*
+ * Poll callback for /browse mode — checks for new messages.
+ *
+ * Ownership contract:
+ *   - chat_read() allocates new_state (caller owns)
+ *   - If new messages: chatview_update() takes ownership of new_state
+ *     (frees old state, adopts new). Caller must NOT free.
+ *   - If no new messages: caller frees new_state.
+ */
+static void browse_poll_cb(chatview_t *cv, void *userdata) {
+    const char *chat_file = (const char *)userdata;
+    chat_state_t new_state;
+    if (chat_read(chat_file, &new_state) != 0) return;
+    if (new_state.message_count > cv->state.message_count) {
+        chatview_update(cv, &new_state); /* takes ownership */
+    } else {
+        chat_state_free(&new_state);     /* no change, free locally */
+    }
+}
+
 static void print_prompt(const char *handle) {
     ASSERT_MSG(handle != NULL, "print_prompt: handle is NULL");
     if (g_highlight_mention) {
@@ -392,6 +415,7 @@ static void print_prompt(const char *handle) {
 static void print_help(void) {
     printf("\n");
     printf("%sCommands:%s\n", BOLD, RESET);
+    printf("  %s/browse%s      Scroll through full chat history\n", DIM, RESET);
     printf("  %s/edit%s       Open $EDITOR to compose a multi-line message\n", DIM, RESET);
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
@@ -1941,6 +1965,70 @@ int main(int argc, char **argv) {
             if (strcmp(edit.buf, "/search") == 0) {
                 printf("  %sUsage: /search <pattern>%s\n", DIM, RESET);
                 line_state_reset(&edit);
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /browse [pattern] — scrollable full-screen chat view */
+            if (strcmp(edit.buf, "/browse") == 0 ||
+                strncmp(edit.buf, "/browse ", 8) == 0) {
+                const char *pattern = NULL;
+                if (strncmp(edit.buf, "/browse ", 8) == 0) {
+                    pattern = edit.buf + 8;
+                    while (*pattern == ' ') pattern++;
+                    if (*pattern == '\0') pattern = NULL;
+                }
+
+                chat_state_t browse_state;
+                if (chat_read(g_chat_file, &browse_state) != 0) {
+                    printf("  %s(browse failed — could not read chat)%s\n",
+                           DIM, RESET);
+                    line_state_reset(&edit);
+                    print_prompt(g_handle);
+                    continue;
+                }
+
+                /* Save terminal state and enter browse mode */
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+                }
+
+                chatview_t *browse = chatview_init(&browse_state, g_chat_file);
+                if (browse) {
+                    if (pattern)
+                        chatview_search(browse, pattern);
+                    /* Poll for new messages during browse */
+                    chatview_set_poll(browse, browse_poll_cb,
+                                     (void *)g_chat_file);
+                    chatview_run(browse);
+                    chatview_free(browse);
+                } else {
+                    chat_state_free(&browse_state);
+                    printf("  %s(browse failed — out of memory)%s\n",
+                           DIM, RESET);
+                }
+
+                /* Restore terminal state */
+                printf("\033[?1049l");  /* leave alternate screen */
+                printf("\033[?25h");    /* show cursor */
+                printf("\033[0m");      /* reset attributes */
+                printf("\r\n");
+                fflush(stdout);
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                }
+
+                /* Sync message count so we don't re-display old messages */
+                {
+                    chat_state_t sync_state;
+                    if (chat_read(g_chat_file, &sync_state) == 0) {
+                        g_msg_count = sync_state.message_count;
+                        chat_state_free(&sync_state);
+                    }
+                }
+
+                line_state_reset(&edit);
+                g_cursor_row = 0;
                 print_prompt(g_handle);
                 continue;
             }

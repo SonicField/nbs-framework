@@ -19,6 +19,7 @@ submodules:
 
 all: submodules
 	$(MAKE) -C src/nbs-bus
+	$(MAKE) -C src/nbs-chatview
 	$(MAKE) -C src/nbs-chat
 	$(MAKE) -C src/nbs-chat-edit
 	$(MAKE) -C src/nbs-sidecar
@@ -55,6 +56,7 @@ install: all
 
 clean:
 	$(MAKE) -C src/nbs-bus clean
+	-$(MAKE) -C src/nbs-chatview clean
 	$(MAKE) -C src/nbs-chat clean
 	-$(MAKE) -C src/nbs-chat-edit clean
 	$(MAKE) -C src/nbs-sidecar clean
@@ -73,6 +75,7 @@ debug:
 
 test-unit: install
 	$(MAKE) -C src/nbs-bus test-unit
+	$(MAKE) -C src/nbs-chatview test
 	$(MAKE) -C src/nbs-chat test-unit
 	$(MAKE) -C src/nbs-sidecar test-unit
 	$(MAKE) -C src/nbs-workers test-unit

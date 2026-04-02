@@ -1,0 +1,3 @@
+*.o
+libchatview.a
+test_chatview_unit
