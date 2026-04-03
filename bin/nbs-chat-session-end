@@ -58,7 +58,8 @@ if [[ -n "$CHAT_FILE" ]]; then
     NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
     if [[ -x "$NBS_CHAT" ]]; then
         "$NBS_CHAT" send "$CHAT_FILE" session-end \
-            "═══════════════════════════════════════════════════
+            "
+═══════════════════════════════════════════════════
   SESSION-END: Team pausing in ${COUNTDOWN} seconds.
   Use nbs-chat-resume to cancel.
 ═══════════════════════════════════════════════════" \
@@ -82,7 +83,8 @@ rm -f "$PID_FILE"
 # Post confirmation
 if [[ -n "$CHAT_FILE" && -x "${NBS_CHAT:-}" ]]; then
     "$NBS_CHAT" send "$CHAT_FILE" session-end \
-        "═══════════════════════════════════════════════════
+        "
+═══════════════════════════════════════════════════
   SESSION-END: Team paused.
   Use nbs-chat-resume to resume.
 ═══════════════════════════════════════════════════" \
