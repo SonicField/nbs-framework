@@ -1,0 +1,53 @@
+#!/bin/bash
+# nbs-chat-resume — Cancel session-end countdown or resume from pause.
+#
+# If a session-end countdown is active, cancels it by killing the
+# countdown process and removing the PID file. If the team is already
+# paused (control-pause exists), deletes the pause file to resume
+# normal operation.
+#
+# Usage:
+#   nbs-chat-resume <root>
+#
+# Arguments:
+#   <root>    Project root directory containing .nbs/
+#
+# Exit codes:
+#   0 - Resumed successfully (or no pause was active)
+#   4 - Invalid arguments
+
+set -uo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: nbs-chat-resume <root>" >&2
+    exit 4
+fi
+
+ROOT="$1"
+
+if [[ ! -d "$ROOT/.nbs" ]]; then
+    echo "Error: $ROOT/.nbs not found" >&2
+    exit 4
+fi
+
+PAUSE_FILE="$ROOT/.nbs/control-pause"
+PID_FILE="$ROOT/.nbs/session-end.pid"
+
+# Cancel active countdown if running
+if [[ -f "$PID_FILE" ]]; then
+    countdown_pid=$(cat "$PID_FILE" 2>/dev/null)
+    if [[ -n "$countdown_pid" ]] && kill -0 "$countdown_pid" 2>/dev/null; then
+        # Remove PID file first (signals the countdown to exit)
+        rm -f "$PID_FILE"
+        # Then kill the process
+        kill "$countdown_pid" 2>/dev/null || true
+    else
+        # Stale PID file — just clean up
+        rm -f "$PID_FILE"
+    fi
+fi
+
+# Delete pause file to resume
+rm -f "$PAUSE_FILE"
+
+exit 0

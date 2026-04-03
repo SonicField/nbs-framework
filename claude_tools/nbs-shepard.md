@@ -122,7 +122,7 @@ Then apply the full NBS review framework (as defined in `/nbs`) to the team's re
 6. **Bullshit check** — are all outcomes being reported or are we cherry-picking?
 
 **Team-specific dimensions:**
-7. **Idle agents** — who has no useful work? What should they do?
+7. **Idle agents** — who has no useful work? What should they do? If ALL agents have been idle for 60+ minutes with no terminal goal, recommend `@supervisor — consider nbs-chat-session-end to pause the team until alexie provides direction.` Do not recommend session-end if any agent reports active work or if alexie has indicated she will return shortly.
 8. **Blocked agents** — who is waiting on something? Can it be unblocked?
 9. **Coordination failures** — agents duplicating work? Talking past each other? Supervisor echoing rather than coordinating?
 10. **Missing roles** — is there work nobody is doing?

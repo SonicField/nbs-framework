@@ -113,6 +113,42 @@ nbs-team-kill <tag> <project-root>
 
 ---
 
+### nbs-chat-session-end
+
+**Purpose:** Graceful team shutdown with a cancellable countdown timer. Posts a session-end message to chat, waits for the countdown period, then creates `.nbs/control-pause` to suppress notifications and ephemeral triggers.
+
+**Usage:**
+```bash
+nbs-chat-session-end <root> --countdown=N --chat=<file>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<root>` | Yes | Project root directory containing `.nbs/` |
+| `--countdown=N` | No | Seconds to wait before pausing (default 300) |
+| `--chat=<file>` | No | Chat file to post countdown message to |
+
+**When to use:** When the supervisor has confirmed the terminal goal is complete and wants to pause the team gracefully. Use `nbs-chat-resume` to cancel during countdown or resume after pause.
+
+---
+
+### nbs-chat-resume
+
+**Purpose:** Cancel a session-end countdown or resume from pause. Kills any active countdown process and deletes `.nbs/control-pause`.
+
+**Usage:**
+```bash
+nbs-chat-resume <root>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<root>` | Yes | Project root directory containing `.nbs/` |
+
+**When to use:** When resuming a paused team or cancelling a session-end countdown before it completes. Also called automatically when a human posts to chat during a pause (via nbs-chat-terminal).
+
+---
+
 ### nbs-chat-terminal
 
 **Purpose:** Provide an interactive terminal client for human participation in NBS chat with team control slash commands.

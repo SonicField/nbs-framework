@@ -1,0 +1,86 @@
+#!/bin/bash
+# nbs-chat-session-end — Graceful team shutdown with countdown timer.
+#
+# Posts a session-end message to chat, waits for a countdown period,
+# then creates .nbs/control-pause to suppress notifications and
+# ephemeral triggers. During the countdown, nbs-chat-resume cancels
+# the timer and prevents the pause.
+#
+# Usage:
+#   nbs-chat-session-end <root> --countdown=N --chat=<file>
+#
+# Arguments:
+#   <root>          Project root directory containing .nbs/
+#   --countdown=N   Seconds to wait before pausing (default 300)
+#   --chat=<file>   Chat file to post countdown message to
+#
+# Exit codes:
+#   0 - Paused successfully
+#   1 - Cancelled by resume during countdown
+#   4 - Invalid arguments
+
+set -uo pipefail
+
+# Parse arguments
+ROOT=""
+COUNTDOWN=300
+CHAT_FILE=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --countdown=*) COUNTDOWN="${arg#--countdown=}" ;;
+        --chat=*)      CHAT_FILE="${arg#--chat=}" ;;
+        -*)            echo "Unknown flag: $arg" >&2; exit 4 ;;
+        *)             if [[ -z "$ROOT" ]]; then ROOT="$arg"
+                       else echo "Unexpected argument: $arg" >&2; exit 4; fi ;;
+    esac
+done
+
+if [[ -z "$ROOT" ]]; then
+    echo "Usage: nbs-chat-session-end <root> --countdown=N --chat=<file>" >&2
+    exit 4
+fi
+
+if [[ ! -d "$ROOT/.nbs" ]]; then
+    echo "Error: $ROOT/.nbs not found" >&2
+    exit 4
+fi
+
+PAUSE_FILE="$ROOT/.nbs/control-pause"
+PID_FILE="$ROOT/.nbs/session-end.pid"
+
+# Write our PID so nbs-chat-resume can cancel us
+echo $$ > "$PID_FILE"
+
+# Post countdown message to chat
+if [[ -n "$CHAT_FILE" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
+    if [[ -x "$NBS_CHAT" ]]; then
+        "$NBS_CHAT" send "$CHAT_FILE" sidecar \
+            "SESSION-END: Team pausing in ${COUNTDOWN}s. Use nbs-chat-resume to cancel." \
+            2>/dev/null || true
+    fi
+fi
+
+# Countdown — check for cancellation each second
+for ((i=COUNTDOWN; i>0; i--)); do
+    # If PID file was removed, we were cancelled
+    if [[ ! -f "$PID_FILE" ]]; then
+        exit 1
+    fi
+    sleep 1
+done
+
+# Countdown expired — create pause file
+echo "session-end at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PAUSE_FILE"
+rm -f "$PID_FILE"
+
+# Post confirmation
+if [[ -n "$CHAT_FILE" && -x "${NBS_CHAT:-}" ]]; then
+    "$NBS_CHAT" send "$CHAT_FILE" sidecar \
+        "SESSION-END: Team paused. Use nbs-chat-resume to resume." \
+        2>/dev/null || true
+fi
+
+exit 0

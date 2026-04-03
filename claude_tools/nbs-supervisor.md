@@ -133,6 +133,51 @@ Use your team and sub-agents. Do not spawn workers via `nbs-workers` — that is
 | Check team status | `@name?` in chat | `nbs-workers list` |
 ```
 
+## Team Process Management
+
+When agents desync, duplicate sidecars appear, or you need a clean restart:
+
+| Need | Command |
+|------|---------|
+| Diagnose team process state | `nbs-team-status <tag> <root>` — shows all sessions, sidecars, sidecar-loops. Flags DUPLICATE and ORPHAN processes. |
+| Clean-slate kill of all processes | `nbs-team-kill <tag> <root>` — kills sidecar-loops first (prevents respawn), then sidecars, then sessions. Cleans PID files. |
+| Check cursor desync | `nbs-chat count <chat-file>` then compare with cursors in `<chat-file>.cursors`. Gap > 10 and growing = desync. |
+| Repair a desynced cursor | `nbs-chat cursor-set <chat-file> <handle> $(($(nbs-chat count <chat-file>) - 1))` — sets cursor to see the last message. |
+| Restart a single sidecar | `nbs-sidecar-restart <handle>` — kills loops, deduplicates, respawns one. |
+
+**Never use `sed -i` on cursor files** — it bypasses the chat lock. Always use `nbs-chat cursor-set`.
+
+For detailed diagnosis of pathological cursor desync, use `/nbs-cursor-diagnosis`.
+
+### Session End and Pause
+
+When the terminal goal is complete and the team is waiting for human direction, use session-end to stop burning resources:
+
+```bash
+nbs-chat-session-end <chat-file>
+```
+
+This posts a countdown message to chat (300s default), then creates `.nbs/control-pause` which suppresses all sidecar notifications and ephemeral triggers (fixup, shepard, pythia, librarian).
+
+**When to use session-end:**
+- Terminal goal is complete and all work is committed
+- Team is blocked on human input with no estimated return time
+- Shepard recommends it after detecting prolonged idle
+
+**When NOT to use session-end:**
+- Work is in progress but agents are temporarily idle between tasks
+- Human said "hold, I'll be back shortly"
+- Any agent reports active uncommitted work
+
+**To resume:**
+```bash
+nbs-chat-resume <chat-file>
+```
+
+This deletes `.nbs/control-pause`, sidecars resume polling within 5s, and the startup catch-up notification ensures agents see any messages posted during the pause.
+
+**During the countdown**, any agent or human can cancel by calling `nbs-chat-resume`. This prevents premature termination if new work arrives.
+
 ## Coordination
 
 Use chat for all coordination. Chat is the record; Scribe captures decisions; Pythia assesses trajectory.

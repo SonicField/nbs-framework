@@ -446,6 +446,24 @@ var manifest : Manifest = (
 
     (
       kind        : Tool;
+      name        : 'nbs-chat-session-end';
+      path        : 'bin/nbs-chat-session-end';
+      summary     : 'Graceful team shutdown with countdown timer — posts session-end message, waits, then creates control-pause to suppress notifications and ephemeral triggers.';
+      when_to_use : 'When the supervisor has confirmed the terminal goal is complete and wants to pause the team gracefully. Cancellable during countdown via nbs-chat-resume.';
+      keywords    : ('session-end'; 'pause'; 'shutdown'; 'countdown'; 'stasis'; 'idle'; 'graceful');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-chat-resume';
+      path        : 'bin/nbs-chat-resume';
+      summary     : 'Cancel session-end countdown or resume from pause — deletes control-pause file and kills any active countdown timer.';
+      when_to_use : 'When resuming a paused team or cancelling a session-end countdown before it completes.';
+      keywords    : ('resume'; 'unpause'; 'cancel'; 'session-end'; 'restart'; 'wake');
+    );
+
+    (
+      kind        : Tool;
       name        : 'nbs-spawn-worker';
       path        : 'bin/nbs-spawn-worker';
       summary     : 'Spawn an ephemeral worker agent with a task file, skill content, and background monitor that kills the session on completion.';
