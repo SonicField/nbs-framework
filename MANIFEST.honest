@@ -34,9 +34,9 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-chat';
       path        : 'docs/tools/nbs-chat.md';
-      summary     : 'Send, read, search, create, and manage chat files. Includes cursor-set (lock-safe cursor reset) and count (authoritative message count) subcommands.';
-      when_to_use : 'When you need to send messages, read chat history, search conversations, manage cursors, or count messages.';
-      keywords    : ('chat'; 'send'; 'read'; 'search'; 'message'; 'cursor-set'; 'count'; 'cursor'; 'create');
+      summary     : 'Send, read, search, create, and manage chat files. Includes cursor-set, count, and companion tools nbs-chat-session-end and nbs-chat-resume.';
+      when_to_use : 'When you need to send messages, read chat history, search conversations, manage cursors, count messages, or end/resume a session.';
+      keywords    : ('chat'; 'send'; 'read'; 'search'; 'message'; 'cursor-set'; 'count'; 'cursor'; 'create'; 'session-end'; 'resume'; 'session'; 'pause');
     );
 
     (
