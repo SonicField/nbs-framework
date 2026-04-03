@@ -243,7 +243,7 @@ respawn_missing() {
 
                 # Dedup check: count sidecars for this session
                 local sc_count
-                sc_count=$(pgrep -fc "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null || echo 0)
+                sc_count=$(pgrep -fc "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null) || sc_count=0
                 if [[ $sc_count -gt 1 ]]; then
                     # Kill all duplicates — we'll respawn one below
                     echo "DEDUP: ${sc_count} sidecars for session ${ts_handle} — killing all"
