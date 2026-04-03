@@ -118,6 +118,7 @@ test: install
 	bash tests/automated/test_sidecar_pid_marker.sh
 	bash tests/automated/test_sidecar_notify_gaps.sh
 	bash tests/automated/test_team_process_tools.sh
+	bash tests/automated/test_fixup_sidecar_verification.sh
 
 test-hardening: install
 	tests/test_cursor_desync_unit
@@ -125,5 +126,6 @@ test-hardening: install
 	bash tests/automated/test_sidecar_pid_marker.sh
 	bash tests/automated/test_sidecar_notify_gaps.sh
 	bash tests/automated/test_team_process_tools.sh
+	bash tests/automated/test_fixup_sidecar_verification.sh
 
 test-all: test-unit test

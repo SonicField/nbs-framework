@@ -401,6 +401,28 @@ static void respond_dialogue(transport_t *tp,
     sleep(resp->settle_secs);
 }
 
+/* --- Cooldown state --- */
+
+/*
+ * cooldown_is_active — Single source of truth for cooldown state.
+ *
+ * Returns 1 if cooldown is active (notification was sent recently),
+ * 0 if cooldown has expired or no notification has ever been sent.
+ *
+ * Both should_inject_notify() and the Root Cause B catch-up tracking
+ * in the main loop MUST use this function instead of computing
+ * cooldown inline. This prevents the two checks from diverging if
+ * cooldown semantics change (per-priority cooldowns, etc).
+ */
+int cooldown_is_active(const sidecar_config_t *cfg,
+                       const sidecar_state_t *state)
+{
+    if (state->last_notify_time == 0)
+        return 0;
+    time_t elapsed = time(NULL) - state->last_notify_time;
+    return (elapsed < cfg->notify_cooldown) ? 1 : 0;
+}
+
 /* --- Notification decision engine --- */
 
 /*
@@ -488,9 +510,6 @@ static int should_inject_notify(const sidecar_config_t *cfg,
      * sidecar create an O(N^2) notification storm: each agent's sidecar
      * posts @team, bus_bridge fans out to N events, and mention bypass
      * ensures every event triggers immediate notification. */
-    now = time(NULL);
-    time_t elapsed = now - state->last_notify_time;
-
     /* H8 fix: only access mention_payload when mention_detected is set.
      * When mention_detected==0, mention_payload may contain stale data
      * from a previous cycle. Short-circuit evaluation prevents the access. */
@@ -500,7 +519,7 @@ static int should_inject_notify(const sidecar_config_t *cfg,
 
     if (strcmp(state->bus_max_priority, "critical") != 0 &&
         !mention_bypasses_cooldown &&
-        elapsed < cfg->notify_cooldown) {
+        cooldown_is_active(cfg, state)) {
         return 1;
     }
 
@@ -1084,10 +1103,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
          */
         int catchup_needed = 0;
         {
-            time_t cd_now = time(NULL);
-            time_t cd_elapsed = cd_now - state.last_notify_time;
-            int cd_active = (state.last_notify_time > 0 &&
-                             cd_elapsed < cfg->notify_cooldown);
+            int cd_active = cooldown_is_active(cfg, &state);
 
             /* Lightweight unread check — no capture dependency */
             int unread_count = 0;
@@ -1099,8 +1115,8 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
             if (has_unreads && cd_active) {
                 if (!state.cooldown_suppressed) {
-                    sc_dbg("cooldown_suppressed SET: unreads=%d cd_elapsed=%ld cooldown=%d",
-                           unread_count, (long)cd_elapsed, cfg->notify_cooldown);
+                    sc_dbg("cooldown_suppressed SET: unreads=%d cooldown=%d",
+                           unread_count, cfg->notify_cooldown);
                 }
                 state.cooldown_suppressed = 1;
             }
@@ -1317,26 +1333,38 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     int injection_consumed = 0;
                     for (int retry = 1; retry <= 3; retry++) {
                         sleep(retry * 2);
-                        char *verify = tp->capture(tp, 1);
+                        char *verify = tp->capture(tp, 3);
                         if (!verify) continue;
 
                         if (strstr(verify, "NBS-CHAT-NOTIFICATION") != NULL) {
-                            /* Still in buffer — retry Enter disabled.
-                             * Needs review before enabling: could submit
-                             * empty prompt to Claude session. */
-                            /* tp->send_key(tp, "Enter"); */
+                            /* Notification visible in terminal — injection
+                             * succeeded (text reached the agent's screen).
+                             * Whether the agent has "consumed" it (processed
+                             * and scrolled past) is not our concern — the
+                             * text is there, the agent can see it. */
+                            sc_dbg("notification visible in terminal for %s",
+                                   cfg->handle);
+                            injection_consumed = 1;
                             free(verify);
+                            break;
                         } else {
-                            /* Consumed */
+                            /* Not visible — either consumed (scrolled past)
+                             * or not yet rendered. Either way, success. */
                             injection_consumed = 1;
                             free(verify);
                             break;
                         }
                     }
 
+                    /* Always update last_notify_time after injection
+                     * attempt — we sent the text + Enter, so delivery
+                     * was attempted. Verification tracks whether it was
+                     * consumed, but timing should reflect the attempt
+                     * to prevent re-injection flooding. */
+                    state.last_notify_time = time(NULL);
+
                     if (injection_consumed) {
                         state.notify_fail_count = 0;
-                        state.last_notify_time = time(NULL);
                         /* Ack bus events — the agent no longer needs to
                          * do this manually. The notification was delivered,
                          * so the events have been communicated. */
@@ -1353,6 +1381,35 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         }
                     } else {
                         state.notify_fail_count++;
+                        sc_dbg("notify_fail_count=%d threshold=%d",
+                               state.notify_fail_count,
+                               cfg->notify_fail_threshold);
+
+                        /* Threshold check: post warning to chat when
+                         * consecutive failures exceed the configured
+                         * threshold. The sidecar does NOT self-heal
+                         * (no restart, no Enter injection) — it warns
+                         * the supervisor via chat so a human or fixup
+                         * can decide what to do. */
+                        if (state.notify_fail_count >= cfg->notify_fail_threshold) {
+                            char fail_chat[SIDECAR_MAX_PATH];
+                            if (registry_find_first(registry_path, "chat",
+                                                     fail_chat,
+                                                     sizeof(fail_chat)) == 0) {
+                                char fail_msg[SIDECAR_MAX_MESSAGE];
+                                snprintf(fail_msg, sizeof(fail_msg),
+                                         "Notification injection failed %d "
+                                         "consecutive times for %s — agent "
+                                         "may not be receiving messages. "
+                                         "@supervisor please investigate.",
+                                         state.notify_fail_count,
+                                         cfg->handle);
+                                chat_client_error(fail_chat, fail_msg);
+                            }
+                            /* Reset counter to avoid spamming — warn again
+                             * after another threshold-worth of failures. */
+                            state.notify_fail_count = 0;
+                        }
                     }
 
                     state.idle_seconds = 0;

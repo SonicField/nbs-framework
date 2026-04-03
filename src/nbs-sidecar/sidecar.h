@@ -139,4 +139,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp);
  */
 int sidecar_config_validate(const sidecar_config_t *cfg);
 
+/*
+ * cooldown_is_active — Single source of truth for cooldown state.
+ *
+ * Returns 1 if cooldown is active, 0 if expired or never notified.
+ * Used by both should_inject_notify() and Root Cause B catch-up tracking.
+ */
+int cooldown_is_active(const sidecar_config_t *cfg,
+                       const sidecar_state_t *state);
+
 #endif /* NBS_SIDECAR_H */

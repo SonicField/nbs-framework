@@ -76,7 +76,7 @@ MOCKEOF
     local mock_link="${TEST_DIR}/nbs-sidecar-${handle}"
     ln -sf "$mock_script" "$mock_link"
 
-    "$mock_link" --handle="$handle" --root="$root" --transport=ts &
+    "$mock_link" --handle="$handle" --root="$root" --transport=ts </dev/null >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" >> "${TEST_DIR}/mock_pids"
     # Wait for /proc entry
@@ -98,7 +98,7 @@ start_mock_sidecar_loop() {
 while true; do sleep 60; done
 EOF
     chmod +x "$loop_script"
-    bash "$loop_script" &
+    bash "$loop_script" </dev/null >/dev/null 2>&1 &
     local pid=$!
     echo "$pid" >> "${TEST_DIR}/mock_pids"
     echo "$loop_script" >> "${TEST_DIR}/mock_loop_scripts"
@@ -253,9 +253,9 @@ if [[ -f "$LAUNCH_AGENT" ]]; then
     check "launch_agent appends stderr to log file" \
         "$(grep -q '2>>' "$LAUNCH_AGENT" && echo pass || echo fail)"
 
-    # Check 2: The function does NOT redirect stderr to /dev/null
+    # Check 2: The function does NOT redirect stderr to /dev/null (old pattern was 2>&1)
     check "launch_agent does NOT send stderr to /dev/null" \
-        "$(grep '2>&1' "$LAUNCH_AGENT" | grep -v '^#' | grep -v 'unset' | wc -l | xargs -I{} test {} -eq 0 && echo pass || echo fail)"
+        "$(grep -q '2>&1' "$LAUNCH_AGENT" 2>/dev/null && echo fail || echo pass)"
 
     # Check 3: Log directory is created
     check "launch_agent creates .nbs/logs dir" \
