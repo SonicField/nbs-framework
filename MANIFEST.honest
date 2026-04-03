@@ -826,6 +826,15 @@ var manifest : Manifest = (
       keywords    : ('chat'; 'teams'; 'protocol'; 'notification'; 'mention'; 'send'; 'read');
     );
 
+    (
+      kind        : Skill;
+      name        : 'nbs-cursor-diagnosis';
+      path        : 'commands/nbs-cursor-diagnosis.md';
+      summary     : 'Diagnose and repair pathological cursor desync — check cursor state, sidecar health, and notification delivery path.';
+      when_to_use : 'When an agent stops receiving notifications, processes old messages, or the sidecar appears stuck.';
+      keywords    : ('cursor'; 'desync'; 'diagnosis'; 'repair'; 'notification'; 'sidecar'; 'unread');
+    );
+
     { ============================================================= }
     { --- Documents and Concepts --- }
     { ============================================================= }
