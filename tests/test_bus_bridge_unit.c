@@ -779,10 +779,10 @@ static void test_dedup_preserves_first_flag(void) {
 
     TEST_ASSERT(count == 1,
                 "dedup flag: expected 1 (deduplicated), got %d", count);
-    TEST_ASSERT(flags[0] == 0,
-                "dedup flag: first @alice was normal (0), got %d", flags[0]);
+    TEST_ASSERT(flags[0] == 1,
+                "dedup flag: upgraded to interrupt (1) from @alice!, got %d", flags[0]);
 
-    TEST_PASS("dedup preserves flag from first occurrence");
+    TEST_PASS("dedup upgrades to highest-priority flag");
 }
 
 static void test_query_flag_with_null_flags_array(void) {

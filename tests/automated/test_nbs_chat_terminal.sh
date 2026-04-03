@@ -807,7 +807,7 @@ echo "47. no --highlight-mention, no inverse..."
 CHAT="$TEST_DIR/test47.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 "$NBS_CHAT" send "$CHAT" "supervisor" "Hello @alex"
-T47_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT alex --no-restart" 2>&1 | tail -1)
+T47_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT alex" 2>&1 | tail -1)
 sleep 2
 OUTPUT=$("$NBS_TS" read "$T47_HANDLE" 2>/dev/null || true)
 "$NBS_TS" kill "$T47_HANDLE" >/dev/null 2>&1 || true
@@ -883,7 +883,7 @@ CHAT="$TEST_DIR/test53.chat"
 "$NBS_CHAT" create "$CHAT" >/dev/null
 "$NBS_CHAT" send "$CHAT" "setup" "Initial message"
 # Start terminal via nbs-ts, set /mention filter, then send matching and non-matching
-T53_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer --no-restart" 2>&1 | tail -1)
+T53_HANDLE=$("$NBS_TS" create "$NBS_TERMINAL $CHAT viewer" 2>&1 | tail -1)
 "$NBS_TS" wait-pattern "$T53_HANDLE" 'viewer>' --timeout=5 >/dev/null 2>&1
 "$NBS_TS" send "$T53_HANDLE" "/mention viewer"
 sleep 1
