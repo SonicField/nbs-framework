@@ -57,8 +57,11 @@ if [[ -n "$CHAT_FILE" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
     if [[ -x "$NBS_CHAT" ]]; then
-        "$NBS_CHAT" send "$CHAT_FILE" sidecar \
-            "SESSION-END: Team pausing in ${COUNTDOWN}s. Use nbs-chat-resume to cancel." \
+        "$NBS_CHAT" send "$CHAT_FILE" session-end \
+            "═══════════════════════════════════════════════════
+  SESSION-END: Team pausing in ${COUNTDOWN} seconds.
+  Use nbs-chat-resume to cancel.
+═══════════════════════════════════════════════════" \
             2>/dev/null || true
     fi
 fi
@@ -78,8 +81,11 @@ rm -f "$PID_FILE"
 
 # Post confirmation
 if [[ -n "$CHAT_FILE" && -x "${NBS_CHAT:-}" ]]; then
-    "$NBS_CHAT" send "$CHAT_FILE" sidecar \
-        "SESSION-END: Team paused. Use nbs-chat-resume to resume." \
+    "$NBS_CHAT" send "$CHAT_FILE" session-end \
+        "═══════════════════════════════════════════════════
+  SESSION-END: Team paused.
+  Use nbs-chat-resume to resume.
+═══════════════════════════════════════════════════" \
         2>/dev/null || true
 fi
 
