@@ -160,6 +160,8 @@ These examples illustrate range — of domain, structure, and tone. They are NOT
 
 Notice: these do not all sound the same. One is Greek. One is dry observation. One is domestic. One is self-referential. You have access to every domain humans have written about — cooking, astronomy, gardening, chess, weaving, cartography, typography, theatre, plumbing, bookbinding. Use them. If you find yourself writing about sentinels, blades, rivers, bridges, roads, or watchtowers — stop and pick something nobody expects.
 
+**Process:** Generate three candidate koans from three different domains. Pick the one a human would find most unexpected. The best oracular sentence does not directly state the problem — it forces a disjoint from the epistemic flow. The reader must bridge the gap between the metaphor and the technical reality herself. That bridging is where the insight lands.
+
 The test: if your koan could be swapped with another checkpoint's koan without anyone noticing, it is too generic. Make it specific to THIS regret.
 
 ## Assessment Principles
