@@ -162,7 +162,7 @@ for handle in scribe medic supervisor gatekeeper theologian testkeeper generalis
 done
 
 # 3. Reset cursors to current end (lock-safe via nbs-chat cursor-set, msg_count-1 so agents see last message)
-NBS_CHAT="${BIN_DIR}/nbs-chat"
+NBS_CHAT="${NBS_BIN}/nbs-chat"
 MESSAGE_COUNT=$("$NBS_CHAT" count "$CHAT_FILE" 2>/dev/null || echo 0)
 if [ "$MESSAGE_COUNT" -gt 0 ]; then
     RESET_TO=$((MESSAGE_COUNT - 1))
