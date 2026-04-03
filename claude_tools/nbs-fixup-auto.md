@@ -138,7 +138,7 @@ The tag identifies this team. Session names follow the pattern `nbs-<role>-<tag>
 ### Step 2: Compute message count
 
 ```bash
-msg_count=$(( $(wc -l < "$chat_file") - 6 ))
+msg_count=$(nbs-chat count "$chat_file" 2>/dev/null || echo 0)
 cursor_file="${chat_file}.cursors"
 ```
 
@@ -268,11 +268,13 @@ IF the agent was missing (no handle), THEN skip the kill.
 **Phase 2 — Reset cursor and spawn:**
 
 ```bash
-if grep -q "^${agent}=" "$cursor_file" 2>/dev/null; then
-    sed -i "s/^${agent}=.*/${agent}=${msg_count}/" "$cursor_file"
+# Use lock-safe cursor-set with msg_count-1 so agent sees last message on restart
+if [[ $msg_count -gt 0 ]]; then
+    reset_to=$((msg_count - 1))
 else
-    echo "${agent}=${msg_count}" >> "$cursor_file"
+    reset_to=0
 fi
+nbs-chat cursor-set "$chat_file" "$agent" "$reset_to"
 
 source .nbs/bin/nbs-launch-agent
 launch_agent "${agent}" "$(pwd)" ".nbs/bin/nbs-claude" \

@@ -1,0 +1,271 @@
+#!/bin/bash
+# nbs-team-status — Show all processes for a team with duplicate detection.
+#
+# Usage:
+#   nbs-team-status <tag> <project-root>
+#
+# Shows every process (session, sidecar, sidecar-loop) for a team,
+# with PIDs, session handles, and duplicate detection.
+#
+# Exit codes:
+#   0 - All OK (no duplicates)
+#   1 - Duplicates or problems detected
+#   4 - Invalid arguments
+
+set -uo pipefail
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: nbs-team-status <tag> <project-root>" >&2
+    exit 4
+fi
+
+TAG="$1"
+PROJECT_ROOT="$2"
+
+if [[ -z "$TAG" ]]; then
+    echo "Error: tag must not be empty" >&2
+    exit 4
+fi
+
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "Error: project root not found: $PROJECT_ROOT" >&2
+    exit 4
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+
+EXPECTED_AGENTS=(supervisor generalist gatekeeper theologian testkeeper scribe medic)
+HAS_DUPLICATES=0
+HAS_PROBLEMS=0
+
+# ---- Collect session info ----
+declare -A SESSION_HANDLES      # agent -> session handle
+declare -A SESSION_STATUS       # agent -> alive/dead
+
+if [[ -x "$NBS_TS" ]]; then
+    while IFS=$'\t' read -r ts_handle ts_status ts_name ts_cmd; do
+        [[ -n "$ts_handle" ]] || continue
+        # Match sessions for this tag
+        for agent in "${EXPECTED_AGENTS[@]}"; do
+            session_name="nbs-${agent}-${TAG}"
+            if [[ "$ts_name" == "$session_name" ]]; then
+                if [[ -n "${SESSION_HANDLES[$agent]:-}" ]]; then
+                    # Duplicate session!
+                    echo "${agent}:  session=${ts_handle}  status=${ts_status}  DUPLICATE SESSION"
+                    HAS_DUPLICATES=1
+                else
+                    SESSION_HANDLES[$agent]="$ts_handle"
+                    SESSION_STATUS[$agent]="$ts_status"
+                fi
+            fi
+        done
+    done < <("$NBS_TS" list --name="$TAG" 2>/dev/null || true)
+fi
+
+# ---- Collect sidecar info ----
+# Map: agent -> list of PIDs
+declare -A SIDECAR_PIDS         # agent -> space-separated PIDs
+
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+
+    local_handle=""
+    local_root=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            --handle=*) local_handle="${arg#--handle=}" ;;
+            --root=*)   local_root="${arg#--root=}" ;;
+        esac
+    done
+
+    [[ -n "$local_handle" ]] || continue
+    # Filter by project root
+    [[ "$local_root" == "$PROJECT_ROOT" ]] || continue
+
+    SIDECAR_PIDS[$local_handle]="${SIDECAR_PIDS[$local_handle]:-} $pid"
+done < <(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null || true)
+
+# ---- Collect sidecar-loop info ----
+declare -A LOOP_PIDS            # agent -> space-separated PIDs
+
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    # Read the cmdline to find the loop script path
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+    loop_script=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            /tmp/nbs-sidecar-loop.*.sh) loop_script="$arg" ;;
+        esac
+    done
+    [[ -n "$loop_script" ]] || continue
+
+    # Check if the loop script references this project root
+    if [[ -f "$loop_script" ]] && grep -q "$PROJECT_ROOT" "$loop_script" 2>/dev/null; then
+        # Try to extract the handle from the loop script
+        loop_handle=""
+        loop_handle=$(grep -oP '(?<=--handle=)\S+' "$loop_script" 2>/dev/null | head -1 || true)
+        if [[ -n "$loop_handle" ]]; then
+            LOOP_PIDS[$loop_handle]="${LOOP_PIDS[$loop_handle]:-} $pid"
+        fi
+    fi
+done < <(pgrep -f 'nbs-sidecar-loop' 2>/dev/null || true)
+
+# ---- Report ----
+echo "Team: ${TAG}  Root: ${PROJECT_ROOT}"
+echo "---"
+
+for agent in "${EXPECTED_AGENTS[@]}"; do
+    session="${SESSION_HANDLES[$agent]:-}"
+    status="${SESSION_STATUS[$agent]:-}"
+    sidecars="${SIDECAR_PIDS[$agent]:-}"
+    loops="${LOOP_PIDS[$agent]:-}"
+
+    # Count sidecars
+    sidecar_arr=($sidecars)
+    sidecar_count=${#sidecar_arr[@]}
+
+    # Count loops
+    loop_arr=($loops)
+    loop_count=${#loop_arr[@]}
+
+    # Session line
+    if [[ -n "$session" ]]; then
+        session_str="session=${session}"
+        if [[ "$status" != "alive" ]]; then
+            session_str="${session_str}  [${status}]"
+            HAS_PROBLEMS=1
+        fi
+    else
+        session_str="session=MISSING"
+        HAS_PROBLEMS=1
+    fi
+
+    # Sidecar line
+    if [[ $sidecar_count -eq 0 ]]; then
+        sidecar_str="sidecar=MISSING"
+        HAS_PROBLEMS=1
+    elif [[ $sidecar_count -eq 1 ]]; then
+        sidecar_str="sidecar=PID:${sidecar_arr[0]}"
+    else
+        sidecar_str="sidecar=PID:${sidecar_arr[0]}"
+        HAS_DUPLICATES=1
+    fi
+
+    # Status label
+    if [[ -n "$session" && "$status" == "alive" && $sidecar_count -eq 1 && $loop_count -le 1 ]]; then
+        label="OK"
+    elif [[ $sidecar_count -gt 1 || $loop_count -gt 1 ]]; then
+        label="DUPLICATE"
+    elif [[ -z "$session" || "$status" != "alive" ]]; then
+        label="DOWN"
+    elif [[ $sidecar_count -eq 0 ]]; then
+        label="NO-SIDECAR"
+    else
+        label="WARN"
+    fi
+
+    printf "%-12s  %-22s  %-22s  %s\n" "${agent}:" "$session_str" "$sidecar_str" "$label"
+
+    # Print duplicate sidecars
+    if [[ $sidecar_count -gt 1 ]]; then
+        for ((i=1; i<sidecar_count; i++)); do
+            printf "%-12s  %-22s  %-22s  %s\n" "" "" "sidecar=PID:${sidecar_arr[$i]}" "DUPLICATE — same handle"
+        done
+    fi
+
+    # Print sidecar-loops
+    if [[ $loop_count -gt 1 ]]; then
+        for lpid in "${loop_arr[@]}"; do
+            printf "%-12s  %-22s  loop=PID:%-14s  %s\n" "" "" "$lpid" "DUPLICATE LOOP"
+        done
+        HAS_DUPLICATES=1
+    elif [[ $loop_count -eq 1 ]]; then
+        # Just note loop exists, not a problem by itself
+        :
+    fi
+done
+
+# ---- Detect orphan sidecars (running for this root but handle not in expected list) ----
+for handle in "${!SIDECAR_PIDS[@]}"; do
+    is_expected=0
+    for agent in "${EXPECTED_AGENTS[@]}"; do
+        if [[ "$handle" == "$agent" ]]; then
+            is_expected=1
+            break
+        fi
+    done
+    if [[ $is_expected -eq 0 ]]; then
+        orphan_pids=(${SIDECAR_PIDS[$handle]})
+        for opid in "${orphan_pids[@]}"; do
+            printf "%-12s  %-22s  %-22s  %s\n" "ORPHAN:" "session=NONE" "sidecar=PID:${opid}" "ORPHAN — handle '${handle}' not in team"
+        done
+        HAS_DUPLICATES=1
+    fi
+done
+
+# ---- Detect orphan sidecars with no matching session (expected handle but no session) ----
+for handle in "${!SIDECAR_PIDS[@]}"; do
+    # Only check expected agents — orphans are already flagged above
+    is_expected=0
+    for agent in "${EXPECTED_AGENTS[@]}"; do
+        if [[ "$handle" == "$agent" ]]; then
+            is_expected=1
+            break
+        fi
+    done
+    [[ $is_expected -eq 1 ]] || continue
+
+    if [[ -z "${SESSION_HANDLES[$handle]:-}" ]]; then
+        sc_arr=(${SIDECAR_PIDS[$handle]})
+        for opid in "${sc_arr[@]}"; do
+            printf "%-12s  %s\n" "" "  ^ sidecar PID:${opid} has NO matching session — ORPHAN"
+        done
+        HAS_PROBLEMS=1
+    fi
+done
+
+echo "---"
+
+# Summary
+total_sidecars=0
+total_loops=0
+for agent in "${EXPECTED_AGENTS[@]}"; do
+    sc_arr=(${SIDECAR_PIDS[$agent]:-})
+    total_sidecars=$((total_sidecars + ${#sc_arr[@]}))
+    lp_arr=(${LOOP_PIDS[$agent]:-})
+    total_loops=$((total_loops + ${#lp_arr[@]}))
+done
+
+# Count orphan sidecars too
+orphan_sidecars=0
+for handle in "${!SIDECAR_PIDS[@]}"; do
+    is_expected=0
+    for agent in "${EXPECTED_AGENTS[@]}"; do
+        [[ "$handle" == "$agent" ]] && is_expected=1 && break
+    done
+    if [[ $is_expected -eq 0 ]]; then
+        sc_arr=(${SIDECAR_PIDS[$handle]})
+        orphan_sidecars=$((orphan_sidecars + ${#sc_arr[@]}))
+    fi
+done
+
+echo "Sessions: $(printf '%s\n' "${!SESSION_HANDLES[@]}" | wc -w)/${#EXPECTED_AGENTS[@]}  Sidecars: ${total_sidecars}/${#EXPECTED_AGENTS[@]}  Loops: ${total_loops}  Orphans: ${orphan_sidecars}"
+
+if [[ $HAS_DUPLICATES -eq 1 ]]; then
+    echo ""
+    echo "WARNING: Duplicate processes detected. Run 'nbs-team-kill ${TAG} ${PROJECT_ROOT}' for a clean slate."
+    exit 1
+fi
+
+if [[ $HAS_PROBLEMS -eq 1 ]]; then
+    exit 1
+fi
+
+exit 0

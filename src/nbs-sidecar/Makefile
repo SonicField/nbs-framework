@@ -40,7 +40,7 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit \
              $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit
 
-.PHONY: all clean install debug asan test test-unit test-all
+.PHONY: all clean install debug asan test test-unit test-all test-valgrind
 
 all: $(TARGET) $(ASSERT_CHECK)
 
@@ -135,5 +135,9 @@ test: all install
 
 test-asan: asan install
 	bash $(TEST_DIR)/test_sidecar_lifecycle.sh
+
+test-valgrind: CFLAGS = $(COMMON_CFLAGS) -O0 -g -Wno-format-truncation
+test-valgrind: clean all install
+	bash ../../tests/valgrind/test_sidecar_valgrind.sh
 
 test-all: test-unit test

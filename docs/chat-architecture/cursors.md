@@ -59,6 +59,22 @@ Blank lines and lines starting with `#` are skipped on read.
 
 The lock is held throughout to prevent concurrent corruption from multiple sidecars updating the same cursor file.
 
+## Ownership and Semantics
+
+**What the cursor means:** A cursor value of N means "messages 0 through N have been *delivered to the agent's terminal*." It does NOT mean the agent has read, understood, or acted on those messages. The cursor tracks delivery, not comprehension — analogous to email read receipts.
+
+**Two writers, one contract:** Both the sidecar and the agent (via `nbs-chat read --unread=<handle>`) can advance the cursor. Both use `chat_cursor_write()` which acquires the chat lock, so there is no data corruption from concurrent writes. The semantic contract is:
+
+- **Sidecar** does not advance the cursor directly. It reads the cursor to compute unread counts and deliver notifications.
+- **Agent** advances the cursor via `--unread` after messages are displayed in the terminal.
+- **`chat_send`** advances the sender's cursor automatically (see Sender Auto-Advance below).
+
+**Monotonicity:** Cursors only move forward (except during archive adjustment or explicit reset via `nbs-chat cursor-set`). A cursor value of N guarantees that on the next poll cycle, the sidecar will compute `unread = total - N - 1`. Any new message (total increases by 1) makes `unread > 0`, which triggers a notification. This invariant ensures that agent `--unread` advancement does not prevent the sidecar from notifying on subsequent messages.
+
+**CLI tools for cursor management:**
+- `nbs-chat cursor-set <file> <handle> <value>` — atomically set a cursor (lock-safe). Use this instead of `sed -i` which bypasses the lock.
+- `nbs-chat count <file>` — authoritative message count using separator-based counting. Use this instead of `wc -l - 6` which assumes a fixed header size.
+
 ## Sender Auto-Advance
 
 When an agent sends a message via `chat_send`, the sender's cursor is automatically advanced to the index of the newly appended message. This happens *after* the lock is released on the main chat file.
@@ -95,7 +111,7 @@ Cursors can desync if:
 - The cursor file is corrupted (returns -2)
 - An archive operation races with a cursor write
 
-The `nbs-fixup` periodic trigger detects and repairs cursor inconsistencies. The simplest repair is to set the cursor to the current message count (mark all as read) or to 0 (re-read everything).
+The `nbs-fixup` periodic trigger detects and repairs cursor inconsistencies. To reset a cursor, use `nbs-chat cursor-set <file> <handle> <value>`. Set to `msg_count - 1` (via `nbs-chat count`) so the agent sees at least the most recent message on restart. Never use `sed -i` on cursor files — it bypasses the chat lock and races with concurrent cursor writers.
 
 ## See Also
 

@@ -155,24 +155,22 @@ HEADER_LINES=6  # nbs-chat file header is exactly 6 lines (=== nbs-chat ===, las
 
 for chat_cursors in .nbs/chat/*.cursors; do
     chat_file="${chat_cursors%.cursors}"
-    # Message count = total lines minus header. Cursor is 0-indexed, so
-    # last valid cursor = message_count - 1 (meaning "I've read everything").
-    total_lines=$(wc -l < "$chat_file")
-    message_count=$((total_lines - HEADER_LINES))
-    cursor_value=$((message_count - 1))
-    if [ "$cursor_value" -lt 0 ]; then
+    # Use nbs-chat count for authoritative message count (not wc -l minus header).
+    # Use nbs-chat cursor-set for lock-safe cursor write (not sed -i).
+    message_count=$(nbs-chat count "$chat_file" 2>/dev/null || echo 0)
+    if [ "$message_count" -gt 0 ]; then
+        cursor_value=$((message_count - 1))
+    else
         cursor_value=0
     fi
     for handle in <dead/zombie handles from triage>; do
-        if grep -q "^${handle}=" "$chat_cursors" 2>/dev/null; then
-            sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" "$chat_cursors"
-            echo "Reset cursor: $handle in $(basename "$chat_file") to ${cursor_value} (${message_count} messages)"
-        fi
+        nbs-chat cursor-set "$chat_file" "$handle" "$cursor_value"
+        echo "Reset cursor: $handle in $(basename "$chat_file") to ${cursor_value} (${message_count} messages)"
     done
 done
 ```
 
-**Why not `wc -l` directly?** The chat file has a 6-line header before the first message. Cursors are 0-indexed message indices. Using raw `wc -l` sets the cursor past the end of the message array, causing an array bounds violation on the next `--unread` read (`start > message_count`). The correct cursor value is `total_lines - HEADER_LINES - 1`.
+**Why `nbs-chat count` and `cursor-set`?** The `count` subcommand uses separator-based counting (lines after `---`), not `wc -l` minus a hardcoded header offset. This is robust to header format changes. The `cursor-set` subcommand acquires the chat lock before writing, preventing races with concurrent cursor writers (sidecars, other scripts). Direct file manipulation (e.g. with sed) on cursor files bypasses the lock and must not be used.
 
 This ensures respawned agents do not see a backlog of hundreds of old messages on their first `--unread` check. The agent will read recent history via `--last=N` on startup instead.
 
@@ -264,11 +262,14 @@ Wait for the digest worker to post its summary to chat. Then reset cursors again
 
 ```bash
 # Reset cursors to current end so agents see the digest + banner
-HEADER_LINES=6
-total_lines=$(wc -l < "$chat_file")
-cursor_value=$((total_lines - HEADER_LINES - 1))
+message_count=$(nbs-chat count "$chat_file" 2>/dev/null || echo 0)
+if [ "$message_count" -gt 0 ]; then
+    cursor_value=$((message_count - 1))
+else
+    cursor_value=0
+fi
 for handle in <all agent handles>; do
-    sed -i "s/^${handle}=.*/${handle}=${cursor_value}/" "${chat_file}.cursors"
+    nbs-chat cursor-set "$chat_file" "$handle" "$cursor_value"
 done
 ```
 

@@ -30,6 +30,7 @@
 
 #include <ctype.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -428,6 +429,19 @@ static int should_inject_notify(const sidecar_config_t *cfg,
         }
     }
 
+    /* Root Cause B (Scenario #6): startup catch-up notification.
+     * After startup grace ends, fire one unconditional notification so the
+     * agent reads recent context. This handles the case where the sidecar
+     * restarts but cursor == msg_count — without this, the agent is deaf
+     * to messages that arrived while the sidecar was dead. */
+    if (!state->startup_notify_sent) {
+        state->startup_notify_sent = 1;
+        snprintf(state->notify_message, sizeof(state->notify_message),
+                 "sidecar startup catch-up");
+        state->last_notify_time = now;
+        return 0;  /* Force notification delivery */
+    }
+
     /* Check bus events */
     char bus_dir[SIDECAR_MAX_PATH];
     int has_bus = (registry_find_first(registry_path, "bus",
@@ -535,7 +549,9 @@ static int should_inject_notify(const sidecar_config_t *cfg,
     ASSERT_MSG(state->notify_message[0] != '\0',
                "should_inject_notify: returning inject but message is empty");
 
-    state->last_notify_time = now;
+    /* Note: last_notify_time is NOT set here. The caller sets it after
+     * confirmed delivery to avoid phantom cooldowns when TOCTOU re-capture
+     * aborts injection (see sidecar_run notification path). */
     return 0;
 }
 
@@ -601,6 +617,157 @@ int sidecar_config_validate(const sidecar_config_t *cfg) {
     return ok ? 0 : -1;
 }
 
+/* --- PID marker for duplicate sidecar detection (Root Cause C) --- */
+
+/*
+ * build_pid_marker_path — Construct path to sidecar PID marker file.
+ *
+ * Pattern: <nbs_root>/.nbs/pids/sidecar-<handle>.pid
+ * Consistent with existing .nbs/pids/${AGENT}.pid convention.
+ */
+static void build_pid_marker_path(const sidecar_config_t *cfg,
+                                   char *out, size_t out_size) {
+    ASSERT_MSG(cfg != NULL, "build_pid_marker_path: cfg is NULL");
+    ASSERT_MSG(out != NULL, "build_pid_marker_path: out is NULL");
+    ASSERT_MSG(out_size > 0, "build_pid_marker_path: out_size is 0");
+
+    int n = snprintf(out, out_size, "%s/.nbs/pids/sidecar-%s.pid",
+                     cfg->nbs_root, cfg->handle);
+    ASSERT_MSG(n >= 0 && (size_t)n < out_size,
+               "build_pid_marker_path: path truncated (need %d, have %zu)", n, out_size);
+}
+
+/*
+ * pid_marker_write — Atomically write PID marker file.
+ *
+ * Writes to a .tmp file first, then renames. This prevents readers
+ * from seeing a partially written PID.
+ *
+ * Returns 0 on success, -1 on error.
+ */
+static int pid_marker_write(const char *path, pid_t pid) {
+    char tmp_path[SIDECAR_MAX_PATH + 16];
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    if (n < 0 || (size_t)n >= sizeof(tmp_path)) return -1;
+
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) return -1;
+
+    fprintf(f, "%d\n", (int)pid);
+    fclose(f);
+
+    if (rename(tmp_path, path) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * pid_marker_check — Check PID marker for duplicate detection.
+ *
+ * Returns:
+ *   0  — no conflict (marker matches our PID, or is stale/missing)
+ *   1  — conflict (another live sidecar owns this handle)
+ *  -1  — error reading marker
+ *
+ * If the marker contains a stale PID (process dead), overwrites it
+ * with our PID and returns 0.
+ */
+static int pid_marker_check(const char *path, pid_t my_pid, const char *handle) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        /* No marker file — no conflict. Write ours. */
+        return pid_marker_write(path, my_pid);
+    }
+
+    int marker_pid = 0;
+    if (fscanf(f, "%d", &marker_pid) != 1) {
+        fclose(f);
+        /* Corrupt or empty — overwrite */
+        return pid_marker_write(path, my_pid);
+    }
+    fclose(f);
+
+    if (marker_pid == (int)my_pid) {
+        /* It's ours — no conflict */
+        return 0;
+    }
+
+    /* Check if the marker PID is still alive AND is actually an nbs-sidecar
+     * with the same handle. Prevents false 'duplicate' when PID is recycled
+     * by an unrelated process (PID recycling edge case). */
+    if (kill((pid_t)marker_pid, 0) == 0) {
+        /* Process is alive — verify it's actually an nbs-sidecar.
+         * Read /proc/pid/cmdline and check for nbs-sidecar + matching handle. */
+        char cmdline_path[64];
+        snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%d/cmdline", marker_pid);
+        FILE *cf = fopen(cmdline_path, "r");
+        if (cf) {
+            char cmdline[4096];
+            size_t nr = fread(cmdline, 1, sizeof(cmdline) - 1, cf);
+            fclose(cf);
+            cmdline[nr] = '\0';
+
+            /* cmdline is NUL-separated args. Must match BOTH:
+             * 1. Binary name contains "nbs-sidecar"
+             * 2. An arg matches "--handle=<our_handle>"
+             * Without handle match, a sidecar for a DIFFERENT handle
+             * would be falsely detected as a conflict. */
+            int found_binary = 0;
+            int found_handle = 0;
+            char handle_arg[SIDECAR_MAX_HANDLE + 16];
+            snprintf(handle_arg, sizeof(handle_arg), "--handle=%s", handle);
+
+            for (size_t i = 0; i < nr; i++) {
+                if (cmdline[i] == '\0') continue;
+                if (strstr(cmdline + i, "nbs-sidecar") != NULL) {
+                    found_binary = 1;
+                }
+                if (strcmp(cmdline + i, handle_arg) == 0) {
+                    found_handle = 1;
+                }
+                /* Skip to next NUL */
+                while (i < nr && cmdline[i] != '\0') i++;
+            }
+
+            if (found_binary && found_handle) {
+                /* Same binary, same handle — real conflict */
+                return 1;
+            }
+            if (found_binary && !found_handle) {
+                /* nbs-sidecar for a different handle — not our conflict */
+                fprintf(stderr, "sidecar: PID %d is nbs-sidecar but different "
+                        "handle (not '%s'), taking ownership\n",
+                        marker_pid, handle);
+            } else {
+                /* Not nbs-sidecar — PID recycled */
+                fprintf(stderr, "sidecar: PID %d alive but not nbs-sidecar "
+                        "(recycled PID), taking ownership\n", marker_pid);
+            }
+        } else {
+            /* Can't read /proc/pid/cmdline — process may have just died,
+             * or permissions issue. Treat as stale with warning. */
+            fprintf(stderr, "sidecar: cannot read /proc/%d/cmdline — "
+                    "treating PID marker as stale\n", marker_pid);
+        }
+    } else {
+        /* Process is dead (stale PID) */
+        fprintf(stderr, "sidecar: stale PID marker %d, taking ownership\n",
+                marker_pid);
+    }
+
+    /* Take ownership */
+    return pid_marker_write(path, my_pid);
+}
+
+/*
+ * pid_marker_remove — Remove PID marker file on clean shutdown.
+ */
+static void pid_marker_remove(const char *path) {
+    unlink(path);
+}
+
 /* --- Main loop --- */
 
 int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
@@ -628,6 +795,29 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     if (seed_rc != 0) {
         fprintf(stderr, "sidecar_run: registry_seed failed\n");
     }
+
+    /* PID marker — write BEFORE first cursor advance (Root Cause C).
+     * Check for existing live sidecar with the same handle. If one
+     * exists, exit immediately to prevent duplicate cursor advancement. */
+    char pid_marker_path[SIDECAR_EXT_PATH];
+    build_pid_marker_path(cfg, pid_marker_path, sizeof(pid_marker_path));
+
+    int pid_check_rc = pid_marker_check(pid_marker_path, getpid(), cfg->handle);
+    if (pid_check_rc == 1) {
+        fprintf(stderr, "sidecar_run: duplicate sidecar detected for handle '%s' "
+                "— another sidecar is already running. Exiting.\n", cfg->handle);
+        sc_dbg("duplicate sidecar detected for %s — exiting", cfg->handle);
+        return SIDECAR_EXIT_ERROR;
+    }
+    if (pid_check_rc < 0) {
+        fprintf(stderr, "sidecar_run: warning: failed to write PID marker for '%s'\n",
+                cfg->handle);
+    }
+    sc_dbg("PID marker written: %s (pid=%d)", pid_marker_path, (int)getpid());
+
+    /* Lifecycle log: startup */
+    fprintf(stderr, "sidecar startup: handle=%s pid=%d root=%s\n",
+            cfg->handle, (int)getpid(), cfg->nbs_root);
 
     /* No blocking init-wait. The main loop handles initial prompt
      * injection alongside queries and interrupts. This ensures queries
@@ -694,6 +884,19 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         state.bus_check_counter, state.notify_fail_count,
                         (long)(hb_now - state.sidecar_start_time));
                 last_heartbeat_time = hb_now;
+
+                /* PID marker re-check on heartbeat — detect if another
+                 * sidecar has taken ownership (Root Cause C). */
+                int hb_pid_rc = pid_marker_check(pid_marker_path, getpid(), cfg->handle);
+                if (hb_pid_rc == 1) {
+                    fprintf(stderr, "sidecar: PID marker mismatch for '%s' "
+                            "— another sidecar took ownership. Exiting.\n",
+                            cfg->handle);
+                    sc_dbg("PID marker mismatch on heartbeat — exiting");
+                    /* Do NOT remove PID file — it belongs to the new owner.
+                     * Only the clean exit path removes it (we own it there). */
+                    break;
+                }
             }
         }
 
@@ -870,11 +1073,55 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             }
         }
 
+        /* Root Cause B: cooldown suppression tracking runs EVERY tick,
+         * BEFORE capture/content checks. This tracks MESSAGE QUEUE state
+         * (unreads exist during cooldown), not delivery state, so it
+         * doesn't depend on capture working or content stability.
+         *
+         * Design (per theologian):
+         * - If unreads > 0 AND cooldown active → cooldown_suppressed = 1
+         * - If cooldown expired AND cooldown_suppressed → catchup_needed = 1
+         */
+        int catchup_needed = 0;
+        {
+            time_t cd_now = time(NULL);
+            time_t cd_elapsed = cd_now - state.last_notify_time;
+            int cd_active = (state.last_notify_time > 0 &&
+                             cd_elapsed < cfg->notify_cooldown);
+
+            /* Lightweight unread check — no capture dependency */
+            int unread_count = 0;
+            char unread_summary[SIDECAR_MAX_MESSAGE];
+            int ur_rc = chat_client_check_unread(registry_path, cfg->handle,
+                                                  &unread_count, unread_summary,
+                                                  sizeof(unread_summary));
+            int has_unreads = (ur_rc == 0 && unread_count > 0);
+
+            if (has_unreads && cd_active) {
+                if (!state.cooldown_suppressed) {
+                    sc_dbg("cooldown_suppressed SET: unreads=%d cd_elapsed=%ld cooldown=%d",
+                           unread_count, (long)cd_elapsed, cfg->notify_cooldown);
+                }
+                state.cooldown_suppressed = 1;
+            }
+
+            if (state.cooldown_suppressed && !cd_active) {
+                /* Cooldown expired with suppressed events — catch up */
+                catchup_needed = 1;
+                state.cooldown_suppressed = 0;
+                sc_dbg("catchup_needed: cooldown expired with %d unreads",
+                       unread_count);
+            }
+        }
+
         /* Capture content and hash. 30 lines to reliably include
          * the prompt area (Claude's terminal has many blank/control
          * lines between the prompt and the end of output). */
         char *content = tp->capture(tp, 30);
-        if (!content) continue;
+        if (!content) {
+            sc_dbg("capture returned NULL");
+            continue;
+        }
 
         size_t content_len = strlen(content);
         uint64_t current_hash = fnv1a_hash(content, content_len);
@@ -986,8 +1233,14 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                 continue;
             }
 
-            free(content);
-            continue;
+            /* Root Cause B: if catch-up is needed, fall through to bus
+             * check instead of skipping. The agent needs the notification
+             * even during content changes. */
+            if (!catchup_needed) {
+                free(content);
+                continue;
+            }
+            /* Fall through to notification delivery */
         }
 
         /* Content stable — check for dialogue when idle */
@@ -1010,11 +1263,11 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
         if (state.bus_check_counter < INT_MAX)
             state.bus_check_counter++;
 
-        /* Bus-aware check */
-        if (state.bus_check_counter >= cfg->bus_check_interval) {
+        /* Bus-aware check — catchup_needed bypasses interval and idle gates */
+        if (state.bus_check_counter >= cfg->bus_check_interval || catchup_needed) {
             state.bus_check_counter = 0;
 
-            if (detect_prompt_idle(content)) {
+            if (detect_prompt_idle(content) || catchup_needed) {
                 /* Context stress — back off */
                 if (detect_context_stress(content)) {
                     state.idle_seconds = 0;
@@ -1058,16 +1311,20 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         fprintf(stderr, "sidecar_run: notify send_key Enter failed\n");
                     }
 
-                    /* Verify injection consumed (up to 3 retries) */
+                    /* Verify injection consumed (up to 3 retries).
+                     * Capture only 3 lines (prompt area) to avoid false
+                     * positives from old notifications in scrollback. */
                     int injection_consumed = 0;
                     for (int retry = 1; retry <= 3; retry++) {
                         sleep(retry * 2);
-                        char *verify = tp->capture(tp, 30);
+                        char *verify = tp->capture(tp, 1);
                         if (!verify) continue;
 
-                        if (strstr(verify, "sidecar detected") != NULL) {
-                            /* Still in buffer — retry Enter */
-                            tp->send_key(tp, "Enter");
+                        if (strstr(verify, "NBS-CHAT-NOTIFICATION") != NULL) {
+                            /* Still in buffer — retry Enter disabled.
+                             * Needs review before enabling: could submit
+                             * empty prompt to Claude session. */
+                            /* tp->send_key(tp, "Enter"); */
                             free(verify);
                         } else {
                             /* Consumed */
@@ -1079,6 +1336,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
                     if (injection_consumed) {
                         state.notify_fail_count = 0;
+                        state.last_notify_time = time(NULL);
                         /* Ack bus events — the agent no longer needs to
                          * do this manually. The notification was delivered,
                          * so the events have been communicated. */
@@ -1110,6 +1368,28 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     }
 
     sc_dbg("main loop exited for %s", cfg->handle);
-    fprintf(stderr, "sidecar_run: main loop exited for '%s'\n", cfg->handle);
+
+    /* Lifecycle log: shutdown */
+    fprintf(stderr, "sidecar shutdown: handle=%s pid=%d uptime=%lds\n",
+            cfg->handle, (int)getpid(),
+            (long)(time(NULL) - state.sidecar_start_time));
+
+    /* Clean up PID marker on exit — only if we still own it.
+     * If another sidecar took ownership (heartbeat mismatch), the file
+     * contains their PID and we must not delete it. */
+    {
+        FILE *pf = fopen(pid_marker_path, "r");
+        if (pf) {
+            int file_pid = 0;
+            if (fscanf(pf, "%d", &file_pid) == 1 && file_pid == (int)getpid()) {
+                fclose(pf);
+                pid_marker_remove(pid_marker_path);
+            } else {
+                fclose(pf);
+                /* PID file belongs to another sidecar — leave it */
+            }
+        }
+    }
+
     return SIDECAR_EXIT_OK;
 }

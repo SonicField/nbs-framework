@@ -56,20 +56,17 @@ fi
 # 2. Clean PID file
 rm -f "${PROJECT_ROOT}/.nbs/pids/${AGENT}.pid"
 
-# 3. Reset cursor
-CURSOR_FILE="${CHAT_FILE}.cursors"
-if [[ -f "$CURSOR_FILE" ]]; then
-    MSG_COUNT=$(wc -l < "$CHAT_FILE" 2>/dev/null || echo 0)
-    MSG_COUNT=$((MSG_COUNT - 6))  # subtract header lines
-    if [[ $MSG_COUNT -lt 0 ]]; then MSG_COUNT=0; fi
-
-    if grep -q "^${AGENT}=" "$CURSOR_FILE" 2>/dev/null; then
-        sed -i "s/^${AGENT}=.*/${AGENT}=${MSG_COUNT}/" "$CURSOR_FILE"
-    else
-        echo "${AGENT}=${MSG_COUNT}" >> "$CURSOR_FILE"
-    fi
-    echo "Cursor reset to $MSG_COUNT"
+# 3. Reset cursor (lock-safe via nbs-chat cursor-set, msg_count-1 so agent sees last message)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_CHAT="${SCRIPT_DIR}/nbs-chat"
+MSG_COUNT=$("$NBS_CHAT" count "$CHAT_FILE" 2>/dev/null || echo 0)
+if [[ $MSG_COUNT -gt 0 ]]; then
+    RESET_TO=$((MSG_COUNT - 1))
+else
+    RESET_TO=0
 fi
+"$NBS_CHAT" cursor-set "$CHAT_FILE" "$AGENT" "$RESET_TO" 2>/dev/null
+echo "Cursor reset to $RESET_TO (msg_count=$MSG_COUNT)"
 
 # 4. Respawn
 echo "Respawning $AGENT..."

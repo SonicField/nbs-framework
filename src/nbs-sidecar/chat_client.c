@@ -230,6 +230,17 @@ static int check_unread_cb(const char *path, void *user_data)
     if (cursor < 0)
         cursor = 0;
 
+    /* Root Cause E (Scenario #7): clamp cursor after archive.
+     * When a chat is archived, message count drops (e.g. 2000 → 1000).
+     * If cursor exceeds the new total, clamp it to avoid treating all
+     * messages as read. Log the anomaly for debugging. */
+    if (total > 0 && cursor >= total) {
+        fprintf(stderr, "check_unread_cb: cursor for '%s' (%d) exceeds "
+                "message count (%d) in '%s' — clamping (post-archive?)\n",
+                ctx->handle, cursor, total, path);
+        cursor = (total > 0) ? total - 1 : 0;
+    }
+
     /* Unread if total > cursor + 1 (cursor is 0-indexed last-read index).
      * Guard total <= 0 first (no messages → nothing unread).
      * Use `total - 1 > cursor` to avoid overflow when cursor is near INT_MAX. */

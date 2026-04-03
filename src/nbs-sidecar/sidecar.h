@@ -113,6 +113,10 @@ typedef struct {
     int query_retry_count;
     int interrupt_retry_count;
     int mention_retry_count;
+
+    /* Root Cause B: notification gap tracking */
+    int cooldown_suppressed;    /* 1 if last notify was suppressed by cooldown */
+    int startup_notify_sent;    /* 1 after startup catch-up notification fired */
 } sidecar_state_t;
 
 /*

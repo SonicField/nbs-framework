@@ -53,6 +53,8 @@ static void print_usage(void) {
     printf("  export <file> [options]          Export with ANSI colours\n");
     printf("  delete <file> --after=<time>     Delete messages after time\n");
     printf("  participants <file>              List participants and counts\n");
+    printf("  count <file>                     Print authoritative message count\n");
+    printf("  cursor-set <file> <handle> <N>   Atomically set cursor (lock-safe)\n");
     printf("  help                             Show this help\n\n");
     printf("Read options:\n");
     printf("  --last=N           Show only the last N messages\n");
@@ -330,11 +332,18 @@ static int cmd_read(int argc, char **argv) {
                    "cmd_read: cursor value %d would overflow on increment", cursor);
         /* cursor is last-read index; show messages after it */
         start = cursor + 1;  /* -1 + 1 = 0 if no cursor exists (show all) */
-        /* Clamp: if file shrunk since cursor was written, start may exceed
-         * message_count.  Treat as 'no unread messages' rather than crash. */
+        /* Clamp: if file shrunk since cursor was written (e.g. after archive),
+         * start may exceed message_count. Clamp cursor in the file so it
+         * doesn't stay impossibly high (Scenario #7 mitigation). */
         if (start > end) {
-            fprintf(stderr, "warning: read cursor for '%s' (%d) exceeds message count (%d), clamping\n",
-                    unread_handle, cursor, state.message_count);
+            int clamped = (state.message_count > 0) ? state.message_count - 1 : 0;
+            fprintf(stderr, "warning: read cursor for '%s' (%d) exceeds message count (%d), clamping to %d\n",
+                    unread_handle, cursor, state.message_count, clamped);
+            /* Write clamped cursor back to file */
+            int clamp_rc = chat_cursor_write(path, unread_handle, clamped);
+            if (clamp_rc < 0) {
+                fprintf(stderr, "warning: failed to write clamped cursor for '%s'\n", unread_handle);
+            }
             start = end;
         }
     } else if (since_handle) {
@@ -1196,6 +1205,132 @@ static int cmd_error(int argc, char **argv) {
     return 0;
 }
 
+/*
+ * cmd_count — Print the authoritative message count for a chat file.
+ *
+ * Uses separator-based counting (lines after "---"), not line count
+ * minus a hardcoded header offset. This avoids the wrong-formula bug
+ * (Scenario #8) where header format changes break all cursor arithmetic.
+ *
+ * Exit: 0 on success (prints count to stdout), 1 on error, 2 not found.
+ */
+static int cmd_count(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: nbs-chat count <file>\n");
+        return 4;
+    }
+
+    const char *path = argv[2];
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_count") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
+    /* Open file and count lines after the --- separator */
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Cannot open chat file: %s\n", path);
+        return 1;
+    }
+
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t line_len;
+    int found_separator = 0;
+    int count = 0;
+
+    while ((line_len = getline(&line, &line_cap, f)) != -1) {
+        /* Strip trailing newline */
+        if (line_len > 0 && line[line_len - 1] == '\n')
+            line[--line_len] = '\0';
+
+        if (!found_separator) {
+            if (strcmp(line, "---") == 0)
+                found_separator = 1;
+            continue;
+        }
+
+        /* After separator: count non-empty lines (one per message) */
+        if (line_len > 0)
+            count++;
+    }
+
+    free(line);
+    fclose(f);
+
+    printf("%d\n", count);
+    return 0;
+}
+
+/*
+ * cmd_cursor_set — Atomically set a handle's cursor value.
+ *
+ * Uses chat_cursor_write() which acquires the chat lock, ensuring
+ * safe concurrent access. This replaces sed -i in shell scripts
+ * (Scenario #2: concurrent cursor write race).
+ *
+ * Exit: 0 on success, 1 on error, 2 not found, 4 invalid args.
+ */
+static int cmd_cursor_set(int argc, char **argv) {
+    if (argc < 5) {
+        fprintf(stderr, "Usage: nbs-chat cursor-set <file> <handle> <value>\n");
+        return 4;
+    }
+
+    const char *path = argv[2];
+    const char *handle = argv[3];
+    const char *value_str = argv[4];
+
+    char abs_path[MAX_PATH_LEN];
+    if (resolve_path(path, abs_path, "cmd_cursor_set") < 0) {
+        return 4;
+    }
+    path = abs_path;
+
+    /* Parse value */
+    char *endptr;
+    errno = 0;
+    long value = strtol(value_str, &endptr, 10);
+    if (errno != 0 || *endptr != '\0' || value < 0 || value > INT_MAX - 1) {
+        fprintf(stderr, "Error: Invalid cursor value: %s (must be 0..%d)\n",
+                value_str, INT_MAX - 1);
+        return 4;
+    }
+
+    /* Validate handle */
+    if (handle[0] == '\0') {
+        fprintf(stderr, "Error: Handle must not be empty\n");
+        return 4;
+    }
+
+    /* Check chat file exists */
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        if (errno == ENOENT) {
+            fprintf(stderr, "Error: Chat file not found: %s\n", path);
+            return 2;
+        }
+        fprintf(stderr, "Error: Cannot open chat file: %s\n", path);
+        return 1;
+    }
+    fclose(f);
+
+    /* Atomically set cursor (acquires chat lock) */
+    int rc = chat_cursor_write(path, handle, (int)value);
+    if (rc < 0) {
+        fprintf(stderr, "Error: Failed to set cursor for '%s' in '%s'\n",
+                handle, path);
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Error: No command specified\n");
@@ -1220,6 +1355,8 @@ int main(int argc, char **argv) {
     else if (strcmp(cmd, "export") == 0) rc = cmd_export(argc, argv);
     else if (strcmp(cmd, "delete") == 0) rc = cmd_delete(argc, argv);
     else if (strcmp(cmd, "participants") == 0) rc = cmd_participants(argc, argv);
+    else if (strcmp(cmd, "count") == 0) rc = cmd_count(argc, argv);
+    else if (strcmp(cmd, "cursor-set") == 0) rc = cmd_cursor_set(argc, argv);
     else if (strcmp(cmd, "help") == 0) { print_usage(); return 0; }
     else {
         fprintf(stderr, "Error: Unknown command: %s\n", cmd);

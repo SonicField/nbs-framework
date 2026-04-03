@@ -13,7 +13,7 @@ HELPER = nbs-ts-helper
 
 ASSERT_CHECK = assert_check
 
-.PHONY: all clean install test debug asan
+.PHONY: all clean install test debug asan test-valgrind
 
 all: $(TARGET) $(HELPER) $(ASSERT_CHECK)
 
@@ -51,3 +51,7 @@ asan: CC = clang
 asan: CFLAGS = $(COMMON_CFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: LDFLAGS = -fsanitize=address,undefined -lpthread -lutil
 asan: clean all
+
+test-valgrind: CFLAGS = $(COMMON_CFLAGS) -O0 -g
+test-valgrind: clean all install
+	bash ../../tests/valgrind/test_helper_valgrind.sh

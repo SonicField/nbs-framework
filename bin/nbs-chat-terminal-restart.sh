@@ -161,20 +161,16 @@ for handle in scribe medic supervisor gatekeeper theologian testkeeper generalis
     fi
 done
 
-# 3. Reset cursors to current end
-HEADER_LINES=6
-MESSAGE_COUNT=$(( $(wc -l < "$CHAT_FILE") - HEADER_LINES ))
-if [ ! -f "${CHAT_FILE}.cursors" ]; then
-    echo "# Read cursors — last-read message index per handle" > "${CHAT_FILE}.cursors"
+# 3. Reset cursors to current end (lock-safe via nbs-chat cursor-set, msg_count-1 so agents see last message)
+NBS_CHAT="${BIN_DIR}/nbs-chat"
+MESSAGE_COUNT=$("$NBS_CHAT" count "$CHAT_FILE" 2>/dev/null || echo 0)
+if [ "$MESSAGE_COUNT" -gt 0 ]; then
+    RESET_TO=$((MESSAGE_COUNT - 1))
+else
+    RESET_TO=0
 fi
 for handle in scribe medic supervisor gatekeeper theologian testkeeper generalist; do
-    if [ -f "${CHAT_FILE}.cursors" ]; then
-        if grep -q "^${handle}=" "${CHAT_FILE}.cursors" 2>/dev/null; then
-            sed -i "s/^${handle}=.*/${handle}=${MESSAGE_COUNT}/" "${CHAT_FILE}.cursors"
-        else
-            echo "${handle}=${MESSAGE_COUNT}" >> "${CHAT_FILE}.cursors"
-        fi
-    fi
+    "$NBS_CHAT" cursor-set "$CHAT_FILE" "$handle" "$RESET_TO" 2>/dev/null
 done
 
 # 4. Spawn agents (scribe first, 5s stagger)

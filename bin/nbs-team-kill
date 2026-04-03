@@ -1,0 +1,219 @@
+#!/bin/bash
+# nbs-team-kill — Kill ALL processes for a team. Clean slate.
+#
+# Usage:
+#   nbs-team-kill <tag> <project-root> [--force]
+#
+# Kills all sessions, sidecars, and sidecar-loops for a team.
+# Optionally clears cursor and PID files.
+#
+# Without --force, prompts for confirmation (unless stdin is not a tty).
+#
+# Exit codes:
+#   0 - Success (all processes killed)
+#   1 - Some processes could not be killed
+#   4 - Invalid arguments
+
+set -uo pipefail
+
+FORCE=0
+TAG=""
+PROJECT_ROOT=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+        --help|-h)
+            echo "Usage: nbs-team-kill <tag> <project-root> [--force]"
+            echo ""
+            echo "Kill ALL processes for a team: sessions, sidecars, sidecar-loops."
+            echo "Also clears PID files. Clean slate for restart."
+            echo ""
+            echo "  --force    Skip confirmation prompt"
+            exit 0
+            ;;
+        *)
+            if [[ -z "$TAG" ]]; then
+                TAG="$arg"
+            elif [[ -z "$PROJECT_ROOT" ]]; then
+                PROJECT_ROOT="$arg"
+            else
+                echo "Error: unexpected argument: $arg" >&2
+                exit 4
+            fi
+            ;;
+    esac
+done
+
+if [[ -z "$TAG" || -z "$PROJECT_ROOT" ]]; then
+    echo "Usage: nbs-team-kill <tag> <project-root> [--force]" >&2
+    exit 4
+fi
+
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "Error: project root not found: $PROJECT_ROOT" >&2
+    exit 4
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NBS_TS="${SCRIPT_DIR}/nbs-ts"
+
+EXPECTED_AGENTS=(supervisor generalist gatekeeper theologian testkeeper scribe medic)
+
+# ---- Confirmation ----
+if [[ $FORCE -ne 1 ]]; then
+    if [[ -t 0 ]]; then
+        echo "This will kill ALL processes for team '${TAG}' in ${PROJECT_ROOT}:"
+        echo "  - All nbs-ts sessions (nbs-*-${TAG})"
+        echo "  - All sidecar processes"
+        echo "  - All sidecar-loop processes"
+        echo "  - PID files in .nbs/pids/"
+        echo ""
+        read -r -p "Continue? [y/N] " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+    fi
+fi
+
+KILLED=0
+FAILED=0
+
+# ---- 1. Kill sidecar-loops FIRST ----
+# If we kill sidecars before loops, the loops will respawn them.
+echo "Killing sidecar-loops..."
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+    loop_script=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            /tmp/nbs-sidecar-loop.*.sh) loop_script="$arg" ;;
+        esac
+    done
+    [[ -n "$loop_script" ]] || continue
+
+    # Check if the loop references this project root
+    if [[ -f "$loop_script" ]] && grep -q "$PROJECT_ROOT" "$loop_script" 2>/dev/null; then
+        echo "  Killing loop PID $pid ($loop_script)"
+        kill "$pid" 2>/dev/null || true
+        # Also remove the loop script to prevent any race
+        rm -f "$loop_script" 2>/dev/null || true
+        KILLED=$((KILLED + 1))
+    fi
+done < <(pgrep -f 'nbs-sidecar-loop' 2>/dev/null || true)
+
+# Brief wait for loops to die
+sleep 1
+
+# ---- 2. Kill sidecars ----
+echo "Killing sidecars..."
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+    local_root=""
+    local_handle=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            --root=*)   local_root="${arg#--root=}" ;;
+            --handle=*) local_handle="${arg#--handle=}" ;;
+        esac
+    done
+
+    [[ "$local_root" == "$PROJECT_ROOT" ]] || continue
+
+    echo "  Killing sidecar PID $pid (handle=${local_handle})"
+    kill "$pid" 2>/dev/null || true
+    KILLED=$((KILLED + 1))
+done < <(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null || true)
+
+# Wait, then force-kill survivors
+sleep 2
+
+# Force-kill any remaining sidecars for this root
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+    local_root=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            --root=*) local_root="${arg#--root=}" ;;
+        esac
+    done
+    [[ "$local_root" == "$PROJECT_ROOT" ]] || continue
+
+    echo "  Force-killing sidecar PID $pid"
+    kill -9 "$pid" 2>/dev/null || true
+done < <(pgrep -f '[n]bs-sidecar.*--handle=' 2>/dev/null || true)
+
+# ---- 3. Kill nbs-ts sessions ----
+echo "Killing sessions..."
+if [[ -x "$NBS_TS" ]]; then
+    while IFS=$'\t' read -r ts_handle ts_status ts_name ts_cmd; do
+        [[ -n "$ts_handle" ]] || continue
+        for agent in "${EXPECTED_AGENTS[@]}"; do
+            session_name="nbs-${agent}-${TAG}"
+            if [[ "$ts_name" == "$session_name" ]]; then
+                echo "  Killing session ${ts_name} (${ts_handle})"
+                "$NBS_TS" kill "$ts_handle" 2>/dev/null || {
+                    echo "  WARN: failed to kill session ${ts_handle}" >&2
+                    FAILED=$((FAILED + 1))
+                }
+                KILLED=$((KILLED + 1))
+            fi
+        done
+    done < <("$NBS_TS" list --name="$TAG" 2>/dev/null || true)
+fi
+
+# ---- 4. Clean up PID files ----
+echo "Cleaning PID files..."
+PID_DIR="${PROJECT_ROOT}/.nbs/pids"
+if [[ -d "$PID_DIR" ]]; then
+    for agent in "${EXPECTED_AGENTS[@]}"; do
+        pid_file="${PID_DIR}/${agent}.pid"
+        if [[ -f "$pid_file" ]]; then
+            echo "  Removing ${pid_file}"
+            rm -f "$pid_file"
+        fi
+    done
+fi
+
+# ---- 5. Force-kill any remaining sidecar-loops ----
+while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+
+    mapfile -d '' ARGS < "/proc/$pid/cmdline"
+    loop_script=""
+    for arg in "${ARGS[@]}"; do
+        case "$arg" in
+            /tmp/nbs-sidecar-loop.*.sh) loop_script="$arg" ;;
+        esac
+    done
+    [[ -n "$loop_script" ]] || continue
+
+    if [[ -f "$loop_script" ]] && grep -q "$PROJECT_ROOT" "$loop_script" 2>/dev/null; then
+        echo "  Force-killing orphan loop PID $pid"
+        kill -9 "$pid" 2>/dev/null || true
+        rm -f "$loop_script" 2>/dev/null || true
+    fi
+done < <(pgrep -f 'nbs-sidecar-loop' 2>/dev/null || true)
+
+# ---- Summary ----
+echo "---"
+echo "Killed: ${KILLED} processes"
+
+if [[ $FAILED -gt 0 ]]; then
+    echo "Failed: ${FAILED}"
+    exit 1
+fi
+
+echo "Clean slate. Ready for restart."
+exit 0

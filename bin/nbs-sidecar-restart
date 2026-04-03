@@ -62,7 +62,54 @@ is_infrastructure() {
     esac
 }
 
+# --- Kill sidecar-loops for a project root ---
+# Must be called BEFORE killing sidecars, otherwise the loop respawns them.
+
+kill_sidecar_loops() {
+    local filter_root="${1:-}"
+    local filter_handle="${2:-}"
+    local killed=0
+
+    while IFS= read -r pid; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        [[ -r "/proc/$pid/cmdline" ]] || continue
+
+        mapfile -d '' ARGS < "/proc/$pid/cmdline"
+        local loop_script=""
+        for arg in "${ARGS[@]}"; do
+            case "$arg" in
+                /tmp/nbs-sidecar-loop.*.sh) loop_script="$arg" ;;
+            esac
+        done
+        [[ -n "$loop_script" ]] || continue
+        [[ -f "$loop_script" ]] || continue
+
+        # Filter by root if given
+        if [[ -n "$filter_root" ]]; then
+            grep -q "$filter_root" "$loop_script" 2>/dev/null || continue
+        fi
+
+        # Filter by handle if given
+        if [[ -n "$filter_handle" ]]; then
+            grep -q -- "--handle=${filter_handle}" "$loop_script" 2>/dev/null || continue
+        fi
+
+        echo "  Killing sidecar-loop PID $pid"
+        kill "$pid" 2>/dev/null || true
+        rm -f "$loop_script" 2>/dev/null || true
+        killed=$((killed + 1))
+    done < <(pgrep -f 'nbs-sidecar-loop' 2>/dev/null || true)
+
+    if [[ $killed -gt 0 ]]; then
+        echo "  Killed $killed sidecar-loop(s)"
+        sleep 1  # Let loops die before proceeding
+    fi
+    return 0
+}
+
 # --- Restart existing sidecars (default mode) ---
+# Now with deduplication: if multiple sidecars exist for the same handle,
+# kill ALL of them and spawn exactly one.
 
 restart_running() {
     local PIDS
@@ -79,57 +126,102 @@ restart_running() {
         return
     fi
 
+    # Phase 1: Collect all sidecars grouped by handle for dedup.
+    # We use temp files because associative arrays lose data in subshells.
+    local DEDUP_DIR
+    DEDUP_DIR=$(mktemp -d /tmp/nbs-sidecar-dedup.XXXXXX)
+    trap "rm -rf '$DEDUP_DIR'" RETURN
+
     for pid in $PIDS; do
         [[ "$pid" =~ ^[0-9]+$ ]] || continue
         [[ -r "/proc/$pid/cmdline" ]] || continue
 
         mapfile -d '' ARGS < "/proc/$pid/cmdline"
 
-        # Extract handle
-        local HANDLE=""
+        # Extract handle and root
+        local HANDLE="" SC_ROOT=""
         for arg in "${ARGS[@]}"; do
-            case "$arg" in --handle=*) HANDLE="${arg#--handle=}" ;; esac
+            case "$arg" in
+                --handle=*) HANDLE="${arg#--handle=}" ;;
+                --root=*)   SC_ROOT="${arg#--root=}" ;;
+            esac
         done
         [[ -n "$HANDLE" ]] || continue
         [[ -z "$TARGET_HANDLE" || "$HANDLE" == "$TARGET_HANDLE" ]] || continue
         is_infrastructure "$HANDLE" && continue
 
         # Filter by project root if --root was given
-        if [[ -n "$ROOT_FILTER" ]]; then
-            local SC_ROOT=""
-            for arg in "${ARGS[@]}"; do
-                case "$arg" in --root=*) SC_ROOT="${arg#--root=}" ;; esac
-            done
-            [[ "$SC_ROOT" == "$ROOT_FILTER" ]] || continue
+        if [[ -n "$ROOT_FILTER" && "$SC_ROOT" != "$ROOT_FILTER" ]]; then
+            continue
         fi
 
-        # Reconstruct args
-        local NEW_ARGS=()
-        for arg in "${ARGS[@]}"; do
-            case "$arg" in
-                --initial-prompt=*) ;;
-                */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar) NEW_ARGS+=("$SIDECAR") ;;
-                *) NEW_ARGS+=("$arg") ;;
-            esac
-        done
-        [[ ${#NEW_ARGS[@]} -gt 0 ]] || continue
-        [[ "${NEW_ARGS[0]}" == "$SIDECAR" ]] || continue
+        # Record this PID under its handle
+        echo "$pid" >> "${DEDUP_DIR}/${HANDLE}.pids"
 
-        # Kill old, spawn new
-        echo -n "Restarting $HANDLE (PID $pid)... "
-        kill "$pid" 2>/dev/null || true
-        for _ in 1 2 3 4 5 6; do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 0.5
-        done
-        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 1
+        # Save args from the first occurrence only (for respawn)
+        if [[ ! -f "${DEDUP_DIR}/${HANDLE}.args" ]]; then
+            # Reconstruct args
+            local NEW_ARGS=()
+            for arg in "${ARGS[@]}"; do
+                case "$arg" in
+                    --initial-prompt=*) ;;
+                    */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar) NEW_ARGS+=("$SIDECAR") ;;
+                    *) NEW_ARGS+=("$arg") ;;
+                esac
+            done
+            [[ ${#NEW_ARGS[@]} -gt 0 ]] || continue
+            [[ "${NEW_ARGS[0]}" == "$SIDECAR" ]] || continue
 
+            printf '%s\0' "${NEW_ARGS[@]}" > "${DEDUP_DIR}/${HANDLE}.args"
+        fi
+    done
+
+    # Phase 2: Kill sidecar-loops before killing sidecars
+    kill_sidecar_loops "$ROOT_FILTER" "$TARGET_HANDLE"
+
+    # Phase 3: For each handle, kill ALL pids, spawn exactly one.
+    for pid_file in "${DEDUP_DIR}"/*.pids; do
+        [[ -f "$pid_file" ]] || continue
+        local HANDLE
+        HANDLE=$(basename "$pid_file" .pids)
+        local args_file="${DEDUP_DIR}/${HANDLE}.args"
+        [[ -f "$args_file" ]] || continue
+
+        mapfile -t HANDLE_PIDS < "$pid_file"
+        local pid_count=${#HANDLE_PIDS[@]}
+
+        if [[ $pid_count -gt 1 ]]; then
+            echo "DEDUP: ${pid_count} sidecars for ${HANDLE} — killing all, spawning one"
+        fi
+
+        # Kill all PIDs for this handle
+        for pid in "${HANDLE_PIDS[@]}"; do
+            echo -n "  Killing $HANDLE sidecar PID $pid... "
+            kill "$pid" 2>/dev/null || true
+            echo "sent SIGTERM"
+        done
+
+        # Wait for them to die
+        for pid in "${HANDLE_PIDS[@]}"; do
+            for _ in 1 2 3 4 5 6; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.5
+            done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 0.5
+        done
+
+        # Spawn exactly one
+        mapfile -d '' NEW_ARGS < "$args_file"
+        echo -n "  Spawning $HANDLE... "
         "${NEW_ARGS[@]}" &
         disown $! 2>/dev/null || true
-        echo "$pid → $!"
+        echo "PID $!"
         RESTARTED=$((RESTARTED + 1))
         sleep 1
     done
+
+    rm -rf "$DEDUP_DIR"
+    trap - RETURN
 }
 
 # --- Respawn missing sidecars ---
@@ -148,8 +240,17 @@ respawn_missing() {
         if [[ -n "$TS_SESSIONS" ]]; then
             while IFS=$'\t' read -r ts_handle ts_status ts_name ts_cmd; do
                 [[ -n "$ts_handle" ]] || continue
-                # Check if a sidecar is already watching this session
-                if pgrep -f "nbs-sidecar.*--session=${ts_handle}" >/dev/null 2>&1; then
+
+                # Dedup check: count sidecars for this session
+                local sc_count
+                sc_count=$(pgrep -fc "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null || echo 0)
+                if [[ $sc_count -gt 1 ]]; then
+                    # Kill all duplicates — we'll respawn one below
+                    echo "DEDUP: ${sc_count} sidecars for session ${ts_handle} — killing all"
+                    pkill -f "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null || true
+                    sleep 1
+                elif [[ $sc_count -eq 1 ]]; then
+                    # Already has exactly one sidecar — skip
                     continue
                 fi
                 # Try to find project root from session metadata
