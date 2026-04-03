@@ -302,7 +302,36 @@ sidecar_alive=$(pgrep -f "nbs-sidecar.*--handle=${agent}.*$(pwd)" >/dev/null 2>&
 IF `verify_handle` is empty OR `verify_status` is not `alive`, THEN report `RESTART FAILED`.
 IF `sidecar_alive` is `no`, THEN report `restarted but sidecar missing`.
 
-MUST NOT report "restarted and verified" without executing Phase 3. Fixup reported "alive — restarted" for a dead medic four consecutive times in production because verification was skipped.
+MUST NOT report "restarted and verified" without executing Phase 3 AND capturing the actual command output. Copy the exact values of `verify_status` and `sidecar_alive` into the fixup summary — do not paraphrase or summarise. "Verified alive" must be accompanied by the literal output: `status=alive, sidecar=yes`. If you cannot produce these values, you did not verify.
+
+Fixup reported "alive — restarted" for a dead medic four consecutive times in production because verification was skipped. In a subsequent session, fixup reported "sidecar ok" for agents with no running sidecar because the verification result was assumed, not checked.
+
+### Step 5b: Global process audit
+
+After all individual agent checks are complete, run a global process audit:
+
+```bash
+nbs-team-status "$tag" "$(pwd)" 2>/dev/null
+team_status_rc=$?
+```
+
+IF `team_status_rc` is 1 (problems detected), THEN parse the output for:
+
+| Flag | Meaning | Action |
+|------|---------|--------|
+| `DUPLICATE` | Multiple sidecars for the same handle | Kill all, then `nbs-sidecar-restart <handle>` |
+| `ORPHAN` | Sidecar running for unknown handle | Kill the orphan process |
+| `NO-SIDECAR` | Session alive but no sidecar | `nbs-sidecar-restart <handle>` |
+| `MISSING` | Expected agent has no session | Already handled by Step 5 (Level 4) |
+
+This catches problems invisible to the per-agent checks in Step 3-5:
+- Ephemeral worker sidecars (pythia, shepard, librarian) that outlived their sessions
+- Sidecars that failed to spawn during agent restart (blind spawn path)
+- Duplicate sidecars from restart races
+
+MUST run this check AFTER all respawns in Step 5 are complete and verified. Do not skip it — the per-agent checks verify sessions, this step verifies the process landscape.
+
+IF any DUPLICATE or ORPHAN processes are found, report them in the fixup summary with PIDs.
 
 ### Step 6: Post summary and exit
 

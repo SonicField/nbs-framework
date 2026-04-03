@@ -11,7 +11,7 @@
 # The function:
 #   1. Sets NBS_HANDLE, NBS_TRANSPORT, NBS_INITIAL_PROMPT
 #   2. Runs setsid nbs-claude --root=... --dangerously-skip-permissions
-#   3. Redirects stdout/stderr to /dev/null
+#   3. Redirects stdout to /dev/null, stderr to launch log
 #   4. Backgrounds the process
 #   5. Returns immediately
 
@@ -25,9 +25,16 @@ launch_agent() {
     # it's nested inside another Claude Code or tmux session.
     unset CLAUDECODE TMUX 2>/dev/null || true
 
+    # Log stderr to a file so sidecar spawn failures are visible.
+    # Without this, nbs-claude's error messages (including sidecar-loop
+    # creation failures) go to /dev/null and are lost.
+    local log_dir="${project_root}/.nbs/logs"
+    mkdir -p "$log_dir" 2>/dev/null || true
+    local log_file="${log_dir}/${handle}-launch.log"
+
     NBS_HANDLE="$handle" \
     NBS_TRANSPORT=ts \
     NBS_INITIAL_PROMPT="$initial_prompt" \
     setsid "$nbs_claude_path" --root="$project_root" --dangerously-skip-permissions \
-        >/dev/null 2>&1 &
+        >/dev/null 2>>"$log_file" &
 }

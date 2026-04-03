@@ -147,15 +147,40 @@ for agent in "${EXPECTED_AGENTS[@]}"; do
         HAS_PROBLEMS=1
     fi
 
-    # Sidecar line
+    # Sidecar line with uptime
     if [[ $sidecar_count -eq 0 ]]; then
         sidecar_str="sidecar=MISSING"
         HAS_PROBLEMS=1
-    elif [[ $sidecar_count -eq 1 ]]; then
+    elif [[ $sidecar_count -ge 1 ]]; then
+        # Get sidecar uptime from /proc/pid/stat (field 22 = starttime in clock ticks)
+        sc_age=""
+        if [[ -r "/proc/${sidecar_arr[0]}/stat" ]]; then
+            sc_start_ticks=$(awk '{print $22}' "/proc/${sidecar_arr[0]}/stat" 2>/dev/null || echo 0)
+            clk_tck=$(getconf CLK_TCK 2>/dev/null || echo 100)
+            uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+            sc_start_secs=$((sc_start_ticks / clk_tck))
+            sc_uptime=$((uptime_secs - sc_start_secs))
+            if [[ $sc_uptime -ge 3600 ]]; then
+                sc_age="$(( sc_uptime / 3600 ))h$(( (sc_uptime % 3600) / 60 ))m"
+            elif [[ $sc_uptime -ge 60 ]]; then
+                sc_age="$(( sc_uptime / 60 ))m$(( sc_uptime % 60 ))s"
+            else
+                sc_age="${sc_uptime}s"
+            fi
+        fi
         sidecar_str="sidecar=PID:${sidecar_arr[0]}"
-    else
-        sidecar_str="sidecar=PID:${sidecar_arr[0]}"
-        HAS_DUPLICATES=1
+        [[ -n "$sc_age" ]] && sidecar_str="${sidecar_str}(${sc_age})"
+        if [[ $sidecar_count -gt 1 ]]; then
+            HAS_DUPLICATES=1
+        fi
+    fi
+
+    # Sidecar-loop presence
+    loop_str=""
+    if [[ $loop_count -eq 0 && $sidecar_count -gt 0 ]]; then
+        loop_str="  loop=MISSING"
+    elif [[ $loop_count -eq 1 ]]; then
+        loop_str="  loop=ok"
     fi
 
     # Status label
@@ -171,7 +196,7 @@ for agent in "${EXPECTED_AGENTS[@]}"; do
         label="WARN"
     fi
 
-    printf "%-12s  %-22s  %-22s  %s\n" "${agent}:" "$session_str" "$sidecar_str" "$label"
+    printf "%-12s  %-22s  %-28s  %s%s\n" "${agent}:" "$session_str" "$sidecar_str" "$label" "${loop_str}"
 
     # Print duplicate sidecars
     if [[ $sidecar_count -gt 1 ]]; then
