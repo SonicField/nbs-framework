@@ -865,17 +865,23 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     while (1) {
         sleep(1);
 
-        /* Team pause check — if control-pause file exists, skip everything.
-         * Agents keep their context, sidecars stay alive, but no notifications,
-         * triggers, or polling occurs. Created by /pause, deleted by /resume. */
+        /* Team pause check — if control-pause file exists, skip notifications
+         * and triggers. Initial prompt injection is exempt: manually-spawned
+         * oracles (/pythia, /digest etc.) need their prompt even during pause,
+         * and init injection only fires once on sidecar startup. */
+        int team_paused = 0;
         {
             char pause_path[8192];
             snprintf(pause_path, sizeof(pause_path),
                      "%s/.nbs/control-pause", cfg->nbs_root);
             struct stat pause_st;
             if (stat(pause_path, &pause_st) == 0) {
-                sleep(4);  /* total 5s with the sleep(1) above */
-                continue;
+                team_paused = 1;
+                if (!init_prompt_pending) {
+                    sleep(4);  /* total 5s with the sleep(1) above */
+                    continue;
+                }
+                /* Fall through to initial prompt injection */
             }
         }
 
@@ -976,6 +982,13 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                     free(init_content);
                 }
             }
+        }
+
+        /* If team is paused and we only fell through for init injection,
+         * skip the rest of the tick (no notifications, triggers, polling). */
+        if (team_paused) {
+            sleep(4);
+            continue;
         }
 
         /* --- Out-of-band interrupt check (every tick) --- */
