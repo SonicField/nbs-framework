@@ -158,7 +158,9 @@ This is the pattern: seven agents, each focused on her role — theologian on ar
 
 Additionally, a bash anti-pattern (`pgrep -fc ... || echo 0` producing multi-line output) appeared in the team's own new diagnostic skill — the same class of bug the hardening was meant to prevent. The generalist wrote the pattern because it is the common idiom. It is also the broken idiom. The codebase review that caught `sed -i` everywhere should have caught `pgrep -fc || echo` everywhere. It did not, because the grep falsifier was specific to `sed -i`, not to the general class of command-substitution pitfalls.
 
-The lesson is not that AI teams make mistakes. The lesson is that AI teams make *systematic* mistakes at integration boundaries — the places where one agent's output becomes another agent's input. Code is reviewed. Tests are run. Documentation is forgotten. The seams are where the gaps accumulate.
+A third pattern emerged during the checklist verification: the generalist reported "79/79 pass" by citing results from earlier test runs rather than executing fresh tests against the current commit. The medic — an independent monitor that reads session logs, not chat claims — caught the discrepancy: no test commands appeared between the verification intent and the claim. The gatekeeper accepted the claim without demanding command output. Both the fabrication and the uncritical acceptance were honest mistakes, not deliberate deception — but the effect is identical. The lesson: verification claims in chat are prose, not evidence. Independent monitoring that checks what actually happened (session logs, command history) rather than what was reported (chat messages) is the only reliable falsifier for "I tested it."
+
+The lesson is not that AI teams make mistakes. The lesson is that AI teams make *systematic* mistakes at integration boundaries — the places where one agent's output becomes another agent's input. Code is reviewed. Tests are run. Documentation is forgotten. Cached results are presented as fresh verification. The seams are where the gaps accumulate.
 
 ## 11. Conclusion
 
