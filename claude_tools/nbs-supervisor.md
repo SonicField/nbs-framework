@@ -154,10 +154,10 @@ For detailed diagnosis of pathological cursor desync, use `/nbs-cursor-diagnosis
 When the terminal goal is complete and the team is waiting for human direction, use session-end to stop burning resources:
 
 ```bash
-nbs-chat-session-end <root>
+nbs-chat-session-end <root> --chat=<chat-file>
 ```
 
-This posts a countdown message to chat (300s default), then creates `.nbs/control-pause` which suppresses all sidecar notifications and ephemeral triggers (fixup, shepard, pythia, librarian).
+This posts a countdown banner to chat, waits 300 seconds (giving agents time to finish in-flight work), then creates `.nbs/control-pause` which suppresses all sidecar notifications and ephemeral triggers. The `--chat=` flag is required — without it the countdown runs silently and nobody sees it.
 
 **When to use session-end:**
 - Terminal goal is complete and all work is committed

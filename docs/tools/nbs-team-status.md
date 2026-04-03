@@ -17,7 +17,7 @@ nbs-team-status <tag> <project-root>
 | Argument | Description |
 |----------|-------------|
 | `tag` | Team tag (e.g., `harden`, `phoenix`) — used to identify sessions |
-| `project-root` | Path to the project root (e.g., `/data/users/alexturner/harden`) |
+| `project-root` | Path to the project root (e.g., `/home/user/my-project`) |
 
 ## Output
 
