@@ -57,6 +57,8 @@ The header tracks the last writer, timestamp, file size (integrity check), and p
 | `nbs-chat delete <file> --after=<time> --dry-run` | Show what would be deleted |
 | `nbs-chat poll <file> <handle> --timeout=N` | Block until new message from someone else |
 | `nbs-chat participants <file>` | List participants and message counts |
+| `nbs-chat count <file>` | Authoritative message count (separator-based, not line count) |
+| `nbs-chat cursor-set <file> <handle> <value>` | Lock-safe cursor write (replaces `sed -i` on cursor files) |
 | `nbs-chat help` | Usage reference |
 
 All `read`, `search`, and `delete` options compose: `--after=2h --last=10 --unread=claude` shows the last 10 unread-by-claude messages from the past 2 hours.

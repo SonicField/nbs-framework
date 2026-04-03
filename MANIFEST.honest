@@ -34,9 +34,9 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-chat';
       path        : 'docs/tools/nbs-chat.md';
-      summary     : 'Send, read, search, create, and manage chat files for AI-to-AI and human-to-AI communication.';
-      when_to_use : 'When you need to send messages, read chat history, search conversations, or create new chat files.';
-      keywords    : ('chat'; 'send'; 'read'; 'search'; 'message'; 'communication'; 'create');
+      summary     : 'Send, read, search, create, and manage chat files. Includes cursor-set (lock-safe cursor reset) and count (authoritative message count) subcommands.';
+      when_to_use : 'When you need to send messages, read chat history, search conversations, manage cursors, or count messages.';
+      keywords    : ('chat'; 'send'; 'read'; 'search'; 'message'; 'cursor-set'; 'count'; 'cursor'; 'create');
     );
 
     (
@@ -421,9 +421,27 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-sidecar-restart';
       path        : 'bin/nbs-sidecar-restart';
-      summary     : 'Hot-restart running sidecars to pick up new binaries, or respawn missing sidecars for active agent sessions.';
+      summary     : 'Hot-restart running sidecars to pick up new binaries, or respawn missing sidecars for active agent sessions. Kills sidecar-loops before sidecars to prevent respawn races.';
       when_to_use : 'After rebuilding the sidecar binary, or when agents are deaf because their sidecar process died.';
-      keywords    : ('sidecar'; 'restart'; 'respawn'; 'hot-restart'; 'binary'; 'upgrade');
+      keywords    : ('sidecar'; 'restart'; 'respawn'; 'hot-restart'; 'binary'; 'upgrade'; 'dedup');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-team-status';
+      path        : 'bin/nbs-team-status';
+      summary     : 'Show every team process (sessions, sidecars, sidecar-loops) with duplicate and orphan detection.';
+      when_to_use : 'When diagnosing duplicate sidecars, orphan processes, or verifying clean process state after restart.';
+      keywords    : ('team'; 'status'; 'process'; 'duplicate'; 'orphan'; 'sidecar'; 'diagnosis');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-team-kill';
+      path        : 'bin/nbs-team-kill';
+      summary     : 'Clean-slate kill of all team processes — sessions, sidecars, and sidecar-loops for a given tag.';
+      when_to_use : 'When you need to kill all team processes before a full restart, or to clear process leaks.';
+      keywords    : ('team'; 'kill'; 'clean'; 'process'; 'restart'; 'leak'; 'slate');
     );
 
     (

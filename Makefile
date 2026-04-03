@@ -114,5 +114,16 @@ test: install
 	bash tests/automated/test_auto_archive.sh
 	bash tests/automated/test_manifest_install.sh
 	bash tests/automated/test_nbs_help.sh
+	bash tests/automated/test_cursor_desync.sh
+	bash tests/automated/test_sidecar_pid_marker.sh
+	bash tests/automated/test_sidecar_notify_gaps.sh
+	bash tests/automated/test_team_process_tools.sh
+
+test-hardening: install
+	tests/test_cursor_desync_unit
+	bash tests/automated/test_cursor_desync.sh
+	bash tests/automated/test_sidecar_pid_marker.sh
+	bash tests/automated/test_sidecar_notify_gaps.sh
+	bash tests/automated/test_team_process_tools.sh
 
 test-all: test-unit test

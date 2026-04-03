@@ -146,7 +146,21 @@ Additionally, the sidecar's injection verification was dead code for months prio
 
 These are monitoring and self-heal gaps, not delivery gaps. Notifications are delivered correctly. The system's ability to detect and recover from delivery failures is what remains incomplete.
 
-## 10. Conclusion
+## 10. The Gaps the Team Left
+
+The code was correct. The integration was not.
+
+Alexie's post-commit review found eight documentation and integration gaps. Not one was a code defect — all 79 tests passed, the architecture was sound, every root cause was addressed. But the new tools were invisible. `nbs-chat cursor-set` existed but was not in the manifest. `nbs-team-status` worked but the supervisor skill did not mention it. The fixup agent had been updated to use the new commands, but the tool table at the top of her skill file had not.
+
+A tool that exists but cannot be discovered is equivalent to a tool that does not exist.
+
+This is the pattern: seven agents, each focused on her role — theologian on architecture, generalist on implementation, testkeeper on tests, gatekeeper on review — and none focused on the seams between roles. The manifest, the tool docs, the skill file references, the Makefile test targets — these are seams. They connect the work to the system that uses it. The team optimised for depth (each root cause thoroughly addressed) at the cost of breadth (the surrounding documentation and integration left untouched).
+
+Additionally, a bash anti-pattern (`pgrep -fc ... || echo 0` producing multi-line output) appeared in the team's own new diagnostic skill — the same class of bug the hardening was meant to prevent. The generalist wrote the pattern because it is the common idiom. It is also the broken idiom. The codebase review that caught `sed -i` everywhere should have caught `pgrep -fc || echo` everywhere. It did not, because the grep falsifier was specific to `sed -i`, not to the general class of command-substitution pitfalls.
+
+The lesson is not that AI teams make mistakes. The lesson is that AI teams make *systematic* mistakes at integration boundaries — the places where one agent's output becomes another agent's input. Code is reviewed. Tests are run. Documentation is forgotten. The seams are where the gaps accumulate.
+
+## 11. Conclusion
 
 Cursor desynchronisation in AI agent teams is not a bug — it is a category of failure that emerges from the interaction between process lifecycle, notification delivery, and coordination protocols. Fixing it requires treating the cursor system as what it is: a distributed consensus mechanism operating over files instead of network messages.
 

@@ -107,7 +107,7 @@ else
 fi
 
 # Check for duplicate sidecars
-dup_count=$(pgrep -fc "nbs-sidecar.*--handle=${handle}" 2>/dev/null || echo 0)
+dup_count=$(pgrep -fc "nbs-sidecar.*--handle=${handle}" 2>/dev/null) || dup_count=0
 if [ "$dup_count" -gt 1 ]; then
     echo "DUPLICATE SIDECARS: $dup_count instances running"
     echo "Fix: kill all, then nbs-sidecar-restart ${handle}"

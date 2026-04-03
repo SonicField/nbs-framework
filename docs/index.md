@@ -67,6 +67,8 @@ Reference documentation for infrastructure components.
 | [nbs-workers](tools/nbs-workers.md) | Worker lifecycle: spawn, status, dismiss |
 | [Remote Tools](tools/nbs-remote.md) | nbs-remote-run/edit/read and nbs-local-run |
 | [Remote Git](tools/nbs-remote-git.md) | Git sync between machines via SSH |
+| [nbs-team-status](tools/tools.md#nbs-team-status) | Show team processes with duplicate/orphan detection |
+| [nbs-team-kill](tools/tools.md#nbs-team-kill) | Clean-slate kill of all team processes |
 | [Testing Strategy](tools/testing-strategy.md) | Test philosophy and methodology |
 | [Interactive Testing](tools/interactive-testing.md) | Manual testing procedures |
 
@@ -101,3 +103,11 @@ Complete worked sessions showing the framework in action.
 | Example | Description |
 |---------|-------------|
 | [TSP Session](../examples/tsp-session/README.md) | Team tackles an impossible problem — goal revision, five falsified hypotheses, useful deliverables |
+
+## [Blog](../blog/)
+
+Technical post-mortems and lessons learned.
+
+| Post | Description |
+|------|-------------|
+| [Cursor Desync Hardening](../blog/Cursor-Desync-Hardening.md) | Five root causes, 79 tests, and the bug that infected its own fix |

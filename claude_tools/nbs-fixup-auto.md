@@ -37,6 +37,15 @@ You are ephemeral. One invocation, one job, gone. When a `[NBS-CHAT-NOTIFICATION
 | Command | Purpose |
 |---------|---------|
 | `nbs-chat send <chat-file> fixup "message"` | Post to chat as fixup |
+| `nbs-chat count <chat-file>` | Authoritative message count (separator-based). Use instead of `wc -l - 6`. |
+| `nbs-chat cursor-set <chat-file> <handle> <value>` | Lock-safe cursor reset. Use instead of `sed -i` on cursor files. |
+
+### Team process management
+
+| Command | Purpose |
+|---------|---------|
+| `nbs-team-status <tag> <root>` | Show all team processes with duplicate and orphan detection. |
+| `nbs-team-kill <tag> <root>` | Clean-slate kill of all team processes (sessions, sidecars, loops). |
 
 ### Agent spawning and verification
 

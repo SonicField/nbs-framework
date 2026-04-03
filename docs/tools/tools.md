@@ -75,6 +75,44 @@ nbs-kick-agent generalist /home/user/myproject .nbs/chat/live.chat
 
 ---
 
+### nbs-team-status
+
+**Purpose:** Show every team process (sessions, sidecars, sidecar-loops) with duplicate and orphan detection.
+
+**Usage:**
+```bash
+nbs-team-status <tag> <project-root>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<tag>` | Yes | Team tag (e.g. `harden`, derived from chat filename) |
+| `<project-root>` | Yes | Absolute path to the project directory containing `.nbs/` |
+
+**Output:** One line per process showing role, PID, type (session/sidecar/loop), and status. Flags DUPLICATE and ORPHAN processes.
+
+**When to use:** Use `nbs-team-status` to diagnose duplicate sidecars, orphan processes, or verify clean process state after a restart. Run before and after `nbs-sidecar-restart` to confirm no leaks.
+
+---
+
+### nbs-team-kill
+
+**Purpose:** Clean-slate kill of all team processes — sessions, sidecars, and sidecar-loops for a given tag.
+
+**Usage:**
+```bash
+nbs-team-kill <tag> <project-root>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<tag>` | Yes | Team tag (e.g. `harden`) |
+| `<project-root>` | Yes | Absolute path to the project directory containing `.nbs/` |
+
+**When to use:** Use `nbs-team-kill` when you need to kill all team processes before a full restart, or to clear process leaks. Kills sidecar-loops before sidecars to prevent respawn races.
+
+---
+
 ### nbs-chat-terminal
 
 **Purpose:** Provide an interactive terminal client for human participation in NBS chat with team control slash commands.
@@ -358,6 +396,49 @@ nbs-chat error .nbs/chat/live.chat "Bus publish failed: events directory missing
 ```
 
 **When to use:** Use `nbs-chat error` for sidecar-level errors. The bracket handle `[SIDECAR-ERROR]` renders in dusty red and cannot be produced by `nbs-chat send`.
+
+#### nbs-chat count
+
+**Purpose:** Return the authoritative message count for a chat file using separator-based counting.
+
+**Usage:**
+```bash
+nbs-chat count <file>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<file>` | Yes | Path to the chat file |
+
+**Example:**
+```bash
+nbs-chat count .nbs/chat/live.chat
+```
+
+**When to use:** Use `nbs-chat count` whenever you need the message count. NEVER use `wc -l - 6` — it assumes a fixed header size and breaks after archiving.
+
+#### nbs-chat cursor-set
+
+**Purpose:** Atomically set a cursor position for an agent using the chat lock.
+
+**Usage:**
+```bash
+nbs-chat cursor-set <file> <handle> <value>
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<file>` | Yes | Path to the chat file |
+| `<handle>` | Yes | Agent handle whose cursor to set |
+| `<value>` | Yes | Cursor value (0-based message index) |
+
+**Example:**
+```bash
+msg_count=$(nbs-chat count .nbs/chat/live.chat)
+nbs-chat cursor-set .nbs/chat/live.chat supervisor $((msg_count - 1))
+```
+
+**When to use:** Use `nbs-chat cursor-set` to repair desync or reset a cursor before agent restart. Set to `msg_count - 1` so the agent sees the last message. NEVER use `sed -i` on cursor files — it bypasses the chat lock and races with concurrent writers.
 
 #### nbs-chat participants
 
