@@ -29,9 +29,8 @@ BIN_DIR="${PROJECT_ROOT}/bin"
 source "${SCRIPT_DIR}/test_helpers.sh"
 
 NBS_CHAT="${BIN_DIR}/nbs-chat"
-# session-end and resume are nbs-chat subcommands, not standalone scripts
-SESSION_END="${NBS_CHAT} session-end"
-SESSION_RESUME="${NBS_CHAT} resume"
+SESSION_END="${BIN_DIR}/nbs-chat-session-end"
+SESSION_RESUME="${BIN_DIR}/nbs-chat-resume"
 
 TEST_DIR=$(mktemp -d)
 ERRORS=0
@@ -72,14 +71,14 @@ mkdir -p "${FAKE_ROOT}/.nbs/chat"
 CHAT_FILE="${FAKE_ROOT}/.nbs/chat/test.chat"
 "$NBS_CHAT" create "$CHAT_FILE" 2>/dev/null
 
-# ---- Test 1: Subcommands exist ----
-echo "1. Subcommand existence..."
+# ---- Test 1: Commands exist ----
+echo "1. Command existence..."
 
-check "nbs-chat session-end subcommand exists" \
-    "$($NBS_CHAT session-end --help >/dev/null 2>&1 && echo pass || echo fail)"
+check "nbs-chat-session-end exists and is executable" \
+    "$([[ -x "$SESSION_END" ]] && echo pass || echo fail)"
 
-check "nbs-chat resume subcommand exists" \
-    "$($NBS_CHAT resume --help >/dev/null 2>&1 && echo pass || echo fail)"
+check "nbs-chat-resume exists and is executable" \
+    "$([[ -x "$SESSION_RESUME" ]] && echo pass || echo fail)"
 
 echo ""
 
@@ -88,7 +87,7 @@ echo "2. session-end creates control-pause after countdown..."
 
 # Call session-end with 5s countdown
 rm -f "${FAKE_ROOT}/.nbs/control-pause"
-$SESSION_END "$CHAT_FILE" --countdown=5 &
+"$SESSION_END" "$FAKE_ROOT" --countdown=5 --chat="$CHAT_FILE" &
 SE_PID=$!
 echo "$SE_PID" > "${TEST_DIR}/countdown_pid"
 
@@ -112,13 +111,13 @@ echo ""
 echo "3. resume during countdown cancels session-end..."
 
 rm -f "${FAKE_ROOT}/.nbs/control-pause"
-$SESSION_END "$CHAT_FILE" --countdown=10 &
+"$SESSION_END" "$FAKE_ROOT" --countdown=10 --chat="$CHAT_FILE" &
 SE_PID=$!
 echo "$SE_PID" > "${TEST_DIR}/countdown_pid"
 
 # Wait 2s then resume
 sleep 2
-$SESSION_RESUME "$CHAT_FILE" 2>/dev/null || true
+"$SESSION_RESUME" "$FAKE_ROOT" 2>/dev/null || true
 
 # Wait for session-end to exit (should be killed by resume)
 sleep 2
@@ -140,7 +139,7 @@ touch "${FAKE_ROOT}/.nbs/control-pause"
 check "pause file exists before resume" \
     "$([[ -f "${FAKE_ROOT}/.nbs/control-pause" ]] && echo pass || echo fail)"
 
-$SESSION_RESUME "$CHAT_FILE" 2>/dev/null || true
+"$SESSION_RESUME" "$FAKE_ROOT" 2>/dev/null || true
 
 check "pause file deleted after resume" \
     "$([[ ! -f "${FAKE_ROOT}/.nbs/control-pause" ]] && echo pass || echo fail)"
@@ -151,7 +150,7 @@ echo ""
 echo "5. session-end posts countdown message to chat..."
 
 rm -f "${FAKE_ROOT}/.nbs/control-pause"
-$SESSION_END "$CHAT_FILE" --countdown=3 &
+"$SESSION_END" "$FAKE_ROOT" --countdown=3 --chat="$CHAT_FILE" &
 SE_PID=$!
 echo "$SE_PID" > "${TEST_DIR}/countdown_pid"
 wait "$SE_PID" 2>/dev/null || true

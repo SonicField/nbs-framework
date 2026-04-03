@@ -154,7 +154,7 @@ For detailed diagnosis of pathological cursor desync, use `/nbs-cursor-diagnosis
 When the terminal goal is complete and the team is waiting for human direction, use session-end to stop burning resources:
 
 ```bash
-nbs-chat-session-end <chat-file>
+nbs-chat-session-end <root>
 ```
 
 This posts a countdown message to chat (300s default), then creates `.nbs/control-pause` which suppresses all sidecar notifications and ephemeral triggers (fixup, shepard, pythia, librarian).
@@ -171,7 +171,7 @@ This posts a countdown message to chat (300s default), then creates `.nbs/contro
 
 **To resume:**
 ```bash
-nbs-chat-resume <chat-file>
+nbs-chat-resume <root>
 ```
 
 This deletes `.nbs/control-pause`, sidecars resume polling within 5s, and the startup catch-up notification ensures agents see any messages posted during the pause.
