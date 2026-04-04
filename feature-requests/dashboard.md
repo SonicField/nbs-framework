@@ -40,7 +40,7 @@ The default view shows all 7 agents in a table, updated every 2 seconds:
 ║  Oracles: pythia (12m ago) shepard (18m ago) librarian (7m ago)            ║
 ║  Paused: no    Auto-repair: idle    Messages: 1752                         ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-  j/k navigate  Enter: view agent  q: back to chat  r: refresh  ?: help
+  ↑/↓ navigate  Enter: view agent  q: back to chat  r: refresh  ?: help
 ```
 
 ### Column Definitions
@@ -88,7 +88,9 @@ The detail view pipes the agent's `output.log` through `nbs-ts-render` (the same
 
 | Key | Overview screen | Detail view |
 |-----|----------------|-------------|
-| j/k or arrows | Move cursor between agents | Scroll output |
+| Up/Down arrows | Move cursor between agents | Scroll output |
+| Page Up/Page Down | — | Scroll one page |
+| Home/End | Jump to first/last agent | Jump to top/bottom of output |
 | Enter | Open selected agent's detail | — |
 | Escape | Exit dashboard, return to chat | Return to overview |
 | q | Exit dashboard, return to chat | Return to overview |
@@ -97,7 +99,8 @@ The detail view pipes the agent's `output.log` through `nbs-ts-render` (the same
 | 1-7 | Jump to agent by number | — |
 | s | Sort by: status, last-post, cursor-behind | — |
 | ? | Show help | Show help |
-| / | Filter agents by name | — |
+
+Navigation uses standard terminal keys only — arrow keys, Page Up/Down, Home/End. No vim-style j/k. This is a monitoring tool for humans operating the team, not a text editor.
 
 ### Alerts
 
