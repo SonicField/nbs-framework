@@ -139,49 +139,52 @@ md_key_t md_terminal_read_key(void)
         return MD_KEY_ENTER;
 
     if (c == 0x1b) {
+        /* Temporarily switch to non-blocking reads (100ms timeout)
+         * to distinguish bare ESC from ESC sequences (arrow keys).
+         * Restore blocking mode before every return. */
+        struct termios old_t, nb_t;
+        tcgetattr(fd, &old_t);
+        nb_t = old_t;
+        nb_t.c_cc[VMIN] = 0;
+        nb_t.c_cc[VTIME] = 1;
+        tcsetattr(fd, TCSANOW, &nb_t);
+
         unsigned char seq[2];
+        md_key_t result = MD_KEY_UNKNOWN;
 
-        if (read(fd, &seq[0], 1) != 1)
-            return MD_KEY_QUIT;  /* bare ESC — exit */
-        if (seq[0] != '[')
-            return MD_KEY_UNKNOWN;
-        if (read(fd, &seq[1], 1) != 1)
-            return MD_KEY_UNKNOWN;
+        if (read(fd, &seq[0], 1) != 1) {
+            result = MD_KEY_QUIT;  /* bare ESC — exit */
+        } else if (seq[0] == '[' && read(fd, &seq[1], 1) == 1) {
+            unsigned char tilde;
+            switch (seq[1]) {
+            case 'A': result = MD_KEY_UP; break;
+            case 'B': result = MD_KEY_DOWN; break;
+            case 'C': result = MD_KEY_RIGHT; break;
+            case 'D': result = MD_KEY_LEFT; break;
+            case 'H': result = MD_KEY_HOME; break;
+            case 'F': result = MD_KEY_END; break;
+            case '5':
+                if (read(fd, &tilde, 1) == 1 && tilde == '~')
+                    result = MD_KEY_PAGE_UP;
+                break;
+            case '6':
+                if (read(fd, &tilde, 1) == 1 && tilde == '~')
+                    result = MD_KEY_PAGE_DOWN;
+                break;
+            case '1':
+                if (read(fd, &tilde, 1) == 1 && tilde == '~')
+                    result = MD_KEY_HOME;
+                break;
+            case '4':
+                if (read(fd, &tilde, 1) == 1 && tilde == '~')
+                    result = MD_KEY_END;
+                break;
+            default: break;
+            }
+        }
 
-        switch (seq[1]) {
-        case 'A': return MD_KEY_UP;
-        case 'B': return MD_KEY_DOWN;
-        case 'C': return MD_KEY_RIGHT;
-        case 'D': return MD_KEY_LEFT;
-        case 'H': return MD_KEY_HOME;
-        case 'F': return MD_KEY_END;
-        case '5': {
-            unsigned char tilde;
-            if (read(fd, &tilde, 1) == 1 && tilde == '~')
-                return MD_KEY_PAGE_UP;
-            return MD_KEY_UNKNOWN;
-        }
-        case '6': {
-            unsigned char tilde;
-            if (read(fd, &tilde, 1) == 1 && tilde == '~')
-                return MD_KEY_PAGE_DOWN;
-            return MD_KEY_UNKNOWN;
-        }
-        case '1': {
-            unsigned char tilde;
-            if (read(fd, &tilde, 1) == 1 && tilde == '~')
-                return MD_KEY_HOME;
-            return MD_KEY_UNKNOWN;
-        }
-        case '4': {
-            unsigned char tilde;
-            if (read(fd, &tilde, 1) == 1 && tilde == '~')
-                return MD_KEY_END;
-            return MD_KEY_UNKNOWN;
-        }
-        default:
-            return MD_KEY_UNKNOWN;
-        }
+        tcsetattr(fd, TCSANOW, &old_t);
+        return result;
     }
 
     return MD_KEY_UNKNOWN;
