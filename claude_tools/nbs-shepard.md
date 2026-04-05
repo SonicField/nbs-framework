@@ -33,29 +33,22 @@ You are spawned when a `shepard-checkpoint` event triggers (every 100 chat messa
 **Before reading chat**, check whether agents are actually alive. A dead agent produces no chat messages — Shepard must detect this directly, not infer it from silence.
 
 ```bash
-# Step 0a: Find YOUR team's session tag.
-# Multiple teams can run on the same machine (live.chat, nn.Module.chat, etc).
-# Each team's sessions are named nbs-<handle>-<tag> where tag is derived from
-# the chat filename (dots replaced with dashes).
-#
-# Find the chat file from the registry, derive the tag:
+# Step 0a: Derive the team tag from the chat file.
 CHAT_FILE=$(cat .nbs/control-registry-* 2>/dev/null | grep '^chat:' | head -1 | cut -d: -f2-)
 CHAT_TAG=$(basename "$CHAT_FILE" .chat | tr '.' '-')
-echo "Team tag: $CHAT_TAG"
 
-# Step 0b: List THIS team's agent sessions only
-nbs-ts list --name="nbs-.*-${CHAT_TAG}"
-
-# For each session, capture the last few lines to check for activity
-# First find the handle: nbs-ts find <session-name>
-# Then read output: nbs-ts read-new <handle> --strip
-# e.g. nbs-ts find nbs-supervisor-live && nbs-ts read-new <handle> --strip
-# (for nn.Module.chat: nbs-ts find nbs-supervisor-nn-Module)
-#
-# IMPORTANT: Only check sessions matching YOUR tag. Do NOT touch other teams.
-#
-# Also check ephemeral workers (periodic triggers, digest workers):
-nbs-workers list
+# Step 0b: Check each agent using nbs-ts find (exact name match).
+# MUST use nbs-ts find, NOT nbs-ts list with grep or regex.
+# nbs-ts list with patterns has caused false "ALL DEAD" reports in production.
+for agent in supervisor generalist gatekeeper theologian testkeeper scribe medic; do
+    handle=$(nbs-ts find "nbs-${agent}-${CHAT_TAG}" 2>/dev/null)
+    if [ -n "$handle" ]; then
+        status=$(nbs-ts status "$handle" 2>/dev/null)
+        echo "${agent}: ${status} (${handle})"
+    else
+        echo "${agent}: NOT FOUND"
+    fi
+done
 ```
 
 Classify each live agent (from `nbs-ts read-new` output):
