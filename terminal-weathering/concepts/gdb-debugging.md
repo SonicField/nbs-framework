@@ -1,10 +1,12 @@
-# GDB Debugging Reference — NBS C Components
+# GDB Debugging Reference
 
-Worked examples of debugging NBS C components with GDB via `nbs-local-session` and `nbs-remote-session`. Every session below was captured against real NBS binaries built with `-g -O0`. No hypothetical or reconstructed output.
+**These techniques work on ANY C binary.** The examples below happen to use the NBS sidecar as the target, but every technique — attaching, breakpoints, memory inspection, reverse debugging, interactive stepping — applies identically to any C program you are debugging. The sidecar is the worked example, not the subject.
 
-**Source code:** [sonicfield/nbs-framework](https://github.com/sonicfield/nbs-framework) — the examples reference files in `src/nbs-sidecar/`, `src/nbs-chat/`, and `src/nbs-ts/`.
+If you are debugging a JIT compiler, a parser, a test harness, or any other C code — this document is for you. Substitute your binary, your function names, your struct types. The GDB commands are the same.
 
-**When to use this:** Before adding a `printf` statement to any NBS C code. GDB shows you the full state of a running process — stack, locals, globals, memory — without recompiling or restarting. For a single variable check, `printf` may be faster. For anything requiring more than one observation — use GDB. The session persists; `printf` does not.
+Every session below was captured against real NBS binaries built with `-g -O0`. No hypothetical or reconstructed output.
+
+**When to use this:** Before adding a `printf` statement to any C code. GDB shows you the full state of a running process — stack, locals, globals, memory — without recompiling or restarting. For a single variable check, `printf` may be faster. For anything requiring more than one observation — use GDB. The session persists; `printf` does not.
 
 **If you read nothing else, read Examples 11 and 12.**
 
@@ -88,7 +90,7 @@ type = struct {
 
 ## Category 1 — Attaching to a Running Process
 
-### Example 1: Attach to a Running Sidecar and Inspect Its State
+### Worked Example 1 — Attach to a Running Sidecar and Inspect Its State
 
 **Scenario:** A sidecar is running but notifications are not firing. You need to understand its internal state without restarting it.
 
@@ -176,7 +178,7 @@ $3 = 0
 
 ---
 
-### Example 2: Attach to `nbs-ts-helper` and Inspect File Descriptors
+### Worked Example 2 — Attach to `nbs-ts-helper` and Inspect File Descriptors
 
 **Scenario:** Sessions are not spawning. You suspect the helper daemon has a socket or FD problem.
 
@@ -232,7 +234,7 @@ FDSize:	64
 
 ## Category 2 — Post-Mortem Analysis
 
-### Example 3: Debug an Assert Failure (Crash) Under GDB
+### Worked Example 3 — Debug an Assert Failure (Crash) Under GDB
 
 **Scenario:** A chat function crashes with an assert failure. You need to inspect the state at the crash point.
 
@@ -285,7 +287,7 @@ index = 5
 
 ---
 
-### Example 4: Use-After-Free with ASAN + GDB
+### Worked Example 4 — Use-After-Free with ASAN + GDB
 
 **Scenario:** A buffer is freed and then accessed. ASAN catches it; GDB confirms the root cause.
 
@@ -335,7 +337,7 @@ The shadow byte `fd` confirms the memory region was freed. The allocator tracked
 
 ## Category 3 — Breakpoint-Driven Investigation
 
-### Example 5: Conditional Breakpoint in the Sidecar Main Loop
+### Worked Example 5 — Conditional Breakpoint in the Sidecar Main Loop
 
 **Scenario:** Notifications are intermittent. You want to inspect the sidecar state only when it has been idle for more than 10 seconds — not on every 1-second tick.
 
@@ -385,7 +387,7 @@ $6 = 0
 
 ---
 
-### Example 6: Breakpoint on `chat_cursor_write()` — Trace Cursor Advancement
+### Worked Example 6 — Breakpoint on `chat_cursor_write()` — Trace Cursor Advancement
 
 **Scenario:** An agent's read cursor is advancing past messages she has not read. You want to see exactly who is calling `chat_cursor_write` and with what values.
 
@@ -425,7 +427,7 @@ index = 14
 
 ## Category 4 — Memory and State Inspection
 
-### Example 7: Print `sidecar_state_t` to Diagnose Notification Failures
+### Worked Example 7 — Print `sidecar_state_t` to Diagnose Notification Failures
 
 **Scenario:** A sidecar is running but not delivering notifications. You need the complete picture of its internal state.
 
@@ -486,7 +488,7 @@ $9 = 0
 
 ---
 
-### Example 8: Walk the Cursor Participants Array
+### Worked Example 8 — Walk the Cursor Participants Array
 
 **Scenario:** You suspect a cursor tracking bug — a handle's read position is wrong. You want to see all participants and their cursor positions.
 
@@ -556,7 +558,7 @@ $16 = 14
 
 ## Category 5 — Reverse Debugging and Watchpoints
 
-### Example 9: Hardware Watchpoint — Catch Who Modifies a Variable
+### Worked Example 9 — Hardware Watchpoint — Catch Who Modifies a Variable
 
 **Scenario:** The sidecar's `idle_seconds` is unexpectedly resetting. You want to catch the exact line that writes to it, without adding logging.
 
@@ -604,7 +606,7 @@ sidecar_run (cfg=0x7ffd2a28fe30, tp=0x7ffd2a28fe00) at sidecar.c:1325
 
 ---
 
-### Example 10: Reverse Stepping with `record btrace pt`
+### Worked Example 10 — Reverse Stepping with `record btrace pt`
 
 **Scenario:** You want to step backwards through execution to find when a config field was set.
 
@@ -680,7 +682,7 @@ The examples in this document were captured on x86-64 Linux with GDB 16.3 and an
 
 ## Category 6 — Advanced Interactive Techniques
 
-### Example 11: Interactive Stepping Through `should_inject_notify()`
+### Worked Example 11 — Interactive Stepping Through `should_inject_notify()`
 
 **Scenario:** Notifications are not being delivered. You want to follow the exact decision path inside `should_inject_notify()` — watching each branch decision as it happens.
 
@@ -812,7 +814,7 @@ $10 = "sidecar startup catch-up", '\000' <repeats 231 times>
 
 ---
 
-### Example 12: Function Injection with `call`
+### Worked Example 12 — Function Injection with `call`
 
 **Scenario:** You want to test individual functions on a running sidecar without modifying code or waiting for the right conditions to occur naturally.
 
@@ -873,7 +875,7 @@ $5 = 40
 
 ---
 
-### Example 13: Memory Examination with `x/` and `display`
+### Worked Example 13 — Memory Examination with `x/` and `display`
 
 **Scenario:** You suspect a buffer contains stale or corrupted data beyond the NUL terminator. You want to see the raw bytes.
 
