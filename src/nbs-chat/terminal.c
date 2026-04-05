@@ -30,6 +30,7 @@
 #include "render.h"
 #include "handle_styles.h"
 #include "../nbs-chatview/chatview.h"
+#include "../nbs-dashboard/dashboard.h"
 #include "../nbs-common/trigger_defs.h"
 #include "../nbs-common/nbs_helper_check.h"
 #include "../nbs-common/nbs_mention.h"
@@ -416,6 +417,7 @@ static void print_help(void) {
     printf("\n");
     printf("%sCommands:%s\n", BOLD, RESET);
     printf("  %s/browse%s      Scroll through full chat history\n", DIM, RESET);
+    printf("  %s/dashboard%s   Live team dashboard — agents, sidecars, activity\n", DIM, RESET);
     printf("  %s/edit%s       Open $EDITOR to compose a multi-line message\n", DIM, RESET);
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
@@ -2053,6 +2055,77 @@ int main(int argc, char **argv) {
                 continue;
             }
 
+            /* /dashboard — live full-screen team dashboard */
+            if (strcmp(edit.buf, "/dashboard") == 0) {
+                if (g_watchdog.project_root[0] == '\0') {
+                    printf("  %s(dashboard requires a project root — "
+                           "start with --restart or --goal-file)%s\n",
+                           DIM, RESET);
+                    line_state_reset(&edit);
+                    print_prompt(g_handle);
+                    continue;
+                }
+
+                /* Save terminal state */
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+                }
+
+                dashboard_t *dash = dashboard_init(
+                    g_watchdog.project_root);
+                if (dash) {
+                    dashboard_run(dash);
+                    dashboard_free(dash);
+                } else {
+                    printf("  %s(dashboard failed — could not "
+                           "initialise)%s\n", DIM, RESET);
+                }
+
+                /* Restore terminal state */
+                printf("\033[?1049l");
+                printf("\033[?25h");
+                printf("\033[0m");
+                printf("\r\n");
+                fflush(stdout);
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                }
+
+                /* Redraw chat */
+                printf("\033[2J\033[H");
+                {
+                    chat_state_t redraw_state;
+                    if (chat_read(g_chat_file, &redraw_state) == 0) {
+                        int start = redraw_state.message_count - 50;
+                        if (start < 0) start = 0;
+                        for (int i = start;
+                             i < redraw_state.message_count; i++) {
+                            if (g_filter_handle[0] != '\0' &&
+                                strcmp(redraw_state.messages[i].handle,
+                                       g_filter_handle) != 0)
+                                continue;
+                            if (g_mention_handle[0] != '\0' &&
+                                !content_mentions(
+                                    redraw_state.messages[i].content,
+                                    g_mention_handle))
+                                continue;
+                            format_message(
+                                redraw_state.messages[i].handle,
+                                redraw_state.messages[i].content,
+                                g_handle,
+                                redraw_state.messages[i].timestamp);
+                        }
+                        g_msg_count = redraw_state.message_count;
+                        chat_state_free(&redraw_state);
+                    }
+                }
+
+                line_state_reset(&edit);
+                g_cursor_row = 0;
+                print_prompt(g_handle);
+                continue;
+            }
+
             /* /filter <handle> — show only messages from one participant */
             if (strncmp(edit.buf, "/filter ", 8) == 0) {
                 const char *target = edit.buf + 8;
@@ -2377,6 +2450,60 @@ int main(int argc, char **argv) {
                  * file would leave the watchdog permanently disabled. */
                 if (!watchdog_is_enabled(&g_watchdog) || had_pause_file) {
                     watchdog_enable(&g_watchdog);
+
+                    /* Reset all agent cursors to msg_count-1 so they
+                     * start fresh from the resume message, not from
+                     * wherever they were when paused. The pause-era
+                     * backlog is monitoring noise — agents don't need
+                     * to process it. */
+                    {
+                        chat_state_t rs;
+                        if (chat_read(g_chat_file, &rs) == 0) {
+                            int mc = rs.message_count > 0
+                                     ? rs.message_count - 1 : 0;
+                            const char *agents[] = {
+                                "supervisor", "generalist", "gatekeeper",
+                                "theologian", "testkeeper", "scribe", "medic"
+                            };
+                            /* Find nbs-chat for cursor-set */
+                            char nbs_chat_bin[4096];
+                            int found = 0;
+                            int sn = snprintf(nbs_chat_bin, sizeof(nbs_chat_bin),
+                                              "%s/.nbs/bin/nbs-chat",
+                                              g_watchdog.project_root);
+                            if (sn > 0 && (size_t)sn < sizeof(nbs_chat_bin) &&
+                                access(nbs_chat_bin, X_OK) == 0)
+                                found = 1;
+                            if (!found) {
+                                sn = snprintf(nbs_chat_bin, sizeof(nbs_chat_bin),
+                                              "%s/bin/nbs-chat",
+                                              g_watchdog.project_root);
+                                if (sn > 0 && (size_t)sn < sizeof(nbs_chat_bin) &&
+                                    access(nbs_chat_bin, X_OK) == 0)
+                                    found = 1;
+                            }
+                            if (found) {
+                                char mc_str[32];
+                                snprintf(mc_str, sizeof(mc_str), "%d", mc);
+                                for (int a = 0; a < 7; a++) {
+                                    /* fork+exec nbs-chat cursor-set */
+                                    pid_t cp = fork();
+                                    if (cp == 0) {
+                                        execlp(nbs_chat_bin, "nbs-chat",
+                                               "cursor-set", g_chat_file,
+                                               agents[a], mc_str,
+                                               (char *)NULL);
+                                        _exit(127);
+                                    } else if (cp > 0) {
+                                        int ws;
+                                        waitpid(cp, &ws, 0);
+                                    }
+                                }
+                            }
+                            chat_state_free(&rs);
+                        }
+                    }
+
                     do_send("@team SYSTEM: Team resumed. Continue where you left off.");
                     printf("  %sTeam resumed.%s\n", DIM, RESET);
                 } else {
