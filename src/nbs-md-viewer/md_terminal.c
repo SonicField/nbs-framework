@@ -138,14 +138,11 @@ md_key_t md_terminal_read_key(void)
     if (c == '\r' || c == '\n')
         return MD_KEY_ENTER;
 
-    if (c == 'q' || c == 'Q')
-        return MD_KEY_QUIT;
-
     if (c == 0x1b) {
         unsigned char seq[2];
 
         if (read(fd, &seq[0], 1) != 1)
-            return MD_KEY_UNKNOWN;
+            return MD_KEY_QUIT;  /* bare ESC — exit */
         if (seq[0] != '[')
             return MD_KEY_UNKNOWN;
         if (read(fd, &seq[1], 1) != 1)
