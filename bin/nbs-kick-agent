@@ -53,8 +53,9 @@ else
     echo "No session found for $AGENT ($SESSION_NAME)"
 fi
 
-# 2. Clean PID file
+# 2. Clean PID files (agent + sidecar marker)
 rm -f "${PROJECT_ROOT}/.nbs/pids/${AGENT}.pid"
+rm -f "${PROJECT_ROOT}/.nbs/pids/sidecar-${AGENT}.pid"
 
 # 3. Reset cursor (lock-safe via nbs-chat cursor-set, msg_count-1 so agent sees last message)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

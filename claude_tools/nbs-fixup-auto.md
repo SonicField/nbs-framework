@@ -270,7 +270,10 @@ Three mandatory phases. MUST NOT skip any phase.
 ```bash
 nbs-ts kill "$handle" 2>/dev/null
 rm -f ".nbs/pids/${agent}.pid"
+rm -f ".nbs/pids/sidecar-${agent}.pid"
 ```
+
+The sidecar PID marker MUST be removed before spawning. Without this, the new sidecar detects the stale marker as a "duplicate" and exits repeatedly until the old sidecar finishes its shutdown cleanup.
 
 IF the agent was missing (no handle), THEN skip the kill.
 
