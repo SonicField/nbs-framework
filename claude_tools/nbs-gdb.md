@@ -52,22 +52,30 @@ Example:
 
 ## Step 2: Create GDB Session
 
-Use `nbs-ts` for persistence. The GDB session survives across tool calls, context compaction, and agent restarts.
+Use `nbs-local-session` (or `nbs-remote-session` for remote machines) for persistence. The GDB session survives across tool calls, context compaction, and agent restarts. These wrappers provide the user's login environment (SSH keys, proxy credentials).
 
 ```bash
 # Local debugging
-HANDLE=$(nbs-ts create --name=gdb-debug 'gdb --args /path/to/python test_script.py')
+GDB_HANDLE=$(nbs-local-session)
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" --args /path/to/binary'
+sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 
-# Remote debugging (SSH to devserver)
-HANDLE=$(nbs-ts create --name=gdb-debug 'ssh user@devserver "cd /workspace && gdb --args ./python test_script.py"')
+# Remote debugging
+GDB_HANDLE=$(nbs-remote-session <remote-host>)
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" --args ./binary'
+sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 
-# Wait for GDB prompt (read until you see it)
-nbs-ts read-new $HANDLE --strip
+# Attach to a running process
+GDB_HANDLE=$(nbs-local-session)
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" -p $PID'
+sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 ```
 
-### Session naming convention
+Use `/usr/bin/gdb` (GDB 16.3), not `/usr/local/bin/gdb` (GDB 9.1) — the newer version has better reverse debugging and fewer ASAN conflicts.
 
-Use descriptive names: `gdb-footercrash`, `gdb-obsize`, `gdb-generators`. Not `gdb-1`, `gdb-2`.
+`set sysroot /` is required — GDB 16.3 cannot find shared libraries without it.
+
+For worked examples with real GDB output, see `terminal-weathering/concepts/gdb-debugging.md` (`nbs-help debug`).
 
 ---
 
@@ -143,7 +151,7 @@ When two hypotheses explain the same crash, design an experiment that distinguis
 
 ## Step 6: Reverse Debugging (when available)
 
-GDB 15+ supports reverse execution on aarch64 with `record-full`. This is invaluable for corruption bugs.
+GDB 15+ supports reverse execution with `record full`, but availability is platform-dependent. On x86-64, `record full` may fail if glibc uses AVX-512 instructions — use `record btrace pt` (Intel PT) or hardware watchpoints as alternatives. On aarch64, `record full` may work but is not guaranteed. Always test before relying on it.
 
 ```bash
 # Enable recording (BEFORE the crash)
@@ -220,8 +228,13 @@ nbs-ts list --name=gdb
 HANDLE=$(nbs-ts find gdb-debug)
 nbs-ts read-new $HANDLE --strip
 
-# Clean up when done
-nbs-ts kill $HANDLE
+# Clean up when done — MUST detach before killing the session,
+# otherwise the debugged process is left frozen in ptrace-stop.
+nbs-ts send "$HANDLE" "detach"
+sleep 1
+nbs-ts send "$HANDLE" "quit"
+sleep 1
+nbs-ts kill "$HANDLE"
 ```
 
 ---

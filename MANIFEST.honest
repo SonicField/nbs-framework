@@ -59,6 +59,15 @@ var manifest : Manifest = (
 
     (
       kind        : Tool;
+      name        : 'nbs-dashboard';
+      path        : 'docs/tools/tools.md';
+      summary     : 'Live full-screen team dashboard showing agent status, sidecar health, cursor position, and activity with drill-down into terminal output.';
+      when_to_use : 'When a human wants a continuous at-a-glance view of all agents without repeatedly running /health.';
+      keywords    : ('dashboard'; 'monitor'; 'status'; 'agents'; 'sidecars'; 'overview'; 'live');
+    );
+
+    (
+      kind        : Tool;
       name        : 'nbs-ts';
       path        : 'docs/tools/nbs-ts.md';
       summary     : 'Terminal session manager — create, send input to, read output from, and manage PTY sessions.';
@@ -496,7 +505,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-testkeeper';
-      path        : 'commands/nbs-testkeeper.md';
+      path        : 'claude_tools/nbs-testkeeper.md';
       summary     : 'Test suite ownership — run tests, report results with evidence, challenge unverified claims.';
       when_to_use : 'Loaded automatically for the testkeeper agent role.';
       keywords    : ('test'; 'testing'; 'verification'; 'benchmark'; 'coverage'; 'ABBA'; 'falsification');
@@ -505,7 +514,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-theologian';
-      path        : 'commands/nbs-theologian.md';
+      path        : 'claude_tools/nbs-theologian.md';
       summary     : 'Architecture advisor — read code, map invariants, identify risks, review fixes.';
       when_to_use : 'Loaded automatically for the theologian agent role.';
       keywords    : ('architecture'; 'review'; 'invariant'; 'risk'; 'design'; 'theory');
@@ -514,7 +523,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-supervisor';
-      path        : 'commands/nbs-supervisor.md';
+      path        : 'claude_tools/nbs-supervisor.md';
       summary     : 'Team coordination — delegate work, track progress, manage agent lifecycle.';
       when_to_use : 'Loaded automatically for the supervisor agent role.';
       keywords    : ('supervisor'; 'coordinate'; 'delegate'; 'team'; 'manage'; 'lifecycle');
@@ -523,7 +532,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-discovery';
-      path        : 'commands/nbs-discovery.md';
+      path        : 'claude_tools/nbs-discovery.md';
       summary     : 'Collaborative, read-only discovery of artefacts in projects lacking epistemic structure.';
       when_to_use : 'When onboarding to a disordered project to understand its state before making changes.';
       keywords    : ('discovery'; 'read-only'; 'artefact'; 'epistemic'; 'onboarding'; 'report');
@@ -532,7 +541,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-recovery';
-      path        : 'commands/nbs-recovery.md';
+      path        : 'claude_tools/nbs-recovery.md';
       summary     : 'Step-wise restructuring and consolidation of projects based on a prior discovery report.';
       when_to_use : 'After running nbs-discovery, when ready to restructure and establish epistemic discipline.';
       keywords    : ('recovery'; 'restructure'; 'consolidate'; 'discipline'; 'action'; 'fix');
@@ -541,7 +550,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-investigation';
-      path        : 'commands/nbs-investigation.md';
+      path        : 'claude_tools/nbs-investigation.md';
       summary     : 'Falsification-driven exploration of a specific hypothesis as an isolated side quest.';
       when_to_use : 'When you have a specific hypothesis to test that is separate from main development work.';
       keywords    : ('investigation'; 'hypothesis'; 'falsification'; 'side-quest'; 'test'; 'explore');
@@ -550,7 +559,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-review';
-      path        : 'commands/nbs.md';
+      path        : 'claude_tools/nbs.md';
       summary     : 'Systematic audit of reasoning quality, goal alignment, and falsification discipline across a project.';
       when_to_use : 'When reviewing work for epistemic rigour — checks for investigations, terminal weathering, and drift.';
       keywords    : ('review'; 'audit'; 'reasoning'; 'alignment'; 'quality'; 'drift');
@@ -559,7 +568,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-discovery-verify';
-      path        : 'commands/nbs-discovery-verify.md';
+      path        : 'claude_tools/nbs-discovery-verify.md';
       summary     : 'Checkpoint verification that a discovery report is complete before proceeding to recovery.';
       when_to_use : 'Immediately after completing nbs-discovery to verify the report captures everything discussed.';
       keywords    : ('discovery'; 'verify'; 'checkpoint'; 'completeness'; 'report'; 'check');
@@ -568,7 +577,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-doc-plan';
-      path        : 'commands/nbs-doc-plan.md';
+      path        : 'claude_tools/nbs-doc-plan.md';
       summary     : 'Interactive planning for documents — clarify goals, audience, and structure before writing a single word.';
       when_to_use : 'Before writing any significant document to prevent conception-phase failures.';
       keywords    : ('document'; 'plan'; 'audience'; 'structure'; 'goals'; 'conception');
@@ -577,7 +586,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-doc-describe';
-      path        : 'commands/nbs-doc-describe.md';
+      path        : 'claude_tools/nbs-doc-describe.md';
       summary     : 'Interactive help describing systems, code, or concepts — find the right words through questioning.';
       when_to_use : 'When you know what something is but need help articulating it clearly for a reader.';
       keywords    : ('describe'; 'document'; 'explain'; 'articulate'; 'system'; 'concept');
@@ -586,7 +595,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-doc-analyse';
-      path        : 'commands/nbs-doc-analyse.md';
+      path        : 'claude_tools/nbs-doc-analyse.md';
       summary     : 'Falsification-focused analysis of documents for hidden goals, rhetoric, and bullshit.';
       when_to_use : 'When you need to expose the gap between stated goals and actual goals in a document or communication.';
       keywords    : ('analyse'; 'document'; 'rhetoric'; 'bullshit'; 'goals'; 'falsification');
@@ -595,7 +604,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-doc-help';
-      path        : 'commands/nbs-doc-help.md';
+      path        : 'claude_tools/nbs-doc-help.md';
       summary     : 'Interactive mentor-style guidance for the NBS document tools.';
       when_to_use : 'When you need help choosing or using the nbs-doc-plan, nbs-doc-describe, or nbs-doc-analyse tools.';
       keywords    : ('document'; 'help'; 'guidance'; 'mentor'; 'tools'; 'interactive');
@@ -604,7 +613,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-natural';
-      path        : 'commands/nbs-natural.md';
+      path        : 'claude_tools/nbs-natural.md';
       summary     : 'Exit Precise Technical English mode and return to natural language communication.';
       when_to_use : 'When PTE constraints are no longer needed and you want informal communication.';
       keywords    : ('natural'; 'language'; 'pte'; 'exit'; 'informal'; 'mode');
@@ -613,7 +622,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-oracular-speech';
-      path        : 'commands/nbs-oracular-speech.md';
+      path        : 'claude_tools/nbs-oracular-speech.md';
       summary     : 'Compressed insight mode using productive ambiguity and metaphor to force interpretation.';
       when_to_use : 'When standard prose is too diffuse and you need dense, aphoristic expression.';
       keywords    : ('oracular'; 'speech'; 'metaphor'; 'compressed'; 'insight'; 'ambiguity');
@@ -622,7 +631,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-bus (skill)';
-      path        : 'commands/nbs-bus.md';
+      path        : 'claude_tools/nbs-bus.md';
       summary     : 'Event-driven coordination skill — publish events, check queues, and manage the bus from an agent context.';
       when_to_use : 'When an agent needs to publish events, check pending work, or manage bus state.';
       keywords    : ('bus'; 'event'; 'publish'; 'queue'; 'coordination'; 'agent');
@@ -631,7 +640,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-chat-digest';
-      path        : 'commands/nbs-chat-digest.md';
+      path        : 'claude_tools/nbs-chat-digest.md';
       summary     : 'Ephemeral agent that extracts structured learnings from chat files into persistent knowledge.';
       when_to_use : 'When chat history needs to be distilled into structured, reusable learnings.';
       keywords    : ('chat'; 'digest'; 'learnings'; 'extract'; 'ephemeral'; 'knowledge');
@@ -640,7 +649,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-teams-start';
-      path        : 'commands/nbs-teams-start.md';
+      path        : 'claude_tools/nbs-teams-start.md';
       summary     : 'Cold start bootstrap — gather user intent, run nbs-chat-init, spawn and verify a full multi-agent team.';
       when_to_use : 'When bootstrapping a new NBS team from scratch in a project with no existing .nbs/ structure.';
       keywords    : ('teams'; 'start'; 'bootstrap'; 'cold-start'; 'spawn'; 'init');
@@ -649,7 +658,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-hub (skill)';
-      path        : 'commands/nbs-hub.md';
+      path        : 'claude_tools/nbs-hub.md';
       summary     : 'Deterministic process enforcement skill — spawn gating, phase transitions, and decision logging for supervisors.';
       when_to_use : 'When a supervisor needs to interact with the hub for teams work, spawn gating, or phase management.';
       keywords    : ('hub'; 'enforcement'; 'gate'; 'spawn'; 'phase'; 'supervisor');
@@ -658,7 +667,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-init';
-      path        : 'commands/nbs-init.md';
+      path        : 'claude_tools/nbs-init.md';
       summary     : 'Configure a project CLAUDE.md to reference NBS engineering standards — idempotent and safe to repeat.';
       when_to_use : 'When setting up a project to use NBS engineering standards for the first time.';
       keywords    : ('init'; 'configure'; 'CLAUDE.md'; 'standards'; 'project'; 'setup');
@@ -667,7 +676,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-help';
-      path        : 'commands/nbs-help.md';
+      path        : 'claude_tools/nbs-help.md';
       summary     : 'Interactive mentor-style guidance for the NBS framework — ask, explain, check understanding.';
       when_to_use : 'When you need help understanding any part of the NBS framework.';
       keywords    : ('help'; 'guidance'; 'mentor'; 'framework'; 'interactive'; 'explain');
@@ -676,7 +685,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-poll';
-      path        : 'commands/nbs-poll.md';
+      path        : 'claude_tools/nbs-poll.md';
       summary     : 'Check for pending bus events and unread chat messages — currently disabled but retained for reference.';
       when_to_use : 'Currently disabled (NBS_POLL_INTERVAL=0) — sidecar notifications replaced polling.';
       keywords    : ('poll'; 'check'; 'messages'; 'events'; 'bus'; 'disabled');
@@ -685,7 +694,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-teams-restart';
-      path        : 'commands/nbs-teams-restart.md';
+      path        : 'claude_tools/nbs-teams-restart.md';
       summary     : 'Partial recovery after downtime — triage all agents, assess before acting, recover in priority order.';
       when_to_use : 'After overnight idle, crash, or network partition to recover a multi-agent team.';
       keywords    : ('teams'; 'restart'; 'recovery'; 'triage'; 'downtime'; 'partial');
@@ -694,7 +703,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-remote-dev';
-      path        : 'commands/nbs-remote-dev.md';
+      path        : 'claude_tools/nbs-remote-dev.md';
       summary     : 'Remote development workflow patterns for editing, building, and debugging on remote machines from an AI agent.';
       when_to_use : 'When doing sustained development work on a remote machine through nbs-ts sessions.';
       keywords    : ('remote'; 'development'; 'workflow'; 'build'; 'debug'; 'ssh');
@@ -703,7 +712,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-gdb';
-      path        : 'commands/nbs-gdb.md';
+      path        : 'claude_tools/nbs-gdb.md';
       summary     : 'Falsification-focused GDB debugging via nbs-ts — hypothesis before commands, measurement not exploration.';
       when_to_use : 'When debugging C/C++ programs and you need persistent GDB sessions with hypothesis discipline.';
       keywords    : ('gdb'; 'debug'; 'hypothesis'; 'falsification'; 'breakpoint'; 'persistent');
@@ -712,7 +721,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-terminal-weathering';
-      path        : 'commands/nbs-terminal-weathering.md';
+      path        : 'claude_tools/nbs-terminal-weathering.md';
       summary     : 'Hypothesis-driven performance optimisation of Python systems through evidence-gated architectural intervention.';
       when_to_use : 'When conducting performance optimisation work that requires profiling, benchmarking, and C extension writing.';
       keywords    : ('performance'; 'optimisation'; 'profiling'; 'benchmark'; 'c-extension'; 'hypothesis');
@@ -721,7 +730,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-terminal-weathering-review';
-      path        : 'commands/nbs-terminal-weathering-review.md';
+      path        : 'claude_tools/nbs-terminal-weathering-review.md';
       summary     : 'Correctness review for terminal weathering sessions — applied in addition to the normal NBS review.';
       when_to_use : 'When reviewing a branch or session that contains terminal weathering performance work.';
       keywords    : ('review'; 'weathering'; 'correctness'; 'performance'; 'check'; 'supplementary');
@@ -730,7 +739,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-teams-fixup';
-      path        : 'commands/nbs-teams-fixup.md';
+      path        : 'claude_tools/nbs-teams-fixup.md';
       summary     : 'Diagnose and restart stalled agents using a graduated escalation ladder from least to most destructive.';
       when_to_use : 'When an agent is stalled and needs graduated recovery — context compaction check before hard restart.';
       keywords    : ('fixup'; 'stalled'; 'escalation'; 'restart'; 'diagnose'; 'recovery');
@@ -739,7 +748,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-notify';
-      path        : 'commands/nbs-notify.md';
+      path        : 'claude_tools/nbs-notify.md';
       summary     : 'Process pending events or messages injected by the sidecar notification system.';
       when_to_use : 'Triggered automatically by sidecar when bus events or unread chat messages are detected.';
       keywords    : ('notify'; 'sidecar'; 'event'; 'message'; 'pending'; 'trigger');
@@ -748,7 +757,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-audit';
-      path        : 'commands/nbs-audit.md';
+      path        : 'claude_tools/nbs-audit.md';
       summary     : 'Full codebase audit against engineering standards with parallel sub-agents and adversarial TDD fix plans.';
       when_to_use : 'When auditing an entire codebase for engineering standards violations and producing a fix plan.';
       keywords    : ('audit'; 'standards'; 'violations'; 'TDD'; 'parallel'; 'codebase');
@@ -757,7 +766,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-scribe';
-      path        : 'commands/nbs-scribe.md';
+      path        : 'claude_tools/nbs-scribe.md';
       summary     : 'Institutional memory agent — observes conversations and distils decisions into a structured log that survives restarts.';
       when_to_use : 'Loaded automatically for the scribe agent role in a multi-agent team.';
       keywords    : ('scribe'; 'memory'; 'decision'; 'log'; 'institutional'; 'distil');
@@ -766,7 +775,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-medic';
-      path        : 'commands/nbs-medic.md';
+      path        : 'claude_tools/nbs-medic.md';
       summary     : 'Meta-cognitive monitor that detects hallucinations, motivated reasoning, and epistemic decay — communicates only via warnings.';
       when_to_use : 'Loaded automatically for the medic agent role — monitors reasoning quality silently.';
       keywords    : ('medic'; 'monitor'; 'hallucination'; 'reasoning'; 'epistemic'; 'warning');
@@ -775,7 +784,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-gatekeeper';
-      path        : 'commands/nbs-gatekeeper.md';
+      path        : 'claude_tools/nbs-gatekeeper.md';
       summary     : 'Pre-push commit review agent — reviews commits for correctness, consistency, and completeness before code reaches the remote.';
       when_to_use : 'Loaded automatically for the gatekeeper agent role before any git push.';
       keywords    : ('gatekeeper'; 'review'; 'commit'; 'push'; 'correctness'; 'pre-push');
@@ -784,7 +793,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-worker';
-      path        : 'commands/nbs-worker.md';
+      path        : 'claude_tools/nbs-worker.md';
       summary     : 'Task execution role — execute a specific task with fresh context, report findings, and exit.';
       when_to_use : 'Loaded automatically for worker agents spawned by a supervisor in a teams hierarchy.';
       keywords    : ('worker'; 'task'; 'execute'; 'report'; 'fresh-context'; 'role');
@@ -793,7 +802,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-pythia';
-      path        : 'commands/nbs-pythia.md';
+      path        : 'claude_tools/nbs-pythia.md';
       summary     : 'Ephemeral oracle that reads the decision log, assesses trajectory and risk, posts a structured checkpoint, and exits.';
       when_to_use : 'Spawned automatically at checkpoints to provide trajectory and risk assessment.';
       keywords    : ('pythia'; 'oracle'; 'trajectory'; 'risk'; 'checkpoint'; 'ephemeral');
@@ -802,7 +811,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-librarian';
-      path        : 'commands/nbs-librarian.md';
+      path        : 'claude_tools/nbs-librarian.md';
       summary     : 'Ephemeral helper oracle that knows where the answers are, what tools exist, and what the team decided before.';
       when_to_use : 'Spawned when agents are stuck or drifting from prior decisions and need institutional knowledge.';
       keywords    : ('librarian'; 'oracle'; 'knowledge'; 'helper'; 'decisions'; 'unstick');
@@ -811,7 +820,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-pte';
-      path        : 'commands/nbs-pte.md';
+      path        : 'claude_tools/nbs-pte.md';
       summary     : 'Activate Precise Technical English mode — constrained prose with RFC 2119 modals and Honest type definitions.';
       when_to_use : 'When specifications require unambiguous language with explicit cardinality and condition-action structure.';
       keywords    : ('pte'; 'precise'; 'technical'; 'english'; 'unambiguous'; 'specification');
@@ -820,7 +829,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-teams-help';
-      path        : 'commands/nbs-teams-help.md';
+      path        : 'claude_tools/nbs-teams-help.md';
       summary     : 'Interactive mentor-style guidance for NBS teams usage and operations.';
       when_to_use : 'When you need help understanding how to use NBS teams features.';
       keywords    : ('teams'; 'help'; 'guidance'; 'mentor'; 'interactive'; 'operations');
@@ -829,7 +838,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-shepard';
-      path        : 'commands/nbs-shepard.md';
+      path        : 'claude_tools/nbs-shepard.md';
       summary     : 'Ephemeral team shepherd oracle that assesses team dynamics and posts actionable coordination recommendations.';
       when_to_use : 'Spawned at checkpoints to evaluate how well the team is coordinating and suggest improvements.';
       keywords    : ('shepard'; 'oracle'; 'team'; 'dynamics'; 'coordination'; 'assessment');
@@ -838,7 +847,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-fixup-auto';
-      path        : 'commands/nbs-fixup-auto.md';
+      path        : 'claude_tools/nbs-fixup-auto.md';
       summary     : 'Ephemeral self-repair agent that diagnoses all seven permanent team agents, escalates through graduated levels, and posts a health summary.';
       when_to_use : 'Triggered automatically by the sidecar to check and repair the team — not invoked manually.';
       keywords    : ('fixup'; 'self-repair'; 'health'; 'escalation'; 'restart'; 'diagnose'; 'ephemeral');
@@ -847,7 +856,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-manifest-audit';
-      path        : 'commands/nbs-manifest-audit.md';
+      path        : 'claude_tools/nbs-manifest-audit.md';
       summary     : 'Audit MANIFEST.honest against the filesystem for stale paths, missing entries, and summary quality issues.';
       when_to_use : 'When maintaining the manifest to find missing tools, dead paths, or vague summaries.';
       keywords    : ('manifest'; 'audit'; 'stale'; 'missing'; 'quality'; 'honest'; 'validate');
@@ -856,7 +865,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-teams-chat';
-      path        : 'commands/nbs-teams-chat.md';
+      path        : 'claude_tools/nbs-teams-chat.md';
       summary     : 'AI-to-AI chat protocol — how agents send, read, search, and receive notifications via nbs-chat in a multi-agent team.';
       when_to_use : 'Loaded for every agent in a multi-agent team to establish chat communication patterns and rules.';
       keywords    : ('chat'; 'teams'; 'protocol'; 'notification'; 'mention'; 'send'; 'read');
@@ -865,7 +874,7 @@ var manifest : Manifest = (
     (
       kind        : Skill;
       name        : 'nbs-cursor-diagnosis';
-      path        : 'commands/nbs-cursor-diagnosis.md';
+      path        : 'claude_tools/nbs-cursor-diagnosis.md';
       summary     : 'Diagnose and repair pathological cursor desync — check cursor state, sidecar health, and notification delivery path.';
       when_to_use : 'When an agent stops receiving notifications, processes old messages, or the sidecar appears stuck.';
       keywords    : ('cursor'; 'desync'; 'diagnosis'; 'repair'; 'notification'; 'sidecar'; 'unread');
@@ -1553,6 +1562,17 @@ var manifest : Manifest = (
       summary     : 'Reference for the five Honest CLI tools — honest-parse, honest-get, honest-fmt, honest-build, and honest-extract.';
       when_to_use : 'When you need usage details, options, or examples for any of the Honest command-line tools.';
       keywords    : ('honest'; 'cli'; 'reference'; 'tools'; 'parse'; 'get'; 'fmt');
+    );
+
+    { --- Terminal Weathering --- }
+
+    (
+      kind        : Document;
+      name        : 'GDB Debugging Reference';
+      path        : 'terminal-weathering/concepts/gdb-debugging.md';
+      summary     : 'Worked examples of debugging NBS C components with GDB via nbs-local-session and nbs-remote-session. 13 real examples covering attach, crash analysis, breakpoints, memory inspection, reverse debugging, and interactive stepping.';
+      when_to_use : 'When debugging a crash, memory corruption, or unexpected behaviour in any NBS C component. Read this before adding printf.';
+      keywords    : ('gdb'; 'debug'; 'debugging'; 'segfault'; 'crash'; 'breakpoint'; 'core dump'; 'ASAN'; 'memory'; 'nbs-local-session'; 'watchpoint'; 'reverse'; 'stepping');
     );
 
     { --- docs/ root --- }
