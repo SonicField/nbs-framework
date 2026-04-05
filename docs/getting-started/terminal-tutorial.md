@@ -181,6 +181,22 @@ alex> /health
 
 The output appears as `[health]` INFO lines. This is a quick, synchronous check — use it when you want a snapshot of who is running without waiting for a full Shepard assessment.
 
+### `/dashboard`
+
+Live full-screen team dashboard. Shows all 7 agents with status, sidecar health, cursor position, last post, and activity. Refreshes every 2 seconds. Press Enter on any agent to drill into their terminal output via `nbs-ts-render`.
+
+```
+alex> /dashboard
+╔══════════════╤══════════╤══════════╤══════════╤═══════════╤══════════╗
+║ Agent        │ Status   │ Sidecar  │ Cursor   │ Last Post │ Activity ║
+╟──────────────┼──────────┼──────────┼──────────┼───────────┼──────────╢
+║ ▸supervisor  │ alive    │ OK       │ 45/0     │ recent    │ Idle     ║
+║  generalist  │ alive    │ OK       │ 43/2     │ recent    │ make -j8 ║
+╚══════════════╧══════════╧══════════╧══════════╧═══════════╧══════════╝
+```
+
+Navigation: arrow keys to select, Enter to view agent detail, Escape/q to exit. Dead agents and missing sidecars are highlighted in red. Cursor behind >10 is yellow, >50 is red.
+
 ### When to Use Each
 
 | Situation | Command |

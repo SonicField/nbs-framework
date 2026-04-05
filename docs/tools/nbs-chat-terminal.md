@@ -80,6 +80,7 @@ All commands are entered at the prompt and submitted with Enter.
 | `/restart` | Manually trigger a team restart via the restart script. Bypasses rate limiting |
 | `/kick <agent>` | Hard restart a single agent: kill session, reset cursor, respawn, verify. Other agents unaffected. Agent must be one of: scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist |
 | `/health` | Report team health: per-agent session and sidecar status via `nbs-team-check` |
+| `/dashboard` | Live full-screen team dashboard — agents, sidecars, cursor, activity. Drill into any agent's terminal output. Refreshes every 2 seconds |
 
 ### Oracle Triggers
 

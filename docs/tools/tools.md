@@ -211,6 +211,47 @@ nbs-chat-terminal .nbs/chat/live.chat alex --restart --goal-file=goal.md
 
 ---
 
+### nbs-dashboard
+
+**Purpose:** Live full-screen team dashboard showing all 7 agents with status, sidecar health, cursor position, and activity. Supports drill-down into individual agent terminal output via `nbs-ts-render`.
+
+**Usage:**
+```bash
+nbs-dashboard <project-root>
+```
+
+Or from `nbs-chat-terminal`:
+```
+/dashboard
+```
+
+**Features:**
+
+| Feature | Description |
+|---------|-------------|
+| Overview table | All 7 agents with Status, Sidecar, Cursor, Last Post, Activity columns |
+| Colour alerts | Red for dead agents/missing sidecars, yellow/red for cursor behind |
+| Detail view | Press Enter to drill into agent's terminal output |
+| Differential redraw | Only changed rows are redrawn — no flicker |
+| Live refresh | Data updates every 2 seconds |
+| SIGWINCH | Handles terminal resize cleanly |
+
+**Navigation:**
+
+| Key | Overview | Detail |
+|-----|----------|--------|
+| ↑/↓ | Select agent | Scroll output |
+| Enter | Open detail view | — |
+| Esc/q | Exit dashboard | Return to overview |
+| PgUp/PgDn | — | Page scroll |
+| Home/End | First/last agent | Top/bottom of output |
+| r | Force refresh | Reload output |
+| f | — | Toggle follow mode |
+
+**When to use:** Use `/dashboard` when you want a continuous, at-a-glance view of all agents. It replaces the workflow of repeatedly running `/health` and `@handle?` queries. Particularly useful during long-running tasks where agents may stall, desync, or lose sidecars.
+
+---
+
 ## Chat and Communication
 
 These tools read from and write to NBS chat files. Chat files use atomic locking for safe concurrent access by multiple agents and the human operator.

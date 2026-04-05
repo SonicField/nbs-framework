@@ -96,6 +96,14 @@ Running and operating agent teams.
 | | |
 | [Help When Stuck](team/help-when-stuck.md) | Troubleshooting guide for stuck teams |
 
+## [Terminal Weathering](../terminal-weathering/concepts/)
+
+Debugging and performance optimisation techniques for NBS C components.
+
+| Document | Description |
+|----------|-------------|
+| [GDB Debugging Reference](../terminal-weathering/concepts/gdb-debugging.md) | 13 worked examples of interactive GDB debugging via nbs-local-session — attach, crash analysis, breakpoints, memory inspection, reverse debugging, stepping, function injection |
+
 ## [Examples](../examples/)
 
 Complete worked sessions showing the framework in action.

@@ -18,6 +18,10 @@ COMMON_DIR = ../nbs-common
 CHATVIEW_DIR = ../nbs-chatview
 CHATVIEW_LIB = $(CHATVIEW_DIR)/libchatview.a
 
+# libdashboard (team dashboard, used by nbs-chat-terminal)
+DASHBOARD_DIR = ../nbs-dashboard
+DASHBOARD_LIB = $(DASHBOARD_DIR)/libdashboard.a
+
 # Shared library objects (used by both binaries)
 LIB_SRCS = chat_file.c base64.c lock.c bus_bridge.c time_parse.c render.c
 LIB_OBJS = $(LIB_SRCS:.c=.o)
@@ -72,8 +76,13 @@ $(CLI_TARGET): $(CLI_OBJS) $(LIB_OBJS) $(COMMON_OBJS)
 
 $(CHATVIEW_LIB): chatview
 
-$(TERM_TARGET): $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB)
-	$(CC) $(CFLAGS) -o $@ $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB) $(LDFLAGS) -lpthread
+dashboard:
+	$(MAKE) -C $(DASHBOARD_DIR)
+
+$(DASHBOARD_LIB): dashboard
+
+$(TERM_TARGET): $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB) $(DASHBOARD_LIB)
+	$(CC) $(CFLAGS) -o $@ $(TERM_OBJS) $(TERM_EXTRA_OBJS) $(COMMON_OBJS) $(CHATVIEW_LIB) $(DASHBOARD_LIB) $(LDFLAGS) -lpthread
 
 $(REMOTE_TARGET): $(REMOTE_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -190,7 +199,7 @@ test-all: test-unit test test-asan
 
 # Dependencies
 main.o: main.c chat_file.h bus_bridge.h time_parse.h render.h
-terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h render.h $(CHATVIEW_DIR)/chatview.h
+terminal.o: terminal.c chat_file.h bus_bridge.h watchdog.h render.h $(CHATVIEW_DIR)/chatview.h $(DASHBOARD_DIR)/dashboard.h
 watchdog.o: watchdog.c watchdog.h ../nbs-common/nbs_assert.h
 chat_file.o: chat_file.c chat_file.h base64.h lock.h
 base64.o: base64.c base64.h ../nbs-common/nbs_assert.h

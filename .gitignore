@@ -137,3 +137,8 @@ src/nbs-help/nbs-help
 src/nbs-common/*.o
 src/nbs-common/test_nbs_term_attr
 src/nbs-common/test_nbs_term_attr_asan
+# Build artefacts for nbs-dashboard
+src/nbs-dashboard/*.o
+src/nbs-dashboard/nbs-dashboard
+src/nbs-dashboard/libdashboard.a
+bin/nbs-dashboard

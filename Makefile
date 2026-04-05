@@ -30,6 +30,7 @@ all: submodules
 	$(MAKE) -C src/nbs-scribe-log
 	$(MAKE) -C src/nbs-hub
 	$(MAKE) -C src/nbs-md-viewer
+	$(MAKE) -C src/nbs-dashboard
 	$(MAKE) -C src/nbs-help
 
 install: all
@@ -44,6 +45,7 @@ install: all
 	$(MAKE) -C src/nbs-scribe-log install
 	$(MAKE) -C src/nbs-hub install
 	$(MAKE) -C src/nbs-md-viewer install
+	$(MAKE) -C src/nbs-dashboard install
 	@mkdir -p $(HOME)/.nbs/commands
 	@cp claude_tools/*.md $(HOME)/.nbs/commands/
 	@echo "Installed skill files to ~/.nbs/commands/"
@@ -88,6 +90,7 @@ clean:
 	-$(MAKE) -C src/nbs-scribe-log clean
 	-$(MAKE) -C src/nbs-hub clean
 	-$(MAKE) -C src/nbs-md-viewer clean
+	-$(MAKE) -C src/nbs-dashboard clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
@@ -119,6 +122,11 @@ test: install
 	bash tests/automated/test_sidecar_notify_gaps.sh
 	bash tests/automated/test_team_process_tools.sh
 	bash tests/automated/test_fixup_sidecar_verification.sh
+	bash tests/automated/test_dashboard_overview.sh
+	bash tests/automated/test_dashboard_detail.sh
+	bash tests/automated/test_dashboard_alerts.sh
+	bash tests/automated/test_dashboard_resize.sh
+	bash tests/automated/test_dashboard_pause.sh
 
 test-hardening: install
 	tests/test_cursor_desync_unit
