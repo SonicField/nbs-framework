@@ -117,6 +117,9 @@ typedef struct {
     /* Root Cause B: notification gap tracking */
     int cooldown_suppressed;    /* 1 if last notify was suppressed by cooldown */
     int startup_notify_sent;    /* 1 after startup catch-up notification fired */
+
+    /* Pause→resume transition detection */
+    int was_paused;             /* 1 if team was paused on previous tick */
 } sidecar_state_t;
 
 /*

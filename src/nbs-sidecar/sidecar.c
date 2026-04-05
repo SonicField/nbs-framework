@@ -877,11 +877,44 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
             struct stat pause_st;
             if (stat(pause_path, &pause_st) == 0) {
                 team_paused = 1;
+                state.was_paused = 1;
                 if (!init_prompt_pending) {
                     sleep(4);  /* total 5s with the sleep(1) above */
                     continue;
                 }
                 /* Fall through to initial prompt injection */
+            }
+        }
+
+        /* Pause→resume transition: inject a hard system notification.
+         * The standard [NBS-CHAT-NOTIFICATION] is too soft — agents
+         * ignore it after sitting idle for 20 minutes during pause.
+         * This message is unmistakable and bypasses cooldown. */
+        if (state.was_paused && !team_paused) {
+            state.was_paused = 0;
+            sc_dbg("pause→resume transition detected, injecting resume notification");
+
+            /* Wait for prompt to settle after resume */
+            sleep(2);
+            char *resume_content = tp->capture(tp, 30);
+            if (resume_content) {
+                if (detect_prompt_not_trust(resume_content)) {
+                    const char *resume_msg =
+                        "[NBS-SYSTEM-NOTIFICATION] Chat is resuming. "
+                        "Your cursor has been reset. The chat is NOT paused. "
+                        "Read your unread messages with nbs-chat read "
+                        "--unread=<your-handle> and resume work. "
+                        "[THIS MESSAGE WAS MACHINE GENERATED]";
+                    if (tp->send_text(tp, resume_msg) != 0)
+                        fprintf(stderr, "sidecar: resume notification send failed\n");
+                    usleep(300000);
+                    if (tp->send_key(tp, "Enter") != 0)
+                        fprintf(stderr, "sidecar: resume notification Enter failed\n");
+                    state.last_notify_time = time(NULL);
+                    state.idle_seconds = 0;
+                    state.last_content_hash = 0;
+                }
+                free(resume_content);
             }
         }
 
