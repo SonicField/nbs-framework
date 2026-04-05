@@ -253,7 +253,7 @@ static void chatview_render(chatview_t *cv) {
 
     /* Message bar */
     const char *hint = cv->help_hint ? cv->help_hint :
-        " /:search ?:search-back n:next N:prev Enter:view q:quit";
+        " /:search ?:search-back n:next N:prev Enter:view Esc:exit";
     off += sprintf(buf + off, "\x1b[%d;1H\x1b[2K%s", cv->term_rows,
                    cv->status[0] ? cv->status : hint);
 
@@ -517,7 +517,7 @@ static void show_help(chatview_t *cv) {
     ho += sprintf(hbuf + ho, "    Enter, v           View full message\r\n");
     ho += sprintf(hbuf + ho, "\r\n");
     ho += sprintf(hbuf + ho, "  %sExit%s\r\n", RENDER_BOLD, RENDER_RESET);
-    ho += sprintf(hbuf + ho, "    q, Escape          Return\r\n");
+    ho += sprintf(hbuf + ho, "    Escape             Return\r\n");
     ho += sprintf(hbuf + ho, "\r\n");
     ho += sprintf(hbuf + ho, "  %sPress any key to return%s",
                   RENDER_DIM, RENDER_RESET);
@@ -709,8 +709,7 @@ int chatview_run(chatview_t *cv) {
             show_help(cv);
             break;
 
-        case 'q': /* quit */
-        case '\x1b': /* Escape */
+        case '\x1b': /* Escape — exit browse */
             goto done;
 
         default:
