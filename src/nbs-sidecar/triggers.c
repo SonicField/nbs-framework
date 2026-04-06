@@ -39,7 +39,11 @@ const trigger_periodic_t TRIGGER_PYTHIA = {
     .role = TRIGGER_ROLE_PYTHIA,
     .skill_file = TRIGGER_SKILL_PYTHIA,
     .task_desc = TRIGGER_DESC_PYTHIA,
-    .first_delay_secs = 600,   /* 10 min — let scribe accumulate decisions first */
+    /* First fire delays and cycle intervals are prime numbers (in seconds)
+     * to prevent oracles from synchronising and creating chat storms.
+     * Primes guarantee no common factors — no two oracles fire on the
+     * same tick unless the LCM of their intervals aligns (rare). */
+    .first_delay_secs = 13 * 60,  /* 13 min — let scribe accumulate decisions */
 };
 
 const trigger_periodic_t TRIGGER_SHEPARD = {
@@ -49,7 +53,7 @@ const trigger_periodic_t TRIGGER_SHEPARD = {
     .role = TRIGGER_ROLE_SHEPARD,
     .skill_file = TRIGGER_SKILL_SHEPARD,
     .task_desc = TRIGGER_DESC_SHEPARD,
-    .first_delay_secs = 600,   /* 10 min — let team settle first */
+    .first_delay_secs = 17 * 60,  /* 17 min — let team settle */
 };
 
 const trigger_periodic_t TRIGGER_FIXUP = {
@@ -59,7 +63,7 @@ const trigger_periodic_t TRIGGER_FIXUP = {
     .role = TRIGGER_ROLE_FIXUP,
     .skill_file = TRIGGER_SKILL_FIXUP,
     .task_desc = TRIGGER_DESC_FIXUP,
-    .first_delay_secs = 600,   /* 10 min — agents need time to initialise */
+    .first_delay_secs = 11 * 60,  /* 11 min — agents need time to initialise */
 };
 
 const trigger_periodic_t TRIGGER_LIBRARIAN = {
@@ -69,7 +73,7 @@ const trigger_periodic_t TRIGGER_LIBRARIAN = {
     .role = TRIGGER_ROLE_LIBRARIAN,
     .skill_file = TRIGGER_SKILL_LIBRARIAN,
     .task_desc = TRIGGER_DESC_LIBRARIAN,
-    .first_delay_secs = 300,   /* 5 min — early first post to introduce herself */
+    .first_delay_secs = 5 * 60,   /* 5 min — early first post */
 };
 
 /* --- nbs-workers path resolution --- */

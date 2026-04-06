@@ -150,10 +150,13 @@ int main(int argc, char **argv) {
      * minutes and blindly ack'd bus events. Re-enable with NBS_POLL_INTERVAL=300
      * if notification path proves unreliable. */
     cfg.poll_interval = env_int("NBS_POLL_INTERVAL", 0);
-    cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 3600);
-    cfg.librarian_interval = env_int("NBS_LIBRARIAN_INTERVAL", 15) * 60;
-    cfg.pythia_interval = env_int("NBS_PYTHIA_INTERVAL", 30) * 60;
-    cfg.shepard_interval = env_int("NBS_SHEPARD_INTERVAL", 20) * 60;
+    /* Oracle intervals — all in SECONDS. Prime numbers prevent
+     * oracles from firing simultaneously and creating chat storms.
+     * Env vars are also in seconds for consistency. */
+    cfg.fixup_interval = env_int("NBS_FIXUP_INTERVAL", 61 * 60);
+    cfg.librarian_interval = env_int("NBS_LIBRARIAN_INTERVAL", 23 * 60);
+    cfg.pythia_interval = env_int("NBS_PYTHIA_INTERVAL", 37 * 60);
+    cfg.shepard_interval = env_int("NBS_SHEPARD_INTERVAL", 31 * 60);
 
     /* After all env_int calls, timing assertions are deferred until after
      * command-line parsing so that argv overrides are applied first. */
@@ -227,14 +230,15 @@ int main(int argc, char **argv) {
                "startup_grace (%d) must be 0 (disabled) or >= bus_check_interval (%d)",
                cfg.startup_grace, cfg.bus_check_interval);
 
-    /* Range assertions on scaled timing fields (lines 125-127 multiply by 60).
-     * env_int caps at ENV_INT_MAX=100000, so max scaled value is 6000000,
-     * which fits in int. Assert non-negative to catch any future changes. */
-    ASSERT_MSG(cfg.librarian_interval >= 0 && cfg.librarian_interval <= ENV_INT_MAX * 60,
+    /* Range assertions on oracle interval fields.
+     * All intervals are in seconds. env_int caps at ENV_INT_MAX=100000. */
+    ASSERT_MSG(cfg.fixup_interval >= 0,
+               "fixup_interval out of range: %d", cfg.fixup_interval);
+    ASSERT_MSG(cfg.librarian_interval >= 0,
                "librarian_interval out of range: %d", cfg.librarian_interval);
-    ASSERT_MSG(cfg.pythia_interval >= 0 && cfg.pythia_interval <= ENV_INT_MAX * 60,
+    ASSERT_MSG(cfg.pythia_interval >= 0,
                "pythia_interval out of range: %d", cfg.pythia_interval);
-    ASSERT_MSG(cfg.shepard_interval >= 0 && cfg.shepard_interval <= ENV_INT_MAX * 60,
+    ASSERT_MSG(cfg.shepard_interval >= 0,
                "shepard_interval out of range: %d", cfg.shepard_interval);
 
     /* Validate required fields */
