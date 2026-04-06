@@ -1865,6 +1865,15 @@ int main(int argc, char **argv) {
              * commands alike — so up-arrow recalls /filter, /mention etc. */
             history_add(edit.buf);
 
+            /* Erase typed command from display — slash commands are
+             * not chat messages and should not clutter the screen. */
+            if (edit.buf[0] == '/') {
+                int up = saved_cursor_row + 1;
+                if (up > 0)
+                    printf("\033[%dA", up);
+                printf("\r\033[J");
+            }
+
             /* Check for commands */
             if (strcmp(edit.buf, "/exit") == 0) {
                 line_state_free(&edit);
