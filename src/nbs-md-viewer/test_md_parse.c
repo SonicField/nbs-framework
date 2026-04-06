@@ -672,6 +672,127 @@ TEST(parse_link_with_bold_text) {
 }
 
 /* ================================================================
+ * 12b. UNDERSCORE EMPHASIS — WORD BOUNDARY RULES
+ * ================================================================ */
+
+TEST(parse_underscore_italic_spaced) {
+    /* _foo_ with word boundaries should produce italic. */
+    md_block_node_t *doc = md_parse("a _foo_ bar");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) {
+            found_italic = 1;
+            T_ASSERT(inl->children != NULL, "italic should have children");
+            T_ASSERT(inl->children->text != NULL, "italic child should have text");
+            T_ASSERT(strcmp(inl->children->text, "foo") == 0,
+                     "italic text should be 'foo', got '%s'", inl->children->text);
+        }
+    }
+    T_ASSERT(found_italic, "spaced _foo_ should produce italic");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_midword_not_italic) {
+    /* a_foo_bar — mid-word underscores must NOT produce italic.
+     * This is the primary bug case. CommonMark requires word boundaries
+     * for underscore emphasis. */
+    md_block_node_t *doc = md_parse("a_foo_bar");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    /* Must be a single TEXT node containing the literal "a_foo_bar" */
+    T_ASSERT(para->inlines != NULL, "should have inline content");
+    T_ASSERT(para->inlines->type == MD_INLINE_TEXT,
+             "mid-word underscore should be TEXT, got type %d", para->inlines->type);
+    T_ASSERT(para->inlines->text != NULL, "text node should have text");
+    T_ASSERT(strcmp(para->inlines->text, "a_foo_bar") == 0,
+             "text should be literal 'a_foo_bar', got '%s'", para->inlines->text);
+    T_ASSERT(para->inlines->next == NULL,
+             "should be exactly one text node, not multiple");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_midword_double_not_bold) {
+    /* a__foo__bar — mid-word double underscores must NOT produce bold. */
+    md_block_node_t *doc = md_parse("a__foo__bar");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_bold = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_BOLD) found_bold = 1;
+    }
+    T_ASSERT(!found_bold, "mid-word __foo__ must NOT produce bold");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_start_of_line) {
+    /* _foo_ at start of line — no preceding alnum, should be italic. */
+    md_block_node_t *doc = md_parse("_foo_ bar");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) found_italic = 1;
+    }
+    T_ASSERT(found_italic, "_foo_ at start of line should be italic");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_end_of_line) {
+    /* _foo_ at end of line — no following alnum, should be italic. */
+    md_block_node_t *doc = md_parse("bar _foo_");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) found_italic = 1;
+    }
+    T_ASSERT(found_italic, "_foo_ at end of line should be italic");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_after_punctuation) {
+    /* (_foo_) — underscore after punctuation should produce italic. */
+    md_block_node_t *doc = md_parse("(_foo_)");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) found_italic = 1;
+    }
+    T_ASSERT(found_italic, "(_foo_) should produce italic");
+    md_block_destroy(doc);
+}
+
+TEST(parse_underscore_variable_name) {
+    /* my_variable_name — common in code, must be literal. */
+    md_block_node_t *doc = md_parse("my_variable_name");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) found_italic = 1;
+    }
+    T_ASSERT(!found_italic,
+             "my_variable_name must NOT produce italic (mid-word underscores)");
+    md_block_destroy(doc);
+}
+
+TEST(parse_asterisk_midword_still_works) {
+    /* a*foo*bar — asterisks ARE allowed intra-word per CommonMark. */
+    md_block_node_t *doc = md_parse("a*foo*bar");
+    md_block_node_t *para = doc->children;
+    T_ASSERT(para != NULL && para->type == MD_BLOCK_PARAGRAPH, "should be paragraph");
+    int found_italic = 0;
+    for (md_inline_node_t *inl = para->inlines; inl; inl = inl->next) {
+        if (inl->type == MD_INLINE_ITALIC) found_italic = 1;
+    }
+    T_ASSERT(found_italic, "a*foo*bar should produce italic (asterisks are intra-word)");
+    md_block_destroy(doc);
+}
+
+/* ================================================================
  * 13. SOFT AND HARD BREAKS
  * ================================================================ */
 
@@ -892,6 +1013,16 @@ int main(void) {
     printf("\nInline nesting:\n");
     RUN(parse_bold_inside_italic);
     RUN(parse_link_with_bold_text);
+
+    printf("\nUnderscore word boundary:\n");
+    RUN(parse_underscore_italic_spaced);
+    RUN(parse_underscore_midword_not_italic);
+    RUN(parse_underscore_midword_double_not_bold);
+    RUN(parse_underscore_start_of_line);
+    RUN(parse_underscore_end_of_line);
+    RUN(parse_underscore_after_punctuation);
+    RUN(parse_underscore_variable_name);
+    RUN(parse_asterisk_midword_still_works);
 
     printf("\nSoft / hard breaks:\n");
     RUN(parse_softbreak);

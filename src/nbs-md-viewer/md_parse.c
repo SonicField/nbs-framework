@@ -289,18 +289,29 @@ static void parse_inline_content(md_block_node_t *block, const char *text, int l
             continue;
         }
 
-        /* bold italic, bold, or italic with * */
+        /* bold italic, bold, or italic with * or _ */
         if (text[i] == '*' || text[i] == '_') {
             char delim = text[i];
+
+            /* Underscore word-boundary rule (CommonMark §6.2):
+             * _ cannot open emphasis if preceded by alphanumeric.
+             * * has no such restriction — intra-word *foo* is valid. */
+            if (delim == '_' && i > 0 && isalnum((unsigned char)text[i - 1])) {
+                i++;
+                continue;
+            }
+
             int run = 0;
             int k = i;
             while (k < len && text[k] == delim) { run++; k++; }
 
             if (run >= 3) {
-                /* find closing *** */
+                /* find closing *** or ___ */
                 int close = -1;
                 for (int s = k; s + 2 < len; s++) {
                     if (text[s] == delim && text[s+1] == delim && text[s+2] == delim) {
+                        /* _ closer must not be followed by alnum */
+                        if (delim == '_' && s + 3 < len && isalnum((unsigned char)text[s + 3])) continue;
                         close = s;
                         break;
                     }
@@ -323,12 +334,14 @@ static void parse_inline_content(md_block_node_t *block, const char *text, int l
             }
 
             if (run >= 2) {
-                /* find closing ** */
+                /* find closing ** or __ */
                 int close = -1;
                 for (int s = i + 2; s + 1 < len; s++) {
                     if (text[s] == delim && text[s+1] == delim) {
                         /* make sure it's not *** */
                         if (run == 2 || (s + 2 >= len || text[s+2] != delim)) {
+                            /* _ closer must not be followed by alnum */
+                            if (delim == '_' && s + 2 < len && isalnum((unsigned char)text[s + 2])) continue;
                             close = s;
                             break;
                         }
@@ -352,12 +365,14 @@ static void parse_inline_content(md_block_node_t *block, const char *text, int l
             }
 
             if (run >= 1) {
-                /* find closing * */
+                /* find closing * or _ */
                 int close = -1;
                 for (int s = i + 1; s < len; s++) {
                     if (text[s] == delim) {
                         /* don't match ** as italic close */
                         if (run == 1 || (s + 1 >= len || text[s+1] != delim)) {
+                            /* _ closer must not be followed by alnum */
+                            if (delim == '_' && s + 1 < len && isalnum((unsigned char)text[s + 1])) continue;
                             close = s;
                             break;
                         }
