@@ -137,6 +137,38 @@ static void history_free(void) {
 
 /* history_load defined after line_state_t and line_ensure_cap (see below) */
 
+/* --- Command autocompletion --- */
+
+static const char *g_commands[] = {
+    "/browse", "/dashboard", "/digest", "/edit", "/exit",
+    "/filter", "/fixup", "/health", "/help",
+    "/kick", "/librarian", "/mention",
+    "/pause", "/pythia",
+    "/redraw", "/restart", "/resume",
+    "/search", "/shepard", "/shutdown", "/sidecar",
+    "/unfilter", "/unmention",
+    NULL
+};
+
+/*
+ * find_completion — Find unique command prefix match.
+ * Returns the full command string if exactly one command matches,
+ * NULL if zero or multiple commands match.
+ */
+static const char *find_completion(const char *buf, size_t len) {
+    if (len < 2 || buf[0] != '/') return NULL;
+    const char *match = NULL;
+    for (const char **cmd = g_commands; *cmd; cmd++) {
+        if (strncmp(*cmd, buf, len) == 0) {
+            if (match) return NULL; /* ambiguous — two or more matches */
+            match = *cmd;
+        }
+    }
+    /* Don't suggest if already complete */
+    if (match && strlen(match) == len) return NULL;
+    return match;
+}
+
 /* --- Restart script resolution --- */
 
 /* Find the restart script: try .nbs/bin/ first (installed projects),
@@ -517,9 +549,21 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
         }
     }
 
+    /* Ghost autocompletion: show the remaining suffix of a matching
+     * command in dim grey after the typed text. The ghost text is
+     * purely visual — cursor positioning ignores it. */
+    int ghost_len = 0;
+    const char *completion = find_completion(ls->buf, ls->len);
+    if (completion && ls->cursor == ls->len) {
+        const char *suffix = completion + ls->len;
+        ghost_len = (int)strlen(suffix);
+        printf("%s%s%s", DIM, suffix, RESET);
+    }
+
     /* Calculate where the cursor needs to be vs where it is now.
-     * After printing, the cursor is at the end of the content.
-     * Both positions are measured in characters from the start.
+     * After printing, the cursor is at the end of the content
+     * PLUS any ghost text. Both positions are measured in characters
+     * from the start.
      *
      * Terminal deferred-wrap: when output fills exactly to the last column,
      * the cursor stays on that column until the next character is printed.
@@ -538,7 +582,7 @@ static void line_redraw(const line_state_t *ls, const char *handle) {
                "line_redraw: cursor %zu + prompt_vlen %d would overflow int",
                ls->cursor, prompt_vlen);
 
-    int end_abs = prompt_vlen + (int)ls->len;
+    int end_abs = prompt_vlen + (int)ls->len + ghost_len;
     int target_abs = prompt_vlen + (int)ls->cursor;
 
     int end_row = (end_abs > 0) ? ((end_abs - 1) / tw) : 0;
@@ -1859,6 +1903,21 @@ int main(int argc, char **argv) {
                 if (!poll_and_display(&edit, g_handle))
                     print_prompt(g_handle);
                 continue;
+            }
+
+            /* Expand autocompletion: if the user typed a unique prefix
+             * of a command (e.g. "/da") and hit Enter, expand to the
+             * full command (e.g. "/dashboard") before dispatch. */
+            {
+                const char *comp = find_completion(edit.buf, edit.len);
+                if (comp) {
+                    size_t clen = strlen(comp);
+                    line_ensure_cap(&edit, clen);
+                    memcpy(edit.buf, comp, clen);
+                    edit.buf[clen] = '\0';
+                    edit.len = clen;
+                    edit.cursor = clen;
+                }
             }
 
             /* Record all non-empty input in history — messages and
