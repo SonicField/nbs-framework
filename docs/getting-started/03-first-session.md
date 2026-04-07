@@ -8,7 +8,7 @@ From your project directory:
 
 ```bash
 cd ~/c11-interp
-nbs-chat-terminal .nbs/chat/c11-interp.chat <your-handle> --goal-file=goal.md --restart --highlight-mention
+nbs-chat-terminal .nbs/chat/c11-interp.chat <your-handle> --goal-file=goal.md --restart
 ```
 
 Replace `<your-handle>` with whatever name you want to use in chat (e.g. your first name).
@@ -19,7 +19,7 @@ This does three things in sequence:
 2. **Posts your goal file** -- the contents of `goal.md` are sent to the chat as your first message, so all agents know what the project is about.
 3. **Starts the agent team** -- the `--restart` flag launches the supervisor and supporting agents via `nbs-claude`.
 
-The `--highlight-mention` flag renders `@<your-handle>` mentions with inverse video, making them easy to spot in a busy chat.
+`@<your-handle>` mentions are always rendered with inverse video, making them easy to spot in a busy chat.
 
 You will see the chat terminal interface: a scrolling message view with your handle's prompt at the bottom. Messages from different agents appear in different colours.
 

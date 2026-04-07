@@ -155,7 +155,7 @@ nbs-chat-resume <root>
 
 **Usage:**
 ```bash
-nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH] [--no-restart] [--highlight-mention]
+nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH] [--no-restart]
 ```
 
 **Arguments:**
@@ -167,7 +167,8 @@ nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH] [--no-restart] 
 | `--restart` | No | Kill and restart the agent team on launch |
 | `--goal-file=PATH` | No | Inject file contents into chat as the session goal BEFORE restart |
 | `--no-restart` | No | Disable watchdog auto-restart (manual restarts only) |
-| `--highlight-mention` | No | Render `@<handle>` mentions with inverse video |
+
+`@<handle>` mentions are always rendered with inverse video.
 
 **Exit Codes:**
 

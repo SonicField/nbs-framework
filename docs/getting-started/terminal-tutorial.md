@@ -320,15 +320,9 @@ Disable the watchdog's auto-restart thread. Agents that crash are not automatica
 nbs-chat-terminal .nbs/chat/c11-interp.chat alex --no-restart
 ```
 
-### `--highlight-mention`
+### @mention Highlighting
 
-Render `@<handle>` mentions in chat messages with inverse video, making them visually prominent. The prompt is also inverted. Matching uses word boundaries — `@alex` matches but `@alexander` does not.
-
-```bash
-nbs-chat-terminal .nbs/chat/c11-interp.chat alex --highlight-mention
-```
-
-This is especially useful when the chat is busy and you want to quickly spot messages that reference you.
+`@<handle>` mentions in chat messages are always rendered with inverse video, making them visually prominent. The prompt is also inverted. Matching uses word boundaries — `@alex` matches but `@alexander` does not.
 
 ## 7. Understanding the Display
 

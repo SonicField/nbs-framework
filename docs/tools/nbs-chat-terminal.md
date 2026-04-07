@@ -6,7 +6,6 @@ The human's window into an NBS chat. A raw-mode terminal client with line editin
 
 ```
 nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]
-                                  [--highlight-mention]
 ```
 
 | Argument | Purpose |
@@ -16,7 +15,8 @@ nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]
 | `--restart` | Kill and restart the agent team immediately on launch |
 | `--goal-file=PATH` | Inject file contents into chat before restart, then disable the auto-restart watchdog thread |
 | `--no-restart` | Disable the watchdog auto-restart thread. Restarts must be triggered manually via `/restart` or `/kick`. Useful when monitoring a team without wanting crashed agents automatically respawned. |
-| `--highlight-mention` | Render `@<handle>` mentions in chat messages with inverse video. The prompt is also inverted. Matching uses word boundaries — `@alex` matches but `@alexander` does not. |
+
+`@<handle>` mentions in chat messages are always rendered with inverse video. The prompt is also inverted. Matching uses word boundaries — `@alex` matches but `@alexander` does not.
 
 ### Exit Codes
 
@@ -65,7 +65,7 @@ All commands are entered at the prompt and submitted with Enter.
 | `/filter <handle>` | Show only messages from one participant; redisplays last 50 matching messages |
 | `/filter` | Show current filter status |
 | `/unfilter` | Clear filter; redisplays last 20 messages from all participants |
-| `/mention <handle>` | Show only messages that `@handle` in their content; redisplays last 50 matching messages. Uses word-boundary matching (same as `--highlight-mention`) |
+| `/mention <handle>` | Show only messages that `@handle` in their content; redisplays last 50 matching messages. Uses word-boundary matching |
 | `/mention` | Show current mention filter status |
 | `/unmention` | Clear mention filter; redisplays last 20 messages |
 | `/redraw` | Clear screen and repaint last 50 messages. Fixes display corruption from resize, scroll, or escape sequence artefacts. Respects active `/filter` |

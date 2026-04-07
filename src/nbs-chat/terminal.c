@@ -80,8 +80,7 @@ static char g_mention_handle[MAX_HANDLE_LEN] = {0}; /* empty = no mention filter
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
 
-/* @mention highlighting — prompt inverts when enabled */
-static int g_highlight_mention = 0;
+/* @mention highlighting is always enabled */
 
 /* Auto-repair: set while repair is in flight, cleared when
  * skipped_count drops to 0 (repair completed successfully). */
@@ -437,11 +436,7 @@ static void browse_poll_cb(chatview_t *cv, void *userdata) {
 
 static void print_prompt(const char *handle) {
     ASSERT_MSG(handle != NULL, "print_prompt: handle is NULL");
-    if (g_highlight_mention) {
-        printf("%s%s%s>%s ", RENDER_REVERSE, BOLD, handle, RESET);
-    } else {
-        printf("%s%s>%s ", BOLD, handle, RESET);
-    }
+    printf("%s%s%s>%s ", RENDER_REVERSE, BOLD, handle, RESET);
     fflush(stdout);
 }
 
@@ -1407,14 +1402,12 @@ static void handle_signal(int sig) {
 static void print_usage(void) {
     printf("nbs-chat-terminal: Interactive terminal client for nbs-chat\n\n");
     printf("Usage:\n");
-    printf("  nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]\n");
-    printf("                                    [--highlight-mention]\n\n");
+    printf("  nbs-chat-terminal <file> <handle> [--restart] [--goal-file=PATH]\n\n");
     printf("  <file>      Path to chat file (must exist)\n");
     printf("  <handle>    Your display name in the chat\n");
     printf("  --restart           Start/restart the agent team immediately\n");
     printf("  --goal-file=PATH    Inject file contents into chat as session goal\n");
-    printf("                      (posted as your handle, before restart/digest)\n");
-    printf("  --highlight-mention Invert @<handle> mentions in chat messages\n\n");
+    printf("                      (posted as your handle, before restart/digest)\n\n");
     printf("Controls:\n");
     printf("  Type a message and press Enter to send.\n");
     printf("  Use arrow keys, Home, End, Delete for line editing.\n");
@@ -1433,9 +1426,8 @@ int main(int argc, char **argv) {
     g_chat_file = argv[1];
     g_handle = argv[2];
 
-    /* Check for --restart, --goal-file, and --highlight-mention flags */
+    /* Check for --restart and --goal-file flags */
     int restart_immediately = 0;
-    int highlight_mention = 0;
     const char *goal_file_path = NULL;
     for (int i = 3; i < argc; i++) {
         if (strcmp(argv[i], "--restart") == 0) {
@@ -1443,7 +1435,7 @@ int main(int argc, char **argv) {
         } else if (strncmp(argv[i], "--goal-file=", 12) == 0) {
             goal_file_path = argv[i] + 12;
         } else if (strcmp(argv[i], "--highlight-mention") == 0) {
-            highlight_mention = 1;
+            /* Accepted for backwards compatibility, now always on */
         } else {
             fprintf(stderr, "Error: unknown flag '%s'\n", argv[i]);
             print_usage();
@@ -1451,11 +1443,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Set up @mention highlighting if requested */
-    if (highlight_mention) {
-        render_set_highlight_handle(g_handle);
-        g_highlight_mention = 1;
-    }
+    /* @mention highlighting is always enabled */
+    render_set_highlight_handle(g_handle);
 
     /* Preconditions: args validated from argv */
     ASSERT_MSG(g_chat_file != NULL, "main: chat_file path is NULL");
