@@ -551,6 +551,7 @@ chatview_t *chatview_init(const chat_state_t *state, const char *title) {
 
     /* Start at the end */
     cv->cursor = state->message_count > 0 ? state->message_count - 1 : 0;
+    cv->needs_redraw = 1;
 
     update_term_size();
     cv->term_rows = g_term_rows;
@@ -596,8 +597,11 @@ int chatview_run(chatview_t *cv) {
 
     while (1) {
         update_term_size();
-        cv->term_rows = g_term_rows;
-        cv->term_cols = g_term_cols;
+        if (cv->term_rows != g_term_rows || cv->term_cols != g_term_cols) {
+            cv->term_rows = g_term_rows;
+            cv->term_cols = g_term_cols;
+            cv->needs_redraw = 1;
+        }
         content_rows = cv->term_rows - 3;
 
         /* Keep cursor in scroll view */
@@ -607,7 +611,10 @@ int chatview_run(chatview_t *cv) {
             cv->scroll_top = cv->cursor - content_rows + 1;
         if (cv->scroll_top < 0) cv->scroll_top = 0;
 
-        chatview_render(cv);
+        if (cv->needs_redraw) {
+            chatview_render(cv);
+            cv->needs_redraw = 0;
+        }
 
         int key = chatview_read_key();
 
@@ -621,6 +628,7 @@ int chatview_run(chatview_t *cv) {
             continue;
         }
         poll_counter = 0;
+        cv->needs_redraw = 1;
 
         /* Let custom key handler have first crack */
         if (cv->key_handler) {
@@ -748,6 +756,8 @@ void chatview_update(chatview_t *cv, const chat_state_t *new_state) {
     if (cv->cursor >= new_state->message_count && new_state->message_count > 0)
         cv->cursor = new_state->message_count - 1;
     if (cv->cursor < 0) cv->cursor = 0;
+
+    cv->needs_redraw = 1;
 }
 
 /* --- Search --- */
@@ -797,6 +807,7 @@ void chatview_set_status(chatview_t *cv, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(cv->status, sizeof(cv->status), fmt, ap);
     va_end(ap);
+    cv->needs_redraw = 1;
 }
 
 int chatview_reload(chatview_t *cv, const char *path) {

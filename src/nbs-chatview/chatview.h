@@ -72,6 +72,9 @@ struct chatview {
     uint8_t *msg_flags;
     int msg_flags_count;
 
+    /* Render state */
+    int needs_redraw;   /* 1 = screen must be repainted */
+
     /* Terminal dimensions */
     int term_rows;
     int term_cols;
