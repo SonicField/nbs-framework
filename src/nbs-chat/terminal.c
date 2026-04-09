@@ -462,7 +462,7 @@ static void print_help(void) {
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
     printf("  %s/digest%s     Spawn chatdigest (extract learnings from chat)\n", DIM, RESET);
     printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
-    printf("  %s/sidecar%s    Restart sidecars — respawn missing, refresh all\n", DIM, RESET);
+    printf("  %s/sidecar%s    Restart all sidecars (e.g. /sidecar testkeeper for just one)\n", DIM, RESET);
     printf("  %s/health%s     Report team health (agents and sidecars)\n", DIM, RESET);
     printf("  %s/redraw%s     Clear screen and repaint chat\n", DIM, RESET);
     printf("  %s/help%s       Show this help\n", DIM, RESET);
@@ -3051,15 +3051,30 @@ int main(int argc, char **argv) {
                 continue;
             }
 
-            /* /sidecar — restart sidecars (respawn missing, refresh all) */
-            if (strcmp(edit.buf, "/sidecar") == 0) {
+            /* /sidecar [handle] — restart sidecars */
+            if (strcmp(edit.buf, "/sidecar") == 0 ||
+                strncmp(edit.buf, "/sidecar ", 9) == 0) {
+                /* Extract optional handle argument */
+                const char *sc_handle = NULL;
+                if (strncmp(edit.buf, "/sidecar ", 9) == 0) {
+                    sc_handle = edit.buf + 9;
+                    while (*sc_handle == ' ') sc_handle++;
+                    if (*sc_handle == '\0') sc_handle = NULL;
+                }
                 line_state_reset(&edit);
                 if (g_watchdog.project_root[0] == '\0') {
                     info_line_emit(&edit, g_handle, "sidecar",
                                    "No project root — cannot restart sidecars.");
                 } else {
-                    info_line_emit(&edit, g_handle, "sidecar",
-                                   "Restarting sidecars (respawning missing)...");
+                    if (sc_handle) {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg),
+                                 "Restarting sidecar for %s...", sc_handle);
+                        info_line_emit(&edit, g_handle, "sidecar", msg);
+                    } else {
+                        info_line_emit(&edit, g_handle, "sidecar",
+                                       "Restarting sidecars (respawning missing)...");
+                    }
                     /* Find nbs-sidecar-restart: .nbs/bin/ then bin/ */
                     char sc_path[4096];
                     int sn = snprintf(sc_path, sizeof(sc_path),
@@ -3076,10 +3091,17 @@ int main(int argc, char **argv) {
                         char root_flag[4200];
                         snprintf(root_flag, sizeof(root_flag),
                                  "--root=%s", g_watchdog.project_root);
-                        const char *sc_argv[] = {
-                            sc_path, "--respawn", root_flag, NULL
-                        };
-                        spawn_with_capture("sidecar", sc_argv);
+                        if (sc_handle) {
+                            const char *sc_argv[] = {
+                                sc_path, root_flag, sc_handle, NULL
+                            };
+                            spawn_with_capture("sidecar", sc_argv);
+                        } else {
+                            const char *sc_argv[] = {
+                                sc_path, "--respawn", root_flag, NULL
+                            };
+                            spawn_with_capture("sidecar", sc_argv);
+                        }
                     } else {
                         info_line_emit(&edit, g_handle, "sidecar",
                                        "nbs-sidecar-restart not found.");
