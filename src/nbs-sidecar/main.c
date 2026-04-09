@@ -327,6 +327,11 @@ int main(int argc, char **argv) {
         }
         ASSERT_MSG(logf == stderr,
                    "freopen returned non-stderr FILE* for log redirect");
+        /* freopen to a file switches stderr from unbuffered to fully
+         * buffered. The sidecar runs indefinitely, so the buffer would
+         * never flush. Set line-buffered so each fprintf+newline is
+         * visible immediately in the log file. */
+        setvbuf(stderr, NULL, _IOLBF, 0);
     }
 
     /* Validate config — sidecar_config_validate logs each failing field
