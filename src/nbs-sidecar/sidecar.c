@@ -693,8 +693,7 @@ static int pid_marker_write(const char *path, pid_t pid) {
  * If the marker contains a stale PID (process dead), overwrites it
  * with our PID and returns 0.
  */
-static int pid_marker_check(const char *path, pid_t my_pid,
-                            const char *handle, const char *nbs_root) {
+static int pid_marker_check(const char *path, pid_t my_pid, const char *handle) {
     FILE *f = fopen(path, "r");
     if (!f) {
         /* No marker file — no conflict. Write ours. */
@@ -729,21 +728,15 @@ static int pid_marker_check(const char *path, pid_t my_pid,
             fclose(cf);
             cmdline[nr] = '\0';
 
-            /* cmdline is NUL-separated args. Must match ALL THREE:
+            /* cmdline is NUL-separated args. Must match BOTH:
              * 1. Binary name contains "nbs-sidecar"
              * 2. An arg matches "--handle=<our_handle>"
-             * 3. An arg matches "--root=<our_root>"
-             * Without root match, a sidecar for the SAME handle in a
-             * DIFFERENT project would be falsely detected as a conflict.
-             * This caused testkeeper sidecars to refuse to start when
-             * another project's testkeeper sidecar was running. */
+             * Without handle match, a sidecar for a DIFFERENT handle
+             * would be falsely detected as a conflict. */
             int found_binary = 0;
             int found_handle = 0;
-            int found_root = 0;
             char handle_arg[SIDECAR_MAX_HANDLE + 16];
             snprintf(handle_arg, sizeof(handle_arg), "--handle=%s", handle);
-            char root_arg[SIDECAR_MAX_PATH + 16];
-            snprintf(root_arg, sizeof(root_arg), "--root=%s", nbs_root);
 
             for (size_t i = 0; i < nr; i++) {
                 if (cmdline[i] == '\0') continue;
@@ -753,23 +746,15 @@ static int pid_marker_check(const char *path, pid_t my_pid,
                 if (strcmp(cmdline + i, handle_arg) == 0) {
                     found_handle = 1;
                 }
-                if (strcmp(cmdline + i, root_arg) == 0) {
-                    found_root = 1;
-                }
                 /* Skip to next NUL */
                 while (i < nr && cmdline[i] != '\0') i++;
             }
 
-            if (found_binary && found_handle && found_root) {
-                /* Same binary, same handle, same root — real conflict */
+            if (found_binary && found_handle) {
+                /* Same binary, same handle — real conflict */
                 return 1;
             }
-            if (found_binary && found_handle && !found_root) {
-                /* Same handle but different project — not our conflict */
-                fprintf(stderr, "sidecar: PID %d is nbs-sidecar with handle "
-                        "'%s' but different root (cross-project), "
-                        "taking ownership\n", marker_pid, handle);
-            } else if (found_binary && !found_handle) {
+            if (found_binary && !found_handle) {
                 /* nbs-sidecar for a different handle — not our conflict */
                 fprintf(stderr, "sidecar: PID %d is nbs-sidecar but different "
                         "handle (not '%s'), taking ownership\n",
@@ -836,8 +821,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
     char pid_marker_path[SIDECAR_EXT_PATH];
     build_pid_marker_path(cfg, pid_marker_path, sizeof(pid_marker_path));
 
-    int pid_check_rc = pid_marker_check(pid_marker_path, getpid(),
-                                        cfg->handle, cfg->nbs_root);
+    int pid_check_rc = pid_marker_check(pid_marker_path, getpid(), cfg->handle);
     if (pid_check_rc == 1) {
         fprintf(stderr, "sidecar_run: duplicate sidecar detected for handle '%s' "
                 "— another sidecar is already running. Exiting.\n", cfg->handle);
@@ -961,8 +945,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
 
                 /* PID marker re-check on heartbeat — detect if another
                  * sidecar has taken ownership (Root Cause C). */
-                int hb_pid_rc = pid_marker_check(pid_marker_path, getpid(),
-                                                 cfg->handle, cfg->nbs_root);
+                int hb_pid_rc = pid_marker_check(pid_marker_path, getpid(), cfg->handle);
                 if (hb_pid_rc == 1) {
                     fprintf(stderr, "sidecar: PID marker mismatch for '%s' "
                             "— another sidecar took ownership. Exiting.\n",
