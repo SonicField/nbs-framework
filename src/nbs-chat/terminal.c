@@ -142,7 +142,7 @@ static const char *g_commands[] = {
     "/browse", "/dashboard", "/digest", "/edit", "/exit",
     "/filter", "/fixup", "/health", "/help",
     "/kick", "/librarian", "/mention",
-    "/pause", "/pythia",
+    "/paste", "/pause", "/pythia",
     "/redraw", "/restart", "/resume",
     "/search", "/shepard", "/shutdown", "/sidecar",
     "/unfilter", "/unmention",
@@ -446,6 +446,7 @@ static void print_help(void) {
     printf("  %s/browse%s      Scroll through full chat history\n", DIM, RESET);
     printf("  %s/dashboard%s   Live team dashboard — agents, sidecars, activity\n", DIM, RESET);
     printf("  %s/edit%s       Open $EDITOR to compose a multi-line message\n", DIM, RESET);
+    printf("  %s/paste%s      Full-screen editor for pasting and tweaking (ESC to send)\n", DIM, RESET);
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
     printf("  %s/filter%s     Show only one participant (e.g. /filter pythia)\n", DIM, RESET);
     printf("  %s/unfilter%s   Return to showing all messages\n", DIM, RESET);
@@ -992,6 +993,348 @@ static int handle_escape_input(line_state_t *ls, esc_parser_t *esc,
     /* Should not reach here */
     esc->state = ESC_NONE;
     return 1;
+}
+
+/* --- Paste mode: full-screen multi-line editor --- */
+
+/*
+ * Cursor navigation helpers for multi-line buffers.
+ * The buffer is a flat char array with \n separating lines.
+ */
+
+/* Find the start of the line containing position pos. */
+static size_t paste_line_start(const char *buf, size_t pos) {
+    if (pos == 0) return 0;
+    size_t i = pos;
+    while (i > 0 && buf[i - 1] != '\n') i--;
+    return i;
+}
+
+/* Find the end of the line containing position pos (points to \n or len). */
+static size_t paste_line_end(const char *buf, size_t pos, size_t len) {
+    size_t i = pos;
+    while (i < len && buf[i] != '\n') i++;
+    return i;
+}
+
+/* Column of cursor within its line. */
+static size_t paste_col(const char *buf, size_t pos) {
+    return pos - paste_line_start(buf, pos);
+}
+
+/* Count lines in buffer. */
+static int paste_line_count(const char *buf, size_t len) {
+    int n = 1;
+    for (size_t i = 0; i < len; i++)
+        if (buf[i] == '\n') n++;
+    return n;
+}
+
+/* Which line number (0-based) is cursor on? */
+static int paste_cursor_line(const char *buf, size_t pos) {
+    int n = 0;
+    for (size_t i = 0; i < pos; i++)
+        if (buf[i] == '\n') n++;
+    return n;
+}
+
+/*
+ * Screen-row accounting for wrapped lines.
+ *
+ * A buffer line of length L occupies ceil(max(L,1) / tw) screen rows.
+ * The cursor's screen row within the buffer is the sum of screen rows
+ * for all lines before the cursor's line, plus the cursor's column
+ * divided by tw.
+ */
+
+/* Screen rows consumed by a buffer line of length line_len. */
+static int paste_wrap_rows(int line_len, int tw) {
+    if (line_len == 0) return 1;
+    return (line_len + tw - 1) / tw;
+}
+
+/* Total screen rows for the entire buffer. */
+__attribute__((unused))
+static int paste_total_screen_rows(const char *buf, size_t len, int tw) {
+    int rows = 0;
+    int col = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            rows += paste_wrap_rows(col, tw);
+            col = 0;
+        } else {
+            col++;
+        }
+    }
+    rows += paste_wrap_rows(col, tw);
+    return rows;
+}
+
+/* Screen row (0-based) of the cursor position. */
+static int paste_cursor_screen_row(const char *buf, size_t cursor, int tw) {
+    int row = 0;
+    int col = 0;
+    for (size_t i = 0; i < cursor; i++) {
+        if (buf[i] == '\n') {
+            row += paste_wrap_rows(col, tw);
+            col = 0;
+        } else {
+            col++;
+        }
+    }
+    row += col / tw; /* wrap rows within current line */
+    return row;
+}
+
+/* Full-screen render of the paste buffer with line wrapping. */
+static void paste_redraw(const line_state_t *ls) {
+    int tw = get_terminal_width();
+    struct winsize ws;
+    int th = 24;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0)
+        th = ws.ws_row;
+
+    int content_rows = th - 2; /* header + status bar */
+    int cur_line = paste_cursor_line(ls->buf, ls->cursor);
+    int cur_col = (int)paste_col(ls->buf, ls->cursor);
+    int total_lines = paste_line_count(ls->buf, ls->len);
+    int cursor_screen_row = paste_cursor_screen_row(ls->buf, ls->cursor, tw);
+
+    /* Scroll in screen rows — keep cursor visible */
+    static int scroll_top = 0;
+    if (cursor_screen_row < scroll_top)
+        scroll_top = cursor_screen_row;
+    if (cursor_screen_row >= scroll_top + content_rows)
+        scroll_top = cursor_screen_row - content_rows + 1;
+
+    /* Move to top-left, clear screen */
+    printf("\033[H\033[2J");
+
+    /* Header */
+    printf("\033[7m /paste — ESC to send, Ctrl-C to cancel \033[0m\n");
+
+    /* Build a flat view of screen rows from the buffer.
+     * Walk the buffer, tracking which screen row we're on.
+     * Print only screen rows in [scroll_top, scroll_top + content_rows). */
+    int screen_row = 0;
+    int rows_printed = 0;
+    size_t i = 0;
+
+    while (i <= ls->len && rows_printed < content_rows) {
+        /* Find the next buffer line */
+        size_t line_start = i;
+        while (i < ls->len && ls->buf[i] != '\n') i++;
+        int line_len = (int)(i - line_start);
+        int wrap_count = paste_wrap_rows(line_len, tw);
+
+        for (int w = 0; w < wrap_count; w++) {
+            if (screen_row >= scroll_top && screen_row < scroll_top + content_rows) {
+                int seg_start = w * tw;
+                int seg_len = line_len - seg_start;
+                if (seg_len > tw) seg_len = tw;
+                if (seg_len > 0)
+                    fwrite(ls->buf + line_start + seg_start, 1, (size_t)seg_len, stdout);
+                printf("\r\n");
+                rows_printed++;
+            }
+            screen_row++;
+        }
+
+        /* Skip past \n */
+        if (i < ls->len && ls->buf[i] == '\n') i++;
+        else if (i >= ls->len) break;
+    }
+
+    /* Fill remaining rows with ~ */
+    while (rows_printed < content_rows) {
+        printf("%s~%s\r\n", DIM, RESET);
+        rows_printed++;
+    }
+
+    /* Status bar */
+    printf("\033[7m Line %d/%d  Col %d  (%zu bytes) \033[0m",
+           cur_line + 1, total_lines, cur_col + 1, ls->len);
+
+    /* Position cursor: screen_row relative to scroll_top */
+    int vis_row = cursor_screen_row - scroll_top + 2; /* +1 header, +1 for 1-based */
+    int vis_col = (cur_col % tw) + 1;
+    printf("\033[%d;%dH", vis_row, vis_col);
+
+    fflush(stdout);
+}
+
+/*
+ * paste_mode — Full-screen multi-line editor.
+ *
+ * Returns 1 if the user submitted (ESC), 0 if cancelled (Ctrl-C).
+ * The buffer in ls contains the message on return (caller sends it).
+ */
+static int paste_mode(line_state_t *ls) {
+    paste_redraw(ls);
+
+    while (1) {
+        char c;
+        ssize_t n = read(STDIN_FILENO, &c, 1);
+        if (n <= 0) {
+            if (n == 0) return 0; /* EOF */
+            if (errno == EINTR || errno == EAGAIN) continue;
+            return 0;
+        }
+
+        /* ESC — check for escape sequence vs bare ESC (submit) */
+        if (c == 0x1B) {
+            /* Try to read next byte with short timeout.
+             * If nothing follows, it's a bare ESC (submit).
+             * If '[' follows, it's an escape sequence. */
+            struct termios cur, tmp;
+            tcgetattr(STDIN_FILENO, &cur);
+            tmp = cur;
+            tmp.c_cc[VMIN] = 0;
+            tmp.c_cc[VTIME] = 1; /* 100ms timeout */
+            tcsetattr(STDIN_FILENO, TCSANOW, &tmp);
+
+            char seq;
+            ssize_t nr = read(STDIN_FILENO, &seq, 1);
+            tcsetattr(STDIN_FILENO, TCSANOW, &cur);
+
+            if (nr <= 0) {
+                /* Bare ESC — submit */
+                return 1;
+            }
+
+            if (seq == '[') {
+                /* CSI sequence — read the final byte */
+                char fin;
+                /* Accumulate numeric param */
+                int param = -1;
+                while (1) {
+                    if (read(STDIN_FILENO, &fin, 1) != 1) break;
+                    if (fin >= '0' && fin <= '9') {
+                        if (param < 0) param = 0;
+                        param = param * 10 + (fin - '0');
+                        continue;
+                    }
+                    break;
+                }
+
+                switch (fin) {
+                case 'A': /* Up arrow */
+                {
+                    size_t ls_start = paste_line_start(ls->buf, ls->cursor);
+                    if (ls_start == 0) break; /* already on first line */
+                    size_t col = ls->cursor - ls_start;
+                    /* Find start of previous line */
+                    size_t prev_end = ls_start - 1; /* the \n */
+                    size_t prev_start = paste_line_start(ls->buf, prev_end);
+                    size_t prev_len = prev_end - prev_start;
+                    ls->cursor = prev_start + (col < prev_len ? col : prev_len);
+                    break;
+                }
+                case 'B': /* Down arrow */
+                {
+                    size_t ls_end = paste_line_end(ls->buf, ls->cursor, ls->len);
+                    if (ls_end >= ls->len) break; /* already on last line */
+                    size_t col = paste_col(ls->buf, ls->cursor);
+                    size_t next_start = ls_end + 1; /* skip the \n */
+                    size_t next_end = paste_line_end(ls->buf, next_start, ls->len);
+                    size_t next_len = next_end - next_start;
+                    ls->cursor = next_start + (col < next_len ? col : next_len);
+                    break;
+                }
+                case 'C': /* Right arrow */
+                    line_move_right(ls);
+                    break;
+                case 'D': /* Left arrow */
+                    line_move_left(ls);
+                    break;
+                case 'H': /* Home */
+                    ls->cursor = paste_line_start(ls->buf, ls->cursor);
+                    break;
+                case 'F': /* End */
+                    ls->cursor = paste_line_end(ls->buf, ls->cursor, ls->len);
+                    break;
+                case '~':
+                    if (param == 3) /* Delete */
+                        line_delete_forward(ls);
+                    else if (param == 1) /* Home (alt) */
+                        ls->cursor = paste_line_start(ls->buf, ls->cursor);
+                    else if (param == 4) /* End (alt) */
+                        ls->cursor = paste_line_end(ls->buf, ls->cursor, ls->len);
+                    else if (param == 5) { /* Page Up */
+                        struct winsize pws;
+                        int rows = 20;
+                        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &pws) == 0)
+                            rows = pws.ws_row - 4;
+                        for (int i = 0; i < rows; i++) {
+                            size_t s = paste_line_start(ls->buf, ls->cursor);
+                            if (s == 0) break;
+                            size_t col = ls->cursor - s;
+                            size_t pe = s - 1;
+                            size_t ps = paste_line_start(ls->buf, pe);
+                            size_t pl = pe - ps;
+                            ls->cursor = ps + (col < pl ? col : pl);
+                        }
+                    } else if (param == 6) { /* Page Down */
+                        struct winsize pws;
+                        int rows = 20;
+                        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &pws) == 0)
+                            rows = pws.ws_row - 4;
+                        for (int i = 0; i < rows; i++) {
+                            size_t e = paste_line_end(ls->buf, ls->cursor, ls->len);
+                            if (e >= ls->len) break;
+                            size_t col = paste_col(ls->buf, ls->cursor);
+                            size_t ns = e + 1;
+                            size_t ne = paste_line_end(ls->buf, ns, ls->len);
+                            size_t nl = ne - ns;
+                            ls->cursor = ns + (col < nl ? col : nl);
+                        }
+                    }
+                    break;
+                }
+            }
+            /* Other ESC sequences (Alt+key) — ignore */
+            paste_redraw(ls);
+            continue;
+        }
+
+        /* Ctrl-C — cancel */
+        if (c == 3) {
+            return 0;
+        }
+
+        /* Enter — insert newline */
+        if (c == '\n' || c == '\r') {
+            line_insert_char(ls, '\n');
+            paste_redraw(ls);
+            continue;
+        }
+
+        /* Backspace */
+        if (c == 127 || c == 8) {
+            if (ls->cursor > 0) {
+                line_delete_back(ls);
+            }
+            paste_redraw(ls);
+            continue;
+        }
+
+        /* Tab — insert literal tab (or spaces) */
+        if (c == '\t') {
+            line_insert_char(ls, ' ');
+            line_insert_char(ls, ' ');
+            line_insert_char(ls, ' ');
+            line_insert_char(ls, ' ');
+            paste_redraw(ls);
+            continue;
+        }
+
+        /* Ignore other control chars */
+        if (c < 32) continue;
+
+        /* Printable character */
+        line_insert_char(ls, c);
+        paste_redraw(ls);
+    }
 }
 
 /* --- Case-insensitive substring search --- */
@@ -1979,6 +2322,44 @@ int main(int argc, char **argv) {
                     printf("  %s(empty — not sent)%s\n", DIM, RESET);
                 }
                 /* Check for messages that arrived during editing */
+                if (!poll_and_display(&edit, g_handle))
+                    print_prompt(g_handle);
+                continue;
+            }
+
+            if (strcmp(edit.buf, "/paste") == 0) {
+                line_state_reset(&edit);
+                /* Enter alternate screen for paste mode */
+                printf("\033[?1049h"); /* alternate screen */
+                printf("\033[?25h");   /* show cursor */
+                fflush(stdout);
+
+                int submitted = paste_mode(&edit);
+
+                /* Leave alternate screen */
+                printf("\033[?1049l");
+                printf("\033[?25h");
+                printf("\033[0m");
+                printf("\r\n");
+                fflush(stdout);
+
+                if (submitted && edit.len > 0) {
+                    /* Strip trailing newlines from the message */
+                    while (edit.len > 0 && edit.buf[edit.len - 1] == '\n') {
+                        edit.len--;
+                        edit.buf[edit.len] = '\0';
+                    }
+                    if (edit.len > 0) {
+                        if (do_send(edit.buf) == 0) {
+                            format_message(g_handle, edit.buf, g_handle, time(NULL));
+                        } else {
+                            printf("  %s(send failed)%s\n", DIM, RESET);
+                        }
+                    }
+                } else {
+                    printf("  %s(cancelled — not sent)%s\n", DIM, RESET);
+                }
+                line_state_reset(&edit);
                 if (!poll_and_display(&edit, g_handle))
                     print_prompt(g_handle);
                 continue;
