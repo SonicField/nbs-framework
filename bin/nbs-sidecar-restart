@@ -301,6 +301,12 @@ if [[ "$MODE" == "respawn" ]]; then
     respawn_missing
 else
     restart_running
+    # If a specific handle was requested and nothing was restarted,
+    # the sidecar is dead — try respawning from session metadata.
+    if [[ -n "$TARGET_HANDLE" && $RESTARTED -eq 0 ]]; then
+        echo "No running sidecar for $TARGET_HANDLE — trying respawn..."
+        respawn_missing
+    fi
 fi
 
 echo ""
