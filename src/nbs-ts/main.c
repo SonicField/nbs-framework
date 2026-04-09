@@ -227,7 +227,8 @@ static int session_is_alive(const char *handle)
  */
 static void daemon_relay(int master_fd, const char *output_log_path,
                          const char *input_fifo_path,
-                         pid_t child_pid, const char *exit_code_path)
+                         pid_t child_pid, const char *exit_code_path,
+                         int idle_timeout_secs)
 {
     int log_fd = open(output_log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
     if (log_fd < 0) {
@@ -267,6 +268,7 @@ static void daemon_relay(int master_fd, const char *output_log_path,
 
     char buf[4096];
     int running = 1;
+    time_t last_input = time(NULL);
 
     while (running) {
         struct pollfd pfds[2];
@@ -279,6 +281,17 @@ static void daemon_relay(int master_fd, const char *output_log_path,
         if (pr < 0) {
             if (errno == EINTR) continue;
             break;
+        }
+
+        /* Idle timeout: if no input received for idle_timeout_secs, exit */
+        if (idle_timeout_secs > 0 && pr == 0) {
+            time_t now = time(NULL);
+            if ((now - last_input) >= idle_timeout_secs) {
+                /* Kill the child and exit */
+                if (child_pid > 0) kill(child_pid, SIGTERM);
+                running = 0;
+                break;
+            }
         }
 
         /* Master → output.log */
@@ -324,6 +337,7 @@ static void daemon_relay(int master_fd, const char *output_log_path,
         if (pfds[1].revents & POLLIN) {
             ssize_t n = read(fifo_fd, buf, sizeof(buf));
             if (n > 0) {
+                last_input = time(NULL);
                 ssize_t written = 0;
                 while (written < n) {
                     ssize_t w = write(master_fd, buf + written, (size_t)(n - written));
@@ -438,7 +452,7 @@ static int is_valid_session_name(const char *name)
 
 /* ── CLI Commands ─────────────────────────────────────────────────── */
 
-static int cmd_create(const char *command, const char *name)
+static int cmd_create(const char *command, const char *name, int idle_timeout)
 {
     /* Generate handle */
     char handle[NBS_TS_HANDLE_LEN];
@@ -694,7 +708,7 @@ static int cmd_create(const char *command, const char *name)
 
         /* Run the relay loop (captures output + forwards input) */
         daemon_relay(master_fd, output_log, input_fifo,
-                     child_pid, exit_code_file);
+                     child_pid, exit_code_file, idle_timeout);
         close(master_fd);
         _exit(0);
     }
@@ -1406,7 +1420,8 @@ static int cmd_help(void)
 {
     printf("Usage: nbs-ts <command> [options]\n\n");
     printf("Commands:\n");
-    printf("  create [--name=NAME] <command>    Create a new session\n");
+    printf("  create [--name=NAME] [--idle-timeout=SECS] <command>\n");
+    printf("                                       Create a new session (0 = no timeout)\n");
     printf("  send <handle> <text>              Send text to a session\n");
     printf("  read-new <handle> [--strip]       Read new output since last read\n");
     printf("  read <handle> [--offset=N|--last=N] Read output from offset or last N lines\n");
@@ -1472,12 +1487,17 @@ int main(int argc, char *argv[])
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "create") == 0) {
-        /* Parse --name=NAME from arguments before the command */
+        /* Parse --name=NAME and --idle-timeout=SECS from arguments before the command */
         const char *session_name = NULL;
+        int idle_timeout = 0; /* 0 = no timeout */
         int cmd_start = 2;
         for (int i = 2; i < argc; i++) {
             if (strncmp(argv[i], "--name=", 7) == 0) {
                 session_name = argv[i] + 7;
+                cmd_start = i + 1;
+            } else if (strncmp(argv[i], "--idle-timeout=", 15) == 0) {
+                idle_timeout = atoi(argv[i] + 15);
+                if (idle_timeout < 0) idle_timeout = 0;
                 cmd_start = i + 1;
             } else {
                 break;  /* First non-flag arg starts the command */
@@ -1496,7 +1516,7 @@ int main(int argc, char *argv[])
         }
         char *command = join_args(argc, argv, cmd_start);
         if (!command) return NBS_TS_EXIT_ERROR;
-        int rc = cmd_create(command, session_name);
+        int rc = cmd_create(command, session_name, idle_timeout);
         free(command);
         return rc;
 

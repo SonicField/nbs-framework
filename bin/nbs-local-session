@@ -40,7 +40,12 @@ for arg in "$@"; do
     esac
 done
 
-HANDLE=$("$NBS_TS" create 'bash --login' 2>&1) || {
+# Default idle timeout: 1 hour. Session self-terminates if no
+# input received for this duration. Prevents zombie sessions
+# when the owning agent dies without cleanup.
+IDLE_TIMEOUT="${NBS_SESSION_IDLE_TIMEOUT:-3600}"
+
+HANDLE=$("$NBS_TS" create --idle-timeout="$IDLE_TIMEOUT" 'bash --login' 2>&1) || {
     die 1 "Failed to create session (is nbs-ts-helper running?)"
 }
 

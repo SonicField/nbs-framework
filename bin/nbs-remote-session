@@ -59,7 +59,12 @@ done
 
 [[ -n "$HOST" ]] || die 2 "Usage: nbs-remote-session <host> [--name=NAME] [--cwd=PATH]"
 
-HANDLE=$("$NBS_TS" create "ssh -o StrictHostKeyChecking=no $HOST") || {
+# Default idle timeout: 1 hour. Session self-terminates if no
+# input received for this duration. Prevents zombie sessions
+# when the owning agent dies without cleanup.
+IDLE_TIMEOUT="${NBS_SESSION_IDLE_TIMEOUT:-3600}"
+
+HANDLE=$("$NBS_TS" create --idle-timeout="$IDLE_TIMEOUT" "ssh -o StrictHostKeyChecking=no $HOST") || {
     die 1 "Failed to create nbs-ts session"
 }
 

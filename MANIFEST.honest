@@ -70,9 +70,9 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-ts';
       path        : 'docs/tools/nbs-ts.md';
-      summary     : 'Terminal session manager — create, send input to, read output from, and manage PTY sessions.';
+      summary     : 'Terminal session manager — create, send input to, read output from, and manage PTY sessions. Supports --idle-timeout=SECS on create for automatic cleanup of abandoned sessions.';
       when_to_use : 'When you need to run commands in a persistent terminal session, capture output, or automate interactive programs.';
-      keywords    : ('terminal'; 'session'; 'pty'; 'send'; 'read'; 'capture'; 'interactive'; 'tmux');
+      keywords    : ('terminal'; 'session'; 'pty'; 'send'; 'read'; 'capture'; 'interactive'; 'tmux'; 'idle'; 'timeout');
     );
 
     (
@@ -394,9 +394,9 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-local-session';
       path        : 'bin/nbs-local-session';
-      summary     : 'Create a persistent local shell session via nbs-ts-helper with the user full login environment.';
+      summary     : 'Create a persistent local shell session via nbs-ts-helper with the user full login environment. Self-terminates after 1 hour of inactivity (configurable via NBS_SESSION_IDLE_TIMEOUT).';
       when_to_use : 'When you need a local shell with full credentials for build commands, git operations, or proxy access.';
-      keywords    : ('local'; 'session'; 'shell'; 'login'; 'credentials'; 'persistent');
+      keywords    : ('local'; 'session'; 'shell'; 'login'; 'credentials'; 'persistent'; 'idle'; 'timeout');
     );
 
     (
@@ -421,9 +421,9 @@ var manifest : Manifest = (
       kind        : Tool;
       name        : 'nbs-remote-session';
       path        : 'bin/nbs-remote-session';
-      summary     : 'Create a persistent SSH shell session on a remote machine and return a handle for use with nbs-ts commands.';
+      summary     : 'Create a persistent SSH shell session on a remote machine and return a handle for use with nbs-ts commands. Self-terminates after 1 hour of inactivity (configurable via NBS_SESSION_IDLE_TIMEOUT).';
       when_to_use : 'When you need a long-lived remote shell for multiple commands, builds, or interactive work.';
-      keywords    : ('remote'; 'session'; 'ssh'; 'persistent'; 'handle'; 'shell');
+      keywords    : ('remote'; 'session'; 'ssh'; 'persistent'; 'handle'; 'shell'; 'idle'; 'timeout');
     );
 
     (
