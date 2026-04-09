@@ -1290,9 +1290,22 @@ static void render_overview(dashboard_t *d)
                d->paused ? "yes" : "no", d->total_messages);
     }
 
+    if (status_changed || full) {
+        /* --- chat location --- */
+        goto_row(bot_row + 2);
+        fputs("\033[2K", stdout);
+        nbs_style_fstart(&sty_dim, stdout);
+        {
+            const char *chat_name = strrchr(d->chat_file, '/');
+            chat_name = chat_name ? chat_name + 1 : d->chat_file;
+            printf("%s/%s", d->nbs_root, chat_name);
+        }
+        nbs_style_freset(stdout);
+    }
+
     if (full) {
         /* --- navigation hints --- */
-        goto_row(bot_row + 2);
+        goto_row(bot_row + 3);
         fputs("\033[2K", stdout);
         nbs_style_fstart(&sty_dim, stdout);
         fputs(ARROW_UD ": select   Enter: detail   Esc: exit   r: refresh",
