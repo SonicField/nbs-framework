@@ -253,21 +253,36 @@ respawn_missing() {
                     # Already has exactly one sidecar — skip
                     continue
                 fi
-                # Try to find project root from session metadata
-                local meta_path="${HOME}/.nbs-ts/sessions/${ts_handle}/meta"
-                [[ -f "$meta_path" ]] || continue
-                # Look for NBS_ROOT in the command or use cwd
+                # Extract project root from session command ("cd /path && ...")
+                # or from session metadata
                 local root=""
-                for d in $(pgrep -a -f "nbs-claude" 2>/dev/null | grep -oP '(?<=--root=)\S+' || true); do
-                    [[ -d "${d}/.nbs" ]] && root="$d" && break
-                done
-                [[ -n "$root" ]] || continue
+                root=$(echo "$ts_cmd" | grep -oP '(?<=^cd )\S+' || true)
+                if [[ -z "$root" || ! -d "${root}/.nbs" ]]; then
+                    # Fallback: try nbs-claude processes
+                    for d in $(pgrep -a -f "nbs-claude" 2>/dev/null | grep -oP '(?<=--root=)\S+' || true); do
+                        [[ -d "${d}/.nbs" ]] && root="$d" && break
+                    done
+                fi
+                [[ -n "$root" && -d "${root}/.nbs" ]] || continue
 
-                # Extract handle from the command
+                # Filter by project root if --root was given
+                if [[ -n "$ROOT_FILTER" && "$root" != "$ROOT_FILTER" ]]; then
+                    continue
+                fi
+
+                # Extract handle from session name (nbs-<handle>-<tag>)
                 local agent_handle=""
-                agent_handle=$(echo "$ts_cmd" | grep -oP '(?<=NBS_HANDLE=)\S+' || true)
+                if [[ "$ts_name" =~ ^nbs-([a-zA-Z0-9_-]+)- ]]; then
+                    agent_handle="${BASH_REMATCH[1]}"
+                fi
+                # Fallback: try NBS_HANDLE= in the command
+                if [[ -z "$agent_handle" ]]; then
+                    agent_handle=$(echo "$ts_cmd" | grep -oP '(?<=NBS_HANDLE=)\S+' || true)
+                fi
                 [[ -n "$agent_handle" ]] || continue
                 is_infrastructure "$agent_handle" && continue
+                # Filter by target handle if specified
+                [[ -z "$TARGET_HANDLE" || "$agent_handle" == "$TARGET_HANDLE" ]] || continue
 
                 echo -n "Spawning sidecar for $agent_handle (nbs-ts=$ts_handle)... "
                 "$SIDECAR" \
