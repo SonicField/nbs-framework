@@ -189,11 +189,17 @@ static void chatview_render(chatview_t *cv) {
             strftime(ts, sizeof(ts), "%H:%M:%S", &tm);
         }
 
-        /* Truncate content for display */
+        /* Truncate content for display.
+         * The visible prefix is: [NNN] HH:MM:SS handle:
+         * Account for this so the total line fits in term_cols. */
+        int prefix_len = 7 + 9 + (int)strlen(msg->handle) + 2; /* [NNN] + ts + handle: + space */
+        int avail = cv->term_cols - prefix_len;
+        if (avail < 10) avail = 10;
+
         char preview[512];
         size_t plen = msg->content_len;
-        if (plen > (size_t)(cv->term_cols - 30))
-            plen = (size_t)(cv->term_cols - 30);
+        if (plen > (size_t)avail)
+            plen = (size_t)avail;
         if (plen > sizeof(preview) - 1)
             plen = sizeof(preview) - 1;
         memcpy(preview, msg->content, plen);
