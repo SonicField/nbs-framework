@@ -21,6 +21,7 @@ TEST_DIR=$(mktemp -d)
 ERRORS=0
 
 cleanup() {
+    pkill -9 -f "nbs-chat-terminal.*$TEST_DIR" 2>/dev/null || true
     rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
