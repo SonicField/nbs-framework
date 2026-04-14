@@ -60,6 +60,9 @@ All commands are entered at the prompt and submitted with Enter.
 |---------|--------|
 | `/help` | Print the command reference |
 | `/exit` | Leave the chat cleanly |
+| `/bash` | Interactive shell — `exit` to return. CWD persists across invocations |
+| `/bash <command>` | Run a command in a PTY, capture output, display in scrollable pager. Ctrl-C cancels |
+| `/file [path]` | Full-screen file browser. Remembers last directory. Enter views files (syntax-highlighted via bat for code, nbs-md-viewer for markdown) |
 | `/edit` | Open `$EDITOR` for multi-line message composition |
 | `/search <pattern>` | Case-insensitive substring search across all messages |
 | `/filter <handle>` | Show only messages from one participant; redisplays last 50 matching messages |
@@ -81,6 +84,7 @@ All commands are entered at the prompt and submitted with Enter.
 | `/kick <agent>` | Hard restart a single agent: kill session, reset cursor, respawn, verify. Other agents unaffected. Agent must be one of: scribe, medic, supervisor, gatekeeper, theologian, testkeeper, generalist |
 | `/health` | Report team health: per-agent session and sidecar status via `nbs-team-check` |
 | `/dashboard` | Live full-screen team dashboard — agents, sidecars, cursor, activity. Drill into any agent's terminal output. Refreshes every 2 seconds |
+| `/sidecar [handle]` | Restart all sidecars, or just one if a handle is given |
 
 ### Oracle Triggers
 
@@ -118,6 +122,62 @@ alex> /search parser
   [67] alex> Both of you focus on parse_int first
   2 match(es)
 ```
+
+
+## The `/bash` Command
+
+Run shell commands without leaving the chat terminal. Two modes.
+
+### Interactive Mode (`/bash`)
+
+Drops into an interactive bash shell. Full history, job control, tab completion — everything a normal shell provides. Type `exit` or Ctrl-D to return to the chat.
+
+The shell's working directory persists across invocations within the same terminal session. If you `cd /tmp` in one `/bash` session, the next `/bash` will start in `/tmp`.
+
+Implementation: fork/exec with `--rcfile` that sets an EXIT trap to write the final `pwd` to a temp file. The terminal reads it back on return.
+
+### Captured Mode (`/bash <command>`)
+
+Runs the command in a PTY (so it thinks it has a terminal — colours and formatting work), captures the output, and displays it in a scrollable pager.
+
+The pager supports: arrows, page up/down, Home/End, j/k, space. ESC or q exits.
+
+While the command is running, the terminal shows `Running: <command>  (Ctrl-C to cancel)`. Ctrl-C sends SIGTERM then SIGKILL and drops you into the pager with whatever output was collected so far.
+
+CWD from previous `/bash` invocations is prepended to the command, so `/bash cd /tmp` followed by `/bash ls` will list `/tmp`.
+
+### What Works, What Doesn't
+
+| Scenario | Result |
+|----------|--------|
+| `ls --color` | Colours preserved — PTY gives the command a terminal |
+| `git log` | Paging works — output captured, then displayed in our pager |
+| `make` | Output captured, scrollable when done |
+| Long-running commands | Ctrl-C cancels, shows partial output |
+| `vim`, `htop` | Broken in captured mode — no stdin. Use `/bash` interactive mode |
+| `while :; do :; done` | Ctrl-C kills it |
+
+
+## The `/file` Command
+
+Full-screen file browser. Opens the last-visited directory (or cwd on first use). With a path argument, opens that directory.
+
+```
+/file              Open last directory
+/file docs/tools   Open a specific path
+```
+
+The browser supports multi-column layout, file type colouring, and two viewers:
+
+| File type | Viewer |
+|-----------|--------|
+| `.md` | nbs-md-viewer — styled markdown rendering |
+| Other text | bat — syntax highlighting for ~200 languages |
+| Binary | Status bar message |
+
+All viewers exit with ESC or q. The browser itself exits with ESC.
+
+Directory memory persists for the lifetime of the terminal process. See [nbs-file-browser](nbs-file-browser.md) for full key bindings and features.
 
 
 ## The `/filter` and `/unfilter` Commands
@@ -272,10 +332,23 @@ The terminal implements its own line editor in raw mode. No readline dependency.
 | Delete (`ESC [3~`) | Delete character at cursor |
 | Up arrow | Browse history (older) |
 | Down arrow | Browse history (newer) |
-| Enter | Send message |
+| Enter | Send message (also expands unique command prefix — `/da` + Enter runs `/dashboard`) |
 | Ctrl-C | Exit (sends pending input first) |
 | Ctrl-D | Exit (sends pending input if buffer non-empty) |
-| Tab | Inserted as literal character |
+| Tab | Slash command completion (see below) |
+
+### Slash Command Completion
+
+Two completion mechanisms work together:
+
+**Ghost completion** — while typing, a dim suffix appears showing the rest of a uniquely-matching command. `/da` ghosts `shboard`. Only appears when exactly one command matches the prefix.
+
+**Tab completion** — pressing Tab with a `/` prefix:
+- If one command matches: fills it in (e.g. `/da` + Tab → `/dashboard`)
+- If multiple match: displays all matches below the input (e.g. `/fi` + Tab shows `/file  /filter  /fixup`)
+- If nothing matches: no action
+
+**Enter expansion** — pressing Enter with a unique prefix also expands: `/da` + Enter dispatches as `/dashboard`.
 
 ### History
 

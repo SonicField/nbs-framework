@@ -57,6 +57,7 @@ Reference documentation for infrastructure components.
 | [nbs-ts](tools/nbs-ts.md) | Session management and nbs-ts-helper daemon |
 | [nbs-ts-grep](tools/nbs-ts-grep.md) | Search across active session output |
 | [nbs-ts-render](tools/nbs-ts-render.md) | Virtual terminal renderer — PTY output to plain text |
+| [nbs-file-browser](tools/nbs-file-browser.md) | Terminal file browser — multi-column, syntax-highlighted viewing via bat |
 | [nbs-md-viewer](tools/nbs-md-viewer.md) | Terminal markdown viewer — styled, scrollable, syntax-highlighted |
 | [nbs-spawn-worker](tools/nbs-spawn-worker.md) | Worker spawn pipeline and nbs-launch-agent |
 | [nbs-bus](tools/nbs-bus.md) | Event bus: publish, subscribe, dedup |
@@ -67,6 +68,7 @@ Reference documentation for infrastructure components.
 | [nbs-workers](tools/nbs-workers.md) | Worker lifecycle: spawn, status, dismiss |
 | [Remote Tools](tools/nbs-remote.md) | nbs-remote-run/edit/read and nbs-local-run |
 | [Remote Git](tools/nbs-remote-git.md) | Git sync between machines via SSH |
+| [SSH Bridge](tools/nbs-ssh-bridge.md) | SSH connection multiplexing — eliminates repeated authentication |
 | [nbs-team-status](tools/tools.md#nbs-team-status) | Show team processes with duplicate/orphan detection |
 | [nbs-team-kill](tools/tools.md#nbs-team-kill) | Clean-slate kill of all team processes |
 | [Testing Strategy](tools/testing-strategy.md) | Test philosophy and methodology |

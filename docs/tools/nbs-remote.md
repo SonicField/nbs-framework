@@ -78,5 +78,6 @@ All four tools share a common scheme:
 
 ## See Also
 
+- [nbs-ssh-bridge](nbs-ssh-bridge.md) — SSH connection multiplexing (eliminates repeated authentication)
 - [nbs-ts](nbs-ts.md) — terminal session manager underlying all remote tools
 - [nbs-claude](nbs-claude.md) — agent launcher that sets up the environment

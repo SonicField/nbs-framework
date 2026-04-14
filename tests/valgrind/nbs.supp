@@ -1,0 +1,109 @@
+# nbs.supp — Valgrind suppressions for NBS framework tests
+#
+# Suppresses known false positives from glibc, pthreads, and
+# system libraries. Do NOT add suppressions for NBS code —
+# those are real bugs that need fixing.
+
+# glibc startup allocations (one-time, process-lifetime)
+{
+   glibc_dl_init
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_init
+}
+
+{
+   glibc_dl_open
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_open
+}
+
+{
+   glibc_dlopen
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:dlopen*
+}
+
+# pthreads internal allocations
+{
+   pthread_once_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pthread_once
+}
+
+{
+   pthread_create_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:pthread_create*
+}
+
+# glibc localtime_r TLS allocation
+{
+   localtime_r_tls
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:localtime_r
+}
+
+{
+   gmtime_r_tls
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:gmtime_r
+}
+
+# glibc getenv/setenv allocations
+{
+   glibc_setenv
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:setenv
+}
+
+# glibc stdio buffer allocations (process-lifetime)
+{
+   glibc_printf_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_IO_file_doallocate
+}
+
+# glibc getaddrinfo / NSS allocations
+{
+   glibc_nss
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:__nss_*
+}
+
+# glibc ctype locale
+{
+   glibc_ctype
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:__ctype_init
+}
+
+# openpty allocations from glibc (one-time)
+{
+   openpty_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:openpty
+}

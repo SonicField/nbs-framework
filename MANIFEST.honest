@@ -428,6 +428,33 @@ var manifest : Manifest = (
 
     (
       kind        : Tool;
+      name        : 'nbs-ssh-bridge';
+      path        : 'docs/tools/nbs-ssh-bridge.md';
+      summary     : 'Drop-in ssh/scp replacement that configures and reuses ControlMaster connections — first connection authenticates, subsequent connections piggyback without re-authentication.';
+      when_to_use : 'When making multiple SSH or SCP connections to the same host and want to avoid repeated authentication handshakes.';
+      keywords    : ('ssh'; 'scp'; 'remote'; 'multiplexing'; 'ControlMaster'; 'connection'; 'authentication'; 'bridge');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-scp-bridge';
+      path        : 'docs/tools/nbs-ssh-bridge.md';
+      summary     : 'SCP with connection multiplexing — symlink to nbs-ssh-bridge, detects invocation name and routes to scp.';
+      when_to_use : 'When transferring files via SCP and want to reuse an existing SSH master connection.';
+      keywords    : ('scp'; 'ssh'; 'remote'; 'transfer'; 'multiplexing'; 'bridge');
+    );
+
+    (
+      kind        : Tool;
+      name        : 'nbs-file-browser';
+      path        : 'src/nbs-file-browser/main.c';
+      summary     : 'Full-screen TUI file browser with multi-column layout, syntax-highlighted viewing via bat, and markdown rendering via nbs-md-viewer.';
+      when_to_use : 'When browsing project files from the terminal or via /file in nbs-chat-terminal.';
+      keywords    : ('file'; 'browser'; 'navigate'; 'directory'; 'bat'; 'syntax'; 'highlight'; 'TUI');
+    );
+
+    (
+      kind        : Tool;
       name        : 'nbs-sidecar-restart';
       path        : 'bin/nbs-sidecar-restart';
       summary     : 'Hot-restart running sidecars to pick up new binaries, or respawn missing sidecars for active agent sessions. Kills sidecar-loops before sidecars to prevent respawn races.';
@@ -438,7 +465,7 @@ var manifest : Manifest = (
     (
       kind        : Tool;
       name        : 'nbs-team-status';
-      path        : 'bin/nbs-team-status';
+      path        : 'docs/tools/nbs-team-status.md';
       summary     : 'Show every team process (sessions, sidecars, sidecar-loops) with duplicate and orphan detection.';
       when_to_use : 'When diagnosing duplicate sidecars, orphan processes, or verifying clean process state after restart.';
       keywords    : ('team'; 'status'; 'process'; 'duplicate'; 'orphan'; 'sidecar'; 'diagnosis');
@@ -447,7 +474,7 @@ var manifest : Manifest = (
     (
       kind        : Tool;
       name        : 'nbs-team-kill';
-      path        : 'bin/nbs-team-kill';
+      path        : 'docs/tools/nbs-team-kill.md';
       summary     : 'Clean-slate kill of all team processes — sessions, sidecars, and sidecar-loops for a given tag.';
       when_to_use : 'When you need to kill all team processes before a full restart, or to clear process leaks.';
       keywords    : ('team'; 'kill'; 'clean'; 'process'; 'restart'; 'leak'; 'slate');
@@ -1113,6 +1140,33 @@ var manifest : Manifest = (
 
     (
       kind        : Document;
+      name        : 'Bus Recovery';
+      path        : 'docs/tools/nbs-bus-recovery.md';
+      summary     : 'How agents recover bus context after starting or restarting — fresh start vs reconnect, event replay, and ack state.';
+      when_to_use : 'When an agent restarts and needs to recover its bus subscription state without missing or replaying events.';
+      keywords    : ('bus'; 'recovery'; 'restart'; 'replay'; 'ack'; 'context');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Team Kill Reference';
+      path        : 'docs/tools/nbs-team-kill.md';
+      summary     : 'Reference for nbs-team-kill — clean-slate process termination for a team: sidecar-loops, sidecars, sessions, and PID cleanup.';
+      when_to_use : 'When you need to kill all team processes before a full restart or to clear process leaks.';
+      keywords    : ('team'; 'kill'; 'process'; 'clean'; 'shutdown'; 'reference');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Team Status Reference';
+      path        : 'docs/tools/nbs-team-status.md';
+      summary     : 'Reference for nbs-team-status — process audit showing sessions, sidecars, sidecar-loops with duplicate and orphan detection.';
+      when_to_use : 'When diagnosing duplicate sidecars, orphan processes, or verifying clean process state.';
+      keywords    : ('team'; 'status'; 'process'; 'audit'; 'duplicate'; 'orphan'; 'reference');
+    );
+
+    (
+      kind        : Document;
       name        : 'Bus Events';
       path        : 'docs/chat-architecture/bus-events.md';
       summary     : 'The .nbs/events/ file-based event queue — publish, ack, prune lifecycle with priority levels and @mention extraction.';
@@ -1219,6 +1273,15 @@ var manifest : Manifest = (
       summary     : 'Two-phase process for disordered projects — read-only discovery maps the territory, recovery rebuilds from the map.';
       when_to_use : 'When onboarding to a project with no epistemic structure and you need to understand before changing anything.';
       keywords    : ('discovery'; 'recovery'; 'archaeology'; 'onboarding'; 'disordered'; 'restructure');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Noeomics Style Guide';
+      path        : 'docs/framework/NOEOMICS_STYLE.md';
+      summary     : 'Writing style for Noeomics — claims early, images as argument, difficulty matched to truth, morality named not hidden.';
+      when_to_use : 'When writing or reviewing Noeomics material to maintain the distinctive voice and epistemic standards.';
+      keywords    : ('noeomics'; 'style'; 'writing'; 'voice'; 'claims'; 'morality');
     );
 
     (
@@ -1454,6 +1517,24 @@ var manifest : Manifest = (
 
     (
       kind        : Document;
+      name        : 'File Browser Reference';
+      path        : 'docs/tools/nbs-file-browser.md';
+      summary     : 'Reference for nbs-file-browser — keys, file type dispatch, colour coding, /file integration, and directory memory.';
+      when_to_use : 'When understanding the file browser features or its integration with the chat terminal.';
+      keywords    : ('file'; 'browser'; 'bat'; 'viewer'; 'navigate'; 'reference');
+    );
+
+    (
+      kind        : Document;
+      name        : 'SSH Bridge Reference';
+      path        : 'docs/tools/nbs-ssh-bridge.md';
+      summary     : 'Reference for nbs-ssh-bridge — SSH ControlMaster multiplexing, setup behaviour, master lifecycle, and relationship to nbs-remote tools.';
+      when_to_use : 'When understanding SSH connection multiplexing or configuring persistent master connections.';
+      keywords    : ('ssh'; 'bridge'; 'remote'; 'multiplexing'; 'ControlMaster'; 'reference');
+    );
+
+    (
+      kind        : Document;
       name        : 'Interactive Testing Guide';
       path        : 'docs/tools/interactive-testing.md';
       summary     : 'Guide to testing Claude Code behaviour requiring multi-turn interaction, permission prompts, and AskUserQuestion via nbs-ts.';
@@ -1557,6 +1638,51 @@ var manifest : Manifest = (
 
     (
       kind        : Document;
+      name        : 'Honest Documentation Index';
+      path        : 'lib/honest/docs/index.md';
+      summary     : 'Entry point for Honest library documentation — reading order and links to user guide, CLI reference, implementors guide, and testing.';
+      when_to_use : 'When starting with the Honest library and need to know what to read first.';
+      keywords    : ('honest'; 'index'; 'documentation'; 'navigation'; 'reading-order');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Honest Implementors Guide';
+      path        : 'lib/honest/docs/implementors-guide.md';
+      summary     : 'How to build a conformant Honest parser and serialiser — grammar, edge cases, and compliance requirements.';
+      when_to_use : 'When implementing an Honest parser in a new language or debugging parser conformance issues.';
+      keywords    : ('honest'; 'implementor'; 'parser'; 'serialiser'; 'grammar'; 'conformance');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Honest Python Library';
+      path        : 'lib/honest/docs/python-library.md';
+      summary     : 'Pure Python implementation of Honest — parse, serialise, and extract Honest documents with a Pythonic API.';
+      when_to_use : 'When using Honest from Python scripts or automation.';
+      keywords    : ('honest'; 'python'; 'library'; 'parse'; 'serialise'; 'API');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Honest Testing Guide';
+      path        : 'lib/honest/docs/testing.md';
+      summary     : 'How to run, understand, and extend the Honest test suites — conformance tests, property-based tests, and fuzz targets.';
+      when_to_use : 'When running Honest tests or adding test coverage for new parser features.';
+      keywords    : ('honest'; 'testing'; 'conformance'; 'fuzz'; 'property-based'; 'suite');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Honest Specification Addendum';
+      path        : 'lib/honest/specs/honest-addendum.md';
+      summary     : 'Addendum to the Honest specification — gap resolutions and clarifications arising from implementation experience.';
+      when_to_use : 'When the main specification is ambiguous and you need clarification on edge cases.';
+      keywords    : ('honest'; 'specification'; 'addendum'; 'gaps'; 'clarification'; 'edge-cases');
+    );
+
+    (
+      kind        : Document;
       name        : 'Honest CLI Reference';
       path        : 'lib/honest/docs/cli-reference.md';
       summary     : 'Reference for the five Honest CLI tools — honest-parse, honest-get, honest-fmt, honest-build, and honest-extract.';
@@ -1565,6 +1691,24 @@ var manifest : Manifest = (
     );
 
     { --- Terminal Weathering --- }
+
+    (
+      kind        : Document;
+      name        : 'Terminal Weathering Concepts Index';
+      path        : 'terminal-weathering/concepts/index.md';
+      summary     : 'Index of terminal weathering concept documents — reading order for methodology, C++ to C patterns, GDB debugging, and performance.';
+      when_to_use : 'When navigating the terminal weathering concepts and need to know which document to read first.';
+      keywords    : ('terminal-weathering'; 'index'; 'concepts'; 'reading-order'; 'navigation');
+    );
+
+    (
+      kind        : Document;
+      name        : 'Terminal Weathering Concepts README';
+      path        : 'terminal-weathering/concepts/README.md';
+      summary     : 'Brief pointer to the terminal weathering concepts directory and root index.';
+      when_to_use : 'When landing in the concepts directory and need orientation.';
+      keywords    : ('terminal-weathering'; 'readme'; 'concepts'; 'pointer');
+    );
 
     (
       kind        : Document;

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# nbs-ssh-bridge — SSH/SCP with connection multiplexing
+#
+# Usage:
+#   nbs-ssh-bridge [ssh-options] destination
+#   nbs-scp-bridge [scp-options] source... target   (symlink to nbs-ssh-bridge)
+#
+# On first run, configures ~/.ssh for ControlMaster multiplexing.
+# The initial connection becomes the master; subsequent ssh and scp
+# to the same user@host:port reuse it without re-authentication.
+#
+# Master management:
+#   ssh -O check <host>    # check if master is running
+#   ssh -O exit  <host>    # tear down master
+#
+# The master lives as long as your shell session. Close it and
+# the master (and its socket) go away.
+
+set -euo pipefail
+
+SOCKET_DIR="$HOME/.ssh/sockets"
+CONF_DIR="$HOME/.ssh/conf.d"
+CONF_FILE="$CONF_DIR/multiplexing.conf"
+
+setup_config() {
+    # Socket directory
+    mkdir -p "$SOCKET_DIR"
+    chmod 700 "$SOCKET_DIR"
+
+    # Multiplexing config snippet
+    if [[ ! -f "$CONF_FILE" ]]; then
+        mkdir -p "$CONF_DIR"
+        cat > "$CONF_FILE" <<'CONF'
+Host *
+    ControlMaster auto
+    ControlPath ~/.ssh/sockets/%r@%h-%p
+CONF
+        chmod 600 "$CONF_FILE"
+        echo >&2 "nbs-ssh-bridge: created $CONF_FILE"
+    fi
+
+    # Ensure ~/.ssh/config includes conf.d/*
+    # Include must appear before any Host/Match blocks.
+    local include_line="Include conf.d/*"
+    if [[ -f "$HOME/.ssh/config" ]]; then
+        if ! grep -qxF "$include_line" "$HOME/.ssh/config" 2>/dev/null; then
+            local tmp
+            tmp=$(mktemp "$HOME/.ssh/.config.tmp.XXXXXX")
+            { echo "$include_line"; echo; cat "$HOME/.ssh/config"; } > "$tmp"
+            mv "$tmp" "$HOME/.ssh/config"
+            chmod 600 "$HOME/.ssh/config"
+            echo >&2 "nbs-ssh-bridge: added Include directive to ~/.ssh/config"
+        fi
+    else
+        mkdir -p "$HOME/.ssh"
+        chmod 700 "$HOME/.ssh"
+        echo "$include_line" > "$HOME/.ssh/config"
+        chmod 600 "$HOME/.ssh/config"
+        echo >&2 "nbs-ssh-bridge: created ~/.ssh/config"
+    fi
+}
+
+# Determine whether to act as ssh or scp based on invocation name
+cmd="ssh"
+case "$(basename "$0")" in
+    *scp*) cmd="scp" ;;
+esac
+
+if [[ $# -eq 0 ]]; then
+    echo >&2 "Usage: nbs-ssh-bridge [ssh-options] destination"
+    echo >&2 "       nbs-scp-bridge [scp-options] source... target"
+    echo >&2 ""
+    echo >&2 "Establishes SSH with connection multiplexing."
+    echo >&2 "Subsequent ssh/scp to the same host reuse this connection."
+    exit 1
+fi
+
+setup_config
+exec "$cmd" "$@"

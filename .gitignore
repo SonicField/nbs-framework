@@ -142,3 +142,11 @@ src/nbs-dashboard/*.o
 src/nbs-dashboard/nbs-dashboard
 src/nbs-dashboard/libdashboard.a
 bin/nbs-dashboard
+bin/nbs-file-browser
+
+# Progress logs (ephemeral session documentation)
+progress/
+
+# Build artefacts for nbs-file-browser
+src/nbs-file-browser/nbs-file-browser
+src/nbs-file-browser/*.o

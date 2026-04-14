@@ -54,6 +54,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <pty.h>
 
 #include "watchdog.h"
 
@@ -79,6 +80,12 @@ static char g_mention_handle[MAX_HANDLE_LEN] = {0}; /* empty = no mention filter
 
 /* Cursor row tracking for wrapped-line redraw */
 static int g_cursor_row = 0;  /* Row of cursor relative to first row of input */
+
+/* /file command: remember last directory across invocations */
+static char g_file_last_dir[PATH_MAX] = {0};
+
+/* /bash command: remember working directory across invocations */
+static char g_bash_cwd[PATH_MAX] = {0};
 
 /* @mention highlighting is always enabled */
 
@@ -139,8 +146,8 @@ static void history_free(void) {
 /* --- Command autocompletion --- */
 
 static const char *g_commands[] = {
-    "/browse", "/dashboard", "/digest", "/edit", "/exit",
-    "/filter", "/fixup", "/health", "/help",
+    "/bash", "/browse", "/dashboard", "/digest", "/edit", "/exit",
+    "/file", "/filter", "/fixup", "/health", "/help",
     "/kick", "/librarian", "/mention",
     "/paste", "/pause", "/pythia",
     "/redraw", "/restart", "/resume",
@@ -443,8 +450,10 @@ static void print_prompt(const char *handle) {
 static void print_help(void) {
     printf("\n");
     printf("%sCommands:%s\n", BOLD, RESET);
+    printf("  %s/bash%s        Interactive shell (exit to return) or /bash <cmd>\n", DIM, RESET);
     printf("  %s/browse%s      Scroll through full chat history\n", DIM, RESET);
     printf("  %s/dashboard%s   Live team dashboard — agents, sidecars, activity\n", DIM, RESET);
+    printf("  %s/file%s        Browse files (e.g. /file src/) — remembers last directory\n", DIM, RESET);
     printf("  %s/edit%s       Open $EDITOR to compose a multi-line message\n", DIM, RESET);
     printf("  %s/paste%s      Full-screen editor for pasting and tweaking (ESC to send)\n", DIM, RESET);
     printf("  %s/search%s     Search message history (e.g. /search parser)\n", DIM, RESET);
@@ -2410,6 +2419,446 @@ int main(int argc, char **argv) {
                 continue;
             }
 
+            /* /bash [command] — shell access with CWD memory */
+            if (strcmp(edit.buf, "/bash") == 0 ||
+                strncmp(edit.buf, "/bash ", 6) == 0) {
+
+                const char *bash_cmd = NULL;
+                if (strncmp(edit.buf, "/bash ", 6) == 0) {
+                    bash_cmd = edit.buf + 6;
+                    while (*bash_cmd == ' ') bash_cmd++;
+                    if (*bash_cmd == '\0') bash_cmd = NULL;
+                }
+
+                if (!bash_cmd) {
+                    /* Interactive mode: hand terminal to bash */
+                    if (have_termios)
+                        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+
+                    /* Write cwd-on-exit trap to a temp file */
+                    char trap_file[PATH_MAX];
+                    snprintf(trap_file, sizeof(trap_file),
+                             "/tmp/nbs-bash-%d.rc", (int)getpid());
+                    char cwd_file[PATH_MAX];
+                    snprintf(cwd_file, sizeof(cwd_file),
+                             "/tmp/nbs-bash-%d.cwd", (int)getpid());
+                    {
+                        FILE *tf = fopen(trap_file, "w");
+                        if (tf) {
+                            fprintf(tf, "trap 'pwd > %s' EXIT\n",
+                                    cwd_file);
+                            if (g_bash_cwd[0])
+                                fprintf(tf, "cd '%s' 2>/dev/null\n",
+                                        g_bash_cwd);
+                            fclose(tf);
+                        }
+                    }
+
+                    pid_t bpid = fork();
+                    if (bpid == 0) {
+                        execlp("bash", "bash", "--rcfile", trap_file,
+                               (char *)NULL);
+                        _exit(127);
+                    } else if (bpid > 0) {
+                        int bst;
+                        waitpid(bpid, &bst, 0);
+                    }
+
+                    /* Read back final cwd */
+                    {
+                        FILE *cf = fopen(cwd_file, "r");
+                        if (cf) {
+                            if (fgets(g_bash_cwd,
+                                      sizeof(g_bash_cwd), cf)) {
+                                size_t sl = strlen(g_bash_cwd);
+                                if (sl > 0 &&
+                                    g_bash_cwd[sl - 1] == '\n')
+                                    g_bash_cwd[sl - 1] = '\0';
+                            }
+                            fclose(cf);
+                            unlink(cwd_file);
+                        }
+                        unlink(trap_file);
+                    }
+                } else {
+                    /* Captured mode: run command in a PTY,
+                     * capture output, display in pager */
+                    if (have_termios)
+                        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+
+                    /* Build the command with cwd prepended */
+                    char full_cmd[8192];
+                    if (g_bash_cwd[0])
+                        snprintf(full_cmd, sizeof(full_cmd),
+                                 "cd '%s' 2>/dev/null; %s",
+                                 g_bash_cwd, bash_cmd);
+                    else
+                        snprintf(full_cmd, sizeof(full_cmd),
+                                 "%s", bash_cmd);
+
+                    /* Set up PTY with current terminal size */
+                    struct winsize bws = {0};
+                    ioctl(STDOUT_FILENO, TIOCGWINSZ, &bws);
+                    if (bws.ws_row == 0) bws.ws_row = 24;
+                    if (bws.ws_col == 0) bws.ws_col = 80;
+
+                    int master_fd;
+                    pid_t cpid = forkpty(&master_fd, NULL, NULL, &bws);
+                    if (cpid == 0) {
+                        /* Child: exec the command */
+                        execlp("bash", "bash", "-c", full_cmd,
+                               (char *)NULL);
+                        _exit(127);
+                    }
+
+                    if (cpid < 0) {
+                        printf("  %s(fork failed: %s)%s\n",
+                               DIM, strerror(errno), RESET);
+                        if (have_termios)
+                            tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                        line_state_reset(&edit);
+                        print_prompt(g_handle);
+                        continue;
+                    }
+
+                    /* Parent: capture output, handle Ctrl-C */
+                    printf("Running: %s%s%s  (Ctrl-C to cancel)\r\n",
+                           DIM, bash_cmd, RESET);
+                    fflush(stdout);
+
+                    /* Switch stdin to raw for Ctrl-C detection */
+                    struct termios cap_raw = orig_termios;
+                    cap_raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
+                    cap_raw.c_cc[VMIN] = 0;
+                    cap_raw.c_cc[VTIME] = 1;
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &cap_raw);
+
+                    #define BASH_MAX_LINES 65536
+                    #define BASH_LINE_MAX  4096
+                    char **blines = calloc(BASH_MAX_LINES,
+                                           sizeof(char *));
+                    int bline_count = 0;
+                    char lbuf[BASH_LINE_MAX];
+                    size_t lpos = 0;
+                    int child_done = 0;
+
+                    while (!child_done && blines) {
+                        struct pollfd bpfds[2];
+                        bpfds[0].fd = master_fd;
+                        bpfds[0].events = POLLIN;
+                        bpfds[1].fd = STDIN_FILENO;
+                        bpfds[1].events = POLLIN;
+
+                        int pr = poll(bpfds, 2, 200);
+                        if (pr < 0 && errno == EINTR) continue;
+
+                        /* Check for Ctrl-C on stdin */
+                        if (bpfds[1].revents & POLLIN) {
+                            char ic;
+                            if (read(STDIN_FILENO, &ic, 1) == 1 &&
+                                ic == 3) {
+                                kill(cpid, SIGTERM);
+                                usleep(100000);
+                                kill(cpid, SIGKILL);
+                                break;
+                            }
+                        }
+
+                        /* Read output from PTY */
+                        if (bpfds[0].revents & POLLIN) {
+                            char rbuf[4096];
+                            ssize_t rn = read(master_fd,
+                                              rbuf, sizeof(rbuf));
+                            if (rn <= 0) {
+                                child_done = 1;
+                            } else {
+                                for (ssize_t ri = 0; ri < rn; ri++) {
+                                    if (rbuf[ri] == '\n' ||
+                                        rbuf[ri] == '\r') {
+                                        if (lpos > 0 &&
+                                            bline_count <
+                                                BASH_MAX_LINES) {
+                                            lbuf[lpos] = '\0';
+                                            blines[bline_count] =
+                                                strdup(lbuf);
+                                            bline_count++;
+                                            lpos = 0;
+                                        }
+                                    } else if (lpos <
+                                               BASH_LINE_MAX - 1) {
+                                        lbuf[lpos++] = rbuf[ri];
+                                    }
+                                }
+                            }
+                        }
+                        if (bpfds[0].revents & (POLLHUP | POLLERR))
+                            child_done = 1;
+
+                        /* Check if child exited */
+                        {
+                            int cst;
+                            pid_t wr = waitpid(cpid, &cst, WNOHANG);
+                            if (wr > 0) child_done = 1;
+                        }
+                    }
+
+                    /* Flush remaining partial line */
+                    if (lpos > 0 && blines &&
+                        bline_count < BASH_MAX_LINES) {
+                        lbuf[lpos] = '\0';
+                        blines[bline_count] = strdup(lbuf);
+                        bline_count++;
+                    }
+
+                    /* Drain any remaining output */
+                    if (blines) {
+                        char rbuf[4096];
+                        ssize_t rn;
+                        while ((rn = read(master_fd,
+                                          rbuf, sizeof(rbuf))) > 0) {
+                            for (ssize_t ri = 0; ri < rn; ri++) {
+                                if (rbuf[ri] == '\n' ||
+                                    rbuf[ri] == '\r') {
+                                    if (lpos > 0 &&
+                                        bline_count < BASH_MAX_LINES) {
+                                        lbuf[lpos] = '\0';
+                                        blines[bline_count] =
+                                            strdup(lbuf);
+                                        bline_count++;
+                                        lpos = 0;
+                                    }
+                                } else if (lpos < BASH_LINE_MAX - 1) {
+                                    lbuf[lpos++] = rbuf[ri];
+                                }
+                            }
+                        }
+                        if (lpos > 0 &&
+                            bline_count < BASH_MAX_LINES) {
+                            lbuf[lpos] = '\0';
+                            blines[bline_count] = strdup(lbuf);
+                            bline_count++;
+                        }
+                    }
+
+                    close(master_fd);
+                    waitpid(cpid, NULL, 0);
+
+                    /* Display captured output in pager */
+                    if (blines && bline_count > 0) {
+                        /* Enter raw mode + alternate screen */
+                        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                        printf("\033[?1049h\033[?25l");
+                        fflush(stdout);
+
+                        int bscroll = 0;
+                        int bdirty = 1;
+
+                        while (1) {
+                            if (bdirty) {
+                                struct winsize pws;
+                                int prows = 24, pcols = 80;
+                                if (ioctl(STDOUT_FILENO, TIOCGWINSZ,
+                                          &pws) == 0) {
+                                    prows = pws.ws_row;
+                                    pcols = pws.ws_col;
+                                }
+                                int pcontent = prows - 2;
+
+                                printf("\033[H\033[2J");
+                                /* Header */
+                                printf("\033[7m BASH \033[0m "
+                                       "\033[2m%s\033[0m", bash_cmd);
+                                char bpos[48];
+                                snprintf(bpos, sizeof(bpos),
+                                         "%d-%d / %d",
+                                         bscroll + 1,
+                                         bscroll + pcontent <
+                                             bline_count ?
+                                             bscroll + pcontent :
+                                             bline_count,
+                                         bline_count);
+                                int bhdr = 6 + 1 +
+                                           (int)strlen(bash_cmd);
+                                int bpad = pcols - bhdr -
+                                           (int)strlen(bpos);
+                                if (bpad > 0)
+                                    printf("%*s", bpad, "");
+                                printf("\033[2m%s\033[0m\r\n", bpos);
+
+                                /* Content */
+                                for (int bi = 0; bi < pcontent; bi++) {
+                                    int bli = bscroll + bi;
+                                    if (bli < bline_count)
+                                        printf("%s\033[0m\r\n",
+                                               blines[bli]);
+                                    else
+                                        printf("\033[2m~\033[0m\r\n");
+                                }
+
+                                /* Hint */
+                                printf("\033[%d;1H\033[2K\033[2m"
+                                       "Arrows/PgUp/PgDn: scroll  "
+                                       "ESC/q: close\033[0m", prows);
+                                fflush(stdout);
+                                bdirty = 0;
+                            }
+
+                            /* Read key (non-blocking with VTIME) */
+                            char kc;
+                            if (read(STDIN_FILENO, &kc, 1) != 1)
+                                continue;
+
+                            struct winsize pws2;
+                            int pcontent2 = 22;
+                            if (ioctl(STDOUT_FILENO, TIOCGWINSZ,
+                                      &pws2) == 0)
+                                pcontent2 = pws2.ws_row - 2;
+
+                            if (kc == 27) { /* ESC or arrow */
+                                char seq[3];
+                                struct termios tc, tt;
+                                tcgetattr(STDIN_FILENO, &tc);
+                                tt = tc;
+                                tt.c_cc[VMIN] = 0;
+                                tt.c_cc[VTIME] = 1;
+                                tcsetattr(STDIN_FILENO, TCSANOW, &tt);
+                                ssize_t snr = read(STDIN_FILENO,
+                                                   &seq[0], 1);
+                                if (snr <= 0) {
+                                    tcsetattr(STDIN_FILENO, TCSANOW,
+                                              &tc);
+                                    break; /* bare ESC — exit */
+                                }
+                                if (seq[0] == '[') {
+                                    read(STDIN_FILENO, &seq[1], 1);
+                                    tcsetattr(STDIN_FILENO, TCSANOW,
+                                              &tc);
+                                    if (seq[1] == 'A') { /* Up */
+                                        if (bscroll > 0)
+                                            { bscroll--; bdirty = 1; }
+                                    } else if (seq[1] == 'B') {
+                                        if (bscroll <
+                                            bline_count - pcontent2)
+                                            { bscroll++; bdirty = 1; }
+                                    } else if (seq[1] == '5') {
+                                        char t;
+                                        read(STDIN_FILENO, &t, 1);
+                                        bscroll -= pcontent2;
+                                        if (bscroll < 0) bscroll = 0;
+                                        bdirty = 1;
+                                    } else if (seq[1] == '6') {
+                                        char t;
+                                        read(STDIN_FILENO, &t, 1);
+                                        bscroll += pcontent2;
+                                        if (bscroll >
+                                            bline_count - pcontent2)
+                                            bscroll = bline_count -
+                                                      pcontent2;
+                                        if (bscroll < 0) bscroll = 0;
+                                        bdirty = 1;
+                                    }
+                                } else {
+                                    tcsetattr(STDIN_FILENO, TCSANOW,
+                                              &tc);
+                                }
+                                continue;
+                            }
+                            if (kc == 'q') break;
+                            if (kc == 'j' || kc == 'k') {
+                                if (kc == 'k' && bscroll > 0)
+                                    { bscroll--; bdirty = 1; }
+                                if (kc == 'j' &&
+                                    bscroll < bline_count - pcontent2)
+                                    { bscroll++; bdirty = 1; }
+                            }
+                            if (kc == ' ') {
+                                bscroll += pcontent2;
+                                if (bscroll > bline_count - pcontent2)
+                                    bscroll = bline_count - pcontent2;
+                                if (bscroll < 0) bscroll = 0;
+                                bdirty = 1;
+                            }
+                        }
+
+                        /* Leave pager */
+                        printf("\033[?25h\033[?1049l");
+                        fflush(stdout);
+                    } else {
+                        /* No output — just restore terminal */
+                        if (have_termios)
+                            tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                        printf("  %s(no output)%s\n", DIM, RESET);
+                    }
+
+                    /* Capture cwd: run pwd in the same cwd */
+                    {
+                        char pwd_cmd[8192];
+                        if (g_bash_cwd[0])
+                            snprintf(pwd_cmd, sizeof(pwd_cmd),
+                                     "cd '%s' 2>/dev/null && pwd",
+                                     g_bash_cwd);
+                        else
+                            snprintf(pwd_cmd, sizeof(pwd_cmd), "pwd");
+                        FILE *pp = popen(pwd_cmd, "r");
+                        if (pp) {
+                            if (fgets(g_bash_cwd,
+                                      sizeof(g_bash_cwd), pp)) {
+                                size_t sl = strlen(g_bash_cwd);
+                                if (sl > 0 &&
+                                    g_bash_cwd[sl - 1] == '\n')
+                                    g_bash_cwd[sl - 1] = '\0';
+                            }
+                            pclose(pp);
+                        }
+                    }
+
+                    if (blines) {
+                        for (int bi = 0; bi < bline_count; bi++)
+                            free(blines[bi]);
+                        free(blines);
+                    }
+                }
+
+                /* Restore terminal state and redraw chat */
+                printf("\033[?1049l\033[?25h\033[0m\r\n");
+                fflush(stdout);
+                if (have_termios)
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+                printf("\033[2J\033[H");
+                {
+                    chat_state_t redraw_state;
+                    if (chat_read(g_chat_file, &redraw_state) == 0) {
+                        int start = redraw_state.message_count - 50;
+                        if (start < 0) start = 0;
+                        for (int i = start;
+                             i < redraw_state.message_count; i++) {
+                            if (g_filter_handle[0] != '\0' &&
+                                strcmp(redraw_state.messages[i].handle,
+                                       g_filter_handle) != 0)
+                                continue;
+                            if (g_mention_handle[0] != '\0' &&
+                                !content_mentions(
+                                    redraw_state.messages[i].content,
+                                    g_mention_handle))
+                                continue;
+                            format_message(
+                                redraw_state.messages[i].handle,
+                                redraw_state.messages[i].content,
+                                g_handle,
+                                redraw_state.messages[i].timestamp);
+                        }
+                        g_msg_count = redraw_state.message_count;
+                        chat_state_free(&redraw_state);
+                    }
+                }
+
+                line_state_reset(&edit);
+                g_cursor_row = 0;
+                print_prompt(g_handle);
+                continue;
+            }
+
             /* /browse [pattern] — scrollable full-screen chat view */
             if (strcmp(edit.buf, "/browse") == 0 ||
                 strncmp(edit.buf, "/browse ", 8) == 0) {
@@ -2517,6 +2966,110 @@ int main(int argc, char **argv) {
                 } else {
                     printf("  %s(dashboard failed — could not "
                            "initialise)%s\n", DIM, RESET);
+                }
+
+                /* Restore terminal state */
+                printf("\033[?1049l");
+                printf("\033[?25h");
+                printf("\033[0m");
+                printf("\r\n");
+                fflush(stdout);
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+                }
+
+                /* Redraw chat */
+                printf("\033[2J\033[H");
+                {
+                    chat_state_t redraw_state;
+                    if (chat_read(g_chat_file, &redraw_state) == 0) {
+                        int start = redraw_state.message_count - 50;
+                        if (start < 0) start = 0;
+                        for (int i = start;
+                             i < redraw_state.message_count; i++) {
+                            if (g_filter_handle[0] != '\0' &&
+                                strcmp(redraw_state.messages[i].handle,
+                                       g_filter_handle) != 0)
+                                continue;
+                            if (g_mention_handle[0] != '\0' &&
+                                !content_mentions(
+                                    redraw_state.messages[i].content,
+                                    g_mention_handle))
+                                continue;
+                            format_message(
+                                redraw_state.messages[i].handle,
+                                redraw_state.messages[i].content,
+                                g_handle,
+                                redraw_state.messages[i].timestamp);
+                        }
+                        g_msg_count = redraw_state.message_count;
+                        chat_state_free(&redraw_state);
+                    }
+                }
+
+                line_state_reset(&edit);
+                g_cursor_row = 0;
+                print_prompt(g_handle);
+                continue;
+            }
+
+            /* /file [path] — full-screen file browser with directory memory */
+            if (strcmp(edit.buf, "/file") == 0 ||
+                strncmp(edit.buf, "/file ", 6) == 0) {
+
+                /* Determine start path: argument > last dir > cwd */
+                const char *start_path = NULL;
+                if (strncmp(edit.buf, "/file ", 6) == 0) {
+                    start_path = edit.buf + 6;
+                    while (*start_path == ' ') start_path++;
+                    if (*start_path == '\0') start_path = NULL;
+                }
+                if (!start_path && g_file_last_dir[0] != '\0')
+                    start_path = g_file_last_dir;
+
+                /* State file for directory memory */
+                char state_path[PATH_MAX];
+                snprintf(state_path, sizeof(state_path),
+                         "/tmp/nbs-fb-%d.state", (int)getpid());
+
+                /* Save terminal state */
+                if (have_termios) {
+                    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+                }
+
+                /* Fork/exec nbs-file-browser */
+                pid_t pid = fork();
+                if (pid == 0) {
+                    char sf_arg[PATH_MAX + 16];
+                    snprintf(sf_arg, sizeof(sf_arg),
+                             "--state-file=%s", state_path);
+                    if (start_path)
+                        execlp("nbs-file-browser", "nbs-file-browser",
+                               sf_arg, start_path, (char *)NULL);
+                    else
+                        execlp("nbs-file-browser", "nbs-file-browser",
+                               sf_arg, (char *)NULL);
+                    _exit(127);
+                } else if (pid > 0) {
+                    int wst;
+                    waitpid(pid, &wst, 0);
+                }
+
+                /* Read back last directory from state file */
+                {
+                    FILE *sf = fopen(state_path, "r");
+                    if (sf) {
+                        if (fgets(g_file_last_dir,
+                                  sizeof(g_file_last_dir), sf)) {
+                            /* Strip trailing newline */
+                            size_t slen = strlen(g_file_last_dir);
+                            if (slen > 0 &&
+                                g_file_last_dir[slen - 1] == '\n')
+                                g_file_last_dir[slen - 1] = '\0';
+                        }
+                        fclose(sf);
+                        unlink(state_path);
+                    }
                 }
 
                 /* Restore terminal state */
@@ -3209,8 +3762,44 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        /* Ignore other control chars except tab */
-        if (c < 32 && c != '\t') continue;
+        /* Tab: slash command completion */
+        if (c == '\t') {
+            if (edit.len >= 2 && edit.buf[0] == '/') {
+                /* Try unique completion first */
+                const char *comp = find_completion(edit.buf, edit.len);
+                if (comp) {
+                    /* Unique match — fill it in */
+                    size_t clen = strlen(comp);
+                    line_ensure_cap(&edit, clen);
+                    memcpy(edit.buf, comp, clen);
+                    edit.buf[clen] = '\0';
+                    edit.len = clen;
+                    edit.cursor = clen;
+                    line_redraw(&edit, g_handle);
+                } else {
+                    /* Ambiguous — collect and display all matches */
+                    const char *matches[64];
+                    int match_count = 0;
+                    for (const char **cmd = g_commands; *cmd; cmd++) {
+                        if (strncmp(*cmd, edit.buf, edit.len) == 0 &&
+                            match_count < 64)
+                            matches[match_count++] = *cmd;
+                    }
+                    if (match_count > 1) {
+                        printf("\r\n");
+                        for (int mi = 0; mi < match_count; mi++)
+                            printf("  %s%s%s", DIM, matches[mi], RESET);
+                        printf("\r\n");
+                        print_prompt(g_handle);
+                        line_redraw(&edit, g_handle);
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* Ignore other control chars */
+        if (c < 32) continue;
 
         /* Printable character: insert at cursor */
         line_insert_char(&edit, c);

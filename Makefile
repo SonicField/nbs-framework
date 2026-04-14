@@ -31,6 +31,7 @@ all: submodules
 	$(MAKE) -C src/nbs-hub
 	$(MAKE) -C src/nbs-md-viewer
 	$(MAKE) -C src/nbs-dashboard
+	$(MAKE) -C src/nbs-file-browser
 	$(MAKE) -C src/nbs-help
 
 install: all
@@ -46,6 +47,7 @@ install: all
 	$(MAKE) -C src/nbs-hub install
 	$(MAKE) -C src/nbs-md-viewer install
 	$(MAKE) -C src/nbs-dashboard install
+	$(MAKE) -C src/nbs-file-browser install
 	@mkdir -p $(HOME)/.nbs/commands
 	@cp claude_tools/*.md $(HOME)/.nbs/commands/
 	@echo "Installed skill files to ~/.nbs/commands/"
@@ -91,6 +93,7 @@ clean:
 	-$(MAKE) -C src/nbs-hub clean
 	-$(MAKE) -C src/nbs-md-viewer clean
 	-$(MAKE) -C src/nbs-dashboard clean
+	-$(MAKE) -C src/nbs-file-browser clean
 
 debug:
 	$(MAKE) -C src/nbs-bus debug
