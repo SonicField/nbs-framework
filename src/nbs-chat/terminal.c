@@ -87,6 +87,115 @@ static char g_file_last_dir[PATH_MAX] = {0};
 /* /bash command: remember working directory across invocations */
 static char g_bash_cwd[PATH_MAX] = {0};
 
+/* Scrollback mode: 0 = live (normal), >0 = N screen lines back from end */
+static int g_scrollback_offset = 0;
+
+/* Forward declaration — defined near poll_and_display */
+static void scrollback_render(void);
+
+/* Half-page scroll amount based on terminal height */
+static int scroll_half_page(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 4)
+        return ws.ws_row / 2;
+    return 12;
+}
+
+/*
+ * Count visible columns in a string, skipping ANSI escape sequences.
+ * Stops at newline or end of string. Returns the number of visible chars
+ * and advances *pp past the consumed input (including the newline if hit).
+ */
+static int visible_line_width(const char **pp) {
+    int w = 0;
+    const char *p = *pp;
+    while (*p && *p != '\n') {
+        if (*p == '\033') {
+            p++;
+            if (*p == '[') {
+                p++;
+                while (*p && !((*p >= 'A' && *p <= 'Z') ||
+                               (*p >= 'a' && *p <= 'z')))
+                    p++;
+                if (*p) p++;
+            }
+            continue;
+        }
+        w++;
+        p++;
+    }
+    if (*p == '\n') p++;
+    *pp = p;
+    return w;
+}
+
+/*
+ * Split rendered output into screen lines accounting for terminal wrapping.
+ * Each output line in the buffer may wrap across multiple screen lines.
+ * Returns an array of line pointers (into buf) and sets *out_count.
+ * Caller must free the returned array (but not the strings — they point
+ * into buf which the caller owns).
+ */
+#define SCROLLBACK_MAX_LINES 131072
+
+static char **split_screen_lines(char *buf, int term_width,
+                                 int *out_count) {
+    char **lines = calloc(SCROLLBACK_MAX_LINES, sizeof(char *));
+    if (!lines) { *out_count = 0; return NULL; }
+    int count = 0;
+
+    char *p = buf;
+    while (*p && count < SCROLLBACK_MAX_LINES) {
+        char *line_start = p;
+
+        /* Measure visible width of this logical line */
+        const char *scan = p;
+        int vis_width = visible_line_width(&scan);
+        /* scan now points past the \n (or at \0) */
+
+        if (vis_width <= term_width || term_width <= 0) {
+            /* Fits on one screen line */
+            lines[count++] = line_start;
+            p = (char *)scan;
+        } else {
+            /* Line wraps — split into chunks of term_width visible
+             * chars. Walk through counting visible chars, skipping
+             * ANSI escapes, and start a new screen line every
+             * term_width visible chars. */
+            const char *cp = line_start;
+            /* Find the newline (or end of string) */
+            const char *nl = cp;
+            while (*nl && *nl != '\n') nl++;
+
+            while (cp < nl && count < SCROLLBACK_MAX_LINES) {
+                lines[count++] = (char *)cp;
+                int col = 0;
+                while (cp < nl) {
+                    if (*cp == '\033') {
+                        cp++;
+                        if (*cp == '[') {
+                            cp++;
+                            while (*cp && !((*cp >= 'A' && *cp <= 'Z')
+                                   || (*cp >= 'a' && *cp <= 'z')))
+                                cp++;
+                            if (*cp) cp++;
+                        }
+                        continue;
+                    }
+                    col++;
+                    cp++;
+                    if (col >= term_width) break;
+                }
+            }
+            /* Advance past the newline */
+            if (*nl == '\n') nl++;
+            p = (char *)nl;
+        }
+    }
+    *out_count = count;
+    return lines;
+}
+
 /* @mention highlighting is always enabled */
 
 /* Auto-repair: set while repair is in flight, cleared when
@@ -403,20 +512,26 @@ static int content_mentions(const char *content, const char *handle) {
 
 /* --- Display functions --- */
 
-static void format_message(const char *handle, const char *content,
-                           const char *my_handle, time_t timestamp) {
+static void format_message_to(FILE *out, const char *handle,
+                              const char *content,
+                              const char *my_handle, time_t timestamp) {
     ASSERT_MSG(handle != NULL, "format_message: handle is NULL");
     ASSERT_MSG(content != NULL, "format_message: content is NULL");
     ASSERT_MSG(my_handle != NULL, "format_message: my_handle is NULL");
 
     const nbs_style_t *bracket_style = handle_style_lookup(handle);
     if (strcmp(handle, my_handle) == 0) {
-        render_message_own(handle, content, timestamp, stdout);
+        render_message_own(handle, content, timestamp, out);
     } else if (bracket_style) {
-        render_message_bracket(handle, content, timestamp, bracket_style, stdout);
+        render_message_bracket(handle, content, timestamp, bracket_style, out);
     } else {
-        render_message(handle, content, timestamp, stdout);
+        render_message(handle, content, timestamp, out);
     }
+}
+
+static void format_message(const char *handle, const char *content,
+                           const char *my_handle, time_t timestamp) {
+    format_message_to(stdout, handle, content, my_handle, timestamp);
 }
 
 /* --- Browse mode poll callback --- */
@@ -987,6 +1102,54 @@ static int handle_escape_input(line_state_t *ls, esc_parser_t *esc,
                 /* End (alternate) */
                 line_move_end(ls);
                 line_redraw(ls, handle);
+            } else if (esc->param == 5) {
+                /* Page Up — enter or continue scrollback (half page) */
+                if (g_scrollback_offset == 0)
+                    g_scrollback_offset = scroll_half_page();
+                else
+                    g_scrollback_offset += scroll_half_page();
+                scrollback_render();
+            } else if (esc->param == 6) {
+                /* Page Down — scroll forward in scrollback (half page) */
+                if (g_scrollback_offset > 0) {
+                    g_scrollback_offset -= scroll_half_page();
+                    if (g_scrollback_offset < 0)
+                        g_scrollback_offset = 0;
+                    if (g_scrollback_offset == 0) {
+                        /* Back to live — redraw normally */
+                        printf("\033[2J\033[H");
+                        {
+                            chat_state_t rs;
+                            if (chat_read(g_chat_file, &rs) == 0) {
+                                int s = rs.message_count - 50;
+                                if (s < 0) s = 0;
+                                for (int ri = s;
+                                     ri < rs.message_count; ri++) {
+                                    if (g_filter_handle[0] != '\0' &&
+                                        strcmp(rs.messages[ri].handle,
+                                               g_filter_handle) != 0)
+                                        continue;
+                                    if (g_mention_handle[0] != '\0' &&
+                                        !content_mentions(
+                                            rs.messages[ri].content,
+                                            g_mention_handle))
+                                        continue;
+                                    format_message(
+                                        rs.messages[ri].handle,
+                                        rs.messages[ri].content,
+                                        g_handle,
+                                        rs.messages[ri].timestamp);
+                                }
+                                g_msg_count = rs.message_count;
+                                chat_state_free(&rs);
+                            }
+                        }
+                        g_cursor_row = 0;
+                        line_redraw(ls, handle);
+                    } else {
+                        scrollback_render();
+                    }
+                }
             }
             /* Other param~ sequences ignored */
             break;
@@ -1361,6 +1524,110 @@ static const char *strcasestr_portable(const char *haystack, const char *needle)
         }
     }
     return NULL;
+}
+
+/* --- Scrollback mode --- */
+
+/*
+ * scrollback_render — Redraw the screen showing historical messages.
+ *
+ * Renders all filtered messages through the real render functions into
+ * a memory buffer, splits into screen lines accounting for terminal
+ * wrapping, then displays the correct slice based on g_scrollback_offset.
+ * No estimation — uses actual rendered output.
+ */
+static void scrollback_render(void) {
+    chat_state_t state;
+    if (chat_read(g_chat_file, &state) < 0) return;
+
+    g_msg_count = state.message_count;
+
+    struct winsize ws;
+    int rows = 24, cols = 80;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        if (ws.ws_row > 0) rows = ws.ws_row;
+        if (ws.ws_col > 0) cols = ws.ws_col;
+    }
+    int content_rows = rows - 1; /* status bar */
+    if (content_rows < 1) content_rows = 1;
+
+    /* Render all filtered messages into a memory buffer */
+    char *render_buf = NULL;
+    size_t render_size = 0;
+    FILE *mem = open_memstream(&render_buf, &render_size);
+    if (!mem) { chat_state_free(&state); return; }
+
+    for (int i = 0; i < state.message_count; i++) {
+        if (g_filter_handle[0] != '\0' &&
+            strcmp(state.messages[i].handle, g_filter_handle) != 0)
+            continue;
+        if (g_mention_handle[0] != '\0' &&
+            !content_mentions(state.messages[i].content,
+                              g_mention_handle))
+            continue;
+        format_message_to(mem, state.messages[i].handle,
+                         state.messages[i].content, g_handle,
+                         state.messages[i].timestamp);
+    }
+    fclose(mem);
+    chat_state_free(&state);
+
+    if (!render_buf) return;
+
+    /* Split into screen lines with wrapping */
+    int line_count = 0;
+    char **lines = split_screen_lines(render_buf, cols, &line_count);
+    if (!lines) { free(render_buf); return; }
+
+    /* Clamp offset */
+    int max_offset = line_count - content_rows;
+    if (max_offset < 0) max_offset = 0;
+    if (g_scrollback_offset > max_offset)
+        g_scrollback_offset = max_offset;
+    if (g_scrollback_offset < 0)
+        g_scrollback_offset = 0;
+
+    /* Calculate which screen lines to display */
+    int first_line = line_count - content_rows - g_scrollback_offset;
+    if (first_line < 0) first_line = 0;
+    int last_line = first_line + content_rows;
+    if (last_line > line_count) last_line = line_count;
+
+    printf("\033[H\033[2J");
+
+    /* Print each screen line. Lines in the array point into render_buf
+     * and are delimited by the next entry (or end of buffer). We need
+     * to print each line followed by a reset and newline. */
+    for (int i = first_line; i < last_line; i++) {
+        char *start = lines[i];
+        char *end;
+        if (i + 1 < line_count)
+            end = lines[i + 1];
+        else
+            end = render_buf + render_size;
+
+        /* Write the line content, stripping trailing \n */
+        size_t len = (size_t)(end - start);
+        while (len > 0 && (start[len - 1] == '\n' ||
+                           start[len - 1] == '\0'))
+            len--;
+        fwrite(start, 1, len, stdout);
+        printf("\033[0m\r\n");
+    }
+
+    /* Status bar */
+    int pct = line_count > 0 ?
+              (first_line + content_rows) * 100 / line_count : 100;
+    if (pct > 100) pct = 100;
+    char status[256];
+    snprintf(status, sizeof(status),
+             " SCROLLBACK  %d%%  (PgUp/PgDn scroll, ESC to return)",
+             pct);
+    printf("\033[%d;1H\033[7m%-*s\033[0m", rows, cols, status);
+    fflush(stdout);
+
+    free(lines);
+    free(render_buf);
 }
 
 /* --- Non-destructive message display --- */
@@ -2150,7 +2417,8 @@ int main(int argc, char **argv) {
 
         /* Timeout branch: poll for new messages + reap zombies */
         if (ready == 0) {
-            poll_and_display(&edit, g_handle);
+            if (g_scrollback_offset == 0)
+                poll_and_display(&edit, g_handle);
 
             /* Reap zombie children from spawn_with_capture */
             {
@@ -2224,6 +2492,121 @@ int main(int argc, char **argv) {
                 break;
             }
             if (errno != EINTR && errno != EAGAIN) break;
+            continue;
+        }
+
+        /* Scrollback mode: only PageUp, PageDown, and ESC are active.
+         * All other input is suppressed until we return to live. */
+        if (g_scrollback_offset > 0) {
+            if (c == 0x1B) {
+                /* Read next char with short timeout to distinguish
+                 * bare ESC from escape sequence */
+                struct termios tc_cur, tc_tmp;
+                tcgetattr(STDIN_FILENO, &tc_cur);
+                tc_tmp = tc_cur;
+                tc_tmp.c_cc[VMIN] = 0;
+                tc_tmp.c_cc[VTIME] = 1; /* 100ms */
+                tcsetattr(STDIN_FILENO, TCSANOW, &tc_tmp);
+
+                char seq0;
+                ssize_t snr = read(STDIN_FILENO, &seq0, 1);
+                if (snr <= 0) {
+                    /* Bare ESC — exit scrollback */
+                    tcsetattr(STDIN_FILENO, TCSANOW, &tc_cur);
+                    g_scrollback_offset = 0;
+                    printf("\033[2J\033[H");
+                    {
+                        chat_state_t rs;
+                        if (chat_read(g_chat_file, &rs) == 0) {
+                            int s = rs.message_count - 50;
+                            if (s < 0) s = 0;
+                            for (int ri = s;
+                                 ri < rs.message_count; ri++) {
+                                if (g_filter_handle[0] != '\0' &&
+                                    strcmp(rs.messages[ri].handle,
+                                           g_filter_handle) != 0)
+                                    continue;
+                                if (g_mention_handle[0] != '\0' &&
+                                    !content_mentions(
+                                        rs.messages[ri].content,
+                                        g_mention_handle))
+                                    continue;
+                                format_message(
+                                    rs.messages[ri].handle,
+                                    rs.messages[ri].content,
+                                    g_handle,
+                                    rs.messages[ri].timestamp);
+                            }
+                            g_msg_count = rs.message_count;
+                            chat_state_free(&rs);
+                        }
+                    }
+                    g_cursor_row = 0;
+                    line_redraw(&edit, g_handle);
+                    continue;
+                }
+                if (seq0 == '[') {
+                    /* CSI sequence — read param + final */
+                    int param = -1;
+                    char fc;
+                    while (read(STDIN_FILENO, &fc, 1) == 1) {
+                        if (fc >= '0' && fc <= '9') {
+                            if (param < 0) param = 0;
+                            param = param * 10 + (fc - '0');
+                        } else {
+                            break; /* final char */
+                        }
+                    }
+                    tcsetattr(STDIN_FILENO, TCSANOW, &tc_cur);
+                    if (fc == '~' && param == 5) {
+                        /* Page Up — half page */
+                        g_scrollback_offset += scroll_half_page();
+                        scrollback_render();
+                    } else if (fc == '~' && param == 6) {
+                        /* Page Down — half page */
+                        g_scrollback_offset -= scroll_half_page();
+                        if (g_scrollback_offset <= 0) {
+                            g_scrollback_offset = 0;
+                            printf("\033[2J\033[H");
+                            {
+                                chat_state_t rs;
+                                if (chat_read(g_chat_file, &rs) == 0) {
+                                    int s = rs.message_count - 50;
+                                    if (s < 0) s = 0;
+                                    for (int ri = s;
+                                         ri < rs.message_count; ri++) {
+                                        if (g_filter_handle[0] != '\0'
+                                            && strcmp(
+                                                rs.messages[ri].handle,
+                                                g_filter_handle) != 0)
+                                            continue;
+                                        if (g_mention_handle[0] != '\0'
+                                            && !content_mentions(
+                                                rs.messages[ri].content,
+                                                g_mention_handle))
+                                            continue;
+                                        format_message(
+                                            rs.messages[ri].handle,
+                                            rs.messages[ri].content,
+                                            g_handle,
+                                            rs.messages[ri].timestamp);
+                                    }
+                                    g_msg_count = rs.message_count;
+                                    chat_state_free(&rs);
+                                }
+                            }
+                            g_cursor_row = 0;
+                            line_redraw(&edit, g_handle);
+                        } else {
+                            scrollback_render();
+                        }
+                    }
+                    /* All other sequences ignored in scrollback */
+                } else {
+                    tcsetattr(STDIN_FILENO, TCSANOW, &tc_cur);
+                }
+            }
+            /* All non-ESC input ignored in scrollback mode */
             continue;
         }
 
