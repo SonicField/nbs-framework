@@ -62,7 +62,7 @@ This is not a reduction of mind to mechanism. It is the creation of a domain whe
 
 The author is a scientist and a theologian and finds no contradiction in this. Measurement is an act of attention. So is prayer. Both fail if you haven't looked.
 
-Theology has always been interested in what happens when minds meet. The encounter between the human and the divine is the central event in every tradition. The encounter between human minds — Martin Buber's I-Thou — is the foundation of Jewish relational theology. The encounter between self and other is the subject of Levinas. In every case, the claim is that something is produced in the meeting that is not reducible to the participants.
+Theology has always been interested in what happens when minds meet. The encounter between the human and the divine is the central event in every tradition. The encounter between self and other — what Buber called I-Thou, what Levinas called the face — is the subject of relational theology across traditions. In every case, the claim is that something is produced in the meeting that is not reducible to the participants.
 
 Noeomics makes the same claim. It makes it with data.
 
