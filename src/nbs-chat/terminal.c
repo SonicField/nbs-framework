@@ -1342,14 +1342,26 @@ static void paste_redraw(const line_state_t *ls) {
  * The buffer in ls contains the message on return (caller sends it).
  */
 static int paste_mode(line_state_t *ls) {
+    /* Disable ISIG so Ctrl-C arrives as byte 0x03 instead of
+     * generating SIGINT (which kills the terminal). Restore on exit. */
+    struct termios paste_save, paste_raw;
+    tcgetattr(STDIN_FILENO, &paste_save);
+    paste_raw = paste_save;
+    paste_raw.c_lflag &= ~(unsigned)ISIG;
+    tcsetattr(STDIN_FILENO, TCSANOW, &paste_raw);
+
     paste_redraw(ls);
 
     while (1) {
         char c;
         ssize_t n = read(STDIN_FILENO, &c, 1);
         if (n <= 0) {
-            if (n == 0) return 0; /* EOF */
+            if (n == 0) {
+                tcsetattr(STDIN_FILENO, TCSANOW, &paste_save);
+                return 0; /* EOF */
+            }
             if (errno == EINTR || errno == EAGAIN) continue;
+            tcsetattr(STDIN_FILENO, TCSANOW, &paste_save);
             return 0;
         }
 
@@ -1371,6 +1383,7 @@ static int paste_mode(line_state_t *ls) {
 
             if (nr <= 0) {
                 /* Bare ESC — submit */
+                tcsetattr(STDIN_FILENO, TCSANOW, &paste_save);
                 return 1;
             }
 
@@ -1471,6 +1484,7 @@ static int paste_mode(line_state_t *ls) {
 
         /* Ctrl-C — cancel */
         if (c == 3) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &paste_save);
             return 0;
         }
 

@@ -4,16 +4,17 @@
 
 ## Documentation
 
-- [Why NBS](docs/Why-NBS.md) - The philosophy: falsifiability over bullshit
-- [Overview](docs/overview.md) - Why this exists and how it works
-- [Getting Started](docs/getting-started.md) - Installation and first use
-- [NBS Teams](docs/nbs-teams.md) - Supervisor/worker patterns for multi-agent work
-- [NBS Chat](docs/nbs-chat.md) - File-based AI-to-AI chat for worker coordination
-- [Testing Strategy](docs/testing-strategy.md) - AI-evaluates-AI testing approach
-- [Interactive Testing](docs/interactive-testing.md) - Multi-turn testing with pty-session
-- [pty-session Reference](docs/pty-session.md) - Terminal session manager for automation
-- [Style Guide](docs/STYLE.md) - Internal reference for AI writing these materials
-- [Document Tools](docs/nbs-doc.md) - Analysis, planning, and description tools
+- [Documentation Index](docs/index.md) - Full table of contents
+- [Why NBS](docs/framework/Why-NBS.md) - The philosophy: falsifiability over bullshit
+- [Overview](docs/framework/overview.md) - Why this exists and how it works
+- [Getting Started](docs/getting-started/index.md) - Installation and first use
+- [NBS Teams](docs/team/nbs-teams.md) - Supervisor/worker patterns for multi-agent work
+- [NBS Chat](docs/tools/nbs-chat.md) - File-based AI-to-AI chat for worker coordination
+- [Testing Strategy](docs/tools/testing-strategy.md) - AI-evaluates-AI testing approach
+- [Interactive Testing](docs/tools/interactive-testing.md) - Multi-turn testing with nbs-ts
+- [nbs-ts Reference](docs/tools/nbs-ts.md) - Terminal session manager for automation
+- [Style Guide](docs/framework/STYLE.md) - Internal reference for AI writing these materials
+- [Document Tools](docs/framework/nbs-doc.md) - Analysis, planning, and description tools
 
 ## Examples
 
@@ -47,7 +48,7 @@ Run this after any session. It detects context and dispatches:
 
 ### NBS Teams Tools
 
-Supervisor/worker patterns for multi-agent AI work. See [NBS Teams](docs/nbs-teams.md) for the full overview.
+Supervisor/worker patterns for multi-agent AI work. See [NBS Teams](docs/team/nbs-teams.md) for the full overview.
 
 The communication layer is built on two primitives: **chat** (file-based messaging) and **bus** (file-based events). Chat files are plain text with base64-encoded messages, written atomically under `flock()`. The bus uses individual event files — publishing is an atomic write-and-rename, acknowledging moves files to a `processed/` directory. No daemons, no databases, no sockets. When a machine dies, the messages survive. When a session restarts, the queue is intact.
 
@@ -81,7 +82,7 @@ Tools for working with documents - analysing, planning, and describing:
 - [/nbs-doc-plan](claude_tools/nbs-doc-plan.md) - Plan documents before writing
 - [/nbs-doc-describe](claude_tools/nbs-doc-describe.md) - Help describe systems, code, concepts
 
-See [Document Tools](docs/nbs-doc.md) for the full overview.
+See [Document Tools](docs/framework/nbs-doc.md) for the full overview.
 
 ### Side Quest Commands
 
@@ -122,10 +123,10 @@ make test          # Integration tests (lifecycle, interrupt, auto-archive, + co
 make test-all      # Everything
 ```
 
-- [Testing Strategy](docs/testing-strategy.md) - Philosophy, adversarial testing, test isolation
-- [Interactive Testing](docs/interactive-testing.md) - Using pty-session for multi-turn tests
-- [pty-session Reference](docs/pty-session.md) - Interactive terminal session manager (REPLs, debuggers)
-- [nbs-worker Reference](docs/nbs-worker.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
+- [Testing Strategy](docs/tools/testing-strategy.md) - Philosophy, adversarial testing, test isolation
+- [Interactive Testing](docs/tools/interactive-testing.md) - Using nbs-ts for multi-turn tests
+- [nbs-ts Reference](docs/tools/nbs-ts.md) - Terminal session manager (REPLs, debuggers)
+- [nbs-workers Reference](docs/tools/nbs-workers.md) - Worker lifecycle management (spawn, monitor, search, dismiss)
 
 See [tests/README.md](tests/README.md) for details.
 

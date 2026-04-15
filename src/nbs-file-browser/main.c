@@ -173,6 +173,8 @@ typedef struct {
     int is_executable;
     int is_hidden;
     off_t size;
+    mode_t mode;
+    time_t mtime;
 } file_entry_t;
 
 #define MAX_ENTRIES 4096
@@ -257,6 +259,33 @@ static void format_size(off_t size, char *buf, size_t bufsz) {
         snprintf(buf, bufsz, "%4d G", (int)(size / (1024LL * 1024 * 1024)));
 }
 
+/* --- Long mode formatting --- */
+
+static void format_perms(mode_t mode, char *buf, size_t bufsz) {
+    if (bufsz < 11) { buf[0] = '\0'; return; }
+    buf[0] = S_ISDIR(mode) ? 'd' : S_ISLNK(mode) ? 'l' : '-';
+    buf[1] = (mode & S_IRUSR) ? 'r' : '-';
+    buf[2] = (mode & S_IWUSR) ? 'w' : '-';
+    buf[3] = (mode & S_IXUSR) ? 'x' : '-';
+    buf[4] = (mode & S_IRGRP) ? 'r' : '-';
+    buf[5] = (mode & S_IWGRP) ? 'w' : '-';
+    buf[6] = (mode & S_IXGRP) ? 'x' : '-';
+    buf[7] = (mode & S_IROTH) ? 'r' : '-';
+    buf[8] = (mode & S_IWOTH) ? 'w' : '-';
+    buf[9] = (mode & S_IXOTH) ? 'x' : '-';
+    buf[10] = '\0';
+}
+
+static void format_mtime(time_t mtime, char *buf, size_t bufsz) {
+    if (bufsz < 17) { buf[0] = '\0'; return; }
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&mtime, &tm_buf);
+    if (tm)
+        strftime(buf, bufsz, "%Y-%m-%d %H:%M", tm);
+    else
+        snprintf(buf, bufsz, "----/--/-- --:--");
+}
+
 /* --- Directory reading --- */
 
 static int entry_cmp(const void *a, const void *b) {
@@ -290,10 +319,14 @@ static int read_directory(const char *path, file_entry_t *entries, int max_entri
             e->is_dir = S_ISDIR(st.st_mode);
             e->is_executable = !e->is_dir && (st.st_mode & S_IXUSR);
             e->size = e->is_dir ? 0 : st.st_size;
+            e->mode = st.st_mode;
+            e->mtime = st.st_mtime;
         } else {
             e->is_dir = 0;
             e->is_executable = 0;
             e->size = 0;
+            e->mode = 0;
+            e->mtime = 0;
         }
         e->is_hidden = (ent->d_name[0] == '.' && strcmp(ent->d_name, "..") != 0);
         count++;
@@ -327,18 +360,33 @@ static int compute_columns(const file_entry_t *entries, int count, int term_cols
 }
 
 static void render(const char *dir_path, const file_entry_t *entries, int count,
-                   int cursor, int scroll_top, const char *status_msg) {
+                   int cursor, int scroll_top, const char *status_msg,
+                   int long_mode) {
     update_term_size();
     int content_rows = g_term_rows - 3; /* header + hint + status */
 
-    int ncols = compute_columns(entries, count, g_term_cols);
-    int col_width = g_term_cols / ncols;
-    int items_per_page = content_rows * ncols;
+    int ncols, col_width, items_per_page;
+    if (long_mode) {
+        ncols = 1;
+        col_width = g_term_cols;
+        items_per_page = content_rows;
+    } else {
+        ncols = compute_columns(entries, count, g_term_cols);
+        col_width = g_term_cols / ncols;
+        items_per_page = content_rows * ncols;
+    }
 
     /* Adjust scroll_top to page boundary for multi-column */
     if (ncols > 1) {
         int page = cursor / items_per_page;
         scroll_top = page * items_per_page;
+    }
+
+    /* Single-column: keep cursor visible */
+    if (ncols == 1) {
+        if (cursor < scroll_top) scroll_top = cursor;
+        if (cursor >= scroll_top + content_rows)
+            scroll_top = cursor - content_rows + 1;
     }
 
     printf("\033[H\033[2J");
@@ -355,17 +403,11 @@ static void render(const char *dir_path, const file_entry_t *entries, int count,
     printf("\033[2m%s\033[0m", countstr);
     printf("\r\n");
 
-    /* File list — column-major order */
-    for (int row = 0; row < content_rows; row++) {
-        for (int col = 0; col < ncols; col++) {
-            int idx = scroll_top + col * content_rows + row;
-
-            if (idx >= count) {
-                /* Empty cell */
-                if (col < ncols - 1)
-                    printf("%-*s", col_width, "");
-                continue;
-            }
+    if (long_mode) {
+        /* Long mode: perms  mtime  size  name — single column */
+        for (int row = 0; row < content_rows; row++) {
+            int idx = scroll_top + row;
+            if (idx >= count) { printf("\r\n"); continue; }
 
             const file_entry_t *e = &entries[idx];
             int is_cur = (idx == cursor);
@@ -374,17 +416,22 @@ static void render(const char *dir_path, const file_entry_t *entries, int count,
             char style[32];
             style_for_type(ft, style, sizeof(style));
 
+            char perms[16];
+            format_perms(e->mode, perms, sizeof(perms));
+
+            char mtime[32];
+            format_mtime(e->mtime, mtime, sizeof(mtime));
+
             char size_str[16];
-            if (e->is_dir) {
+            if (e->is_dir)
                 snprintf(size_str, sizeof(size_str), " <DIR>");
-            } else {
+            else
                 format_size(e->size, size_str, sizeof(size_str));
-            }
 
             const char *indicator = e->is_dir ? "/" : "";
 
-            /* Name truncated to fit column */
-            int name_avail = col_width - 9;
+            /* perms(10) + space + mtime(16) + space + size(6) + space = 35 */
+            int name_avail = g_term_cols - 35;
             if (name_avail < 4) name_avail = 4;
             char display_name[512];
             snprintf(display_name, sizeof(display_name), "%s%s",
@@ -393,22 +440,69 @@ static void render(const char *dir_path, const file_entry_t *entries, int count,
                 display_name[name_avail] = '\0';
 
             if (is_cur) {
-                printf("\033[7m%s%-*s%7s\033[0m",
-                       style, name_avail, display_name, size_str);
+                printf("\033[7m%s%s %s %6s %-*s\033[0m",
+                       style, perms, mtime, size_str,
+                       name_avail, display_name);
             } else {
-                printf("%s%-*s\033[0m\033[2m%7s\033[0m",
-                       style, name_avail, display_name, size_str);
+                printf("\033[2m%s %s\033[0m %6s %s%-*s\033[0m",
+                       perms, mtime, size_str,
+                       style, name_avail, display_name);
             }
-            /* Gap between columns (not after last) */
-            if (col < ncols - 1) printf("   ");
+            printf("\r\n");
         }
-        printf("\r\n");
+    } else {
+        /* Normal mode: multi-column file list */
+        for (int row = 0; row < content_rows; row++) {
+            for (int col = 0; col < ncols; col++) {
+                int idx = scroll_top + col * content_rows + row;
+
+                if (idx >= count) {
+                    if (col < ncols - 1)
+                        printf("%-*s", col_width, "");
+                    continue;
+                }
+
+                const file_entry_t *e = &entries[idx];
+                int is_cur = (idx == cursor);
+                file_type_t ft = classify(e);
+
+                char style[32];
+                style_for_type(ft, style, sizeof(style));
+
+                char size_str[16];
+                if (e->is_dir) {
+                    snprintf(size_str, sizeof(size_str), " <DIR>");
+                } else {
+                    format_size(e->size, size_str, sizeof(size_str));
+                }
+
+                const char *indicator = e->is_dir ? "/" : "";
+
+                int name_avail = col_width - 9;
+                if (name_avail < 4) name_avail = 4;
+                char display_name[512];
+                snprintf(display_name, sizeof(display_name), "%s%s",
+                         e->name, indicator);
+                if ((int)strlen(display_name) > name_avail)
+                    display_name[name_avail] = '\0';
+
+                if (is_cur) {
+                    printf("\033[7m%s%-*s%7s\033[0m",
+                           style, name_avail, display_name, size_str);
+                } else {
+                    printf("%s%-*s\033[0m\033[2m%7s\033[0m",
+                           style, name_avail, display_name, size_str);
+                }
+                if (col < ncols - 1) printf("   ");
+            }
+            printf("\r\n");
+        }
     }
 
     /* Hint bar */
     printf("\033[%d;1H\033[2K\033[2m"
            "Arrows: navigate  Enter: view  e: edit  "
-           "Tab: jump 10  r: refresh  Esc: exit"
+           "l: long mode  Tab: jump 10  r: refresh  Esc: exit"
            "\033[0m", g_term_rows - 1);
 
     /* Status bar (bottom) */
@@ -680,13 +774,15 @@ int main(int argc, char *argv[]) {
     signal(SIGWINCH, handle_winch);
 
     int dirty = 1; /* initial draw */
+    int long_mode = 0;
 
     while (1) {
         int content_rows = g_term_rows - 3;
         (void)compute_columns(entries, count, g_term_cols);
 
         if (dirty) {
-            render(dir_path, entries, count, cursor, scroll_top, status_msg);
+            render(dir_path, entries, count, cursor, scroll_top,
+                   status_msg, long_mode);
             status_msg = NULL;
             dirty = 0;
         }
@@ -792,6 +888,11 @@ int main(int argc, char *argv[]) {
                          dir_path, entries[cursor].name);
                 open_with_editor(full);
             }
+            break;
+
+        case 'l':
+            /* Toggle long mode */
+            long_mode = !long_mode;
             break;
 
         case 'r':

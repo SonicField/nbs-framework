@@ -96,6 +96,13 @@ echo "7. Makefile links -lutil..."
 check "-lutil in Makefile" "$( grep -q 'lutil' "$PROJECT_ROOT/src/nbs-chat/Makefile" && echo pass || echo fail )"
 echo ""
 
+# --- Test 8: paste mode disables ISIG for Ctrl-C ---
+echo "8. Paste mode disables ISIG..."
+check "ISIG disabled in paste_mode" "$( grep -qF 'c_lflag &= ~(unsigned)ISIG' "$TERM_SRC" && echo pass || echo fail )"
+check "ISIG restored on Ctrl-C" "$( grep -A2 'Ctrl-C.*cancel' "$TERM_SRC" | grep -q 'paste_save' && echo pass || echo fail )"
+check "ISIG restored on ESC" "$( grep -B1 'Bare ESC.*submit' "$TERM_SRC" | grep -q 'paste_save' || grep -A1 'Bare ESC.*submit' "$TERM_SRC" | grep -q 'paste_save' && echo pass || echo fail )"
+echo ""
+
 # --- Summary ---
 echo "=== Result ==="
 if [[ $ERRORS -eq 0 ]]; then
