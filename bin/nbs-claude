@@ -427,14 +427,30 @@ if [[ "$NBS_TRANSPORT" == "ts" ]]; then
         cat > "$SIDECAR_LOOP" << SIDECAR_EOF
 #!/bin/bash
 export NBS_DEBUG="${NBS_DEBUG}"
+CURRENT_SESSION="$SESSION_NAME"
+LOGFILE="${NBS_ROOT}/.nbs/sidecar-loop-${SIDECAR_HANDLE}.log"
+log() { echo "\$(date -u '+%Y-%m-%dT%H:%M:%SZ') \$*" >> "\$LOGFILE"; }
+log "sidecar-loop started for ${SIDECAR_HANDLE} session=\$CURRENT_SESSION pid=\$\$"
 while true; do
-    $(printf '%q ' "${SIDECAR_ARGS[@]}")
+    log "starting sidecar session=\$CURRENT_SESSION"
+    $(printf '%q ' "${SIDECAR_ARGS[@]}" | sed "s/$SESSION_NAME/\\\$CURRENT_SESSION/g")
     rc=\$?
-    if ! "$NBS_TS" status "$SESSION_NAME" 2>/dev/null | grep -q "alive"; then
-        break
+    log "sidecar exited rc=\$rc session=\$CURRENT_SESSION"
+    if "$NBS_TS" status "\$CURRENT_SESSION" 2>/dev/null | grep -q "alive"; then
+        log "session \$CURRENT_SESSION alive, restarting in 5s"
+        sleep 5
+        continue
     fi
-    echo "warning: sidecar exited (rc=\$rc) but session $SESSION_NAME alive, restarting in 5s" >&2
-    sleep 5
+    log "session \$CURRENT_SESSION dead, searching for replacement for ${SIDECAR_HANDLE}"
+    NEW_SESSION=\$("$NBS_TS" list 2>/dev/null | grep "alive" | grep "nbs-${SIDECAR_HANDLE}-" | awk '{print \$1}' | head -1)
+    if [[ -n "\$NEW_SESSION" ]]; then
+        log "found replacement session \$NEW_SESSION for ${SIDECAR_HANDLE}"
+        CURRENT_SESSION="\$NEW_SESSION"
+        sleep 5
+        continue
+    fi
+    log "no replacement session for ${SIDECAR_HANDLE} — exiting"
+    break
 done
 rm -f "$SIDECAR_LOOP"
 SIDECAR_EOF

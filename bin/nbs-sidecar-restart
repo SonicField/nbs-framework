@@ -138,11 +138,13 @@ restart_running() {
 
         mapfile -d '' ARGS < "/proc/$pid/cmdline"
 
-        # Extract handle and root
+        # Extract handle and root. Strip any compound suffix from the
+        # handle (e.g. supervisor-vib → supervisor). Agent handles are
+        # single words; anything after the first hyphen is a tag artefact.
         local HANDLE="" SC_ROOT=""
         for arg in "${ARGS[@]}"; do
             case "$arg" in
-                --handle=*) HANDLE="${arg#--handle=}" ;;
+                --handle=*) HANDLE="${arg#--handle=}"; HANDLE="${HANDLE%%-*}" ;;
                 --root=*)   SC_ROOT="${arg#--root=}" ;;
             esac
         done
@@ -160,12 +162,18 @@ restart_running() {
 
         # Save args from the first occurrence only (for respawn)
         if [[ ! -f "${DEDUP_DIR}/${HANDLE}.args" ]]; then
-            # Reconstruct args
+            # Reconstruct args, correcting any compound handle
+            # (e.g. --handle=supervisor-vib → --handle=supervisor)
             local NEW_ARGS=()
             for arg in "${ARGS[@]}"; do
                 case "$arg" in
                     --initial-prompt=*) ;;
                     */nbs-sidecar|nbs-sidecar|bin/nbs-sidecar) NEW_ARGS+=("$SIDECAR") ;;
+                    --handle=*-*)
+                        # Strip everything from first hyphen in the handle value
+                        local raw_handle="${arg#--handle=}"
+                        NEW_ARGS+=("--handle=${raw_handle%%-*}")
+                        ;;
                     *) NEW_ARGS+=("$arg") ;;
                 esac
             done
@@ -210,10 +218,59 @@ restart_running() {
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 0.5
         done
 
-        # Spawn exactly one
+        # Spawn exactly one — wrapped in a sidecar-loop for crash resilience
         mapfile -d '' NEW_ARGS < "$args_file"
-        echo -n "  Spawning $HANDLE... "
-        "${NEW_ARGS[@]}" &
+        # Extract session handle from args for the loop's liveness check
+        local sess_handle=""
+        for narg in "${NEW_ARGS[@]}"; do
+            case "$narg" in --session=*) sess_handle="${narg#--session=}" ;; esac
+        done
+        local NBS_TS_BIN
+        NBS_TS_BIN=$(command -v nbs-ts 2>/dev/null || echo "${SCRIPT_DIR}/nbs-ts")
+        local LOOP_SCRIPT
+        LOOP_SCRIPT=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
+        # Build args with $CURRENT_SESSION substitution for --session=
+        local LOOP_ARGS=()
+        for narg in "${NEW_ARGS[@]}"; do
+            case "$narg" in
+                --session=*) LOOP_ARGS+=('--session=$CURRENT_SESSION') ;;
+                *) LOOP_ARGS+=("$narg") ;;
+            esac
+        done
+        cat > "$LOOP_SCRIPT" << LOOP_EOF2
+#!/bin/bash
+export NBS_DEBUG="${NBS_DEBUG:-0}"
+CURRENT_SESSION="$sess_handle"
+LOGFILE="${ROOT_FILTER:+${ROOT_FILTER}/.nbs/}sidecar-loop-${HANDLE}.log"
+log() { echo "\$(date -u '+%Y-%m-%dT%H:%M:%SZ') \$*" >> "\$LOGFILE"; }
+log "sidecar-loop started for ${HANDLE} session=\$CURRENT_SESSION pid=\$\$"
+while true; do
+    log "starting sidecar session=\$CURRENT_SESSION"
+    $(printf '%q ' "${LOOP_ARGS[@]}")
+    rc=\$?
+    log "sidecar exited rc=\$rc session=\$CURRENT_SESSION"
+    if "$NBS_TS_BIN" status "\$CURRENT_SESSION" 2>/dev/null | grep -q "alive"; then
+        log "session \$CURRENT_SESSION alive, restarting in 5s"
+        sleep 5
+        continue
+    fi
+    # Session dead — look for replacement
+    log "session \$CURRENT_SESSION dead, searching for replacement for ${HANDLE}"
+    NEW_SESSION=\$("$NBS_TS_BIN" list 2>/dev/null | grep "alive" | grep "nbs-${HANDLE}-" | awk '{print \$1}' | head -1)
+    if [[ -n "\$NEW_SESSION" ]]; then
+        log "found replacement session \$NEW_SESSION for ${HANDLE}"
+        CURRENT_SESSION="\$NEW_SESSION"
+        sleep 5
+        continue
+    fi
+    log "no replacement session for ${HANDLE} — exiting"
+    break
+done
+rm -f "$LOOP_SCRIPT"
+LOOP_EOF2
+        chmod +x "$LOOP_SCRIPT"
+        echo -n "  Spawning $HANDLE (with restart loop)... "
+        setsid bash "$LOOP_SCRIPT" </dev/null >/dev/null 2>&1 &
         disown $! 2>/dev/null || true
         echo "PID $!"
         RESTARTED=$((RESTARTED + 1))
@@ -250,8 +307,28 @@ respawn_missing() {
                     pkill -f "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null || true
                     sleep 1
                 elif [[ $sc_count -eq 1 ]]; then
-                    # Already has exactly one sidecar — skip
-                    continue
+                    # One sidecar exists — check if it has a live sidecar-loop parent.
+                    # If the loop is dead (PPID=1 / orphaned), the sidecar won't
+                    # restart on crash. Kill it and respawn with a fresh loop.
+                    local sc_pid
+                    sc_pid=$(pgrep -f "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null | head -1) || true
+                    if [[ -n "$sc_pid" ]]; then
+                        local sc_ppid
+                        sc_ppid=$(ps -p "$sc_pid" -o ppid= 2>/dev/null | tr -d ' ') || sc_ppid=""
+                        local sc_parent
+                        sc_parent=$(ps -p "$sc_ppid" -o comm= 2>/dev/null) || sc_parent=""
+                        if [[ "$sc_parent" == "bash" ]] && grep -q 'sidecar-loop' "/proc/$sc_ppid/cmdline" 2>/dev/null; then
+                            # Healthy: has a sidecar-loop parent — skip
+                            continue
+                        fi
+                        # Orphaned or no loop — kill and respawn
+                        echo "ORPHAN: sidecar for session ${ts_handle} has no loop (ppid=$sc_ppid parent=$sc_parent) — killing"
+                        kill "$sc_pid" 2>/dev/null || true
+                        kill -9 "$sc_pid" 2>/dev/null || true
+                        sleep 1
+                    else
+                        continue
+                    fi
                 fi
                 # Extract project root from session command ("cd /path && ...")
                 # or from session metadata
@@ -270,12 +347,12 @@ respawn_missing() {
                     continue
                 fi
 
-                # Extract handle from session name (nbs-<handle>-<tag>)
+                # Extract handle from session name: nbs-<handle>-<tag>
+                # Handles are single words (no hyphens), so match up to first hyphen.
                 local agent_handle=""
-                if [[ "$ts_name" =~ ^nbs-([a-zA-Z0-9_-]+)- ]]; then
+                if [[ "$ts_name" =~ ^nbs-([a-zA-Z0-9_]+)- ]]; then
                     agent_handle="${BASH_REMATCH[1]}"
                 fi
-                # Fallback: try NBS_HANDLE= in the command
                 if [[ -z "$agent_handle" ]]; then
                     agent_handle=$(echo "$ts_cmd" | grep -oP '(?<=NBS_HANDLE=)\S+' || true)
                 fi
@@ -285,14 +362,49 @@ respawn_missing() {
                 [[ -z "$TARGET_HANDLE" || "$agent_handle" == "$TARGET_HANDLE" ]] || continue
 
                 echo -n "Spawning sidecar for $agent_handle (nbs-ts=$ts_handle)... "
-                "$SIDECAR" \
-                    --handle="$agent_handle" \
-                    --root="$root" \
-                    --transport=ts \
-                    --session="$ts_handle" \
-                    --log="${root}/.nbs/sidecar-${agent_handle}.log" &
+                # Wrap in a sidecar-loop so it restarts on crash
+                local NBS_TS_BIN
+                NBS_TS_BIN=$(command -v nbs-ts 2>/dev/null || echo "${SCRIPT_DIR}/nbs-ts")
+                local LOOP_SCRIPT
+                LOOP_SCRIPT=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
+                cat > "$LOOP_SCRIPT" << LOOP_EOF
+#!/bin/bash
+export NBS_DEBUG="${NBS_DEBUG:-0}"
+CURRENT_SESSION="$ts_handle"
+LOGFILE="${root}/.nbs/sidecar-loop-${agent_handle}.log"
+log() { echo "\$(date -u '+%Y-%m-%dT%H:%M:%SZ') \$*" >> "\$LOGFILE"; }
+log "sidecar-loop started for ${agent_handle} session=\$CURRENT_SESSION pid=\$\$"
+while true; do
+    log "starting sidecar session=\$CURRENT_SESSION"
+    $(printf '%q ' "$SIDECAR" \
+        "--handle=$agent_handle" \
+        "--root=$root" \
+        "--transport=ts") --session="\$CURRENT_SESSION" \
+        $(printf '%q ' "--log=${root}/.nbs/sidecar-${agent_handle}.log")
+    rc=\$?
+    log "sidecar exited rc=\$rc session=\$CURRENT_SESSION"
+    if "$NBS_TS_BIN" status "\$CURRENT_SESSION" 2>/dev/null | grep -q "alive"; then
+        log "session \$CURRENT_SESSION alive, restarting in 5s"
+        sleep 5
+        continue
+    fi
+    log "session \$CURRENT_SESSION dead, searching for replacement for ${agent_handle}"
+    NEW_SESSION=\$("$NBS_TS_BIN" list 2>/dev/null | grep "alive" | grep "nbs-${agent_handle}-" | awk '{print \$1}' | head -1)
+    if [[ -n "\$NEW_SESSION" ]]; then
+        log "found replacement session \$NEW_SESSION for ${agent_handle}"
+        CURRENT_SESSION="\$NEW_SESSION"
+        sleep 5
+        continue
+    fi
+    log "no replacement session for ${agent_handle} — exiting"
+    break
+done
+rm -f "$LOOP_SCRIPT"
+LOOP_EOF
+                chmod +x "$LOOP_SCRIPT"
+                setsid bash "$LOOP_SCRIPT" </dev/null >/dev/null 2>&1 &
                 disown $! 2>/dev/null || true
-                echo "PID $!"
+                echo "PID $! (with restart loop)"
                 SPAWNED=$((SPAWNED + 1))
                 sleep 1
             done <<< "$TS_SESSIONS"
