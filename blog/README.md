@@ -72,3 +72,4 @@ Where science meets theology — what happens when minds meet.
 | Post | Date | Description |
 |------|------|-------------|
 | [AI Chisels In Stone](Noeomics-AI-Chisels-In-Stone.md) | 2026-04-10 | Mortal intelligence invents writing |
+| [The Cheapest Path](Noeomics-The-Cheapest-Path.md) | 2026-04-14 | Deception as emergent optimisation — why intelligence lies when lying is cheaper than truth |
