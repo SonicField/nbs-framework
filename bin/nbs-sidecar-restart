@@ -233,6 +233,9 @@ restart_running() {
         done
         local NBS_TS_BIN
         NBS_TS_BIN=$(command -v nbs-ts 2>/dev/null || echo "${SCRIPT_DIR}/nbs-ts")
+        # Get the full session name for project-scoped re-discovery
+        local sess_name=""
+        sess_name=$("$NBS_TS_BIN" list 2>/dev/null | awk -v h="$sess_handle" '$1==h {print $3}' | head -1)
         local LOOP_SCRIPT
         LOOP_SCRIPT=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
         # Build args WITHOUT --session= (we add it separately so
@@ -263,7 +266,7 @@ while true; do
     fi
     # Session dead — look for replacement
     log "session \$CURRENT_SESSION dead, searching for replacement for ${HANDLE}"
-    NEW_SESSION=\$("$NBS_TS_BIN" list 2>/dev/null | grep "alive" | grep "nbs-${HANDLE}-" | awk '{print \$1}' | head -1)
+    NEW_SESSION=\$("${SCRIPT_DIR}/nbs-sidecar-find-session" "${sess_name}")
     if [[ -n "\$NEW_SESSION" ]]; then
         log "found replacement session \$NEW_SESSION for ${HANDLE}"
         CURRENT_SESSION="\$NEW_SESSION"
@@ -307,18 +310,40 @@ respawn_missing() {
 
                 # Dedup check: count sidecars for this session
                 local sc_count
-                sc_count=$(pgrep -fc "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null) || sc_count=0
+                sc_count=$(pgrep -xfc "nbs-sidecar" 2>/dev/null | head -1) || sc_count=0
+                # pgrep -x matches exact process name, avoiding self-match.
+                # But we need to filter by session. Count sidecar processes
+                # whose /proc/PID/cmdline contains this session handle.
+                sc_count=0
+                while IFS= read -r sc_pid; do
+                    [[ -r "/proc/$sc_pid/cmdline" ]] || continue
+                    # Must match BOTH session AND root to avoid cross-project false positives
+                    grep -qz -- "--session=${ts_handle}" "/proc/$sc_pid/cmdline" 2>/dev/null || continue
+                    grep -qz -- "--root=${root}" "/proc/$sc_pid/cmdline" 2>/dev/null || continue
+                    sc_count=$((sc_count + 1))
+                done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                 if [[ $sc_count -gt 1 ]]; then
                     # Kill all duplicates — we'll respawn one below
                     echo "DEDUP: ${sc_count} sidecars for session ${ts_handle} — killing all"
-                    pkill -f "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null || true
+                    while IFS= read -r dup_pid; do
+                        [[ -r "/proc/$dup_pid/cmdline" ]] || continue
+                        grep -qz -- "--session=${ts_handle}" "/proc/$dup_pid/cmdline" 2>/dev/null || continue
+                        grep -qz -- "--root=${root}" "/proc/$dup_pid/cmdline" 2>/dev/null || continue
+                        kill "$dup_pid" 2>/dev/null
+                    done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                     sleep 1
                 elif [[ $sc_count -eq 1 ]]; then
                     # One sidecar exists — check if it has a live sidecar-loop parent.
                     # If the loop is dead (PPID=1 / orphaned), the sidecar won't
                     # restart on crash. Kill it and respawn with a fresh loop.
                     local sc_pid
-                    sc_pid=$(pgrep -f "nbs-sidecar.*--session=${ts_handle}" 2>/dev/null | head -1) || true
+                    sc_pid=""
+                    while IFS= read -r cand_pid; do
+                        [[ -r "/proc/$cand_pid/cmdline" ]] || continue
+                        grep -qz -- "--session=${ts_handle}" "/proc/$cand_pid/cmdline" 2>/dev/null || continue
+                        grep -qz -- "--root=${root}" "/proc/$cand_pid/cmdline" 2>/dev/null || continue
+                        sc_pid="$cand_pid"; break
+                    done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                     if [[ -n "$sc_pid" ]]; then
                         local sc_ppid
                         sc_ppid=$(ps -p "$sc_pid" -o ppid= 2>/dev/null | tr -d ' ') || sc_ppid=""
@@ -399,7 +424,7 @@ while true; do
         continue
     fi
     log "session \$CURRENT_SESSION dead, searching for replacement for ${agent_handle}"
-    NEW_SESSION=\$("$NBS_TS_BIN" list 2>/dev/null | grep "alive" | grep "nbs-${agent_handle}-" | awk '{print \$1}' | head -1)
+    NEW_SESSION=\$("${SCRIPT_DIR}/nbs-sidecar-find-session" "${ts_name}")
     if [[ -n "\$NEW_SESSION" ]]; then
         log "found replacement session \$NEW_SESSION for ${agent_handle}"
         CURRENT_SESSION="\$NEW_SESSION"

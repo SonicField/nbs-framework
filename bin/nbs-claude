@@ -442,7 +442,7 @@ while true; do
         continue
     fi
     log "session \$CURRENT_SESSION dead, searching for replacement for ${SIDECAR_HANDLE}"
-    NEW_SESSION=\$("$NBS_TS" list 2>/dev/null | grep "alive" | grep "nbs-${SIDECAR_HANDLE}-" | awk '{print \$1}' | head -1)
+    NEW_SESSION=\$("$(dirname "$0")/nbs-sidecar-find-session" "nbs-${SIDECAR_HANDLE}-${NBS_TS_TAG}")
     if [[ -n "\$NEW_SESSION" ]]; then
         log "found replacement session \$NEW_SESSION for ${SIDECAR_HANDLE}"
         CURRENT_SESSION="\$NEW_SESSION"

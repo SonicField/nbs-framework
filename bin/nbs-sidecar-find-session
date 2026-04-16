@@ -1,0 +1,18 @@
+#!/bin/bash
+# nbs-sidecar-find-session — Find a replacement nbs-ts session by name.
+#
+# Usage: nbs-sidecar-find-session <session-name>
+#
+# Searches nbs-ts list for an alive session with the given name.
+# Prints the session handle (ID) on stdout. Exits 1 if not found.
+#
+# Used by sidecar-loops to re-discover sessions after agent restarts.
+
+set -euo pipefail
+
+[[ $# -ge 1 ]] || { echo "Usage: nbs-sidecar-find-session <session-name>" >&2; exit 1; }
+
+SESSION_NAME="$1"
+NBS_TS=$(command -v nbs-ts 2>/dev/null || echo "$(dirname "$0")/nbs-ts")
+
+"$NBS_TS" list 2>/dev/null | awk -v n="$SESSION_NAME" '$2=="alive" && $3==n {print $1; exit}'
