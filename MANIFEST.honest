@@ -437,6 +437,15 @@ var manifest : Manifest = (
 
     (
       kind        : Tool;
+      name        : 'nbs-sidecar-find-session';
+      path        : 'bin/nbs-sidecar-find-session';
+      summary     : 'Find an alive nbs-ts session by exact name — used by sidecar-loops for project-scoped session re-discovery after agent restarts.';
+      when_to_use : 'Called by sidecar-loop scripts — not invoked directly by agents.';
+      keywords    : ('sidecar'; 'session'; 'find'; 'rediscovery'; 'restart'; 'loop');
+    );
+
+    (
+      kind        : Tool;
       name        : 'nbs-scp-bridge';
       path        : 'docs/tools/nbs-ssh-bridge.md';
       summary     : 'SCP with connection multiplexing — symlink to nbs-ssh-bridge, detects invocation name and routes to scp.';
