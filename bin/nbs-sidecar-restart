@@ -218,6 +218,12 @@ restart_running() {
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 0.5
         done
 
+        # Clean stale PID marker — without this, the new sidecar
+        # detects the old marker as a "duplicate" and exits (rc=1).
+        if [[ -n "$SC_ROOT" ]]; then
+            rm -f "${SC_ROOT}/.nbs/pids/sidecar-${HANDLE}.pid"
+        fi
+
         # Spawn exactly one — wrapped in a sidecar-loop for crash resilience
         mapfile -d '' NEW_ARGS < "$args_file"
         # Extract session handle from args for the loop's liveness check
@@ -229,11 +235,12 @@ restart_running() {
         NBS_TS_BIN=$(command -v nbs-ts 2>/dev/null || echo "${SCRIPT_DIR}/nbs-ts")
         local LOOP_SCRIPT
         LOOP_SCRIPT=$(mktemp /tmp/nbs-sidecar-loop.XXXXXX.sh)
-        # Build args with $CURRENT_SESSION substitution for --session=
+        # Build args WITHOUT --session= (we add it separately so
+        # $CURRENT_SESSION is not escaped by printf %q)
         local LOOP_ARGS=()
         for narg in "${NEW_ARGS[@]}"; do
             case "$narg" in
-                --session=*) LOOP_ARGS+=('--session=$CURRENT_SESSION') ;;
+                --session=*) ;; # skip — added separately below
                 *) LOOP_ARGS+=("$narg") ;;
             esac
         done
@@ -246,7 +253,7 @@ log() { echo "\$(date -u '+%Y-%m-%dT%H:%M:%SZ') \$*" >> "\$LOGFILE"; }
 log "sidecar-loop started for ${HANDLE} session=\$CURRENT_SESSION pid=\$\$"
 while true; do
     log "starting sidecar session=\$CURRENT_SESSION"
-    $(printf '%q ' "${LOOP_ARGS[@]}")
+    $(printf '%q ' "${LOOP_ARGS[@]}") --session="\$CURRENT_SESSION"
     rc=\$?
     log "sidecar exited rc=\$rc session=\$CURRENT_SESSION"
     if "$NBS_TS_BIN" status "\$CURRENT_SESSION" 2>/dev/null | grep -q "alive"; then
@@ -360,6 +367,9 @@ respawn_missing() {
                 is_infrastructure "$agent_handle" && continue
                 # Filter by target handle if specified
                 [[ -z "$TARGET_HANDLE" || "$agent_handle" == "$TARGET_HANDLE" ]] || continue
+
+                # Clean stale PID marker before spawning
+                rm -f "${root}/.nbs/pids/sidecar-${agent_handle}.pid"
 
                 echo -n "Spawning sidecar for $agent_handle (nbs-ts=$ts_handle)... "
                 # Wrap in a sidecar-loop so it restarts on crash
