@@ -2388,6 +2388,7 @@ int main(int argc, char **argv) {
     }
 
     time_t last_reaper_check_t = time(NULL);
+    time_t last_sidecar_watchdog_t = time(NULL);
 
     /* --- Event loop --- */
     while (!g_quit) {
@@ -2471,6 +2472,66 @@ int main(int argc, char **argv) {
                             _exit(rpid2 < 0 ? 127 : 0);
                         }
                         if (rpid > 0) waitpid(rpid, NULL, 0);
+                    }
+                }
+            }
+
+            /* Sidecar watchdog — every 601s, respawn missing sidecars.
+             * 601 is prime to avoid synchronisation with other periodic
+             * checks. Only runs when not paused and project root is set. */
+            if (g_watchdog.project_root[0] != '\0') {
+                time_t sc_wd_now = time(NULL);
+                if ((sc_wd_now - last_sidecar_watchdog_t) >= 601) {
+                    last_sidecar_watchdog_t = sc_wd_now;
+
+                    /* Check pause file */
+                    char pause_chk[4200];
+                    snprintf(pause_chk, sizeof(pause_chk),
+                             "%s/.nbs/control-pause",
+                             g_watchdog.project_root);
+                    struct stat pchk_st;
+                    if (stat(pause_chk, &pchk_st) != 0) {
+                        /* Not paused — run sidecar respawn */
+                        char sc_wd_bin[4096];
+                        int swn = snprintf(sc_wd_bin, sizeof(sc_wd_bin),
+                                     "%s/.nbs/bin/nbs-sidecar-restart",
+                                     g_watchdog.project_root);
+                        if (swn <= 0 || (size_t)swn >= sizeof(sc_wd_bin)
+                            || access(sc_wd_bin, X_OK) != 0) {
+                            swn = snprintf(sc_wd_bin, sizeof(sc_wd_bin),
+                                     "%s/bin/nbs-sidecar-restart",
+                                     g_watchdog.project_root);
+                        }
+                        if (swn > 0 && (size_t)swn < sizeof(sc_wd_bin)
+                            && access(sc_wd_bin, X_OK) == 0) {
+                            char sc_wd_root[4200];
+                            snprintf(sc_wd_root, sizeof(sc_wd_root),
+                                     "--root=%s",
+                                     g_watchdog.project_root);
+                            pid_t swpid = fork();
+                            if (swpid == 0) {
+                                pid_t swpid2 = fork();
+                                if (swpid2 == 0) {
+                                    /* Redirect stdout/stderr to /dev/null
+                                     * — respawn output is logged by the
+                                     * sidecar-restart script itself */
+                                    int devnull = open("/dev/null",
+                                                       O_WRONLY);
+                                    if (devnull >= 0) {
+                                        dup2(devnull, STDOUT_FILENO);
+                                        dup2(devnull, STDERR_FILENO);
+                                        close(devnull);
+                                    }
+                                    execl(sc_wd_bin,
+                                          "nbs-sidecar-restart",
+                                          "--respawn", sc_wd_root,
+                                          (char *)NULL);
+                                    _exit(127);
+                                }
+                                _exit(swpid2 < 0 ? 127 : 0);
+                            }
+                            if (swpid > 0) waitpid(swpid, NULL, 0);
+                        }
                     }
                 }
             }
