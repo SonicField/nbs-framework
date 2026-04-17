@@ -318,8 +318,8 @@ respawn_missing() {
                 while IFS= read -r sc_pid; do
                     [[ -r "/proc/$sc_pid/cmdline" ]] || continue
                     # Must match BOTH session AND root to avoid cross-project false positives
-                    grep -qz -- "--session=${ts_handle}" "/proc/$sc_pid/cmdline" 2>/dev/null || continue
-                    grep -qz -- "--root=${root}" "/proc/$sc_pid/cmdline" 2>/dev/null || continue
+                    tr '\0' '\n' < "/proc/$sc_pid/cmdline" 2>/dev/null | grep -qF -- "--session=${ts_handle}" || continue
+                    tr '\0' '\n' < "/proc/$sc_pid/cmdline" 2>/dev/null | grep -qF -- "--root=${root}" || continue
                     sc_count=$((sc_count + 1))
                 done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                 if [[ $sc_count -gt 1 ]]; then
@@ -327,8 +327,8 @@ respawn_missing() {
                     echo "DEDUP: ${sc_count} sidecars for session ${ts_handle} — killing all"
                     while IFS= read -r dup_pid; do
                         [[ -r "/proc/$dup_pid/cmdline" ]] || continue
-                        grep -qz -- "--session=${ts_handle}" "/proc/$dup_pid/cmdline" 2>/dev/null || continue
-                        grep -qz -- "--root=${root}" "/proc/$dup_pid/cmdline" 2>/dev/null || continue
+                        tr '\0' '\n' < "/proc/$dup_pid/cmdline" 2>/dev/null | grep -qF -- "--session=${ts_handle}" || continue
+                        tr '\0' '\n' < "/proc/$dup_pid/cmdline" 2>/dev/null | grep -qF -- "--root=${root}" || continue
                         kill "$dup_pid" 2>/dev/null
                     done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                     sleep 1
@@ -340,8 +340,8 @@ respawn_missing() {
                     sc_pid=""
                     while IFS= read -r cand_pid; do
                         [[ -r "/proc/$cand_pid/cmdline" ]] || continue
-                        grep -qz -- "--session=${ts_handle}" "/proc/$cand_pid/cmdline" 2>/dev/null || continue
-                        grep -qz -- "--root=${root}" "/proc/$cand_pid/cmdline" 2>/dev/null || continue
+                        tr '\0' '\n' < "/proc/$cand_pid/cmdline" 2>/dev/null | grep -qF -- "--session=${ts_handle}" || continue
+                        tr '\0' '\n' < "/proc/$cand_pid/cmdline" 2>/dev/null | grep -qF -- "--root=${root}" || continue
                         sc_pid="$cand_pid"; break
                     done < <(pgrep -x nbs-sidecar 2>/dev/null || true)
                     if [[ -n "$sc_pid" ]]; then
@@ -349,7 +349,7 @@ respawn_missing() {
                         sc_ppid=$(ps -p "$sc_pid" -o ppid= 2>/dev/null | tr -d ' ') || sc_ppid=""
                         local sc_parent
                         sc_parent=$(ps -p "$sc_ppid" -o comm= 2>/dev/null) || sc_parent=""
-                        if [[ "$sc_parent" == "bash" ]] && grep -q 'sidecar-loop' "/proc/$sc_ppid/cmdline" 2>/dev/null; then
+                        if [[ "$sc_parent" == "bash" ]] && tr '\0' '\n' < "/proc/$sc_ppid/cmdline" 2>/dev/null | grep -qF 'sidecar-loop'; then
                             # Healthy: has a sidecar-loop parent — skip
                             continue
                         fi
