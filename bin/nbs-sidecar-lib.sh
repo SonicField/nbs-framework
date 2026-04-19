@@ -94,6 +94,59 @@ nbs_sc_is_infrastructure() {
     esac
 }
 
+# --- Lock File Management ---
+#
+# Sidecar-loop lock files prevent duplicate loops. The lock lives at
+# <root>/.nbs/locks/sidecar-<handle>.lock and contains the loop's PID.
+# One writer (the loop), many readers (watchdog, dashboard, respawn).
+
+# Acquire a sidecar-loop lock. Returns 0 if acquired, 1 if held by another.
+nbs_sc_lock_acquire() {
+    local handle="$1"
+    local root="$2"
+    local lockdir="${root}/.nbs/locks"
+    local lockfile="${lockdir}/sidecar-${handle}.lock"
+
+    mkdir -p "$lockdir" 2>/dev/null
+
+    if [[ -f "$lockfile" ]]; then
+        local held_pid
+        held_pid=$(cat "$lockfile" 2>/dev/null)
+        if [[ -n "$held_pid" && "$held_pid" == "$$" ]]; then
+            # Re-entrant — we already hold it
+            return 0
+        fi
+        if [[ -n "$held_pid" ]] && kill -0 "$held_pid" 2>/dev/null; then
+            # Held by a live process
+            return 1
+        fi
+        # Stale — take over
+    fi
+
+    echo "$$" > "$lockfile"
+    return 0
+}
+
+# Release a sidecar-loop lock.
+nbs_sc_lock_release() {
+    local handle="$1"
+    local root="$2"
+    rm -f "${root}/.nbs/locks/sidecar-${handle}.lock" 2>/dev/null
+}
+
+# Check if a sidecar-loop lock is held (without acquiring).
+# Returns 0 if held by a live process, 1 if not held.
+nbs_sc_lock_check() {
+    local handle="$1"
+    local root="$2"
+    local lockfile="${root}/.nbs/locks/sidecar-${handle}.lock"
+
+    [[ -f "$lockfile" ]] || return 1
+    local held_pid
+    held_pid=$(cat "$lockfile" 2>/dev/null)
+    [[ -n "$held_pid" ]] && kill -0 "$held_pid" 2>/dev/null
+}
+
 # --- PID File Management ---
 
 # Remove stale sidecar PID file.
@@ -171,8 +224,22 @@ nbs_sc_generate_loop() {
     lines+=("CURRENT_SESSION=$(printf '%q' "$session")")
     lines+=("LOGFILE=$(printf '%q' "$logfile")")
     lines+=('log() { echo "$(date -u "+%Y-%m-%dT%H:%M:%SZ") $*" >> "$LOGFILE"; }')
+    local lockdir="${root}/.nbs/locks"
+    local lockfile="${lockdir}/sidecar-${handle}.lock"
+
+    lines+=("LOCKFILE=$(printf '%q' "$lockfile")")
+    lines+=("mkdir -p $(printf '%q' "$lockdir") 2>/dev/null")
+    lines+=('# Acquire lock — exit if another loop holds it')
+    lines+=('if [[ -f "$LOCKFILE" ]]; then')
+    lines+=('    held_pid=$(cat "$LOCKFILE" 2>/dev/null)')
+    lines+=('    if [[ -n "$held_pid" && "$held_pid" != "$$" ]] && kill -0 "$held_pid" 2>/dev/null; then')
+    lines+=("        echo \"sidecar-loop for ${handle}: lock held by PID \$held_pid — exiting\" >&2")
+    lines+=('        exit 0')
+    lines+=('    fi')
+    lines+=('fi')
+    lines+=('echo $$ > "$LOCKFILE"')
     lines+=("log \"sidecar-loop started for ${handle} session=\$CURRENT_SESSION pid=\$\$\"")
-    lines+=("trap 'log \"sidecar-loop exiting for ${handle}\"; rm -f $(printf '%q' "$script_file")' EXIT")
+    lines+=("trap 'log \"sidecar-loop exiting for ${handle}\"; rm -f $(printf '%q' "$script_file") \"\$LOCKFILE\"' EXIT")
     lines+=('while true; do')
     lines+=('    log "starting sidecar session=$CURRENT_SESSION"')
     lines+=("    ${sidecar_cmd_str}--session=\"\$CURRENT_SESSION\"")
@@ -214,6 +281,12 @@ nbs_sc_spawn() {
             --root=*)   root="${arg#*=}" ;;
         esac
     done
+
+    # Check lock — don't spawn if a loop already exists
+    if [[ -n "$handle" && -n "$root" ]] && nbs_sc_lock_check "$handle" "$root"; then
+        echo "0"  # signal: not spawned, already running
+        return 1
+    fi
 
     # Clean stale PID marker before spawning
     [[ -n "$handle" && -n "$root" ]] && nbs_sc_clean_pid "$handle" "$root"
