@@ -57,23 +57,56 @@ Use `nbs-local-session` (or `nbs-remote-session` for remote machines) for persis
 ```bash
 # Local debugging
 GDB_HANDLE=$(nbs-local-session)
-nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" --args /path/to/binary'
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" -ex "set pagination off" -ex "set confirm off" --args /path/to/binary'
 sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 
 # Remote debugging
 GDB_HANDLE=$(nbs-remote-session <remote-host>)
-nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" --args ./binary'
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" -ex "set pagination off" -ex "set confirm off" --args ./binary'
 sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 
 # Attach to a running process
 GDB_HANDLE=$(nbs-local-session)
-nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" -p $PID'
+nbs-ts send "$GDB_HANDLE" '/usr/bin/gdb -q -ex "set sysroot /" -ex "set pagination off" -ex "set confirm off" -p $PID'
 sleep 2 && nbs-ts read-new "$GDB_HANDLE" --strip
 ```
 
 Use `/usr/bin/gdb` (GDB 16.3), not `/usr/local/bin/gdb` (GDB 9.1) — the newer version has better reverse debugging and fewer ASAN conflicts.
 
 `set sysroot /` is required — GDB 16.3 cannot find shared libraries without it.
+
+`set pagination off` is required — without it, GDB uses readline to paginate output. Readline redraws the prompt with cursor movement sequences that `nbs-ts read-new --strip` strips but cannot reinterpret. Register and memory inspection commands (`p/x $rdi`, `info registers`) may appear to produce no output because the value is overwritten by readline's prompt redraw. `set pagination off` disables this and gives clean line-oriented output.
+
+`set confirm off` prevents GDB from asking "are you sure?" on quit, kill, etc. — questions that hang the session because nbs-ts cannot answer interactively.
+
+### Slow symbol loading
+
+Large debug binaries (e.g., `_cinderx.so` at 45MB) can take 3+ minutes to load debug symbols. The `sleep 2` after GDB startup is not enough. For large binaries, poll for the GDB prompt:
+
+```bash
+# Poll for GDB prompt (up to 5 minutes)
+for i in $(seq 1 60); do
+    sleep 5
+    output=$(nbs-ts read-new "$GDB_HANDLE" --strip)
+    if echo "$output" | grep -q '(gdb)'; then
+        echo "GDB ready after $((i * 5))s"
+        break
+    fi
+done
+```
+
+Do NOT set a hard timeout and give up — GDB is loading, not stuck. The `(gdb)` prompt appears when loading completes.
+
+### Dollar signs in commands
+
+`nbs-ts send` writes directly to the session's input FIFO — no shell expansion. Dollar signs in GDB commands (`p/x $rdi`, `print $rax`) are passed through intact. No special quoting needed beyond the single quotes around the command:
+
+```bash
+nbs-ts send $HANDLE 'p/x $rdi'              # works — $rdi reaches gdb
+nbs-ts send $HANDLE "p/x $rdi"              # BROKEN — bash expands $rdi to empty
+```
+
+Always use single quotes for GDB commands containing `$`.
 
 For worked examples with real GDB output, see `terminal-weathering/concepts/gdb-debugging.md` (`nbs-help debug`).
 

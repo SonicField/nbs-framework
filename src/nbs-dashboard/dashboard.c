@@ -453,21 +453,49 @@ static int find_chat_file(dashboard_t *d)
 
 static void read_project_tag(dashboard_t *d)
 {
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/.nbs/project-id", d->nbs_root);
+    /* Derive tag from the chat file basename — this is the same
+     * convention nbs-claude uses for session names (nbs-<handle>-<tag>).
+     * The chat file is at <root>/.nbs/chat/<tag>.chat.
+     * Previously read from project-id which contained a random hex
+     * value that never matched session names. */
+    DIR *dp;
+    char chat_dir[PATH_MAX];
+    snprintf(chat_dir, sizeof(chat_dir), "%s/.nbs/chat", d->nbs_root);
+    dp = opendir(chat_dir);
+    if (dp) {
+        struct dirent *ent;
+        while ((ent = readdir(dp)) != NULL) {
+            const char *name = ent->d_name;
+            size_t len = strlen(name);
+            /* Skip archive files and non-.chat files */
+            if (len < 6) continue;
+            if (strcmp(name + len - 5, ".chat") != 0) continue;
+            if (strstr(name, "-archive") != NULL) continue;
 
-    FILE *fp = fopen(path, "r");
-    if (!fp) { snprintf(d->project_tag, sizeof(d->project_tag), "unknown"); return; }
+            /* Strip .chat suffix, replace dots with hyphens */
+            snprintf(d->project_tag, sizeof(d->project_tag), "%s", name);
+            d->project_tag[len - 5] = '\0'; /* strip .chat */
+            for (char *p = d->project_tag; *p; p++)
+                if (*p == '.') *p = '-';
+            break;
+        }
+        closedir(dp);
+    }
 
-    if (!fgets(d->project_tag, (int)sizeof(d->project_tag), fp))
-        d->project_tag[0] = '\0';
-    fclose(fp);
-
-    /* strip trailing whitespace */
-    size_t n = strlen(d->project_tag);
-    while (n > 0 && (d->project_tag[n-1] == '\n' || d->project_tag[n-1] == '\r'
-                  || d->project_tag[n-1] == ' '))
-        d->project_tag[--n] = '\0';
+    if (d->project_tag[0] == '\0') {
+        /* Fallback to project-id if no chat file found */
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/.nbs/project-id", d->nbs_root);
+        FILE *fp = fopen(path, "r");
+        if (!fp) { snprintf(d->project_tag, sizeof(d->project_tag), "unknown"); return; }
+        if (!fgets(d->project_tag, (int)sizeof(d->project_tag), fp))
+            d->project_tag[0] = '\0';
+        fclose(fp);
+        size_t n = strlen(d->project_tag);
+        while (n > 0 && (d->project_tag[n-1] == '\n' || d->project_tag[n-1] == '\r'
+                      || d->project_tag[n-1] == ' '))
+            d->project_tag[--n] = '\0';
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -529,7 +557,7 @@ static void read_cursors(dashboard_t *d)
 static void collect_data(dashboard_t *d)
 {
     const char *bin = d->bin_dir;
-    char cmd[2048], out[8192];
+    char cmd[2048], out[65536];
 
     /* --- pause state (direct stat, no subprocess) --- */
     {

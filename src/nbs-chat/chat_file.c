@@ -955,6 +955,15 @@ int chat_send(const char *path, const char *handle, const char *message) {
             continue;
         }
 
+        /* Skip space-padded repair artefacts — match chat_read behaviour */
+        if (ll > 0) {
+            int all_spaces = 1;
+            for (size_t si = 0; si < ll; si++) {
+                if (line_buf[si] != ' ') { all_spaces = 0; break; }
+            }
+            if (all_spaces) continue;
+        }
+
         if (ll > 0) {
             ASSERT_MSG(encoded_line_count < MAX_MESSAGES,
                        "chat_send: encoded_line_count %d exceeds MAX_MESSAGES", encoded_line_count);
