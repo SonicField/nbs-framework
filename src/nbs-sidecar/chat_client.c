@@ -248,9 +248,12 @@ static int check_unread_cb(const char *path, void *user_data)
         return 0;
 
     {
-        int n_unread = total - cursor - 1;
-        ASSERT_MSG(n_unread > 0,
-                   "check_unread_cb: n_unread should be positive: %d", n_unread);
+        /* Filter own messages out of the unread count — the agent should
+         * not be notified about its own posts (root cause of context noise
+         * after the agent itself sent a message into the chat). */
+        int n_unread = chat_client_count_unread_others(path, ctx->handle, cursor);
+        if (n_unread <= 0)
+            return 0;
         ASSERT_MSG(ctx->unread_count <= INT_MAX - n_unread,
                    "check_unread_cb: unread_count would overflow: %d + %d",
                    ctx->unread_count, n_unread);
@@ -580,6 +583,130 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
         return 1;
 
     return 0;
+}
+
+/* ---- chat_client_count_unread_others ---- */
+
+int chat_client_count_unread_others(const char *chat_path,
+                                     const char *my_handle, int cursor)
+{
+    ASSERT_MSG(chat_path != NULL,
+               "chat_client_count_unread_others: chat_path is NULL");
+    ASSERT_MSG(chat_path[0] != '\0',
+               "chat_client_count_unread_others: chat_path is empty");
+    ASSERT_MSG(my_handle != NULL,
+               "chat_client_count_unread_others: my_handle is NULL");
+    ASSERT_MSG(my_handle[0] != '\0',
+               "chat_client_count_unread_others: my_handle is empty");
+
+    FILE *f = fopen(chat_path, "r");
+    if (!f)
+        return -1;
+
+    /* Treat any cursor < 0 as "no entry" — all messages past index -1 are unread. */
+    if (cursor < -1)
+        cursor = -1;
+
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t line_len;
+    int found_separator = 0;
+    int msg_index = 0; /* 0-based index of messages after --- */
+    int unread_others = 0;
+
+    while ((line_len = getline(&line, &line_cap, f)) != -1) {
+        /* Strip trailing newline */
+        if (line_len > 0 && line[line_len - 1] == '\n')
+            line[--line_len] = '\0';
+
+        if (!found_separator) {
+            if (strcmp(line, "---") == 0)
+                found_separator = 1;
+            continue;
+        }
+
+        /* Skip empty lines (they don't count as messages) */
+        if (line_len == 0)
+            continue;
+
+        /* Skip space-padded repair artefacts — match chat_send / chat_read.
+         * These are not real messages and must not advance msg_index. */
+        {
+            int all_spaces = 1;
+            for (ssize_t si = 0; si < line_len; si++) {
+                if (line[si] != ' ') { all_spaces = 0; break; }
+            }
+            if (all_spaces)
+                continue;
+        }
+
+        int current_index = msg_index;
+        msg_index++;
+
+        /* Already-read: cursor=N means messages 0..N have been read.
+         * Use `current_index <= cursor` (with cursor possibly INT_MAX) —
+         * direct comparison is safe; no arithmetic. */
+        if (current_index <= cursor)
+            continue;
+
+        /* Decode base64 message line.
+         * Cap line_len to prevent unreasonably large allocations from
+         * corrupt/adversarial chat files. */
+        ASSERT_MSG((size_t)line_len < MAX_PATH_BUF * 16,
+                   "chat_client_count_unread_others: unreasonably large "
+                   "base64 line: %zd bytes in '%s'", line_len, chat_path);
+        /* Skip corrupt lines with length not a multiple of 4 —
+         * base64_decoded_size asserts this precondition and would abort. */
+        if ((size_t)line_len % 4 != 0)
+            continue;
+
+        size_t decoded_max = base64_decoded_size((size_t)line_len);
+        ASSERT_MSG(decoded_max < SIZE_MAX,
+                   "chat_client_count_unread_others: decoded_max overflow");
+        unsigned char *decoded = malloc(decoded_max + 1);
+        if (!decoded) {
+            fprintf(stderr, "chat_client_count_unread_others: malloc(%zu) "
+                    "failed for '%s'\n", decoded_max + 1, chat_path);
+            continue;
+        }
+
+        int decoded_len = base64_decode(line, (size_t)line_len,
+                                         decoded, decoded_max);
+        if (decoded_len < 0) {
+            free(decoded);
+            fprintf(stderr, "chat_client_count_unread_others: base64_decode "
+                    "failed for message %d in '%s'\n", current_index, chat_path);
+            continue;
+        }
+        decoded[decoded_len] = '\0';
+
+        char msg_handle[256];
+        int rc = extract_handle_from_decoded((const char *)decoded,
+                                              (size_t)decoded_len,
+                                              msg_handle, sizeof(msg_handle));
+        free(decoded);
+
+        if (rc != 0) {
+            /* Unparseable handle — count as "other" so the agent isn't
+             * silently denied a notification it might need. */
+            fprintf(stderr, "chat_client_count_unread_others: unparseable "
+                    "message %d in '%s' — counting as other\n",
+                    current_index, chat_path);
+            unread_others++;
+            continue;
+        }
+
+        if (strcmp(msg_handle, my_handle) != 0)
+            unread_others++;
+    }
+
+    free(line);
+    fclose(f);
+
+    ASSERT_MSG(unread_others >= 0,
+               "chat_client_count_unread_others: count went negative: %d",
+               unread_others);
+    return unread_others;
 }
 
 /* ---- chat_client_send ---- */

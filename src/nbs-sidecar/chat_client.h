@@ -49,6 +49,30 @@ int chat_client_are_unread_sidecar_only(const char *registry_path,
                                          const char *handle);
 
 /*
+ * chat_client_count_unread_others — Count unread messages in a chat
+ * file, excluding messages whose sender handle matches my_handle.
+ *
+ * Used by the sidecar so it does not notify an agent about its own
+ * posts. Decodes base64 message lines and inspects the handle prefix.
+ *
+ * chat_path: path to the chat file
+ * my_handle: handle whose own messages should NOT be counted
+ * cursor:    last-read 0-indexed message position; -1 means "no cursor"
+ *            (treat all messages as unread). Messages with index > cursor
+ *            are considered unread.
+ *
+ * Returns: count of unread messages from other senders (>= 0),
+ *          or -1 if the chat file cannot be opened.
+ *
+ * Skips empty lines, space-padded repair artefacts, and base64 lines
+ * with length not a multiple of 4 (matching chat_send / sidecar_only_cb).
+ * Messages whose handle cannot be parsed are conservatively counted as
+ * "other" (so a corrupt line doesn't silence a notification).
+ */
+int chat_client_count_unread_others(const char *chat_path,
+                                     const char *my_handle, int cursor);
+
+/*
  * chat_client_send — Send a message via fork+exec of nbs-chat send.
  *
  * Returns: 0 on success, -1 on failure

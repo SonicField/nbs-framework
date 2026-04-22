@@ -38,6 +38,7 @@ UNIT_TESTS = $(UNIT_TEST_DIR)/test_sidecar_detect_unit \
              $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit \
              $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit \
              $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit \
+             $(UNIT_TEST_DIR)/test_sidecar_unread_filter_unit \
              $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit
 
 .PHONY: all clean install debug asan test test-unit test-all test-valgrind
@@ -113,6 +114,9 @@ $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit: $(UNIT_TEST_DIR)/test_sidecar_bus
 $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit: $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit.c chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
+$(UNIT_TEST_DIR)/test_sidecar_unread_filter_unit: $(UNIT_TEST_DIR)/test_sidecar_unread_filter_unit.c chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+
 $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit: $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit.c bus_client.o exec_util.o
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
@@ -128,6 +132,7 @@ test-unit: $(UNIT_TESTS)
 	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit
 	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_bus_client_deferred_ack_unit
 	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_chat_client_unit
+	PATH="$(shell pwd)/../../bin:$$PATH" $(UNIT_TEST_DIR)/test_sidecar_unread_filter_unit
 
 test: all install
 	./$(ASSERT_CHECK)
