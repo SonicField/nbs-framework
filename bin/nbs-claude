@@ -61,7 +61,7 @@ dbg() {
 POLL_DISABLE="${NBS_POLL_DISABLE:-0}"
 SIDECAR_HANDLE="${NBS_HANDLE:-claude}"
 NBS_ROOT="${NBS_ROOT:-.}"
-NBS_MODEL="${NBS_MODEL:-opus[1m]}"
+NBS_MODEL="${NBS_MODEL:-claude-opus-4-7[1m]}"
 NBS_CONTINUE_SESSION="${NBS_CONTINUE_SESSION:-}"
 INITIAL_PROMPT="${NBS_INITIAL_PROMPT:-}"
 # NBS_FORCE_SPAWN removed — flock mechanism deleted. Handle collision
