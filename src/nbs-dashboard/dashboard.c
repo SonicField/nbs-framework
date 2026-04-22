@@ -63,7 +63,7 @@
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#define MAX_AGENTS     7
+#define MAX_AGENTS     11
 #define NUM_COLS       6
 #define COL_AGENT     14
 #define COL_STATUS    10
@@ -76,9 +76,16 @@
 #define MAX_OUTPUT    (256 * 1024)
 #define REFRESH_TICKS 20   /* 20 x 100ms = 2s */
 
-static const char *AGENT_NAMES[MAX_AGENTS] = {
-    "supervisor", "generalist", "gatekeeper",
-    "theologian", "testkeeper", "scribe", "medic"
+/* Agent definitions. ephemeral=1 means the agent spawns briefly
+ * (oracles like shepard/pythia) and is normally absent — the dashboard
+ * renders "—" for status/sidecar instead of red "dead" when not alive. */
+typedef struct { const char *name; int ephemeral; } agent_def_t;
+static const agent_def_t AGENT_DEFS[MAX_AGENTS] = {
+    {"supervisor", 0}, {"generalist", 0}, {"gatekeeper", 0},
+    {"theologian", 0}, {"testkeeper", 0}, {"scribe",     0},
+    {"medic",      0},
+    {"librarian",  1}, {"pythia",     1}, {"shepard",    1},
+    {"fixup",      1},
 };
 
 static const int COL_WIDTHS[5] = {
@@ -104,6 +111,7 @@ typedef enum {
 
 typedef struct {
     char name[64];
+    int  ephemeral;     /* 1 for oracles (shepard, pythia, fixup, librarian) */
     int  alive;
     int  sidecar_ok;
     int  cursor_pos;
@@ -1219,16 +1227,26 @@ static void render_overview(dashboard_t *d)
 
         goto_row(5 + i);
 
-        const char *status_text  = a->alive      ? "alive"   : "dead";
-        const char *sidecar_text = a->sidecar_ok  ? "OK"      : "MISSING";
+        /* Ephemeral oracles (shepard, pythia, fixup, librarian) spawn briefly
+         * and are normally absent — show "—" in neutral colour rather than
+         * red "dead" / "MISSING" when they're not currently running. */
+        const char *status_text;
+        const char *sidecar_text;
+        if (a->ephemeral && !a->alive) {
+            status_text  = EM_DASH;
+            sidecar_text = EM_DASH;
+        } else {
+            status_text  = a->alive     ? "alive" : "dead";
+            sidecar_text = a->sidecar_ok ? "OK"   : "MISSING";
+        }
 
         nbs_style_t *sty_status   = NULL;
         nbs_style_t *sty_sidecar  = NULL;
         nbs_style_t *sty_cursor   = NULL;
         nbs_style_t *sty_lastpost = NULL;
 
-        if (!a->alive)           sty_status   = &sty_red;
-        if (!a->sidecar_ok)      sty_sidecar  = &sty_red;
+        if (!a->alive && !a->ephemeral)      sty_status  = &sty_red;
+        if (!a->sidecar_ok && !a->ephemeral) sty_sidecar = &sty_red;
         if (a->behind > 50)      sty_cursor   = &sty_red;
         else if (a->behind > 10) sty_cursor   = &sty_yel;
         /* silence warning: "never" = red, anything non-"recent" = yellow */
@@ -1539,9 +1557,11 @@ dashboard_t *dashboard_init(const char *nbs_root)
     if (find_chat_file(d) < 0) { free(d); return NULL; }
 
     d->agent_count = MAX_AGENTS;
-    for (int i = 0; i < MAX_AGENTS; i++)
+    for (int i = 0; i < MAX_AGENTS; i++) {
         snprintf(d->agents[i].name, sizeof(d->agents[i].name),
-                 "%s", AGENT_NAMES[i]);
+                 "%s", AGENT_DEFS[i].name);
+        d->agents[i].ephemeral = AGENT_DEFS[i].ephemeral;
+    }
 
     d->selected     = 0;
     d->mode         = MODE_OVERVIEW;
