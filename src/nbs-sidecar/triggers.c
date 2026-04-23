@@ -135,6 +135,71 @@ static const char *resolve_nbs_workers(void)
 /* resolve_spawn_worker removed — nbs-workers spawn is the single
  * entry point for worker lifecycle. */
 
+/* --- Live-worker detection --- */
+
+/*
+ * worker_session_active — Check whether a worker for `role` currently has a
+ * live nbs-ts session.
+ *
+ * Defends against the duplicate-spawn race that the timestamp recheck cannot
+ * cover: multiple sidecars can pass the recheck within the same scheduler
+ * tick if their reads of the timestamp file are not perfectly serialised by
+ * the lock. A live nbs-ts session is unambiguous evidence that a worker is
+ * already in flight; spawning a duplicate would be wasted work.
+ *
+ * Returns 1 if a worker session for this role is alive, 0 otherwise.
+ * Returns 0 on any error (fail-open — better to risk a duplicate than
+ * silently suppress a needed spawn).
+ */
+static int worker_session_active(const char *role) {
+    char prefix_arg[128];
+    int n = snprintf(prefix_arg, sizeof(prefix_arg),
+                     "--name=nbs-%s-worker-", role);
+    if (n <= 0 || (size_t)n >= sizeof(prefix_arg))
+        return 0;
+
+    /* Resolve nbs-ts via the same /proc/self/exe trick as nbs-workers — it
+     * sits beside nbs-sidecar in bin/. Fall back to PATH lookup. */
+    char nbs_ts_path[4096] = "";
+    char self[4096];
+    ssize_t sl = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (sl > 0) {
+        self[sl] = '\0';
+        char *slash = strrchr(self, '/');
+        if (slash) {
+            *slash = '\0';
+            int tn = snprintf(nbs_ts_path, sizeof(nbs_ts_path),
+                              "%s/nbs-ts", self);
+            if (tn <= 0 || (size_t)tn >= sizeof(nbs_ts_path) ||
+                access(nbs_ts_path, X_OK) != 0) {
+                nbs_ts_path[0] = '\0';
+            }
+        }
+    }
+    const char *nbs_ts = nbs_ts_path[0] ? nbs_ts_path : "nbs-ts";
+
+    const char *argv[] = { nbs_ts, "list", prefix_arg, NULL };
+    char out[8192];
+    int rc = exec_capture(argv, out, sizeof(out));
+    if (rc != 0)
+        return 0;
+
+    /* Parse: each line is `handle\tstatus\tname\t...`. Match status==alive. */
+    char *saveptr = NULL;
+    for (char *line = strtok_r(out, "\n", &saveptr);
+         line != NULL;
+         line = strtok_r(NULL, "\n", &saveptr)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        char *status = tab + 1;
+        char *tab2 = strchr(status, '\t');
+        size_t status_len = tab2 ? (size_t)(tab2 - status) : strlen(status);
+        if (status_len == 5 && memcmp(status, "alive", 5) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* --- Shared timestamp file I/O --- */
 
 static time_t read_last_run(const char *nbs_root, const char *ts_filename) {
@@ -290,10 +355,26 @@ int trigger_periodic_spawn(const char *nbs_root,
      * the elapsed check in trigger_periodic_check before any acquires the
      * lock. The first winner writes the timestamp; subsequent winners must
      * re-read and bail if it's been updated. Without this, N sidecars
-     * produce N duplicate spawns (observed: 3 librarian posts in 30s). */
+     * produce N duplicate spawns (observed: 3 librarian posts in 30s,
+     * later 6 shepard posts in 17s). The window is set to 120s to cover
+     * worker startup latency — a worker that has been spawned but has
+     * not yet posted to chat counts as "in flight" and must not be
+     * duplicated. */
     time_t recheck = read_last_run(nbs_root, trigger->ts_filename);
-    if (recheck > 0 && (time(NULL) - recheck) < 30) {
+    if (recheck > 0 && (time(NULL) - recheck) < 120) {
         /* Another sidecar already spawned recently — bail */
+        struct flock unlock = { .l_type = F_UNLCK, .l_whence = SEEK_SET };
+        fcntl(fd, F_SETLK, &unlock);
+        close(fd);
+        return 1;
+    }
+
+    /* Active-worker check — defence in depth against the race where
+     * multiple sidecars pass the timestamp recheck within the same
+     * scheduler tick (the recheck only catches state changes that have
+     * already been observed by the filesystem). If a worker process for
+     * this role is currently alive in nbs-ts, do not spawn a duplicate. */
+    if (worker_session_active(trigger->role)) {
         struct flock unlock = { .l_type = F_UNLCK, .l_whence = SEEK_SET };
         fcntl(fd, F_SETLK, &unlock);
         close(fd);

@@ -355,12 +355,101 @@ static int resolve_project_root(const char *chat_path, char *out, size_t out_siz
 }
 
 /*
+ * oracle_worker_active — Check whether a worker for `role` currently has a
+ * live nbs-ts session. Mirror of triggers.c::worker_session_active.
+ *
+ * Defends against duplicate spawns when the user types the same slash
+ * command twice in quick succession, or when the slash command races with
+ * the sidecar's periodic trigger. Returns 1 if a worker is alive, 0 if not
+ * or on error (fail-open).
+ */
+static int oracle_worker_active(const char *role) {
+    char prefix_arg[128];
+    int n = snprintf(prefix_arg, sizeof(prefix_arg),
+                     "--name=nbs-%s-worker-", role);
+    if (n <= 0 || (size_t)n >= sizeof(prefix_arg))
+        return 0;
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return 0;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return 0; }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        close(pipefd[1]);
+        execlp("nbs-ts", "nbs-ts", "list", prefix_arg, (char *)NULL);
+        _exit(127);
+    }
+    close(pipefd[1]);
+
+    char out[8192];
+    size_t total = 0;
+    ssize_t r;
+    while (total < sizeof(out) - 1 &&
+           (r = read(pipefd[0], out + total, sizeof(out) - 1 - total)) > 0) {
+        total += (size_t)r;
+    }
+    out[total] = '\0';
+    close(pipefd[0]);
+    int wstatus;
+    waitpid(pid, &wstatus, 0);
+    if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+        return 0;
+
+    /* Each line: handle\tstatus\tname\t... — match status==alive */
+    char *saveptr = NULL;
+    for (char *line = strtok_r(out, "\n", &saveptr);
+         line != NULL;
+         line = strtok_r(NULL, "\n", &saveptr)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        char *status = tab + 1;
+        char *tab2 = strchr(status, '\t');
+        size_t status_len = tab2 ? (size_t)(tab2 - status) : strlen(status);
+        if (status_len == 5 && memcmp(status, "alive", 5) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * touch_oracle_timestamp — Atomically update <project_root>/.nbs/<role>-last-run
+ * to the current time. This blocks the sidecar's periodic trigger from
+ * firing again until the periodic interval has elapsed, eliminating the
+ * manual+periodic doubling that produced the original duplicate-spawn bug.
+ *
+ * Best-effort: failure is silent. Worst case is one extra spawn.
+ */
+static void touch_oracle_timestamp(const char *role,
+                                   const char *project_root) {
+    char path[4096], tmp_path[4096];
+    int n = snprintf(path, sizeof(path), "%s/.nbs/%s-last-run",
+                     project_root, role);
+    if (n <= 0 || (size_t)n >= sizeof(path)) return;
+    int tn = snprintf(tmp_path, sizeof(tmp_path), "%s.XXXXXX", path);
+    if (tn <= 0 || (size_t)tn >= sizeof(tmp_path)) return;
+
+    int tfd = mkstemp(tmp_path);
+    if (tfd < 0) return;
+    FILE *f = fdopen(tfd, "w");
+    if (!f) { close(tfd); unlink(tmp_path); return; }
+    fprintf(f, "%lld\n", (long long)time(NULL));
+    if (fclose(f) != 0) { unlink(tmp_path); return; }
+    if (rename(tmp_path, path) != 0) unlink(tmp_path);
+}
+
+/*
  * spawn_trigger_worker — Fork+exec nbs-workers spawn.
  *
  * Single source of truth for worker lifecycle. Double-fork to
  * avoid zombie processes.
  *
- * Returns 0 on spawn success, -1 on failure.
+ * Returns 0 on spawn success, -1 on failure, 1 if skipped because a
+ * worker for this role is already alive (caller should report to user).
  */
 static int spawn_trigger_worker(const char *role, const char *skill_file,
                                  const char *task_desc,
@@ -369,6 +458,12 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     ASSERT_MSG(skill_file != NULL, "spawn_trigger_worker: skill_file is NULL");
     ASSERT_MSG(task_desc != NULL, "spawn_trigger_worker: task_desc is NULL");
     ASSERT_MSG(project_root != NULL, "spawn_trigger_worker: project_root is NULL");
+
+    /* Dedup: if a worker for this role is already alive, refuse to spawn
+     * a duplicate. This catches both rapid-fire slash commands and the
+     * race against the sidecar periodic trigger. */
+    if (oracle_worker_active(role))
+        return 1;
 
     /* Find nbs-workers: try .nbs/bin/ then bin/ */
     char workers_bin[4096];
@@ -389,6 +484,12 @@ static int spawn_trigger_worker(const char *role, const char *skill_file,
     /* Build --skill=FILE flag */
     char skill_flag[4096];
     snprintf(skill_flag, sizeof(skill_flag), "--skill=%s", skill_file);
+
+    /* Update timestamp BEFORE fork — blocks periodic from firing again
+     * for the periodic interval. Mirrors what trigger_periodic_spawn does
+     * under its lock. Done before fork because the parent's filesystem
+     * write is what other sidecars observe. */
+    touch_oracle_timestamp(role, project_root);
 
     /* Double-fork to avoid zombie processes */
     pid_t pid = fork();
@@ -4163,19 +4264,22 @@ int main(int argc, char **argv) {
                     snprintf(msg, sizeof(msg), "Unknown oracle: %s", role);
                     info_line_emit(&edit, g_handle, role, msg);
                 } else {
-                    if (spawn_trigger_worker(role, skill, desc,
-                                              g_watchdog.project_root) == 0) {
-                        char msg[128];
+                    int sr = spawn_trigger_worker(role, skill, desc,
+                                                  g_watchdog.project_root);
+                    char msg[160];
+                    if (sr == 0) {
                         snprintf(msg, sizeof(msg),
                                  "%s spawned (will post to chat when done).",
                                  role);
-                        info_line_emit(&edit, g_handle, role, msg);
+                    } else if (sr == 1) {
+                        snprintf(msg, sizeof(msg),
+                                 "%s already running — skipped (no duplicate spawn).",
+                                 role);
                     } else {
-                        char msg[128];
                         snprintf(msg, sizeof(msg),
                                  "Failed to spawn %s.", role);
-                        info_line_emit(&edit, g_handle, role, msg);
                     }
+                    info_line_emit(&edit, g_handle, role, msg);
                 }
                 /* info_line_emit already redraws the prompt via line_redraw */
                 continue;
