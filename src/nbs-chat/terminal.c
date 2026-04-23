@@ -284,6 +284,26 @@ static const char *find_completion(const char *buf, size_t len) {
     return match;
 }
 
+/*
+ * is_known_command — Return 1 if `buf` starts with one of the slash
+ * commands in `g_commands` (exact match on the first whitespace-
+ * delimited word). Used to suppress accidental typos like `/dsa` from
+ * being sent to chat as plain text — the user's mistake should produce
+ * an out-of-chat warning, not pollute the conversation.
+ */
+static int is_known_command(const char *buf) {
+    if (!buf || buf[0] != '/') return 0;
+    size_t wlen = 0;
+    while (buf[wlen] && buf[wlen] != ' ' && buf[wlen] != '\t')
+        wlen++;
+    for (const char **cmd = g_commands; *cmd; cmd++) {
+        size_t clen = strlen(*cmd);
+        if (clen == wlen && memcmp(buf, *cmd, clen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* --- Restart script resolution --- */
 
 /* Find the restart script: try .nbs/bin/ first (installed projects),
@@ -4282,6 +4302,23 @@ int main(int argc, char **argv) {
                     info_line_emit(&edit, g_handle, role, msg);
                 }
                 /* info_line_emit already redraws the prompt via line_redraw */
+                continue;
+            }
+
+            /* Unknown slash command — refuse to send. Emit an out-of-chat
+             * warning so the typo (e.g. `/dsa`) does not pollute chat. */
+            if (edit.buf[0] == '/' && !is_known_command(edit.buf)) {
+                size_t wlen = 0;
+                while (edit.buf[wlen] && edit.buf[wlen] != ' ' &&
+                       edit.buf[wlen] != '\t')
+                    wlen++;
+                if (wlen > 80) wlen = 80;
+                char msg[160];
+                snprintf(msg, sizeof(msg),
+                         "Unknown command: %.*s  (type /help for the list)",
+                         (int)wlen, edit.buf);
+                info_line_emit(&edit, g_handle, "system", msg);
+                line_state_reset(&edit);
                 continue;
             }
 
