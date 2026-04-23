@@ -63,7 +63,7 @@
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#define MAX_AGENTS     11
+#define MAX_AGENTS     12
 #define NUM_COLS       6
 #define COL_AGENT     14
 #define COL_STATUS    10
@@ -85,7 +85,7 @@ static const agent_def_t AGENT_DEFS[MAX_AGENTS] = {
     {"theologian", 0}, {"testkeeper", 0}, {"scribe",     0},
     {"medic",      0},
     {"librarian",  1}, {"pythia",     1}, {"shepard",    1},
-    {"fixup",      1},
+    {"fixup",      1}, {"chatdigest", 1},
 };
 
 static const int COL_WIDTHS[5] = {
