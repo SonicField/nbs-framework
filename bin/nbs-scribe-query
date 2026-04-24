@@ -88,6 +88,27 @@ ARCHIVES=()
 for f in "${SCRIBE_DIR}/${CHAT_BASE}-log-"*"-archive.md"; do
     [[ -f "$f" ]] && ARCHIVES+=("$f")
 done
+
+# Cross-stream fallback (Phoenix-class projects): include live-log.md +
+# its archives if they exist alongside (or instead of) the chat-name-
+# derived log. The 13:02Z 4-cascade false-positive was caused by this
+# tool searching only the derived log when the writer (scribe) writes
+# to a different fixed name (live-log.md). Including both keeps
+# behavior unchanged for projects with the derived log only AND fixes
+# the cascade for projects whose scribe writes to live-log.md.
+if [[ "$CHAT_BASE" != "live" && -f "${SCRIBE_DIR}/live-log.md" ]]; then
+    if [[ ! -f "$LOG" ]]; then
+        # Derived log doesn't exist; live-log.md is canonical.
+        LOG="${SCRIBE_DIR}/live-log.md"
+    else
+        # Both exist; search both (live-log.md added to ARCHIVES list).
+        ARCHIVES+=("${SCRIBE_DIR}/live-log.md")
+    fi
+    for f in "${SCRIBE_DIR}/live-log-"*"-archive.md"; do
+        [[ -f "$f" ]] && ARCHIVES+=("$f")
+    done
+fi
+
 # Sort newest first (filename contains timestamp)
 IFS=$'\n' ARCHIVES=($(printf '%s\n' "${ARCHIVES[@]}" | sort -r)); unset IFS
 # All files: live first, then archives newest-to-oldest
