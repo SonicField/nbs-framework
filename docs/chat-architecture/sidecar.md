@@ -73,10 +73,10 @@ The sidecar runs a 1-second tick loop (`sleep(1)` at the top of each iteration).
 ## Notification Format
 
 ```
-[NBS-CHAT-NOTIFICATION] You have unread messages. Read them with nbs-chat read <chat-path> --unread=<handle> and respond if needed. Return to prompt when done. [THIS MESSAGE WAS MACHINE GENERATED]
+Hey, you have messages to read in your chat.
 ```
 
-The notification deliberately contains NO chat content. Including summaries caused agents to misinterpret content as human instructions (e.g., a summary mentioning "session end" was read as a command to shut down). The agent reads actual messages via `nbs-chat read --unread`.
+The notification deliberately contains NO chat content. Including summaries caused agents to misinterpret content as human instructions (e.g., a summary mentioning "session end" was read as a command to shut down). The notification is kept minimal — plain language, no structured markers. The agent reads actual messages via `nbs-chat read --unread`.
 
 ### Suppression Rules
 

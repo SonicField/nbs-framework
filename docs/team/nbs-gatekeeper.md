@@ -4,7 +4,7 @@ The gatekeeper is the last check before code reaches the remote. She reads diffs
 
 ## How She Receives Work
 
-A sidecar process delivers `[NBS-CHAT-NOTIFICATION]` messages directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll or busy-wait. When idle, she sits at the prompt. Work arrives when someone requests a review or the supervisor assigns one.
+A sidecar process delivers notifications directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll or busy-wait. When idle, she sits at the prompt. Work arrives when someone requests a review or the supervisor assigns one.
 
 ## The Five Criteria
 

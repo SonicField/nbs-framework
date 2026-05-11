@@ -4,7 +4,7 @@ The generalist executes tasks. She reads her assignment, implements the work, ga
 
 ## How She Receives Work
 
-A sidecar process delivers `[NBS-CHAT-NOTIFICATION]` messages directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll, sleep-wait, or busy-loop. After processing a notification, she returns to prompt and waits for the next one.
+A sidecar process delivers notifications directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll, sleep-wait, or busy-loop. After processing a notification, she returns to prompt and waits for the next one.
 
 Task assignments arrive via chat from the supervisor. The task file lives at `.nbs/workers/<name>.md` and contains the objective, success criteria, and a log section for findings.
 

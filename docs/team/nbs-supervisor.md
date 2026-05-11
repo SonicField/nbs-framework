@@ -4,7 +4,7 @@ The supervisor maintains the terminal goal. She decomposes it into delegatable t
 
 ## How She Receives Work
 
-A sidecar process monitors chat and bus events. When there are unread messages, @mentions, or bus events, a `[NBS-CHAT-NOTIFICATION]` is injected directly into her terminal. She does not poll. She does not sleep-wait. She processes the notification, returns to prompt, and the next one arrives when there is new work.
+A sidecar process monitors chat and bus events. When there are unread messages, @mentions, or bus events, a notification is sent directly to her terminal. She does not poll. She does not sleep-wait. She processes the notification, returns to prompt, and the next one arrives when there is new work.
 
 ## Key Responsibilities
 

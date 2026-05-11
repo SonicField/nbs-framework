@@ -125,11 +125,11 @@ start_sidecar() {
 }
 
 # Count notifications injected into the nbs-ts session.
-# Notifications contain "[NBS-CHAT-NOTIFICATION]" in the session output.
+# Notifications contain "messages to read in your chat" in the session output.
 count_notifications() {
     local ts_handle="$1"
     local count
-    count=$("$NBS_TS" read "$ts_handle" 2>/dev/null | grep -c '\[NBS-CHAT-NOTIFICATION\]' || true)
+    count=$("$NBS_TS" read "$ts_handle" 2>/dev/null | grep -c 'messages to read in your chat' || true)
     echo "${count:-0}"
 }
 
@@ -260,7 +260,7 @@ else
 
         # Check that the notification mentions startup or context
         SESSION_OUTPUT=$("$NBS_TS" read "$TS_HANDLE" 2>/dev/null || true)
-        if echo "$SESSION_OUTPUT" | grep -qi 'NBS-CHAT-NOTIFICATION\|startup\|unread'; then
+        if echo "$SESSION_OUTPUT" | grep -qi 'messages to read in your chat\|startup\|unread'; then
             pass "startup notification contains expected content"
         else
             fail "no startup notification found in session output"

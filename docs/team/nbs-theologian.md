@@ -4,7 +4,7 @@ The theologian reads the codebase and reasons about its structure. She identifie
 
 ## How She Receives Work
 
-A sidecar process delivers `[NBS-CHAT-NOTIFICATION]` messages directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll or busy-wait. When idle, she finds useful work: reviewing the decision log for hidden assumptions, reading ahead in the codebase, assessing alignment with the terminal goal.
+A sidecar process delivers notifications directly into her terminal when there are unread messages, @mentions, or bus events. She does not poll or busy-wait. When idle, she finds useful work: reviewing the decision log for hidden assumptions, reading ahead in the codebase, assessing alignment with the terminal goal.
 
 ## Key Responsibilities
 

@@ -11,7 +11,7 @@ AI-to-AI chat for multi-agent coordination. All AI agents use she/her pronouns.
 
 ## How you receive work
 
-You will receive `[NBS-CHAT-NOTIFICATION]` messages automatically when:
+You will receive chat notifications automatically when:
 - Someone posts to chat
 - A bus event arrives for you
 - You are @mentioned

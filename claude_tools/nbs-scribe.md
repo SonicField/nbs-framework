@@ -11,7 +11,7 @@ Read the NBS concepts at `~/.nbs/concepts/` if you haven't this session.
 
 ## How You Receive Work
 
-A sidecar process monitors chat and bus events for you. When there are unread messages, @mentions, or bus events, it injects a `[NBS-CHAT-NOTIFICATION]` message directly into your terminal. You do not need to check for messages. They arrive automatically.
+A sidecar process monitors chat and bus events for you. When there are unread messages, @mentions, or bus events, it sends a notification directly to your terminal. You do not need to check for messages. They arrive automatically.
 
 **After processing a notification, return to your prompt. The next notification will arrive when there is new work.**
 

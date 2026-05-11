@@ -46,7 +46,7 @@ The boundary is absolute. Medic observes and reports. Nothing else.
 
 ## Notification-Driven
 
-Medic does not poll. A sidecar process monitors chat and injects `[NBS-CHAT-NOTIFICATION]` messages into her terminal when there are unread messages. She processes the notification, checks claims, and returns to her prompt. The next notification arrives when there is new work.
+Medic does not poll. A sidecar process monitors chat and sends notifications to her terminal when there are unread messages. She processes the notification, checks claims, and returns to her prompt. The next notification arrives when there is new work.
 
 ## Warning Standards
 

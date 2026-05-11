@@ -97,8 +97,8 @@ static void build_inbox_path(const sidecar_config_t *cfg,
 /*
  * build_notify_prompt — Construct a plain text notification prompt.
  *
- * Deliberately contains NO chat content — only the instruction to
- * read the chat. Including summaries of chat messages caused agents
+ * Deliberately contains NO chat content — only a brief notice that
+ * messages exist. Including summaries of chat messages caused agents
  * to misinterpret content as human instructions (e.g. a summary
  * mentioning "session end" was read as a command to shut down).
  *
@@ -112,11 +112,11 @@ static void build_notify_prompt(const sidecar_config_t *cfg,
     ASSERT_MSG(out != NULL, "build_notify_prompt: out is NULL");
     ASSERT_MSG(out_size > 0, "build_notify_prompt: out_size is 0");
 
+    (void)cfg;
+    (void)chat_path;
+
     int sn = snprintf(out, out_size,
-        "[NBS-CHAT-NOTIFICATION] You have unread messages. "
-        "Read them with nbs-chat read %s --unread=%s and respond if needed. "
-        "Return to prompt when done. [THIS MESSAGE WAS MACHINE GENERATED]",
-        chat_path ? chat_path : "<chat-file>", cfg->handle);
+        "Hey, you have messages to read in your chat.");
 
     (void)sn;
 
@@ -1382,7 +1382,7 @@ int sidecar_run(const sidecar_config_t *cfg, transport_t *tp) {
                         char *verify = tp->capture(tp, 3);
                         if (!verify) continue;
 
-                        if (strstr(verify, "NBS-CHAT-NOTIFICATION") != NULL) {
+                        if (strstr(verify, "messages to read in your chat") != NULL) {
                             /* Notification visible in terminal — injection
                              * succeeded (text reached the agent's screen).
                              * Whether the agent has "consumed" it (processed

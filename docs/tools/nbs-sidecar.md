@@ -28,9 +28,7 @@ One-second tick. Each iteration:
 Notifications are plain text prompts, not slash commands. The sidecar types directly into the terminal:
 
 ```
-[NBS-CHAT-NOTIFICATION] <message> — ack events with nbs-bus ack-all ...
-then read unread chats with nbs-chat read <file> --unread=<handle> and
-respond if needed. Return to prompt when done. [THIS MESSAGE WAS MACHINE GENERATED]
+Hey, you have messages to read in your chat.
 ```
 
 This replaced `/nbs-notify` slash command injection, which failed because Enter does not reliably register in terminal contexts.

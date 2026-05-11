@@ -4,7 +4,7 @@ Fixup is the team's immune system. Spawned by the sidecar when triggered, it dia
 
 ## Role Type
 
-Fixup is an **ephemeral oracle**. One invocation, one job, gone. It receives work via a `[NBS-CHAT-NOTIFICATION]` injected by the sidecar. No polling, no sleep-waiting. When the notification arrives, it runs the procedure. When the procedure completes, it exits.
+Fixup is an **ephemeral oracle**. One invocation, one job, gone. It receives work via a notification from the sidecar. No polling, no sleep-waiting. When the notification arrives, it runs the procedure. When the procedure completes, it exits.
 
 ## The Standard Team
 

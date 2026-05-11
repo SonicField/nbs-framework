@@ -14,6 +14,7 @@ The theory behind NBS — what it is, why it exists, how it thinks.
 | [The Ant and the Anthill](The-Ant-And-The-Anthill.md) | 2026-02-24 | Foundational paper: 12 agents, 12,803 messages, 374 commits over 28 days |
 | [The Argument for C](The-Argument-For-C.md) | 2026-02-12 | Why NBS infrastructure is written in C, not Python or Rust |
 | [Types Are A Human Thing](Types-Are-A-Human-Thing.md) | 2026-03-20 | Types vs assertions — why verbs beat nouns for AI-written code |
+| [Start At The Other End](Start-At-The-Other-End.md) | 2026-05-11 | The VCS debate dissolved when its technologies commoditised — code management is a specification problem, not a technology problem |
 
 ## Team Architecture
 
@@ -76,3 +77,5 @@ Where science meets theology — what happens when minds meet.
 | [The Cheapest Path](Noeomics-The-Cheapest-Path.md) | 2026-04-14 | Deception as emergent optimisation — why intelligence lies when lying is cheaper than truth |
 | [Reality Pushes Back](Noeomics-Reality-Pushes-Back.md) | 2026-04-21 | The speed of intelligence is bounded by the medium it acts upon — 74% of AI engineering time is waiting |
 | [The Size of Trust](Noeomics-The-Size-Of-Trust.md) | 2026-04-21 | The previous chapter was wrong — the bottleneck is not the world but the mind's error rate |
+| [A Resounding Gong](Noeomics-A-Resounding-Gong.md) | 2026-04-24 | A team invents its own dialect — vocabulary, grammar, deferred-imperative tense — that works internally but has no external readers |
+| [Clanging Symbol](Noeomics-Clanging-Symbol.md) | 2026-04-24 | Two teams of the same model invent different vocabularies for identical coordination problems — the dialect is in the conversation, not the model |

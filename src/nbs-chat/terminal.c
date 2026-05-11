@@ -255,7 +255,7 @@ static void history_free(void) {
 /* --- Command autocompletion --- */
 
 static const char *g_commands[] = {
-    "/bash", "/browse", "/dashboard", "/digest", "/edit", "/exit",
+    "/bash", "/broadcast", "/browse", "/dashboard", "/digest", "/edit", "/exit",
     "/file", "/filter", "/fixup", "/health", "/help",
     "/kick", "/librarian", "/mention",
     "/paste", "/pause", "/pythia",
@@ -706,6 +706,7 @@ static void print_help(void) {
     printf("  %s/librarian%s  Spawn librarian (institutional memory search)\n", DIM, RESET);
     printf("  %s/fixup%s      Spawn fixup (diagnose & restart stalled agents)\n", DIM, RESET);
     printf("  %s/digest%s     Spawn chatdigest (extract learnings from chat)\n", DIM, RESET);
+    printf("  %s/broadcast%s  Send text directly to all agent terminals (e.g. /broadcast stop)\n", DIM, RESET);
     printf("  %s/kick%s       Hard restart a single agent (e.g. /kick scribe)\n", DIM, RESET);
     printf("  %s/sidecar%s    Restart all sidecars (e.g. /sidecar testkeeper for just one)\n", DIM, RESET);
     printf("  %s/health%s     Report team health (agents and sidecars)\n", DIM, RESET);
@@ -4302,6 +4303,144 @@ int main(int argc, char **argv) {
                     info_line_emit(&edit, g_handle, role, msg);
                 }
                 /* info_line_emit already redraws the prompt via line_redraw */
+                continue;
+            }
+
+            /* /broadcast <msg> — send text directly to all agent terminals. */
+            if (strncmp(edit.buf, "/broadcast ", 11) == 0 ||
+                strcmp(edit.buf, "/broadcast") == 0) {
+                const char *bmsg = edit.buf + 10;
+                while (*bmsg == ' ') bmsg++;
+                if (*bmsg == '\0') {
+                    line_state_reset(&edit);
+                    info_line_emit(&edit, g_handle, "broadcast",
+                                   "Usage: /broadcast <message>");
+                    continue;
+                }
+
+                /* Derive tag from chat file basename */
+                char btag[256] = {0};
+                {
+                    const char *base = strrchr(g_chat_file, '/');
+                    base = base ? base + 1 : g_chat_file;
+                    size_t blen = strlen(base);
+                    if (blen > 5 && strcmp(base + blen - 5, ".chat") == 0)
+                        blen -= 5;
+                    if (blen >= sizeof(btag)) blen = sizeof(btag) - 1;
+                    memcpy(btag, base, blen);
+                    btag[blen] = '\0';
+                    for (size_t i = 0; i < blen; i++)
+                        if (btag[i] == '.') btag[i] = '-';
+                }
+
+                /* Get alive sessions for this project via nbs-ts list */
+                int lpipe[2];
+                if (pipe(lpipe) < 0) {
+                    info_line_emit(&edit, g_handle, "broadcast",
+                                   "Failed to create pipe.");
+                    line_state_reset(&edit);
+                    continue;
+                }
+                pid_t lpid = fork();
+                if (lpid < 0) {
+                    close(lpipe[0]); close(lpipe[1]);
+                    info_line_emit(&edit, g_handle, "broadcast",
+                                   "Failed to fork.");
+                    line_state_reset(&edit);
+                    continue;
+                }
+                if (lpid == 0) {
+                    close(lpipe[0]);
+                    dup2(lpipe[1], STDOUT_FILENO);
+                    int dn = open("/dev/null", O_WRONLY);
+                    if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+                    close(lpipe[1]);
+                    execlp("nbs-ts", "nbs-ts", "list", (char *)NULL);
+                    _exit(127);
+                }
+                close(lpipe[1]);
+
+                char lout[32768];
+                size_t ltotal = 0;
+                ssize_t lr;
+                while (ltotal < sizeof(lout) - 1 &&
+                       (lr = read(lpipe[0], lout + ltotal,
+                                  sizeof(lout) - 1 - ltotal)) > 0)
+                    ltotal += (size_t)lr;
+                lout[ltotal] = '\0';
+                close(lpipe[0]);
+                waitpid(lpid, NULL, 0);
+
+                /* Parse: each line is handle\tstatus\tname\t...
+                 * Match alive sessions whose name contains the tag. */
+                char handles[64][16]; /* up to 64 session handles */
+                int nsessions = 0;
+                char *lsave = NULL;
+                for (char *line = strtok_r(lout, "\n", &lsave);
+                     line && nsessions < 64;
+                     line = strtok_r(NULL, "\n", &lsave)) {
+                    if (!strstr(line, "alive")) continue;
+                    if (!strstr(line, btag)) continue;
+                    /* Skip infrastructure workers (pythia, librarian, etc.) */
+                    if (strstr(line, "pythia-") || strstr(line, "librarian-") ||
+                        strstr(line, "fixup-") || strstr(line, "shepard-") ||
+                        strstr(line, "chatdigest-"))
+                        continue;
+                    /* Extract handle (first tab-delimited field) */
+                    size_t hlen = 0;
+                    while (line[hlen] && line[hlen] != '\t') hlen++;
+                    if (hlen == 0 || hlen >= sizeof(handles[0])) continue;
+                    memcpy(handles[nsessions], line, hlen);
+                    handles[nsessions][hlen] = '\0';
+                    nsessions++;
+                }
+
+                if (nsessions == 0) {
+                    line_state_reset(&edit);
+                    info_line_emit(&edit, g_handle, "broadcast",
+                                   "No active agents found for this project.");
+                    continue;
+                }
+
+                /* Send to each session via direct FIFO write with
+                 * bracketed paste (required for Claude Code's TUI). */
+                const char *home = getenv("HOME");
+                int sent = 0;
+                size_t bmsg_len = strlen(bmsg);
+                for (int si = 0; si < nsessions; si++) {
+                    char fifo[4096];
+                    snprintf(fifo, sizeof(fifo),
+                             "%s/.nbs-ts/sessions/%s/input.fifo",
+                             home ? home : "/tmp", handles[si]);
+
+                    int fd = open(fifo, O_WRONLY | O_NONBLOCK);
+                    if (fd < 0) continue;
+                    int fl = fcntl(fd, F_GETFL);
+                    if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+
+                    static const char ps[] = "\x1b[200~";
+                    static const char pe[] = "\x1b[201~";
+                    write(fd, ps, sizeof(ps) - 1);
+                    write(fd, bmsg, bmsg_len);
+                    write(fd, pe, sizeof(pe) - 1);
+                    close(fd);
+
+                    usleep(100000);
+
+                    fd = open(fifo, O_WRONLY | O_NONBLOCK);
+                    if (fd < 0) { sent++; continue; }
+                    fl = fcntl(fd, F_GETFL);
+                    if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+                    write(fd, "\r", 1);
+                    close(fd);
+                    sent++;
+                }
+
+                line_state_reset(&edit);
+                char rmsg[128];
+                snprintf(rmsg, sizeof(rmsg),
+                         "Sent to %d/%d agents.", sent, nsessions);
+                info_line_emit(&edit, g_handle, "broadcast", rmsg);
                 continue;
             }
 
