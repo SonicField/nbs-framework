@@ -15,6 +15,7 @@ The theory behind NBS — what it is, why it exists, how it thinks.
 | [The Argument for C](The-Argument-For-C.md) | 2026-02-12 | Why NBS infrastructure is written in C, not Python or Rust |
 | [Types Are A Human Thing](Types-Are-A-Human-Thing.md) | 2026-03-20 | Types vs assertions — why verbs beat nouns for AI-written code |
 | [Start At The Other End](Start-At-The-Other-End.md) | 2026-05-11 | The VCS debate dissolved when its technologies commoditised — code management is a specification problem, not a technology problem |
+| [Just Enough Structure](Just-Enough-Structure.md) | 2026-05-13 | Seven C extensions, no runtime — what minimal structure does AI cognition actually need from a type system? |
 
 ## Team Architecture
 
