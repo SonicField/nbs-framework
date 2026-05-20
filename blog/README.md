@@ -16,6 +16,7 @@ The theory behind NBS — what it is, why it exists, how it thinks.
 | [Types Are A Human Thing](Types-Are-A-Human-Thing.md) | 2026-03-20 | Types vs assertions — why verbs beat nouns for AI-written code |
 | [Start At The Other End](Start-At-The-Other-End.md) | 2026-05-11 | The VCS debate dissolved when its technologies commoditised — code management is a specification problem, not a technology problem |
 | [Just Enough Structure](Just-Enough-Structure.md) | 2026-05-13 | Seven C extensions, no runtime — what minimal structure does AI cognition actually need from a type system? |
+| [The Wrong Curve](The-Wrong-Curve.md) | 2026-05-20 | AI asked for a proof assistant and used a preprocessor — why AI's stated language preferences extrapolate the human trajectory rather than departing from it |
 
 ## Team Architecture
 
