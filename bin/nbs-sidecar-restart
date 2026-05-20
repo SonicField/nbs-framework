@@ -163,11 +163,19 @@ restart_running() {
             continue
         fi
 
-        # Record this PID under its handle
-        echo "$pid" >> "${DEDUP_DIR}/${HANDLE}.pids"
+        # Dedup key is (handle, project-root) — not handle alone.
+        # Without the root, sidecars for the same role in different
+        # projects (e.g. gatekeeper@cinderx vs gatekeeper@phoenix)
+        # collide and only one survives.
+        local ROOT_BASENAME=""
+        [[ -n "$SC_ROOT" ]] && ROOT_BASENAME=$(basename "$SC_ROOT")
+        local DEDUP_KEY="${HANDLE}@${ROOT_BASENAME}"
+
+        # Record this PID under its dedup key
+        echo "$pid" >> "${DEDUP_DIR}/${DEDUP_KEY}.pids"
 
         # Save args from the first occurrence only (for respawn)
-        if [[ ! -f "${DEDUP_DIR}/${HANDLE}.args" ]]; then
+        if [[ ! -f "${DEDUP_DIR}/${DEDUP_KEY}.args" ]]; then
             # Reconstruct args, correcting any compound handle
             # (e.g. --handle=supervisor-vib → --handle=supervisor)
             local NEW_ARGS=()
@@ -186,31 +194,32 @@ restart_running() {
             [[ ${#NEW_ARGS[@]} -gt 0 ]] || continue
             [[ "${NEW_ARGS[0]}" == "$SIDECAR" ]] || continue
 
-            printf '%s\0' "${NEW_ARGS[@]}" > "${DEDUP_DIR}/${HANDLE}.args"
+            printf '%s\0' "${NEW_ARGS[@]}" > "${DEDUP_DIR}/${DEDUP_KEY}.args"
         fi
     done
 
     # Phase 2: Kill sidecar-loops before killing sidecars
     kill_sidecar_loops "$ROOT_FILTER" "$TARGET_HANDLE"
 
-    # Phase 3: For each handle, kill ALL pids, spawn exactly one.
+    # Phase 3: For each (handle, root), kill ALL pids, spawn exactly one.
     for pid_file in "${DEDUP_DIR}"/*.pids; do
         [[ -f "$pid_file" ]] || continue
-        local HANDLE
-        HANDLE=$(basename "$pid_file" .pids)
-        local args_file="${DEDUP_DIR}/${HANDLE}.args"
+        local DEDUP_KEY
+        DEDUP_KEY=$(basename "$pid_file" .pids)
+        local HANDLE="${DEDUP_KEY%%@*}"
+        local args_file="${DEDUP_DIR}/${DEDUP_KEY}.args"
         [[ -f "$args_file" ]] || continue
 
         mapfile -t HANDLE_PIDS < "$pid_file"
         local pid_count=${#HANDLE_PIDS[@]}
 
         if [[ $pid_count -gt 1 ]]; then
-            echo "DEDUP: ${pid_count} sidecars for ${HANDLE} — killing all, spawning one"
+            echo "DEDUP: ${pid_count} sidecars for ${DEDUP_KEY} — killing all, spawning one"
         fi
 
-        # Kill all PIDs for this handle
+        # Kill all PIDs for this (handle, root)
         for pid in "${HANDLE_PIDS[@]}"; do
-            echo -n "  Killing $HANDLE sidecar PID $pid... "
+            echo -n "  Killing $DEDUP_KEY sidecar PID $pid... "
             kill "$pid" 2>/dev/null || true
             echo "sent SIGTERM"
         done
@@ -224,12 +233,6 @@ restart_running() {
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null && sleep 0.5
         done
 
-        # Clean stale PID marker — without this, the new sidecar
-        # detects the old marker as a "duplicate" and exits (rc=1).
-        if [[ -n "$SC_ROOT" ]]; then
-            rm -f "${SC_ROOT}/.nbs/pids/sidecar-${HANDLE}.pid"
-        fi
-
         # Spawn exactly one — via library (which adds the lock block)
         mapfile -d '' NEW_ARGS < "$args_file"
         local sess_handle="" sc_root="" sc_log="" sc_prompt=""
@@ -241,6 +244,12 @@ restart_running() {
                 --initial-prompt=*) sc_prompt="${narg#--initial-prompt=}" ;;
             esac
         done
+        # Clean stale PID marker — without this, the new sidecar
+        # detects the old marker as a "duplicate" and exits (rc=1).
+        if [[ -n "$sc_root" ]]; then
+            rm -f "${sc_root}/.nbs/pids/sidecar-${HANDLE}.pid"
+        fi
+
         local NBS_TS_BIN
         NBS_TS_BIN=$(command -v nbs-ts 2>/dev/null || echo "${SCRIPT_DIR}/nbs-ts")
         local sess_name=""
