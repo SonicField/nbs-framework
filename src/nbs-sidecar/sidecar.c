@@ -256,119 +256,26 @@ static int handle_query(transport_t *tp, const sidecar_config_t *cfg,
         return -1;
     }
 
-    /* Find the last screen-clear sequence in output.log by scanning
-     * backwards from the end. This gives the renderer the last "fresh
-     * screen" state, avoiding the problem where long thinking spinners
-     * push real content out of a fixed-size tail window.
-     *
-     * Screen clears: ESC[2J (erase display) or ESC[H (cursor home,
-     * often followed by ESC[2J). We search for ESC[2J as the primary
-     * marker. Give up after 1MB of backwards scan. */
-    char log_path[4096];
-    snprintf(log_path, sizeof(log_path), "%s/output.log", session_dir);
-
-    int log_fd = open(log_path, O_RDONLY);
-    if (log_fd < 0) {
-        QUERY_ERROR("session output.log not found — agent session may have been cleaned up");
+    /* Use tp->capture which feeds through the terminal renderer */
+    char *rendered = tp->capture(tp, 0);
+    if (!rendered || rendered[0] == '\0') {
+        free(rendered);
+        QUERY_ERROR("session has no visible output — agent may be initialising or dead");
         return -1;
     }
-
-    off_t file_end = lseek(log_fd, 0, SEEK_END);
-    off_t render_start = 0;
-    if (file_end > 0) {
-        off_t max_scan = 1024 * 1024;
-        if (max_scan > file_end) max_scan = file_end;
-        off_t scan_pos = file_end - max_scan;
-        char *scan_buf = malloc((size_t)max_scan);
-        if (scan_buf) {
-            ssize_t nr = pread(log_fd, scan_buf, (size_t)max_scan, scan_pos);
-            if (nr > 2) {
-                for (ssize_t i = nr - 3; i >= 0; i--) {
-                    if (scan_buf[i] == '\x1b' && scan_buf[i+1] == '[' &&
-                        scan_buf[i+2] == '2' &&
-                        (i + 3 < nr && scan_buf[i+3] == 'J')) {
-                        render_start = scan_pos + i;
-                        break;
-                    }
-                }
-            }
-            free(scan_buf);
-        }
-        if (render_start == 0 && file_end > 65536)
-            render_start = file_end - 65536;
-    }
-    close(log_fd);
-
-    /* Resolve nbs-ts-render to absolute path — same directory as this
-     * binary.  Bare "nbs-ts-render" fails silently when PATH doesn't
-     * include the install directory. */
-    char render_bin[4096] = "nbs-ts-render";
-    {
-        char self_path[4096];
-        ssize_t rlen = readlink("/proc/self/exe", self_path,
-                                 sizeof(self_path) - 1);
-        if (rlen > 0) {
-            self_path[rlen] = '\0';
-            char *slash = strrchr(self_path, '/');
-            if (slash) {
-                size_t dir_len = (size_t)(slash - self_path);
-                if (dir_len + sizeof("/nbs-ts-render") <= sizeof(render_bin)) {
-                    memcpy(render_bin, self_path, dir_len);
-                    memcpy(render_bin + dir_len, "/nbs-ts-render",
-                           sizeof("/nbs-ts-render"));
-                }
-            }
-        }
-    }
-
-    /* Pipe from render_start through nbs-ts-render */
-    char render_cmd[8192];
-    snprintf(render_cmd, sizeof(render_cmd),
-             "tail -c +%" PRId64 " '%s' 2>/dev/null | "
-             "'%s' --width=80 --height=24 2>/dev/null",
-             (int64_t)(render_start + 1),
-             log_path, render_bin);
-
-    char truncated[SIDECAR_MAX_CONTENT];
-    truncated[0] = '\0';
-
-    FILE *pipe = popen(render_cmd, "r");
-    if (!pipe) {
-        QUERY_ERROR("failed to launch terminal renderer");
-        return -1;
-    }
-
-    size_t total = 0;
-    size_t n;
-    while ((n = fread(truncated + total, 1,
-                      sizeof(truncated) - total - 1, pipe)) > 0) {
-        total += n;
-        if (total >= sizeof(truncated) - 1) break;
-    }
-    truncated[total] = '\0';
-    pclose(pipe);
-
-    if (total == 0) {
-        /* Fallback: if render fails, try raw capture */
-        char *content = tp->capture(tp, 30);
-        if (!content) {
-            QUERY_ERROR("session has no visible output — agent may be initialising or dead");
-            return -1;
-        }
-        strip_ansi(content);
-        size_t clen = strlen(content);
-        if (clen >= sizeof(truncated)) clen = sizeof(truncated) - 1;
-        memcpy(truncated, content, clen);
-        truncated[clen] = '\0';
-        free(content);
-    }
-
-    /* Escape @ signs to prevent mention feedback loops. */
-    sanitise_at_signs(truncated);
 
     char msg[SIDECAR_MAX_CONTENT];
-    snprintf(msg, sizeof(msg),
-             "session output for %s:\n%s", cfg->handle, truncated);
+    size_t prefix_len = (size_t)snprintf(msg, sizeof(msg),
+                                         "session output for %s:\n", cfg->handle);
+    size_t remaining = sizeof(msg) - prefix_len - 1;
+    size_t rlen = strlen(rendered);
+    if (rlen > remaining) rlen = remaining;
+    memcpy(msg + prefix_len, rendered, rlen);
+    msg[prefix_len + rlen] = '\0';
+    free(rendered);
+
+    /* Escape @ signs to prevent mention feedback loops. */
+    sanitise_at_signs(msg);
     int rc = chat_client_send(chat_path, "sidecar", msg);
     if (rc != 0) {
         QUERY_ERROR("failed to post session output to chat");

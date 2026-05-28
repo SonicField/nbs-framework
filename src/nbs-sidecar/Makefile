@@ -6,7 +6,7 @@ CC = gcc
 COMMON_CFLAGS = -Wall -Wextra -Wshadow -Werror -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 CFLAGS ?= $(COMMON_CFLAGS) -O2
 LDFLAGS =
-INCLUDES = -I. -I../nbs-common -I../nbs-chat
+INCLUDES = -I. -I../nbs-common -I../nbs-chat -I../nbs-ts-render
 
 BIN_DIR = ../../bin
 TEST_DIR = ../../tests/automated
@@ -17,6 +17,10 @@ UNIT_TEST_DIR = ../../tests
 CHAT_SRC_DIR = ../nbs-chat
 CHAT_LIB_SRCS = $(CHAT_SRC_DIR)/base64.c $(CHAT_SRC_DIR)/lock.c $(CHAT_SRC_DIR)/bus_bridge.c
 CHAT_LIB_OBJS = chat_base64.o chat_lock.o chat_bus_bridge.o
+
+# nbs-ts-render sources needed for terminal-rendered capture
+RENDER_SRC_DIR = ../nbs-ts-render
+RENDER_OBJS = render_nbs_ts_render.o render_nbs_ts_wcwidth.o render_nbs_ts_bidi.o render_nbs_term_attr.o
 
 # Sidecar sources
 SRCS = main.c sidecar.c transport_ts.c detect.c exec_util.c \
@@ -55,7 +59,19 @@ chat_lock.o: $(CHAT_SRC_DIR)/lock.c $(CHAT_SRC_DIR)/lock.h $(CHAT_SRC_DIR)/chat_
 chat_bus_bridge.o: $(CHAT_SRC_DIR)/bus_bridge.c $(CHAT_SRC_DIR)/bus_bridge.h $(CHAT_SRC_DIR)/chat_file.h
 	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(CHAT_SRC_DIR)/bus_bridge.c
 
-$(TARGET): $(OBJS) $(CHAT_LIB_OBJS)
+render_nbs_ts_render.o: $(RENDER_SRC_DIR)/nbs_ts_render.c $(RENDER_SRC_DIR)/nbs_ts_render.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(RENDER_SRC_DIR)/nbs_ts_render.c
+
+render_nbs_ts_wcwidth.o: $(RENDER_SRC_DIR)/nbs_ts_wcwidth.c $(RENDER_SRC_DIR)/nbs_ts_wcwidth.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(RENDER_SRC_DIR)/nbs_ts_wcwidth.c
+
+render_nbs_ts_bidi.o: $(RENDER_SRC_DIR)/nbs_ts_bidi.c $(RENDER_SRC_DIR)/nbs_ts_bidi.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(RENDER_SRC_DIR)/nbs_ts_bidi.c
+
+render_nbs_term_attr.o: ../nbs-common/nbs_term_attr.c ../nbs-common/nbs_term_attr.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ ../nbs-common/nbs_term_attr.c
+
+$(TARGET): $(OBJS) $(CHAT_LIB_OBJS) $(RENDER_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(ASSERT_CHECK): assert_check.c
@@ -70,7 +86,7 @@ install: all
 	install $(TARGET) $(BIN_DIR)/
 
 clean:
-	rm -f $(OBJS) $(CHAT_LIB_OBJS) $(TARGET) $(ASSERT_CHECK)
+	rm -f $(OBJS) $(CHAT_LIB_OBJS) $(RENDER_OBJS) $(TARGET) $(ASSERT_CHECK)
 	rm -f $(UNIT_TESTS)
 
 debug: CFLAGS = $(COMMON_CFLAGS) -O0 -g
@@ -103,9 +119,7 @@ $(UNIT_TEST_DIR)/test_sidecar_strip_ansi_unit: $(UNIT_TEST_DIR)/test_sidecar_str
 $(UNIT_TEST_DIR)/test_sidecar_triggers_unit: $(UNIT_TEST_DIR)/test_sidecar_triggers_unit.c triggers.o bus_client.o chat_client.o registry.o exec_util.o $(CHAT_LIB_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
-
-$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_ts.o $(CHAT_LIB_OBJS)
+$(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit: $(UNIT_TEST_DIR)/test_sidecar_main_sidecar_unit.c sidecar.o detect.o hash.o bus_client.o chat_client.o registry.o triggers.o exec_util.o strip_ansi.o mention_escape.o transport_ts.o $(CHAT_LIB_OBJS) $(RENDER_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit: $(UNIT_TEST_DIR)/test_sidecar_bus_client_unit.c bus_client.o exec_util.o

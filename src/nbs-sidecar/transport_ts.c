@@ -16,6 +16,7 @@
 
 #include "transport.h"
 #include "../nbs-common/nbs_assert.h"
+#include "nbs_ts_render.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -116,7 +117,42 @@ static pid_t read_pid(const ts_ctx_t *ctx)
 }
 
 /*
- * ts_capture — Read last `scrollback` lines from output.log.
+ * find_last_screen_clear — Scan backwards for ESC[2J in a buffer.
+ *
+ * Returns the byte offset of the last screen clear, or -1 if not found.
+ * max_scan limits how far back to search.
+ */
+static off_t find_last_screen_clear(int fd, off_t file_end, off_t max_scan)
+{
+    if (file_end <= 0) return -1;
+    if (max_scan > file_end) max_scan = file_end;
+
+    off_t scan_pos = file_end - max_scan;
+    char *scan_buf = malloc((size_t)max_scan);
+    if (!scan_buf) return -1;
+
+    ssize_t nr = pread(fd, scan_buf, (size_t)max_scan, scan_pos);
+    off_t result = -1;
+    if (nr > 3) {
+        for (ssize_t i = nr - 4; i >= 0; i--) {
+            if (scan_buf[i] == '\x1b' && scan_buf[i+1] == '[' &&
+                scan_buf[i+2] == '2' && scan_buf[i+3] == 'J') {
+                result = scan_pos + i;
+                break;
+            }
+        }
+    }
+    free(scan_buf);
+    return result;
+}
+
+/*
+ * ts_capture — Render the terminal screen from output.log.
+ *
+ * Feeds raw PTY output through the terminal renderer to produce the
+ * actual screen content (cursor movement, scrolling, erase resolved).
+ * The scrollback parameter is unused — the renderer always returns
+ * the full terminal screen. Kept for vtable compatibility.
  *
  * Returns heap-allocated NUL-terminated string, or NULL on error.
  * Caller must free().
@@ -126,9 +162,7 @@ static char *ts_capture(const transport_t *self, int scrollback)
     ASSERT_MSG(self != NULL, "ts_capture: self is NULL");
     ASSERT_MSG(self->ctx != NULL, "ts_capture: ctx is NULL");
     const ts_ctx_t *ctx = self->ctx;
-
-    ASSERT_MSG(scrollback >= 0,
-               "ts_capture: scrollback must be non-negative, got %d", scrollback);
+    (void)scrollback;
 
     int fd = open(ctx->output_log, O_RDONLY);
     if (fd < 0) {
@@ -137,68 +171,50 @@ static char *ts_capture(const transport_t *self, int scrollback)
         return NULL;
     }
 
-    off_t file_size = lseek(fd, 0, SEEK_END);
-    if (file_size <= 0) {
+    off_t file_end = lseek(fd, 0, SEEK_END);
+    if (file_end <= 0) {
         close(fd);
         char *empty = calloc(1, 1);
         ASSERT_MSG(empty != NULL, "ts_capture: calloc(1,1) failed — out of memory");
         return empty;
     }
 
-    /* Read the tail of the file */
-    size_t read_size = (size_t)file_size;
-    if (read_size > TS_CAPTURE_BUF_SIZE - 1)
-        read_size = TS_CAPTURE_BUF_SIZE - 1;
+    off_t render_start = find_last_screen_clear(fd, file_end, 1024 * 1024);
+    if (render_start < 0 && file_end > 65536)
+        render_start = file_end - 65536;
+    if (render_start < 0)
+        render_start = 0;
 
-    off_t read_offset = file_size - (off_t)read_size;
-    char *buf = malloc(read_size + 1);
-    if (!buf) {
-        fprintf(stderr, "ts_capture: malloc(%zu) failed — out of memory\n",
-                read_size + 1);
+    ts_render_t *renderer = ts_render_create(24, 80);
+    if (!renderer) {
+        fprintf(stderr, "ts_capture: failed to allocate renderer\n");
         close(fd);
         return NULL;
     }
 
-    ssize_t n = pread(fd, buf, read_size, read_offset);
+    off_t pos = render_start;
+    char feed_buf[65536];
+    while (pos < file_end) {
+        size_t chunk = sizeof(feed_buf);
+        if ((off_t)chunk > file_end - pos)
+            chunk = (size_t)(file_end - pos);
+        ssize_t nr = pread(fd, feed_buf, chunk, pos);
+        if (nr <= 0) break;
+        ts_render_feed(renderer, feed_buf, (size_t)nr);
+        pos += nr;
+    }
     close(fd);
 
-    if (n <= 0) {
-        free(buf);
+    char *result = ts_render_snapshot(renderer);
+    ts_render_destroy(renderer);
+
+    if (!result) {
         char *empty = calloc(1, 1);
         ASSERT_MSG(empty != NULL, "ts_capture: calloc(1,1) failed — out of memory");
         return empty;
     }
 
-    /* If scrollback > 0, find the last `scrollback` lines.
-     * H3: scrollback=0 means "return all captured data" (up to
-     * TS_CAPTURE_BUF_SIZE bytes from the tail of output.log).
-     * This is used internally for full-buffer operations; normal
-     * callers pass scrollback > 0 for line-limited captures. */
-    if (scrollback > 0) {
-        int lines_found = 0;
-        ssize_t pos = n - 1;
-
-        /* Skip trailing newline */
-        if (pos >= 0 && buf[pos] == '\n') pos--;
-
-        while (pos >= 0 && lines_found < scrollback) {
-            if (buf[pos] == '\n') lines_found++;
-            if (lines_found < scrollback) pos--;
-        }
-
-        ssize_t start = (pos < 0) ? 0 : pos + 1;
-        size_t result_len = (size_t)(n - start);
-
-        /* Shift content to beginning of buffer */
-        if (start > 0) {
-            memmove(buf, buf + start, result_len);
-        }
-        buf[result_len] = '\0';
-    } else {
-        buf[n] = '\0';
-    }
-
-    return buf;
+    return result;
 }
 
 /*
